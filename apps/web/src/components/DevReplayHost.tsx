@@ -24,7 +24,7 @@ const DEV_REPLAY_INSTANCE_ID = ProviderInstanceId.make("devReplay");
 
 /**
  * Starts free replay threads on the primary environment in dev builds. Ctrl+Alt+Shift+R
- * opens a picker, and `window.t3dev.replay(scenario)` does the same from the console.
+ * opens a picker, and `window.prismuxdev.replay(scenario)` does the same from the console.
  */
 export function DevReplayHost() {
   const gt = useGT();
@@ -96,7 +96,7 @@ export function DevReplayHost() {
 
   // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- exposes the console API on window and listens for the hidden window hotkey
   useEffect(() => {
-    window.t3dev = {
+    window.prismuxdev = {
       replayScenarios: () => listScenarios(),
       replay: (scenario) => replayFromConsole(scenario),
     };
@@ -109,7 +109,7 @@ export function DevReplayHost() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => {
-      delete window.t3dev;
+      delete window.prismuxdev;
       window.removeEventListener("keydown", onKeyDown);
     };
   }, []);

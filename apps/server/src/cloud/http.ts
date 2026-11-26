@@ -165,7 +165,7 @@ export const layer = HttpApiBuilder.group(
           Effect.tap(() => appendCloudCredentialResponseHeaders),
         ),
       )
-      .handle("t3MintCredential", ({ payload }) =>
+      .handle("prismuxMintCredential", ({ payload }) =>
         traceRelayRequest(
           toHttpError(cloudLink.mintCredential(payload)).pipe(
             Effect.tap(() => appendCloudCredentialResponseHeaders),

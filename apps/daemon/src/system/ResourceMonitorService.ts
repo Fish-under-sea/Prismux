@@ -68,7 +68,7 @@ export interface HostElectronProcessMetric {
   peakWorkingSetBytes?: number | null;
 }
 
-export interface HostT3ServerInfo {
+export interface HostCoreServerInfo {
   pid: number | null;
   ready: boolean;
   desiredRunning?: boolean;
@@ -82,7 +82,7 @@ export interface HostMetricsReport {
   mainPid: number;
   cpuCores?: number;
   cpuScale?: "single-core" | "system-total";
-  t3Server?: HostT3ServerInfo | null;
+  coreServer?: HostCoreServerInfo | null;
   electronProcesses: HostElectronProcessMetric[];
 }
 
@@ -91,7 +91,7 @@ export interface HostMetricsIngestResult {
   receivedAt: number;
   acceptedProcesses: number;
   mainPid: number | null;
-  t3ServerPid: number | null;
+  coreServerPid: number | null;
 }
 
 export type ProcessAttributionRole =
@@ -99,7 +99,7 @@ export type ProcessAttributionRole =
   | "electron-renderer"
   | "electron-gpu"
   | "electron-utility"
-  | "t3-server"
+  | "core-server"
   | "daemon"
   | "agent"
   | "terminal"
@@ -135,7 +135,7 @@ export interface DesktopResourcesSummary {
   source: "electron-app-metrics" | "process-tree" | "mixed";
 }
 
-export interface ExtendedT3ServerResources {
+export interface ExtendedCoreServerResources {
   pid: number | null;
   cpuPercent: number | null;
   memoryBytes: number | null;
@@ -147,8 +147,8 @@ export interface ExtendedT3ServerResources {
 }
 
 export interface ExtendedSystemResourcesResponse
-  extends Omit<SystemResourcesResponse, "t3Server"> {
-  t3Server: ExtendedT3ServerResources | null;
+  extends Omit<SystemResourcesResponse, "coreServer"> {
+  coreServer: ExtendedCoreServerResources | null;
   desktop: DesktopResourcesSummary | null;
   processes: ProcessAttributionEntry[];
   processCount: number;
@@ -164,11 +164,17 @@ export interface GetResourcesOptions {
 
 export interface ResourceMonitorServiceOptions {
   ptyPool: PersistentPtyPool;
+  coreSupervisor?: CoreServerSupervisor;
+  coreRpcClient?: CoreRpcClient;
+  coreServerUrl?: string;
+  /** @deprecated Use coreSupervisor */
   t3Supervisor?: CoreServerSupervisor;
+  /** @deprecated Use coreRpcClient */
   t3RpcClient?: CoreRpcClient;
+  /** @deprecated Use coreServerUrl */
   t3ServerUrl?: string;
   mainPid?: number | null;
-  t3ServerPid?: number | null;
+  coreServerPid?: number | null;
   sampleTimeoutMs?: number;
   treeCacheTtlMs?: number;
   backgroundSampleIntervalMs?: number;
@@ -678,7 +684,7 @@ const AGENT_PATTERNS: ReadonlyArray<{
   { regex: /(?:^|[\\/.\s-])(opencode|cursor-agent|aider)(?:$|[\\/.\s-])/i, label: "Coding Agent" }
 ];
 
-function formatElectronProcessLabel(metric: HostElectronProcessMetric, isInProcessT3: boolean): {
+function formatElectronProcessLabel(metric: HostElectronProcessMetric, isInProcessCore: boolean): {
   role: ProcessAttributionRole;
   name: string;
 } {
@@ -686,7 +692,7 @@ function formatElectronProcessLabel(metric: HostElectronProcessMetric, isInProce
   if (typeLower === "browser") {
     return {
       role: "electron-main",
-      name: isInProcessT3 ? "Prismux 主进程 (含 Prismux Server)" : "Prismux 主进程"
+      name: isInProcessCore ? "Prismux 主进程 (含 Prismux Server)" : "Prismux 主进程"
     };
   }
   if (typeLower === "tab") {
@@ -722,7 +728,7 @@ function formatElectronProcessLabel(metric: HostElectronProcessMetric, isInProce
   };
 }
 
-function detectT3ServerFromOsEntry(
+function detectCoreServerFromOsEntry(
   entry: OsProcessSnapshotEntry,
   daemonPid: number,
   mainPid: number | null
@@ -746,7 +752,7 @@ function detectT3ServerFromOsEntry(
   return (
     cmd.includes("apps\\server\\") ||
     cmd.includes("apps/server/") ||
-    cmd.includes("t3-server") ||
+    cmd.includes("core-server") ||
     (cmd.includes("resources\\server\\") || cmd.includes("resources/server/")) ||
     (cmd.includes("dist\\index.mjs") || cmd.includes("dist/index.mjs"))
   );
@@ -761,7 +767,7 @@ export function classifyOsProcessEntry(
   ctx: {
     daemonPid: number;
     mainPid: number | null;
-    t3Pid: number | null;
+    corePid: number | null;
     electronMetric?: HostElectronProcessMetric;
     ptyTitle?: string | null;
   }
@@ -773,13 +779,13 @@ export function classifyOsProcessEntry(
   if (entry.pid === ctx.daemonPid) {
     return { role: "daemon", category: "core", name: "Prismux Daemon" };
   }
-  if (ctx.t3Pid !== null && entry.pid === ctx.t3Pid && entry.pid !== ctx.mainPid) {
-    return { role: "t3-server", category: "core", name: "Prismux Server" };
+  if (ctx.corePid !== null && entry.pid === ctx.corePid && entry.pid !== ctx.mainPid) {
+    return { role: "core-server", category: "core", name: "Prismux Server" };
   }
   if (ctx.electronMetric) {
     const formatted = formatElectronProcessLabel(
       ctx.electronMetric,
-      ctx.t3Pid !== null && entry.pid === ctx.t3Pid
+      ctx.corePid !== null && entry.pid === ctx.corePid
     );
     return { role: formatted.role, category: "desktop", name: formatted.name };
   }
@@ -787,7 +793,7 @@ export function classifyOsProcessEntry(
     return {
       role: "electron-main",
       category: "desktop",
-      name: ctx.t3Pid === ctx.mainPid ? "Prismux 主进程 (含 Prismux Server)" : "Prismux 主进程"
+      name: ctx.corePid === ctx.mainPid ? "Prismux 主进程 (含 Prismux Server)" : "Prismux 主进程"
     };
   }
 
@@ -866,28 +872,28 @@ export function normalizeHostMetricsReport(raw: unknown): HostMetricsReport | nu
       ? rec["cpuScale"]
       : "system-total";
 
-  let t3Server: HostT3ServerInfo | null | undefined;
-  if (rec["t3Server"] === null) {
-    t3Server = null;
+  let coreServer: HostCoreServerInfo | null | undefined;
+  if (rec["coreServer"] === null) {
+    coreServer = null;
   } else if (
-    typeof rec["t3Server"] === "object" &&
-    rec["t3Server"] !== null &&
-    !Array.isArray(rec["t3Server"])
+    typeof rec["coreServer"] === "object" &&
+    rec["coreServer"] !== null &&
+    !Array.isArray(rec["coreServer"])
   ) {
-    const t3Rec = rec["t3Server"] as Record<string, unknown>;
-    const pid = parsePositiveInt(t3Rec["pid"]);
-    const ready = Boolean(t3Rec["ready"]);
+    const coreRec = rec["coreServer"] as Record<string, unknown>;
+    const pid = parsePositiveInt(coreRec["pid"]);
+    const ready = Boolean(coreRec["ready"]);
     const desiredRunning =
-      typeof t3Rec["desiredRunning"] === "boolean" ? t3Rec["desiredRunning"] : undefined;
+      typeof coreRec["desiredRunning"] === "boolean" ? coreRec["desiredRunning"] : undefined;
     const state =
-      typeof t3Rec["state"] === "string" && t3Rec["state"].trim().length > 0
-        ? t3Rec["state"].trim()
+      typeof coreRec["state"] === "string" && coreRec["state"].trim().length > 0
+        ? coreRec["state"].trim()
         : ready
           ? "running"
           : desiredRunning
             ? "starting"
             : "stopped";
-    const hostedByRaw = t3Rec["hostedBy"];
+    const hostedByRaw = coreRec["hostedBy"];
     const hostedBy =
       hostedByRaw === "electron" ||
       hostedByRaw === "electron-in-process" ||
@@ -898,10 +904,10 @@ export function normalizeHostMetricsReport(raw: unknown): HostMetricsReport | nu
           ? "electron-in-process"
           : "electron";
     const httpUrl =
-      typeof t3Rec["httpUrl"] === "string" && t3Rec["httpUrl"].trim().length > 0
-        ? t3Rec["httpUrl"].trim()
+      typeof coreRec["httpUrl"] === "string" && coreRec["httpUrl"].trim().length > 0
+        ? coreRec["httpUrl"].trim()
         : null;
-    t3Server = {
+    coreServer = {
       pid,
       ready,
       ...(desiredRunning !== undefined ? { desiredRunning } : {}),
@@ -953,7 +959,7 @@ export function normalizeHostMetricsReport(raw: unknown): HostMetricsReport | nu
     });
   }
 
-  if (mainPid === null && electronProcesses.length === 0 && t3Server === undefined) {
+  if (mainPid === null && electronProcesses.length === 0 && coreServer === undefined) {
     return null;
   }
 
@@ -962,7 +968,7 @@ export function normalizeHostMetricsReport(raw: unknown): HostMetricsReport | nu
     mainPid: mainPid ?? electronProcesses.find((p) => p.type.toLowerCase() === "browser")?.pid ?? 0,
     ...(cpuCores !== undefined ? { cpuCores } : {}),
     cpuScale,
-    ...(t3Server !== undefined ? { t3Server } : {}),
+    ...(coreServer !== undefined ? { coreServer } : {}),
     electronProcesses
   };
 }
@@ -979,11 +985,11 @@ export function normalizeHostMetricsReport(raw: unknown): HostMetricsReport | nu
  */
 export class ResourceMonitorService {
   private readonly ptyPool: PersistentPtyPool;
-  private readonly t3Supervisor: CoreServerSupervisor | undefined;
-  private readonly t3RpcClient: CoreRpcClient | undefined;
-  private readonly t3ServerUrl: string | undefined;
+  private readonly coreSupervisor: CoreServerSupervisor | undefined;
+  private readonly coreRpcClient: CoreRpcClient | undefined;
+  private readonly coreServerUrl: string | undefined;
   private readonly configuredMainPid: number | null;
-  private readonly configuredT3ServerPid: number | null;
+  private readonly configuredCoreServerPid: number | null;
   private readonly sampleTimeoutMs: number;
   private readonly treeCacheTtlMs: number;
   private readonly backgroundSampleIntervalMs: number;
@@ -1019,17 +1025,17 @@ export class ResourceMonitorService {
     this.backgroundSampleIntervalMs =
       options.backgroundSampleIntervalMs ?? DEFAULT_BACKGROUND_SAMPLE_INTERVAL_MS;
     this.ptyPool = options.ptyPool;
-    this.t3Supervisor = options.t3Supervisor;
-    this.t3RpcClient = options.t3RpcClient;
-    this.t3ServerUrl = options.t3ServerUrl;
+    this.coreSupervisor = options.coreSupervisor ?? options.t3Supervisor;
+    this.coreRpcClient = options.coreRpcClient ?? options.t3RpcClient;
+    this.coreServerUrl = options.coreServerUrl ?? options.t3ServerUrl;
     this.configuredMainPid =
       options.mainPid !== undefined
         ? parsePositiveInt(options.mainPid)
         : parsePositiveInt(process.env["PRISMUX_MAIN_PID"]);
-    this.configuredT3ServerPid =
-      options.t3ServerPid !== undefined
-        ? parsePositiveInt(options.t3ServerPid)
-        : (parsePositiveInt(process.env["PRISMUX_SERVER_PID"]) ?? parsePositiveInt(process.env["PRISMUX_CORE_SERVER_PID"]) ?? parsePositiveInt(process.env["PRISMUX_T3_SERVER_PID"]));
+    this.configuredCoreServerPid =
+      options.coreServerPid !== undefined
+        ? parsePositiveInt(options.coreServerPid)
+        : (parsePositiveInt(process.env["PRISMUX_SERVER_PID"]) ?? parsePositiveInt(process.env["PRISMUX_CORE_SERVER_PID"]));
     this.customSampleProcessesFn = options.sampleProcesses;
     this.sampleProcessTreeFn = options.sampleProcessTree;
 
@@ -1159,7 +1165,7 @@ export class ResourceMonitorService {
       receivedAt,
       acceptedProcesses: report.electronProcesses.length,
       mainPid: report.mainPid > 0 ? report.mainPid : null,
-      t3ServerPid: report.t3Server?.pid ?? null
+      coreServerPid: report.coreServer?.pid ?? null
     };
   }
 
@@ -1300,15 +1306,14 @@ export class ResourceMonitorService {
     const roots = new Set<number>([process.pid]);
     const mainPid = this.resolveEffectiveMainPid();
     if (mainPid !== null) roots.add(mainPid);
-    const t3Status = this.t3Supervisor?.getStatus();
-    const t3Pid =
-      parsePositiveInt(t3Status?.pid) ??
-      parsePositiveInt(this.latestHostMetrics?.report.t3Server?.pid) ??
-      this.configuredT3ServerPid ??
+    const coreStatus = this.coreSupervisor?.getStatus();
+    const corePid =
+      parsePositiveInt(coreStatus?.pid) ??
+      parsePositiveInt(this.latestHostMetrics?.report.coreServer?.pid) ??
+      this.configuredCoreServerPid ??
       parsePositiveInt(process.env["PRISMUX_SERVER_PID"]) ??
-      parsePositiveInt(process.env["PRISMUX_CORE_SERVER_PID"]) ??
-      parsePositiveInt(process.env["PRISMUX_T3_SERVER_PID"]);
-    if (t3Pid !== null) roots.add(t3Pid);
+      parsePositiveInt(process.env["PRISMUX_CORE_SERVER_PID"]);
+    if (corePid !== null) roots.add(corePid);
     if (this.latestHostMetrics) {
       for (const proc of this.latestHostMetrics.report.electronProcesses) {
         if (proc.pid > 0) roots.add(proc.pid);
@@ -1442,7 +1447,7 @@ export class ResourceMonitorService {
     const freshHost = this.getFreshHostMetrics(now);
     const hostReport = freshHost?.report ?? null;
     const mainPid = this.resolveEffectiveMainPid();
-    const t3SupervisorStatus = this.t3Supervisor?.getStatus();
+    const coreSupervisorStatus = this.coreSupervisor?.getStatus();
     const ptyInfos = this.ptyPool.listSessionRuntimeInfos();
 
     // Collect process samples either via injected test sampler OR full cached OS process tree.
@@ -1459,13 +1464,13 @@ export class ResourceMonitorService {
       if (mainPid !== null) {
         pidsToSample.push(mainPid);
       }
-      const hintT3Pid =
-        parsePositiveInt(t3SupervisorStatus?.pid) ??
-        parsePositiveInt(hostReport?.t3Server?.pid) ??
-        this.configuredT3ServerPid ??
-        (parsePositiveInt(process.env["PRISMUX_SERVER_PID"]) ?? parsePositiveInt(process.env["PRISMUX_CORE_SERVER_PID"]) ?? parsePositiveInt(process.env["PRISMUX_T3_SERVER_PID"]));
-      if (hintT3Pid !== null) {
-        pidsToSample.push(hintT3Pid);
+      const hintCorePid =
+        parsePositiveInt(coreSupervisorStatus?.pid) ??
+        parsePositiveInt(hostReport?.coreServer?.pid) ??
+        this.configuredCoreServerPid ??
+        (parsePositiveInt(process.env["PRISMUX_SERVER_PID"]) ?? parsePositiveInt(process.env["PRISMUX_CORE_SERVER_PID"]));
+      if (hintCorePid !== null) {
+        pidsToSample.push(hintCorePid);
       }
       for (const info of ptyInfos) {
         if (info.alive && info.pid !== null && info.pid > 0) {
@@ -1504,11 +1509,11 @@ export class ResourceMonitorService {
         if (osTree.size === 0 && !this.sampleProcessTreeFn) {
           const fallbackPids = new Set<number>([process.pid]);
           if (mainPid !== null) fallbackPids.add(mainPid);
-          const hintT3 =
-            parsePositiveInt(t3SupervisorStatus?.pid) ??
-            parsePositiveInt(hostReport?.t3Server?.pid) ??
-            this.configuredT3ServerPid;
-          if (hintT3 !== null) fallbackPids.add(hintT3);
+          const hintCore =
+            parsePositiveInt(coreSupervisorStatus?.pid) ??
+            parsePositiveInt(hostReport?.coreServer?.pid) ??
+            this.configuredCoreServerPid;
+          if (hintCore !== null) fallbackPids.add(hintCore);
           for (const info of ptyInfos) {
             if (info.alive && info.pid !== null && info.pid > 0) {
               fallbackPids.add(info.pid);
@@ -1536,38 +1541,38 @@ export class ResourceMonitorService {
     }
 
     // Resolve T3 Server PID & hosting metadata across all authoritative sources.
-    let t3Pid: number | null =
-      parsePositiveInt(t3SupervisorStatus?.pid) ??
-      parsePositiveInt(hostReport?.t3Server?.pid) ??
-      parsePositiveInt(this.latestHostMetrics?.report.t3Server?.pid) ??
-      this.configuredT3ServerPid ??
-      (parsePositiveInt(process.env["PRISMUX_SERVER_PID"]) ?? parsePositiveInt(process.env["PRISMUX_CORE_SERVER_PID"]) ?? parsePositiveInt(process.env["PRISMUX_T3_SERVER_PID"]));
-    let t3HostedBy: ExtendedT3ServerResources["hostedBy"] =
-      t3SupervisorStatus !== undefined
+    let corePid: number | null =
+      parsePositiveInt(coreSupervisorStatus?.pid) ??
+      parsePositiveInt(hostReport?.coreServer?.pid) ??
+      parsePositiveInt(this.latestHostMetrics?.report.coreServer?.pid) ??
+      this.configuredCoreServerPid ??
+      (parsePositiveInt(process.env["PRISMUX_SERVER_PID"]) ?? parsePositiveInt(process.env["PRISMUX_CORE_SERVER_PID"]));
+    let coreHostedBy: ExtendedCoreServerResources["hostedBy"] =
+      coreSupervisorStatus !== undefined
         ? "daemon-supervisor"
-        : hostReport?.t3Server?.hostedBy ??
-          this.latestHostMetrics?.report.t3Server?.hostedBy ??
+        : hostReport?.coreServer?.hostedBy ??
+          this.latestHostMetrics?.report.coreServer?.hostedBy ??
           (mainPid !== null ? "electron" : undefined);
-    let t3State: string | null =
-      t3SupervisorStatus?.state ??
-      hostReport?.t3Server?.state ??
-      (hostReport?.t3Server?.ready ? "running" : null) ??
-      (this.t3RpcClient?.isConnected() ? "running" : null);
+    let coreState: string | null =
+      coreSupervisorStatus?.state ??
+      hostReport?.coreServer?.state ??
+      (hostReport?.coreServer?.ready ? "running" : null) ??
+      (this.coreRpcClient?.isConnected() ? "running" : null);
 
     // Auto-discover T3 Server child under Electron Main PID if PID wasn't pushed yet.
-    if (t3Pid === null && mainPid !== null && osTree.size > 0) {
+    if (corePid === null && mainPid !== null && osTree.size > 0) {
       const mainChildren = childrenByParent.get(mainPid) ?? [];
       const detected = mainChildren.find((child) =>
-        detectT3ServerFromOsEntry(child, process.pid, mainPid)
+        detectCoreServerFromOsEntry(child, process.pid, mainPid)
       );
       if (detected) {
-        t3Pid = detected.pid;
-        t3HostedBy = "electron";
-        t3State = "running";
+        corePid = detected.pid;
+        coreHostedBy = "electron";
+        coreState = "running";
       }
     }
-    if (t3Pid !== null && mainPid !== null && t3Pid === mainPid) {
-      t3HostedBy = "electron-in-process";
+    if (corePid !== null && mainPid !== null && corePid === mainPid) {
+      coreHostedBy = "electron-in-process";
     }
 
     // Helper to look up raw OS reading for any PID (preferring osTree, fallback to legacySampledMap).
@@ -1604,7 +1609,7 @@ export class ResourceMonitorService {
     // Walk full Prismux family tree (Electron Main + Electron helpers + T3 Server + Daemon + PTYs + descendants).
     const familyPids = new Set<number>([process.pid]);
     if (mainPid !== null) familyPids.add(mainPid);
-    if (t3Pid !== null) familyPids.add(t3Pid);
+    if (corePid !== null) familyPids.add(corePid);
     for (const pid of electronByPid.keys()) familyPids.add(pid);
     for (const pid of ptyByPid.keys()) familyPids.add(pid);
 
@@ -1679,55 +1684,55 @@ export class ResourceMonitorService {
     const daemonPrivateMemBytes = daemonOsReading?.privateMemoryBytes ?? undefined;
 
     // Build T3 Server metrics (never returns null when desktop/env/RPC knows about T3 Server!).
-    const t3OsReading = t3Pid !== null ? getOsReading(t3Pid) : undefined;
-    const t3ElectronMetric = t3Pid !== null ? electronByPid.get(t3Pid) : undefined;
-    const t3DerivedCpu = t3Pid !== null ? (resolvedCpuByPid.get(t3Pid) ?? null) : null;
-    const t3MemoryBytes =
-      t3OsReading?.memoryBytes ??
-      (t3ElectronMetric ? t3ElectronMetric.workingSetBytes : null);
-    const t3PrivateMemoryBytes =
-      t3OsReading?.privateMemoryBytes ??
-      (t3ElectronMetric?.privateMemoryBytes !== undefined
-        ? t3ElectronMetric.privateMemoryBytes
+    const coreOsReading = corePid !== null ? getOsReading(corePid) : undefined;
+    const coreElectronMetric = corePid !== null ? electronByPid.get(corePid) : undefined;
+    const coreDerivedCpu = corePid !== null ? (resolvedCpuByPid.get(corePid) ?? null) : null;
+    const coreMemoryBytes =
+      coreOsReading?.memoryBytes ??
+      (coreElectronMetric ? coreElectronMetric.workingSetBytes : null);
+    const corePrivateMemoryBytes =
+      coreOsReading?.privateMemoryBytes ??
+      (coreElectronMetric?.privateMemoryBytes !== undefined
+        ? coreElectronMetric.privateMemoryBytes
         : undefined);
-    const t3ChildCount =
-      t3Pid !== null && t3Pid !== mainPid
-        ? (childrenByParent.get(t3Pid)?.filter((c) => c.pid !== process.pid).length ?? 0)
+    const coreChildCount =
+      corePid !== null && corePid !== mainPid
+        ? (childrenByParent.get(corePid)?.filter((c) => c.pid !== process.pid).length ?? 0)
         : 0;
 
-    const hasT3Presence =
-      t3SupervisorStatus !== undefined ||
-      t3Pid !== null ||
-      hostReport?.t3Server !== undefined ||
-      this.t3RpcClient !== undefined ||
-      Boolean(this.t3ServerUrl) ||
+    const hasCorePresence =
+      coreSupervisorStatus !== undefined ||
+      corePid !== null ||
+      hostReport?.coreServer !== undefined ||
+      this.coreRpcClient !== undefined ||
+      Boolean(this.coreServerUrl) ||
       Boolean(process.env["PRISMUX_SERVER_URL"]) ||
       Boolean(process.env["PRISMUX_CORE_SERVER_URL"]) ||
-      Boolean(process.env["PRISMUX_T3_SERVER_URL"]);
+      Boolean(process.env["PRISMUX_CORE_SERVER_URL"]);
 
-    const t3Server: ExtendedT3ServerResources | null = hasT3Presence
+    const coreServer: ExtendedCoreServerResources | null = hasCorePresence
       ? {
-          pid: t3Pid,
-          cpuPercent: t3DerivedCpu,
-          memoryBytes: t3MemoryBytes,
-          ...(t3PrivateMemoryBytes !== undefined
-            ? { privateMemoryBytes: t3PrivateMemoryBytes }
+          pid: corePid,
+          cpuPercent: coreDerivedCpu,
+          memoryBytes: coreMemoryBytes,
+          ...(corePrivateMemoryBytes !== undefined
+            ? { privateMemoryBytes: corePrivateMemoryBytes }
             : {}),
           state:
-            t3State ??
-            (t3Pid !== null && (t3MemoryBytes !== null || t3OsReading !== undefined)
+            coreState ??
+            (corePid !== null && (coreMemoryBytes !== null || coreOsReading !== undefined)
               ? "running"
               : "unknown"),
-          ...(t3HostedBy !== undefined ? { hostedBy: t3HostedBy } : {}),
+          ...(coreHostedBy !== undefined ? { hostedBy: coreHostedBy } : {}),
           label:
-            t3HostedBy === "electron-in-process"
+            coreHostedBy === "electron-in-process"
               ? "Prismux Server (宿主同进程)"
-              : t3HostedBy === "electron"
+              : coreHostedBy === "electron"
                 ? "Prismux Server (桌面托管)"
-                : t3HostedBy === "daemon-supervisor"
+                : coreHostedBy === "daemon-supervisor"
                   ? "Prismux Server (Daemon 托管)"
                   : "Prismux Server",
-          childCount: t3ChildCount
+          childCount: coreChildCount
         }
       : null;
 
@@ -1805,7 +1810,7 @@ export class ResourceMonitorService {
         {
           daemonPid: process.pid,
           mainPid,
-          t3Pid,
+          corePid,
           ...(electronMetric !== undefined ? { electronMetric } : {}),
           ...(ptyEntry ? { ptyTitle: ptyEntry.title } : {})
         }
@@ -2070,7 +2075,7 @@ export class ResourceMonitorService {
           ? { privateMemoryBytes: daemonPrivateMemBytes }
           : {})
       },
-      t3Server,
+      coreServer,
       desktop: desktopSummary,
       processes: processEntries,
       processCount: processEntries.length,

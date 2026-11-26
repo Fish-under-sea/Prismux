@@ -41,7 +41,7 @@ const handlers = {
       return yield* service.cancelTask(scope, input);
     }),
   ),
-  t3_workflow_stop: McpToolAccess.writesThreads(
+  prismux_workflow_stop: McpToolAccess.writesThreads(
     (input) => [input.threadId],
     (input) =>
       Effect.gen(function* () {
@@ -62,10 +62,10 @@ const handlers = {
       }),
   ),
   // Claude can start a turn by itself before T3 starts its run, so a live-run check would refuse the mark.
-  t3_background_wait: McpToolAccess.readsAsCaller((input) =>
+  prismux_background_wait: McpToolAccess.readsAsCaller((input) =>
     Effect.gen(function* () {
       const { scope, threads } = yield* readCaller();
-      const caller = yield* McpInvocationContext.requireThreadScope(scope, "t3_background_wait");
+      const caller = yield* McpInvocationContext.requireThreadScope(scope, "prismux_background_wait");
       return yield* threads
         .awaitBackgroundTasks({
           threadId: caller.thread.threadId,
@@ -151,21 +151,21 @@ const handlers = {
       return yield* service.createThreads(scope, input);
     }),
   ),
-  t3_thread_list: McpToolAccess.reads((input) =>
+  prismux_thread_list: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
       return yield* service.listThreads(scope, input);
     }),
   ),
-  t3_thread_read: McpToolAccess.reads((input) =>
+  prismux_thread_read: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
       return yield* service.readThread(scope, input);
     }),
   ),
-  t3_thread_update: McpToolAccess.writesThreads(
+  prismux_thread_update: McpToolAccess.writesThreads(
     (input) => [input.threadId],
     (input) =>
       Effect.gen(function* () {
@@ -174,7 +174,7 @@ const handlers = {
         return yield* service.update(scope, input);
       }),
   ),
-  t3_thread_send: McpToolAccess.afterForwarding(
+  prismux_thread_send: McpToolAccess.afterForwarding(
     McpToolAccess.writesThreads(
       (input) => [input.threadId],
       (input) =>
@@ -192,14 +192,14 @@ const handlers = {
         return yield* remote.followUp(scope, environmentId, input, sent);
       }),
   ),
-  t3_thread_wait: McpToolAccess.reads((input) =>
+  prismux_thread_wait: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
       return yield* service.waitForThread(scope, input);
     }),
   ),
-  t3_environment_links: McpToolAccess.reads(() =>
+  prismux_environment_links: McpToolAccess.reads(() =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const forwarding = yield* PeerForwarding.PeerForwarding;
@@ -208,14 +208,14 @@ const handlers = {
   ),
   // A link lets every agent here reach the other environment, so it is an
   // environment setting: full access, and never for linked work.
-  t3_environment_link: McpToolAccess.writesEnvironment((input) =>
+  prismux_environment_link: McpToolAccess.writesEnvironment((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const requests = yield* PeerLinkRequests.PeerLinkRequests;
       return yield* requests.request(scope, input);
     }),
   ),
-  t3_environment_unlink: McpToolAccess.writesEnvironment(({ environmentId }) =>
+  prismux_environment_unlink: McpToolAccess.writesEnvironment(({ environmentId }) =>
     Effect.gen(function* () {
       const links = yield* PeerLinks.PeerLinks;
       const removed = yield* links
@@ -229,7 +229,7 @@ const handlers = {
       return { environmentId, removed };
     }),
   ),
-  t3_thread_interrupt: McpToolAccess.writesThreads(
+  prismux_thread_interrupt: McpToolAccess.writesThreads(
     (input) => [input.threadId],
     (input) =>
       Effect.gen(function* () {

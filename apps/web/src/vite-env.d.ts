@@ -24,7 +24,7 @@ declare global {
   interface Window {
     desktopBridge?: DesktopBridge;
     /** Dev builds only, from DevReplayHost. Agents call these from the browser console. */
-    t3dev?: {
+    prismuxdev?: {
       readonly replayScenarios: () => ReadonlyArray<string>;
       readonly replay: (scenario?: string) => Promise<ThreadId>;
     };

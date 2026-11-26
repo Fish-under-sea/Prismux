@@ -130,7 +130,7 @@ const readySession = {
 describe("deriveComposerSendState", () => {
   it("keeps text sendable while excluding expired terminal pills", () => {
     const state = deriveComposerSendState({
-      prompt: `yoo [Terminal 1](t3-context://v1/terminal/ctx-expired) waddup`,
+      prompt: `yoo [Terminal 1](prismux-context://v1/terminal/ctx-expired) waddup`,
       imageCount: 0,
       terminalContexts: [
         {
@@ -1301,7 +1301,7 @@ describe("snapshotComposerSend", () => {
       replyTo,
     });
 
-    expect(snapshot.messageText).toContain(`t3-context://v1/response/${replyTo.contextId}`);
+    expect(snapshot.messageText).toContain(`prismux-context://v1/response/${replyTo.contextId}`);
     expect(snapshot.draftText).toBe("why there?");
     expect(snapshot.replyTo).toBe(replyTo);
   });

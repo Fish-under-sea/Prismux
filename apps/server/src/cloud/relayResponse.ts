@@ -64,7 +64,7 @@ function recoveryHint(error: RelayProtectedError): string {
     case "RelayEnvironmentLinkLimitExceededError":
       return "Unlink an unused environment in Prismux Connect, then restart Prismux on this machine.";
     case "RelayAuthInvalidError":
-      return "Run `t3 connect login` to check this machine's authorization. If the stored credential was revoked, sign out with `t3 connect logout`, then run `t3 connect` again. Restart Prismux after signing in.";
+      return "Run `prismux connect login` to check this machine's authorization. If the stored credential was revoked, sign out with `prismux connect logout`, then run `prismux connect` again. Restart Prismux after signing in.";
     case "RelayEnvironmentLinkProofInvalidError":
       if (error.reason === "environment_key_mismatch") {
         return "Prismux Connect already has this environment linked with a different key. Unlink it in Prismux Connect, then restart Prismux on this machine.";

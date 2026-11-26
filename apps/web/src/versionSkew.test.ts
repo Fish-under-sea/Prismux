@@ -29,14 +29,14 @@ describe("versionSkew", () => {
     ).toBe("npm install --global --prefix '/opt/maria'\\''s node' t3@0.0.45");
     expect(
       manualServerUpdateCommand("0.0.45", {
-        kind: "t3-launcher",
+        kind: "prismux-launcher",
         launcher: "t3",
         baseDir: "/home/u/.t3",
       }),
     ).toBe("'t3' update --base-dir '/home/u/.t3' 0.0.45");
     expect(
       manualServerUpdateCommand("0.0.45", {
-        kind: "t3-launcher",
+        kind: "prismux-launcher",
         launcher: "/opt/maria's bin/t3",
         baseDir: "/data/t3 home",
       }),

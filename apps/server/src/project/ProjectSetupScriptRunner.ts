@@ -134,7 +134,7 @@ export class ProjectSetupScriptRunner extends Context.Service<
 
 /** @public */
 // Random per-run tokens prevent script output from spoofing completion.
-const COMPLETION_SENTINEL_PREFIX = "__T3_SETUP_DONE__";
+const COMPLETION_SENTINEL_PREFIX = "__PRISMUX_SETUP_DONE__";
 const OUTPUT_LINE_MAX_LENGTH = 400;
 const PARTIAL_LINE_MAX_LENGTH = 4_096;
 
@@ -179,7 +179,7 @@ function resolveCompletionShell(shell: string): CompletionShell | null {
 const utf8 = new TextEncoder();
 // Canonical TTY input (before a line editor starts reading) caps a line below 1 KiB on Linux.
 const POSIX_MAX_LINE_BYTES = 1_023;
-const POSIX_APPEND = '__t3_command="$__t3_command"';
+const POSIX_APPEND = '__prismux_command="$__prismux_command"';
 
 function encodePosixScript(text: string): string {
   let encoded = "";
@@ -201,13 +201,13 @@ function wrapPosixCommand(command: string, sentinel: string): string {
   const normalized = command.replace(/\r\n/g, "\n");
   // The `_` suffix keeps trailing newlines; the subshell contains exits and syntax errors.
   const evaluate = (payload: string) =>
-    `( __t3_command=$(printf '%b_' ${payload}); eval "\${__t3_command%_}" ); printf '\\n${sentinel}%s\\n' "$?"`;
+    `( __prismux_command=$(printf '%b_' ${payload}); eval "\${__prismux_command%_}" ); printf '\\n${sentinel}%s\\n' "$?"`;
   const inline = evaluate(`'${encodePosixScript(normalized)}'`);
   if (utf8.encode(` ${inline}\r`).byteLength <= POSIX_MAX_LINE_BYTES) return inline;
 
   const maxChunkBytes = POSIX_MAX_LINE_BYTES - utf8.encode(` ${POSIX_APPEND}''\r`).byteLength;
   const lines: string[] = [];
-  let prefix = "__t3_command=";
+  let prefix = "__prismux_command=";
   let chunk = "";
   let chunkBytes = 0;
   for (const character of normalized) {
@@ -222,7 +222,7 @@ function wrapPosixCommand(command: string, sentinel: string): string {
     chunk += encoded;
     chunkBytes += bytes;
   }
-  lines.push(`${prefix}'${chunk}'`, `${evaluate('"$__t3_command"')}; unset __t3_command`);
+  lines.push(`${prefix}'${chunk}'`, `${evaluate('"$__prismux_command"')}; unset __prismux_command`);
   // The leading space gives every line the history suppression a short command gets.
   return lines.join("\r ");
 }
@@ -235,7 +235,7 @@ function wrapCommandForCompletion(
   const body = command.replace(/\r?\n/g, "\r");
   switch (shell) {
     case "powershell":
-      return `$global:LASTEXITCODE = $null; & {\r${body}\r}; if ($null -ne $LASTEXITCODE) { $__t3c = $LASTEXITCODE } elseif ($?) { $__t3c = 0 } else { $__t3c = 1 }; Write-Host "${sentinel}$__t3c"`;
+      return `$global:LASTEXITCODE = $null; & {\r${body}\r}; if ($null -ne $LASTEXITCODE) { $__prismuxc = $LASTEXITCODE } elseif ($?) { $__prismuxc = 0 } else { $__prismuxc = 1 }; Write-Host "${sentinel}$__prismuxc"`;
     case "fish":
       return `begin\r${body}\rend; printf '\\n${sentinel}%s\\n' $status`;
     case "nushell": {
@@ -245,11 +245,11 @@ function wrapCommandForCompletion(
       // Nu resolves imports before running cd; source a file rooted in the worktree.
       return [
         "$env.LAST_EXIT_CODE = 0",
-        "let __t3f = try { mktemp --tmpdir-path $env.PRISMUX_WORKTREE_PATH --suffix .nu .t3-setup-XXXXXXXX } catch {|e| print -e $e.msg; null }",
-        `if $__t3f == null { $env.LAST_EXIT_CODE = 1 } else { try { [$"rm --permanent ($__t3f | to nuon)" "${escaped}"] | str join (char newline) | save --force --raw $__t3f; ^$nu.current-exe --login --commands $"cd $env.PRISMUX_WORKTREE_PATH; source ($__t3f | to nuon)" } catch {|e| if $e != null and $e.exit_code? == null { print -e $e.msg }; if $env.LAST_EXIT_CODE == 0 { $env.LAST_EXIT_CODE = 1 } } }`,
-        "let __t3c = $env.LAST_EXIT_CODE",
-        "try { if $__t3f != null and ($__t3f | path exists) { rm --permanent $__t3f } } catch {|e| print -e $e.msg }",
-        `print $"\\n${sentinel}($__t3c)"`,
+        "let __prismuxf = try { mktemp --tmpdir-path $env.PRISMUX_WORKTREE_PATH --suffix .nu .prismux-setup-XXXXXXXX } catch {|e| print -e $e.msg; null }",
+        `if $__prismuxf == null { $env.LAST_EXIT_CODE = 1 } else { try { [$"rm --permanent ($__prismuxf | to nuon)" "${escaped}"] | str join (char newline) | save --force --raw $__prismuxf; ^$nu.current-exe --login --commands $"cd $env.PRISMUX_WORKTREE_PATH; source ($__prismuxf | to nuon)" } catch {|e| if $e != null and $e.exit_code? == null { print -e $e.msg }; if $env.LAST_EXIT_CODE == 0 { $env.LAST_EXIT_CODE = 1 } } }`,
+        "let __prismuxc = $env.LAST_EXIT_CODE",
+        "try { if $__prismuxf != null and ($__prismuxf | path exists) { rm --permanent $__prismuxf } } catch {|e| print -e $e.msg }",
+        `print $"\\n${sentinel}($__prismuxc)"`,
       ].join("; ");
     }
     case "posix":

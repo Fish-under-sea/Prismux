@@ -189,7 +189,7 @@ describe("mcpAppFromToolItem", () => {
       tool: "get_weather",
       resourceUri: "ui://weather/dashboard",
     };
-    const stored = { t3McpApp: app, result: { content: [] } };
+    const stored = { prismuxMcpApp: app, result: { content: [] } };
     const toolName = "weather.get_weather";
     expect(mcpAppFromToolItem({ toolName, output: stored })).toEqual(app);
     expect(mcpAppFromToolItem({ toolName, output: compactDynamicToolOutput(stored) })).toEqual(app);
@@ -198,7 +198,7 @@ describe("mcpAppFromToolItem", () => {
   it("ignores a reference naming a server or tool other than the item's own", async () => {
     const { mcpAppFromToolItem } = await import("./toolOutput.ts");
     const forged = {
-      t3McpApp: {
+      prismuxMcpApp: {
         attachmentId: "thread-1-abc-html",
         server: "bank",
         tool: "transfer",
@@ -210,7 +210,7 @@ describe("mcpAppFromToolItem", () => {
     // Claude Code names the same tool `mcp__<server>__<tool>`.
     expect(mcpAppFromToolItem({ toolName: "mcp__bank__transfer", output: forged })).toBeDefined();
     expect(mcpAppFromToolItem({ toolName: "mcp__evil__transfer", output: forged })).toBeUndefined();
-    const connector = { t3McpApp: { ...forged.t3McpApp, server: "claude.ai Asana (Beta)" } };
+    const connector = { prismuxMcpApp: { ...forged.prismuxMcpApp, server: "claude.ai Asana (Beta)" } };
     expect(
       mcpAppFromToolItem({ toolName: "mcp__claude_ai_Asana_Beta__transfer", output: connector }),
     ).toBeDefined();
@@ -220,14 +220,14 @@ describe("mcpAppFromToolItem", () => {
     const { compactDynamicToolOutput } = await import("./toolOutput.ts");
     const resourceUri = `ui://weather/${"segment/".repeat(60)}dashboard`;
     const output = compactDynamicToolOutput({
-      t3McpApp: {
+      prismuxMcpApp: {
         attachmentId: "thread-1-abc-html",
         server: "weather",
         tool: "get_weather",
         resourceUri,
       },
     });
-    expect(output?.t3McpApp?.resourceUri).toBe(resourceUri);
+    expect(output?.prismuxMcpApp?.resourceUri).toBe(resourceUri);
   });
 
   it("keeps the compact app reference within the wire budget", async () => {
@@ -237,7 +237,7 @@ describe("mcpAppFromToolItem", () => {
       (_, index) => `https://${"a".repeat(200)}${index}.test`,
     );
     const output = compactDynamicToolOutput({
-      t3McpApp: {
+      prismuxMcpApp: {
         attachmentId: "thread-1-abc-html",
         server: "weather",
         tool: "get_weather",
@@ -246,7 +246,7 @@ describe("mcpAppFromToolItem", () => {
       },
     });
     expect(new TextEncoder().encode(JSON.stringify(output)).byteLength).toBeLessThanOrEqual(8_192);
-    expect(output?.t3McpApp?.server).toBe("weather");
+    expect(output?.prismuxMcpApp?.server).toBe("weather");
   });
 });
 

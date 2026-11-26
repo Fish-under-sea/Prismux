@@ -39,7 +39,7 @@ interface Setup {
   readonly service: BootService.BootServiceStatus;
   /** Null in builds without Prismux Connect. Off when Prismux Connect revoked the link. */
   readonly connect: boolean | null;
-  /** Prismux Connect revoked the link; `t3 connect` links again. */
+  /** Prismux Connect revoked the link; `prismux connect` links again. */
   readonly connectRevoked: boolean;
   readonly lan: boolean;
   /** An installed service with no PRISMUX_LAN or PRISMUX_HOST keeps the old default: on. */

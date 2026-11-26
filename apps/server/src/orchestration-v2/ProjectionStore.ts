@@ -101,7 +101,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import type * as Statement from "effect/sql/Statement";
 
-import { MCP_APP_OUTPUT_KEY } from "@prismux/core-shared/mcpApp";
+import { MCP_APP_LEGACY_OUTPUT_KEY, MCP_APP_OUTPUT_KEY } from "@prismux/core-shared/mcpApp";
 import { normalizeProjectPathForComparison } from "@prismux/core-shared/path";
 import { threadHtmlRenderAttachmentIds } from "../attachmentStore.ts";
 import { DELEGATED_TASK_MESSAGE_CONDITION } from "./delegatedTaskMessage.ts";
@@ -912,7 +912,7 @@ export interface ProviderBatchProjection {
 }
 export class ProviderBatchProjectionState extends Context.Reference<
   ProviderBatchProjection | undefined
->("t3/orchestration-v2/ProjectionStore/ProviderBatchProjectionState", {
+>("prismux/orchestration-v2/ProjectionStore/ProviderBatchProjectionState", {
   defaultValue: () => undefined,
 }) {}
 
@@ -2327,7 +2327,7 @@ function shellFromState(input: {
 // in migration 095, where a tool name counts anywhere after the first toolName. Searching from
 // that first one once avoids rescanning the payload for every nested toolName.
 const INLINE_WORK_OUTPUT = new RegExp(
-  `htmlRender|${MCP_APP_OUTPUT_KEY}|"viewedImagePath"|sentMessage`,
+  `htmlRender|${MCP_APP_OUTPUT_KEY}|${MCP_APP_LEGACY_OUTPUT_KEY}|"viewedImagePath"|sentMessage`,
   "i",
 );
 const TOOL_NAME_PREFIX = /"toolName":"/i;
@@ -6868,6 +6868,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         AND item.type = 'dynamic_tool'
         AND (item.payload_json LIKE '%htmlRender%'
           OR item.payload_json LIKE ${`%${MCP_APP_OUTPUT_KEY}%`}
+          OR item.payload_json LIKE ${`%${MCP_APP_LEGACY_OUTPUT_KEY}%`}
           OR item.payload_json LIKE '%preview_recording_stop%')
         AND ${runOrdinalBetween("item.run_id", from, through)}
     `,

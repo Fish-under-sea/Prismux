@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 
 import { APP_VERSION } from "../../branding";
-import { T3AppIcon } from "../../components/T3AppIcon";
+import { PrismuxAppIcon } from "../../components/PrismuxAppIcon";
 import { openSafeExternalHttpsUrl, validateSafeHttpsUrl } from "../../components/settings/prismuxProviderMeta";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -342,7 +342,7 @@ export function PrismuxUpdateReleaseModal() {
         <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border/60 px-5 pt-4 pb-3.5">
           <div className="min-w-0 flex-1 space-y-1.5">
             <div className="flex flex-wrap items-center gap-2">
-              <T3AppIcon className="size-7 shrink-0 rounded-lg object-contain ring-1 ring-border/35 [[data-pmx-glass='1']_&]:ring-foreground/15" />
+              <PrismuxAppIcon className="size-7 shrink-0 rounded-lg object-contain ring-1 ring-border/35 [[data-pmx-glass='1']_&]:ring-foreground/15" />
               <h2 id={titleId} className="text-base font-semibold tracking-tight text-foreground">
                 发现新版本
               </h2>

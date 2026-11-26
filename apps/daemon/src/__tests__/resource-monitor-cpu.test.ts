@@ -124,7 +124,7 @@ test("ResourceMonitorService preserves non-zero OS process CPU% across cached os
   const monitor = new ResourceMonitorService({
     ptyPool: pool,
     mainPid: 3000,
-    t3ServerPid: 3001,
+    coreServerPid: 3001,
     treeCacheTtlMs: 2_000,
     sampleProcessTree: async () => {
       sampleCall += 1;
@@ -170,21 +170,21 @@ test("ResourceMonitorService preserves non-zero OS process CPU% across cached os
     const snap2 = await monitor.getResources({ forceRefresh: true });
     assert.equal(sampleCall, 2);
     assert.ok(
-      snap2.t3Server !== null &&
-        snap2.t3Server.cpuPercent !== null &&
-        snap2.t3Server.cpuPercent > 0,
-      `Expected positive T3 Server CPU% on frame 2, got ${String(snap2.t3Server?.cpuPercent)}`
+      snap2.coreServer !== null &&
+        snap2.coreServer.cpuPercent !== null &&
+        snap2.coreServer.cpuPercent > 0,
+      `Expected positive T3 Server CPU% on frame 2, got ${String(snap2.coreServer?.cpuPercent)}`
     );
-    const measuredT3Cpu = snap2.t3Server.cpuPercent;
+    const measuredT3Cpu = snap2.coreServer.cpuPercent;
 
     // Frame 3: cache hit after 80ms (still within 2000ms treeCacheTtlMs) MUST NOT wipe CPU% to 0.0%!
     await new Promise((r) => setTimeout(r, 80));
     const snap3 = await monitor.getResources({ forceRefresh: false });
     assert.equal(sampleCall, 2, "Expected treeCacheTtlMs cache hit");
     assert.equal(
-      snap3.t3Server?.cpuPercent,
+      snap3.coreServer?.cpuPercent,
       measuredT3Cpu,
-      `Cached osTree hit wiped T3 Server CPU% from ${measuredT3Cpu} to ${String(snap3.t3Server?.cpuPercent)}`
+      `Cached osTree hit wiped T3 Server CPU% from ${measuredT3Cpu} to ${String(snap3.coreServer?.cpuPercent)}`
     );
   } finally {
     monitor.stop();
@@ -255,7 +255,7 @@ test("ResourceMonitorService live calibration captures ~1-core CPU usage from a 
   const monitor = new ResourceMonitorService({
     ptyPool: pool,
     mainPid: process.pid,
-    t3ServerPid: burner.pid,
+    coreServerPid: burner.pid,
     treeCacheTtlMs: 0
   });
 
@@ -270,7 +270,7 @@ test("ResourceMonitorService live calibration captures ~1-core CPU usage from a 
 
     // Pass 2: real delta measurement
     const snap2 = await monitor.getResources({ forceRefresh: true });
-    const burnerCpu = snap2.t3Server?.cpuPercent;
+    const burnerCpu = snap2.coreServer?.cpuPercent;
 
     assert.ok(
       typeof burnerCpu === "number" && burnerCpu > 0.5,

@@ -14,9 +14,9 @@ const kindOf = (url: string) => sourceControlClients.parseChangeRequestUrl(url)?
 
 describe("sourceControlClients.parseChangeRequestUrl", () => {
   it("reads a GitHub pull request, lower-casing the repository", () => {
-    expect(parse("https://github.com/T3Tools/Prismux/pull/123")).toEqual({
+    expect(parse("https://github.com/PrismuxTools/Prismux/pull/123")).toEqual({
       host: "github.com",
-      repository: "t3tools/prismux",
+      repository: "prismuxtools/prismux",
       number: 123,
     });
   });
@@ -320,19 +320,19 @@ describe("sourceControlClients.recognizeRemote", () => {
 describe("sourceControlClients repository keys", () => {
   // Persisted as `repositoryIdentity.canonicalKey` and in thread pull request keys.
   it.each([
-    ["git@github.com:T3Tools/Prismux.git", "github.com/t3tools/prismux"],
+    ["git@github.com:PrismuxTools/Prismux.git", "github.com/prismuxtools/prismux"],
     ["ssh://git@gitlab.company.com:2222/team/project.git", "gitlab.company.com/team/project"],
     [
-      "git@ssh.dev.azure.com:v3/T3Tools/Platform/Prismux",
-      "dev.azure.com/t3tools/platform/_git/prismux",
+      "git@ssh.dev.azure.com:v3/PrismuxTools/Platform/Prismux",
+      "dev.azure.com/prismuxtools/platform/_git/prismux",
     ],
     [
-      "T3Tools@vs-ssh.visualstudio.com:v3/T3Tools/Platform/Prismux",
-      "t3tools.visualstudio.com/platform/_git/prismux",
+      "PrismuxTools@vs-ssh.visualstudio.com:v3/PrismuxTools/Platform/Prismux",
+      "prismuxtools.visualstudio.com/platform/_git/prismux",
     ],
     [
-      "https://T3Tools.visualstudio.com/DefaultCollection/Platform/_git/Prismux",
-      "t3tools.visualstudio.com/defaultcollection/platform/_git/prismux",
+      "https://PrismuxTools.visualstudio.com/DefaultCollection/Platform/_git/Prismux",
+      "prismuxtools.visualstudio.com/defaultcollection/platform/_git/prismux",
     ],
     ["git@ssh.dev.azure.com:v3/o/p", "ssh.dev.azure.com/v3/o/p"],
     ["ssh.dev.azure.com/v3/o/p/r", "ssh.dev.azure.com/v3/o/p/r"],

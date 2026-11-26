@@ -32,7 +32,7 @@ import * as ServerConfig from "../config.ts";
 import { makeFakeWslHost } from "../testUtils/fakeWsl.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
-import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
+import * as PrismuxProjectFileLoader from "../project/PrismuxProjectFileLoader.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { assetFileResponse } from "../http.ts";
 import { ASSET_ROUTE_PREFIX, issueAssetUrl, readMcpAppHtml, resolveAsset } from "./AssetAccess.ts";
@@ -72,7 +72,7 @@ const screenshotItem = {
   ordinal: 1,
   status: "completed" as const,
   title: null,
-  toolName: "mcp__t3-code__device_screenshot",
+  toolName: "mcp__prismux__device_screenshot",
   input: { deviceId: "phone" },
   output: {
     content: [
@@ -120,7 +120,7 @@ const layerTest = Layer.mergeAll(
   WorkspacePaths.layer,
   ProjectFaviconResolver.layer.pipe(
     Layer.provide(WorkspacePaths.layer),
-    Layer.provide(T3ProjectFileLoader.layer),
+    Layer.provide(PrismuxProjectFileLoader.layer),
   ),
   NativeAppIconResolver.layer.pipe(Layer.provide(layerConfig)),
   AssetSigner.layer.pipe(

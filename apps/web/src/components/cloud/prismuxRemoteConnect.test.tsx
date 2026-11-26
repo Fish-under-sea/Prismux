@@ -91,7 +91,7 @@ describe("prismuxRemoteConnect pure QR remote access", () => {
     expect(sidebarNavSource).not.toContain("T3ConnectSidebarAvatar");
 
     const installCommandsSource = NodeFS.readFileSync(
-      NodePath.resolve(import.meta.dirname, "../InstallT3Commands.tsx"),
+      NodePath.resolve(import.meta.dirname, "../InstallPrismuxCommands.tsx"),
       "utf8",
     );
     expect(installCommandsSource).not.toContain("t3.codes");

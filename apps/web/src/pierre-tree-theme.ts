@@ -56,11 +56,11 @@ export const PIERRE_TREE_UNSAFE_CSS = `
       transition-duration: 0.01ms;
     }
   }
-  svg[data-icon-name='t3-tree-icon-loading'] { opacity: 0.6; }
+  svg[data-icon-name='prismux-tree-icon-loading'] { opacity: 0.6; }
   @media (prefers-reduced-motion: no-preference) {
-    svg[data-icon-name='t3-tree-icon-loading'] { animation: t3-tree-spin 1s linear infinite; }
+    svg[data-icon-name='prismux-tree-icon-loading'] { animation: prismux-tree-spin 1s linear infinite; }
   }
-  @keyframes t3-tree-spin { to { transform: rotate(360deg); } }
+  @keyframes prismux-tree-spin { to { transform: rotate(360deg); } }
 `;
 
 export function pierreTreeStyle(colorScheme: "light" | "dark"): CSSProperties {

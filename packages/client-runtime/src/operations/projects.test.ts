@@ -97,12 +97,12 @@ describe("add project shared logic", () => {
 
   it("clones the repository when given a page URL copied from the browser", () => {
     for (const [pageUrl, pageRoute, repository] of [
-      ["https://github.com/Fish-under-sea/Prismux/tree/main", "/tree/", "prismux"],
+      ["https://github.com/Fish-under-sea/Prismux/tree/main", "/tree/", "Prismux"],
       ["https://gitlab.com/gitlab-org/gitlab-runner/-/tree/main", "/-/", "gitlab-runner"],
-      ["https://git.cafe/Fish-under-sea/Prismux/tree/main", "/tree/", "prismux"],
+      ["https://git.cafe/Fish-under-sea/Prismux/tree/main", "/tree/", "Prismux"],
       ["https://gitlab.example.test/g/p/-/blob/main/src/branch/x", "/-/", "p"],
       ["https://code.company.test/g/p/-/tree/main", "/-/", "p"],
-      ["https://github.com/Fish-under-sea/Prismux/tree/release.git", "/tree/", "prismux"],
+      ["https://github.com/Fish-under-sea/Prismux/tree/release.git", "/tree/", "Prismux"],
     ] as const) {
       const cloneUrl = normalizePastedCloneUrl(pageUrl);
       expect(cloneUrl).not.toContain(pageRoute);

@@ -126,9 +126,9 @@ function makeSession(
       if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };
       if (method === "Page.createIsolatedWorld") {
         const worldContexts: Record<string, number> = {
-          "t3-preview-viewport": 9,
-          "t3-preview-title": 11,
-          "t3-preview": 1,
+          "prismux-preview-viewport": 9,
+          "prismux-preview-title": 11,
+          "prismux-preview": 1,
         };
         return {
           executionContextId: worldContexts[(input as { worldName: string }).worldName] ?? 7,
@@ -1363,7 +1363,7 @@ it.effect.each([{ truncated: false }, { truncated: true }])(
         let stagedPath: string | undefined;
         const download = Promise.withResolvers<{ saveAs: (path: string) => Promise<void> }>();
         const sandbox = NodeVM.createContext({
-          __t3Recorder: {
+          __prismuxRecorder: {
             frame: async () => true,
             stop: async () => ({ mimeType: "video/webm", count: 1, bytes }),
             chunk: async () => {

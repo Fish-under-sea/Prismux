@@ -10,7 +10,7 @@ import type {
 import { isOrchestrationV2WorkActive } from "@prismux/core-contracts";
 import * as Predicate from "effect/Predicate";
 
-import { resolveT3McpToolId } from "./t3McpToolPresentation.ts";
+import { resolvePrismuxMcpToolId } from "./prismuxMcpToolPresentation.ts";
 
 const BACKGROUND_TURN_ITEM_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
   "command_execution",
@@ -71,9 +71,9 @@ export function deriveBlockedOnThreadWait(input: {
       continue;
     }
     if (item.type !== "dynamic_tool") return false;
-    const tool = resolveT3McpToolId(item.toolName);
+    const tool = resolvePrismuxMcpToolId(item.toolName);
     if (
-      tool !== "t3_thread_wait" &&
+      tool !== "prismux_thread_wait" &&
       !(
         tool === "delegate_task" &&
         Predicate.isObject(item.input) &&

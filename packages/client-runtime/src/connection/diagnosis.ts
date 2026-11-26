@@ -1,6 +1,6 @@
 import {
-  t3ConnectTroubleshootingUrl,
-  type T3ConnectTroubleshootingSection,
+  prismuxConnectTroubleshootingUrl,
+  type PrismuxConnectTroubleshootingSection,
 } from "@prismux/core-contracts";
 import type { RelayEnvironmentStatusResponse } from "@prismux/core-contracts/relay";
 import * as DateTime from "effect/DateTime";
@@ -169,7 +169,7 @@ function steps(
   resolve: MFunctionType,
 ): string[] {
   const checkHost = resolve(
-    msg("On {host}, check Settings > Sharing & access or run `t3 connect status`.", { host }),
+    msg("On {host}, check Settings > Sharing & access or run `prismux connect status`.", { host }),
   );
   switch (located.cause) {
     case "offline":
@@ -197,7 +197,7 @@ function steps(
               ),
             ),
         resolve(
-          msg("Or run `t3 auth connect-device approve {code}` on {host}.", {
+          msg("Or run `prismux auth connect-device approve {code}` on {host}.", {
             code: code ?? "<code>",
             host,
           }),
@@ -305,12 +305,12 @@ function steps(
 function helpSection(
   located: Located,
   failure: ConnectionAttemptError | null,
-): T3ConnectTroubleshootingSection {
+): PrismuxConnectTroubleshootingSection {
   switch (located.cause) {
     case "offline":
-      return "this-device-cant-reach-t3-connect";
+      return "this-device-cant-reach-prismux-connect";
     case "outdated":
-      return "the-host-runs-an-older-t3-code";
+      return "the-host-runs-an-older-prismux";
     case "clock_skew":
       return "the-clock-is-off";
     case "session_pending":
@@ -319,20 +319,20 @@ function helpSection(
     case "tunnel_not_enabled":
       return "sign-in-account-or-link-problems";
     case "relay_error":
-      return "t3-connect-returned-an-error";
+      return "prismux-connect-returned-an-error";
     case "released":
     case "tunnel_down":
     case "tunnel_pending":
       return "the-hosts-tunnel-is-offline";
     case "origin_unreachable":
     case "invalid_response":
-      return "the-tunnel-works-but-t3-code-does-not-answer";
+      return "the-tunnel-works-but-prismux-does-not-answer";
     case "dns":
     case "tls":
     case "refused":
     case "timeout":
     case "unknown":
-      return "the-t3-connect-address-does-not-resolve-or-answer";
+      return "the-prismux-connect-address-does-not-resolve-or-answer";
     case null:
       break;
   }
@@ -342,21 +342,21 @@ function helpSection(
     failure?.reason === "timeout";
   switch (located.hop) {
     case "device":
-      return "this-device-cant-reach-t3-connect";
+      return "this-device-cant-reach-prismux-connect";
     case "relay":
       return failure?.reason === "authentication"
         ? "sign-in-account-or-link-problems"
-        : "this-device-cant-reach-t3-connect";
+        : "this-device-cant-reach-prismux-connect";
     case "tunnel":
-      return onThisDevice ? "this-device-cant-reach-t3-connect" : "the-hosts-tunnel-is-offline";
+      return onThisDevice ? "this-device-cant-reach-prismux-connect" : "the-hosts-tunnel-is-offline";
     case "server":
       return failure?.reason === "authentication" || failure?.reason === "permission"
         ? "sign-in-account-or-link-problems"
-        : "the-tunnel-works-but-t3-code-does-not-answer";
+        : "the-tunnel-works-but-prismux-does-not-answer";
   }
 }
 
-const T3_CONNECT_NAME = "Prismux Connect";
+const PRISMUX_CONNECT_NAME = "Prismux Connect";
 
 const HOP_ORDER = {
   relay: ["device", "relay", "tunnel", "server"],
@@ -368,7 +368,7 @@ function hopLabel(hop: ConnectionHop, host: string, resolve: MFunctionType): str
     case "device":
       return resolve(msg("This device"));
     case "relay":
-      return T3_CONNECT_NAME;
+      return PRISMUX_CONNECT_NAME;
     case "tunnel":
       return resolve(msg("{host} tunnel", { host }));
     case "server":
@@ -443,7 +443,7 @@ export function presentConnectionDiagnosis(
     facts,
     moreInfoUrl:
       relayPath || located.cause === "session_pending"
-        ? t3ConnectTroubleshootingUrl(helpSection(located, failure))
+        ? prismuxConnectTroubleshootingUrl(helpSection(located, failure))
         : null,
   };
 }

@@ -8,10 +8,10 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import { LEGACY_T3_PROJECT_FILE_NAME, PRISMUX_PROJECT_FILE_NAME } from "@prismux/core-contracts";
-import * as T3ProjectFileLoader from "./T3ProjectFileLoader.ts";
+import * as PrismuxProjectFileLoader from "./PrismuxProjectFileLoader.ts";
 
 const layerTest = Layer.empty.pipe(
-  Layer.provideMerge(T3ProjectFileLoader.layer),
+  Layer.provideMerge(PrismuxProjectFileLoader.layer),
   Layer.provideMerge(NodeServices.layer),
 );
 
@@ -32,11 +32,11 @@ const writeProjectFile = Effect.fn("writeProjectFile")(function* (
   yield* fileSystem.writeFileString(path.join(cwd, fileName), contents).pipe(Effect.orDie);
 });
 
-it.layer(layerTest)("T3ProjectFileLoader", (it) => {
+it.layer(layerTest)("PrismuxProjectFileLoader", (it) => {
   describe("load", () => {
     it.effect("loads prismux.json as the primary project configuration", () =>
       Effect.gen(function* () {
-        const loader = yield* T3ProjectFileLoader.T3ProjectFileLoader;
+        const loader = yield* PrismuxProjectFileLoader.PrismuxProjectFileLoader;
         const cwd = yield* makeTempDir;
         yield* writeProjectFile(cwd, '{ "iconPath": "assets/prismux.svg" }');
 
@@ -48,7 +48,7 @@ it.layer(layerTest)("T3ProjectFileLoader", (it) => {
 
     it.effect("prefers prismux.json when both prismux.json and legacy t3.json exist", () =>
       Effect.gen(function* () {
-        const loader = yield* T3ProjectFileLoader.T3ProjectFileLoader;
+        const loader = yield* PrismuxProjectFileLoader.PrismuxProjectFileLoader;
         const cwd = yield* makeTempDir;
         yield* writeProjectFile(
           cwd,
@@ -77,7 +77,7 @@ it.layer(layerTest)("T3ProjectFileLoader", (it) => {
               warnings.push(String(message));
             }
           });
-          const loader = yield* T3ProjectFileLoader.T3ProjectFileLoader;
+          const loader = yield* PrismuxProjectFileLoader.PrismuxProjectFileLoader;
           const fileSystem = yield* FileSystem.FileSystem;
           const path = yield* Path.Path;
           const cwd = yield* makeTempDir;
@@ -99,7 +99,7 @@ it.layer(layerTest)("T3ProjectFileLoader", (it) => {
 
     it.effect("returns none for malformed JSON without failing", () =>
       Effect.gen(function* () {
-        const loader = yield* T3ProjectFileLoader.T3ProjectFileLoader;
+        const loader = yield* PrismuxProjectFileLoader.PrismuxProjectFileLoader;
         const cwd = yield* makeTempDir;
         yield* writeProjectFile(cwd, "{ not json");
 

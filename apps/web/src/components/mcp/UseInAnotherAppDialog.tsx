@@ -24,13 +24,13 @@ import { m } from "~/i18n/messages";
 import { type ReactNode, useEffect, useEffectEvent, useState } from "react";
 
 import { checkReachability, readLinkState } from "~/cloud/linkEnvironmentAtoms";
-import { isManagedTunnelActive } from "~/cloud/t3ConnectState";
+import { isManagedTunnelActive } from "~/cloud/prismuxConnectState";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { readCachedCloudLinkState } from "~/cloud/cloudLinkState";
 import { useCloudLinkController } from "~/cloud/useCloudLinkController";
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import { isElectron } from "~/env";
-import { useT3ConnectTurnOn } from "~/cloud/useT3ConnectTurnOn";
+import { usePrismuxConnectTurnOn } from "~/cloud/usePrismuxConnectTurnOn";
 import {
   namedClipboardTarget,
   useCopyToClipboard,
@@ -393,7 +393,7 @@ function GateScreen({
   const name = environment.label;
   const gt = useGT();
   const navigate = useNavigate();
-  const turnOnHere = useT3ConnectTurnOn(environment.environmentId);
+  const turnOnHere = usePrismuxConnectTurnOn(environment.environmentId);
   const retry = (onClick: () => void) => (
     <Button variant="outline" onClick={onClick}>
       <T>Check again</T>
@@ -507,7 +507,7 @@ function GateScreen({
             <p className="text-sm text-muted-foreground">{turnOnHere.reason}</p>
           ) : (
             <div className="space-y-2 text-sm">
-              <CommandBlock command="t3 connect link" />
+              <CommandBlock command="prismux connect link" />
               <p>
                 <T>
                   Restart Prismux on <Var>{name}</Var>.

@@ -801,7 +801,7 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
   const commitAppearance = useCallback(
     (
       nextOrUpdater: AppearanceConfig | ((prev: AppearanceConfig) => AppearanceConfig),
-      options?: { syncT3Polarity?: boolean },
+      options?: { syncPolarity?: boolean },
     ) => {
       const prev = appearanceRef.current;
       const rawNext =
@@ -811,7 +811,7 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       setAppearanceState(normalized);
 
       if (
-        options?.syncT3Polarity ||
+        options?.syncPolarity ||
         normalized.themeMode !== prev.themeMode ||
         normalized.glassBasePolarity !== prev.glassBasePolarity
       ) {
@@ -847,7 +847,7 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
   const setThemeMode = useCallback(
     (mode: ThemeMode) => {
       commitAppearance((prev) => setThemeModeWithGlassAutoWake(prev, mode), {
-        syncT3Polarity: true,
+        syncPolarity: true,
       });
     },
     [commitAppearance],
@@ -958,7 +958,7 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
     applyPrismuxAppearanceToDocument(appearance, {
       wallpaperActive,
       reducedTransparency,
-      syncT3DarkClass: false,
+      syncDarkClass: false,
     });
     syncBrowserChromeTheme();
     // Defense-in-depth for Issue #4: in non-glass Light/Dark modes, Prismux's

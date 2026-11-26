@@ -5,7 +5,7 @@ import {
   ORCHESTRATION_PROTOCOL_VERSION,
   PortSchema,
 } from "@prismux/core-contracts";
-import { resolveWorktreeT3Home } from "@prismux/core-shared/devHome";
+import { resolveWorktreePrismuxHome } from "@prismux/core-shared/devHome";
 import * as HostProcess from "@prismux/core-shared/HostProcess";
 import { formatHostForUrl, isWildcardHost } from "@prismux/core-shared/hostClassification";
 import { DEFAULT_SIGNAL_EXPORT } from "@prismux/core-shared/observability";
@@ -50,7 +50,7 @@ import { authScopesFlag } from "./authScopes.ts";
 import { baseDirFlag, DurationFromString } from "./config.ts";
 import { hostShellWord, resolveHostCliCommand } from "./invocation.ts";
 
-const WELL_KNOWN_ENVIRONMENT_PATH = "/.well-known/t3/environment";
+const WELL_KNOWN_ENVIRONMENT_PATH = "/.well-known/prismux/environment";
 const PAIR_PROBE_TIMEOUT = Duration.millis(2_500);
 // Tailscale's first HTTPS request may take seconds to provision a certificate.
 const TAILSCALE_PROBE_ATTEMPTS = 5;
@@ -235,7 +235,7 @@ const formatPairOutput = (input: {
 type EnvironmentProbeResult =
   | { readonly _tag: "descriptor"; readonly descriptor: ExecutionEnvironmentDescriptor }
   | { readonly _tag: "unreachable" }
-  | { readonly _tag: "not-a-t3-server" };
+  | { readonly _tag: "not-a-prismux-server" };
 
 const probeEnvironmentDescriptor: (
   baseUrl: string,
@@ -255,7 +255,7 @@ const probeEnvironmentDescriptor: (
     }
     const descriptor = yield* HttpClientResponse.filterStatusOk(response).pipe(
       Effect.flatMap(HttpClientResponse.schemaBodyJson(ExecutionEnvironmentDescriptor)),
-      Effect.mapError(() => ({ _tag: "not-a-t3-server" }) as const),
+      Effect.mapError(() => ({ _tag: "not-a-prismux-server" }) as const),
     );
     return { _tag: "descriptor", descriptor } as const;
   },
@@ -282,7 +282,7 @@ const discoverPairTarget = Effect.fn("pair.discoverPairTarget")(function* (
     // `.t3` counts. Minting opens the target database with this checkout's
     // migrations, so falling back to the shared home could migrate the live
     // install with unreleased schema.
-    const worktreeHome = yield* resolveWorktreeT3Home(yield* HostProcess.WorkingDirectory);
+    const worktreeHome = yield* resolveWorktreePrismuxHome(yield* HostProcess.WorkingDirectory);
     if (worktreeHome !== undefined) {
       bases.push(worktreeHome);
       inLinkedWorktree = true;
@@ -424,7 +424,7 @@ const resolveTailscalePairingBase = Effect.fn("pair.resolveTailscalePairingBase"
         return { baseUrl, notes };
       }
     }
-    if (existing._tag === "not-a-t3-server") {
+    if (existing._tag === "not-a-prismux-server") {
       return yield* new ServePortOccupiedError({ servePort: input.servePort });
     }
 

@@ -138,7 +138,7 @@ describe("resource telemetry process model", () => {
     expect(result.groups.backend.processCount).toBe(4);
     expect(result.groups.monitor.processCount).toBe(1);
     expect(result.groups.monitor.processStarts).toBe(1);
-    expect(result.groups.allT3.processStarts).toBe(5);
+    expect(result.groups.allPrismux.processStarts).toBe(5);
   });
 
   it("deduplicates Electron metrics and classifies Electron descendants", () => {
@@ -236,8 +236,8 @@ describe("resource telemetry process model", () => {
       processStarts: 2,
     });
     expect(result.groups.monitor.processCount).toBe(1);
-    expect(result.groups.allT3.currentCpuPercent).toBe(63.875);
-    expect(result.groups.allT3.currentRssBytes).toBe(6_144);
+    expect(result.groups.allPrismux.currentCpuPercent).toBe(63.875);
+    expect(result.groups.allPrismux.currentRssBytes).toBe(6_144);
   });
 
   it("ignores stale Electron metrics after PID reuse", () => {
@@ -676,10 +676,10 @@ describe("resource telemetry process model", () => {
     const electron = second.processes.find((process) => process.identity.pid === 300)!;
     expect(electron.cpuPercent).toBeCloseTo(4.075, 4);
     expect(second.groups.electron.currentCpuPercent).toBeCloseTo(4.075, 4);
-    expect(second.groups.allT3.currentCpuPercent).toBeCloseTo(4.175, 4);
-    expect(second.groups.allT3.currentCpuPercent).toBeLessThanOrEqual(100);
+    expect(second.groups.allPrismux.currentCpuPercent).toBeCloseTo(4.175, 4);
+    expect(second.groups.allPrismux.currentCpuPercent).toBeLessThanOrEqual(100);
     // Peak memory must track native Private Working Set (130 MB), NOT Electron's inflated 640 MB shared peak.
     expect(electron.peakResidentBytes).toBe(130_000_000);
-    expect(second.groups.allT3.peakRssBytes).toBe(172_000_000);
+    expect(second.groups.allPrismux.peakRssBytes).toBe(172_000_000);
   });
 });

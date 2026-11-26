@@ -188,13 +188,13 @@ function routeAddressKey(route: ConnectionRoute): string | null {
   }
 }
 
-const T3_CONNECT_NAME = "Prismux Connect";
+const PRISMUX_CONNECT_NAME = "Prismux Connect";
 
 /** The route's label in English. Display sites use `connectionRouteLabelText`. */
 export function connectionRouteLabel(route: ConnectionRoute): string {
   switch (connectionRouteKind(route)) {
     case "relay":
-      return T3_CONNECT_NAME;
+      return PRISMUX_CONNECT_NAME;
     case "loopback":
       return msg("This device");
     case "lan":
@@ -270,8 +270,8 @@ export function mergeLearnedRoutes(input: {
   const authorization =
     active._tag === "RelayConnectionTarget" ||
     (activeProfile?._tag === "BearerConnectionProfile" &&
-      activeProfile.authorization === "t3-connect")
-      ? ("t3-connect" as const)
+      activeProfile.authorization === "prismux-connect")
+      ? ("prismux-connect" as const)
       : undefined;
   const sharedCredential =
     authorization === undefined && active._tag === "BearerConnectionTarget"
@@ -388,7 +388,7 @@ export function sendsTokenInClear(
   tailscale?: boolean,
 ): boolean {
   const profile = Option.getOrNull(route.profile);
-  if (profile?._tag !== "BearerConnectionProfile" || profile.authorization === "t3-connect") {
+  if (profile?._tag !== "BearerConnectionProfile" || profile.authorization === "prismux-connect") {
     return false;
   }
   if ((tailscale ?? profile.network === "tailscale") || !profile.httpBaseUrl.startsWith("http:")) {
@@ -470,7 +470,7 @@ export function routesAfterRemoving(
     if (route === removed) return false;
     if (!isLearned(route)) return true;
     const profile = Option.getOrNull(route.profile);
-    if (profile?._tag === "BearerConnectionProfile" && profile.authorization === "t3-connect") {
+    if (profile?._tag === "BearerConnectionProfile" && profile.authorization === "prismux-connect") {
       return removed.target._tag !== "RelayConnectionTarget";
     }
     return credentialConnectionId(connectionRouteId(route.target)) !== removedId;

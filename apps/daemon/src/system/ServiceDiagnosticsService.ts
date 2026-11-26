@@ -170,8 +170,6 @@ export interface ServiceDiagnosticsOptions {
   t3RpcClient?: CoreRpcClient;
   /** Optional explicit Core Server URL (HTTP or WS) when desktop-hosted. */
   coreServerUrl?: string;
-  /** @deprecated Use coreServerUrl */
-  t3ServerUrl?: string;
   /** Optional Core Server bearer token used strictly as a probe header (never logged/returned). */
   coreToken?: string;
   /** @deprecated Use coreToken */
@@ -1729,7 +1727,7 @@ export async function defaultCliProbe(
  * Converts a T3 Server URL (HTTP/HTTPS or WS/WSS, including `/ws` or `/rpc`
  * paths) into an HTTP/HTTPS endpoint suitable for lightweight liveness probing.
  */
-export function normalizeT3HttpProbeUrl(rawUrl: string): string | null {
+export function normalizeCoreHttpProbeUrl(rawUrl: string): string | null {
   const trimmed = rawUrl.trim();
   if (trimmed.length === 0) {
     return null;
@@ -2231,7 +2229,7 @@ async function detectLocalToolchainPackageAsync(
   const home = homedir();
   const roots = [
     join(dataDir, "device-toolchain"),
-    join(home, ".t3", "device-toolchain"),
+    join(home, ".prismux", "device-toolchain"),
     join(home, ".prismux", "device-toolchain")
   ];
 
@@ -2516,7 +2514,7 @@ export class ServiceDiagnosticsService {
         run: async () => this.checkDaemonCore()
       },
       {
-        id: "host.t3_server",
+        id: "host.core_server",
         category: "host_core",
         name: "Prismux Server",
         run: () => this.checkCoreServer(perCheckTimeout)
@@ -2836,7 +2834,7 @@ export class ServiceDiagnosticsService {
     const connected = rpc?.connected ?? false;
     if (connected) {
       return {
-        id: "host.t3_server",
+        id: "host.core_server",
         category: "host_core",
         name: "Prismux Server",
         status: "ok",
@@ -2847,10 +2845,10 @@ export class ServiceDiagnosticsService {
 
     const rawCandidates = [
       this.opts.coreServerUrl,
-      this.opts.t3ServerUrl,
+      this.opts.coreServerUrl,
       process.env["PRISMUX_SERVER_URL"],
       process.env["PRISMUX_CORE_SERVER_URL"],
-      process.env["PRISMUX_T3_SERVER_URL"],
+      process.env["PRISMUX_CORE_SERVER_URL"],
       sup?.healthUrl,
       rpc?.wsUrl
     ];
@@ -2859,7 +2857,7 @@ export class ServiceDiagnosticsService {
       if (typeof raw !== "string") {
         continue;
       }
-      const normalized = normalizeT3HttpProbeUrl(raw);
+      const normalized = normalizeCoreHttpProbeUrl(raw);
       if (normalized !== null && !probeUrls.includes(normalized)) {
         probeUrls.push(normalized);
       }
@@ -2899,7 +2897,7 @@ export class ServiceDiagnosticsService {
           const latencySuffix =
             probed.latencyMs !== null ? ` · ${probed.latencyMs}ms` : "";
           return {
-            id: "host.t3_server",
+            id: "host.core_server",
             category: "host_core",
             name: "Prismux Server",
             status: "ok",
@@ -2915,7 +2913,7 @@ export class ServiceDiagnosticsService {
 
       if (sup?.state === "running") {
         return {
-          id: "host.t3_server",
+          id: "host.core_server",
           category: "host_core",
           name: "Prismux Server",
           status: "degraded",
@@ -2931,7 +2929,7 @@ export class ServiceDiagnosticsService {
         // keep full URL
       }
       return {
-        id: "host.t3_server",
+        id: "host.core_server",
         category: "host_core",
         name: "Prismux Server",
         status: "degraded",
@@ -2946,7 +2944,7 @@ export class ServiceDiagnosticsService {
 
     if (sup?.state === "running") {
       return {
-        id: "host.t3_server",
+        id: "host.core_server",
         category: "host_core",
         name: "Prismux Server",
         status: "degraded",
@@ -2955,7 +2953,7 @@ export class ServiceDiagnosticsService {
       };
     }
     return {
-      id: "host.t3_server",
+      id: "host.core_server",
       category: "host_core",
       name: "Prismux Server",
       status: "degraded",

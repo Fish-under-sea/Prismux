@@ -42,7 +42,7 @@ import * as HostProcess from "@prismux/core-shared/HostProcess";
 import { compactTraceAttributes } from "@prismux/core-shared/observability";
 import { decodeJsonResult } from "@prismux/core-shared/schemaJson";
 import { resolveSpawnCommand, runsGitWithoutConsole } from "@prismux/core-shared/shell";
-import { parseT3ProjectFile } from "@prismux/core-shared/t3ProjectFile";
+import { parsePrismuxProjectFile } from "@prismux/core-shared/prismuxProjectFile";
 import { resolveProjectFileBackedSetting } from "@prismux/core-shared/projectSettings";
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
@@ -2406,7 +2406,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     options?: { readonly allowRemoteOfCurrent?: boolean },
     trace?: { dependsOnRemoteOfCurrent: boolean; degraded: boolean },
   ) {
-    const configuredBaseRef = yield* readConfigValue(cwd, `branch.${refName}.t3-merge-base-ref`);
+    const configuredBaseRef = yield* readConfigValue(cwd, `branch.${refName}.prismux-merge-base-ref`);
     if (
       configuredBaseRef?.startsWith("refs/heads/") ||
       configuredBaseRef?.startsWith("refs/remotes/")
@@ -3909,10 +3909,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           key: branchBaseConfigKey(branch),
           value: upstream.branchName,
         });
-        if (!(yield* readConfigValue(cwd, `branch.${branch}.t3-merge-base-ref`))) {
+        if (!(yield* readConfigValue(cwd, `branch.${branch}.prismux-merge-base-ref`))) {
           yield* writeConfigValue({
             cwd,
-            key: `branch.${branch}.t3-merge-base-ref`,
+            key: `branch.${branch}.prismux-merge-base-ref`,
             value:
               upstream.remoteName === "."
                 ? `refs/heads/${upstream.branchName}`
@@ -5783,7 +5783,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const ref = refName === "-" ? "@{-1}" : refName;
     const projectFile = yield* readProjectFileFromRef(cwd, ref);
     if (projectFile === null) return null;
-    const file = parseT3ProjectFile(projectFile.stdout);
+    const file = parsePrismuxProjectFile(projectFile.stdout);
     if (file === null) {
       yield* Effect.logWarning(
         `${projectFile.fileName} is invalid; checking out the full worktree`,
@@ -5955,7 +5955,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       : null;
     const lockReason =
       addHelp && `${addHelp.stdout}\n${addHelp.stderr}`.includes("--reason")
-        ? `t3-create-${yield* random.uuidV4()}`
+        ? `prismux-create-${yield* random.uuidV4()}`
         : undefined;
 
     if (newRefName) {
@@ -6139,7 +6139,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               yield* readProjectFileFromRef(worktreePath, "HEAD").pipe(
                 Effect.flatMap((projectFile) => {
                   if (projectFile === null) return Effect.succeed(null);
-                  const file = parseT3ProjectFile(projectFile.stdout);
+                  const file = parsePrismuxProjectFile(projectFile.stdout);
                   return file === null
                     ? Effect.logWarning(
                         `${projectFile.fileName} is invalid; initializing submodules recursively`,
@@ -6154,7 +6154,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         );
     if (hasSubmodules && submoduleMode.value === "none" && progress?.onSubmodulesDisabled) {
       yield* progress.onSubmodulesDisabled({
-        source: submoduleMode.source === "t3.json" ? "t3.json" : "settings",
+        source: submoduleMode.source === "prismux.json" ? "prismux.json" : "settings",
       });
     }
     if (submoduleMode.value !== "none") {
@@ -6278,7 +6278,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           // The base key names a branch on the host; this one keeps the remote it came from.
           yield* writeConfigValue({
             cwd: input.cwd,
-            key: `branch.${newRefName}.t3-merge-base-ref`,
+            key: `branch.${newRefName}.prismux-merge-base-ref`,
             value: base.baseRef,
           });
         }

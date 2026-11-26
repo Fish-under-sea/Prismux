@@ -138,7 +138,7 @@ const EnvServerConfig = Config.all({
   ),
   port: Config.Port("PRISMUX_PORT").pipe(Config.option, Config.map(Option.getOrUndefined)),
   host: Config.String("PRISMUX_HOST").pipe(Config.option, Config.map(Option.getOrUndefined)),
-  t3Home: Config.String("PRISMUX_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  prismuxHome: Config.String("PRISMUX_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devUrl: Config.URL("VITE_DEV_SERVER_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devAllowedOrigins: Config.String("PRISMUX_DEV_ALLOWED_ORIGINS").pipe(
     Config.withDefault(""),
@@ -334,11 +334,11 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     mode === "web" && devUrl !== undefined ? yield* DevAuthTokenConfig : undefined;
   const explicitBaseDir = resolveOptionPrecedence(
     normalizedFlags.baseDir,
-    Option.fromUndefinedOr(env.t3Home),
+    Option.fromUndefinedOr(env.prismuxHome),
   ).pipe(Option.filter((value) => value.trim().length > 0));
   const baseDir = yield* resolveBaseDir(
     Option.getOrUndefined(
-      resolveOptionPrecedence(explicitBaseDir, Option.fromUndefinedOr(bootstrap?.t3Home)),
+      resolveOptionPrecedence(explicitBaseDir, Option.fromUndefinedOr(bootstrap?.prismuxHome)),
     ),
   );
   const rawCwd = Option.getOrElse(normalizedFlags.cwd, () => process.cwd());
@@ -436,7 +436,7 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     Option.fromUndefinedOr(bootstrap?.host),
   );
   // Private networks only, so clients learn a LAN address and prefer it over
-  // Prismux Connect. `t3 service install` writes PRISMUX_LAN=false for a new
+  // Prismux Connect. `prismux service install` writes PRISMUX_LAN=false for a new
   // service; one installed before PRISMUX_LAN existed keeps listening.
   const lan = resolveOptionPrecedence(normalizedFlags.lan, Option.fromUndefinedOr(env.lan));
   const privateNetworkOnly =

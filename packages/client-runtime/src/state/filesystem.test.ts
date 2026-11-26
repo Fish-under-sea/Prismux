@@ -115,7 +115,7 @@ describe("filesystem browse model", () => {
     });
     expect(getFilesystemBrowseTabCompletion([], "x")).toBeNull();
     // The list also shows substring and fuzzy matches; Tab completes only the typed name.
-    expect(getFilesystemBrowseTabCompletion([entry("prismux"), entry("my-prismux")], "t3")).toEqual({
+    expect(getFilesystemBrowseTabCompletion([entry("prismux"), entry("my-prismux")], "pr")).toEqual({
       name: "prismux",
       isComplete: true,
     });
@@ -125,7 +125,7 @@ describe("filesystem browse model", () => {
         "op",
       ),
     ).toEqual({ name: "Open", isComplete: false });
-    expect(getFilesystemBrowseTabCompletion([entry("prismux")], "tcd")).toBeNull();
+    expect(getFilesystemBrowseTabCompletion([entry("prismux")], "pmx")).toBeNull();
   });
 
   it("matches folder names stored decomposed, as macOS Finder names them", () => {
@@ -177,7 +177,7 @@ describe("browse navigation", () => {
 });
 
 describe("browse entry filtering", () => {
-  const entries = ["my-prismux", "prismux", "cotton", "Prismux-old", ".t3", "docs"].map((name) => ({
+  const entries = ["my-prismux", "prismux", "cotton", "Prismux-old", ".prismux", "docs"].map((name) => ({
     name,
     fullPath: `~/code/${name}`,
   }));
@@ -189,9 +189,9 @@ describe("browse entry filtering", () => {
   });
 
   it("matches substrings and subsequences, best match first", () => {
-    expect(names("code")).toEqual(["prismux", "Prismux-old", "my-prismux"]);
-    expect(names("t3c")).toEqual(["prismux", "Prismux-old", "my-prismux"]);
-    expect(names("tcd")).toEqual(["prismux", "Prismux-old", "my-prismux"]);
+    expect(names("mux")).toEqual(["prismux", "Prismux-old", "my-prismux"]);
+    expect(names("pri")).toEqual(["prismux", "Prismux-old", "my-prismux"]);
+    expect(names("pmx")).toEqual(["prismux", "Prismux-old", "my-prismux"]);
     expect(names("xyz")).toEqual([]);
   });
 
@@ -207,8 +207,8 @@ describe("browse entry filtering", () => {
   });
 
   it("shows dot folders only when the query starts with a dot", () => {
-    expect(names("t3")).not.toContain(".t3");
-    expect(filterFilesystemBrowseEntries(entries, ".t3")).toEqual({
+    expect(names("prismux")).not.toContain(".prismux");
+    expect(filterFilesystemBrowseEntries(entries, ".prismux")).toEqual({
       visibleEntries: [entries[4]],
       exactEntry: entries[4],
     });

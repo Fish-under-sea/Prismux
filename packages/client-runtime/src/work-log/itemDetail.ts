@@ -1,6 +1,6 @@
 import type { AssetResource, OrchestrationV2TurnItem } from "@prismux/core-contracts";
 import { commandItemOutput } from "@prismux/core-shared/commandOutput";
-import { MCP_APP_OUTPUT_KEY } from "@prismux/core-shared/mcpApp";
+import { MCP_APP_LEGACY_OUTPUT_KEY, MCP_APP_OUTPUT_KEY } from "@prismux/core-shared/mcpApp";
 import {
   mcpToolResultOutput,
   toolOutputImageBlocks,
@@ -195,7 +195,11 @@ function dynamicToolOutputText(
   item: Extract<OrchestrationV2TurnItem, { readonly type: "dynamic_tool" }>,
 ): string | null {
   const output = item.output;
-  if (!isRecord(output) || !(MCP_APP_OUTPUT_KEY in output) || !("result" in output)) {
+  if (
+    !isRecord(output) ||
+    (!(MCP_APP_OUTPUT_KEY in output) && !(MCP_APP_LEGACY_OUTPUT_KEY in output)) ||
+    !("result" in output)
+  ) {
     return formatToolValue(output, item.viewedImagePath !== undefined);
   }
   const result = output.result;

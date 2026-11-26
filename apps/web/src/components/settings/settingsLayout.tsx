@@ -526,7 +526,7 @@ export function SettingsRow({
     ? { state: "mixed", summary: gt("Mixed across selected environments") }
     : source === "project"
       ? { state: "overridden", summary: gt("Overridden for this project") }
-      : source === "t3.json"
+      : source === "prismux.json"
         ? { state: "inherited", summary: gt("Inherited from the repository's prismux.json") }
         : source === "environment" && scopedKeys.length > 0
           ? {

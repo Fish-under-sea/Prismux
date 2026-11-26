@@ -71,7 +71,7 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const nodePath = yield* HostProcess.ExecutablePath;
   const baseEnv = yield* HostProcess.Environment;
-  const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-antigravity-driver-" });
+  const root = yield* fs.makeTempDirectoryScoped({ prefix: "prismux-antigravity-driver-" });
   const instanceId = ProviderInstanceId.make(path.basename(root));
   const mockAgentPath = yield* path.fromFileUrl(
     new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
@@ -99,16 +99,16 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
       executablePath,
       [
         "#!/bin/sh",
-        ...(options.loginRequired ? ["export T3_ACP_REQUIRE_AUTH=1"] : []),
+        ...(options.loginRequired ? ["export PRISMUX_ACP_REQUIRE_AUTH=1"] : []),
         ...(options.newSessionErrorData === undefined
           ? []
           : [
-              `export T3_ACP_NEW_SESSION_ERROR_DATA=${shellQuote(JSON.stringify(options.newSessionErrorData))}`,
+              `export PRISMUX_ACP_NEW_SESSION_ERROR_DATA=${shellQuote(JSON.stringify(options.newSessionErrorData))}`,
             ]),
         ...(options.initialMode === undefined
           ? []
-          : [`export T3_ACP_INITIAL_MODE=${shellQuote(options.initialMode)}`]),
-        `export T3_ACP_AGENT_VERSION=${shellQuote(options.agentVersion ?? "1.5.12")}`,
+          : [`export PRISMUX_ACP_INITIAL_MODE=${shellQuote(options.initialMode)}`]),
+        `export PRISMUX_ACP_AGENT_VERSION=${shellQuote(options.agentVersion ?? "1.5.12")}`,
         `exec ${shellQuote(nodePath)} ${shellQuote(mockAgentPath)} "$@"`,
         "",
       ].join("\n"),
@@ -221,8 +221,8 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
     config: { ...AntigravityDriver.defaultConfig(), ...options.config },
     environment: [
       { name: "PATH", value: instancePath },
-      { name: "T3_ACP_ANTIGRAVITY", value: "1" },
-      { name: "T3_ACP_REQUEST_LOG_PATH", value: requestLog },
+      { name: "PRISMUX_ACP_ANTIGRAVITY", value: "1" },
+      { name: "PRISMUX_ACP_REQUEST_LOG_PATH", value: requestLog },
       { name: "GEMINI_API_KEY", value: "must-not-be-used" },
       { name: "google_api_key", value: "must-not-be-used" },
       { name: "GOOGLE_APPLICATION_CREDENTIALS", value: "/must-not-be-used.json" },
@@ -274,7 +274,7 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
 });
 
 const layerDeps = ServerConfig.layerTest(process.cwd(), {
-  prefix: "t3-antigravity-driver-config-",
+  prefix: "prismux-antigravity-driver-config-",
 }).pipe(
   Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   Layer.provideMerge(
@@ -441,10 +441,10 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
         const h = yield* makeHarness({
           environment: [
             { name: "PRISMUX_THREAD_ID", value: "thread-antigravity-ambient" },
-            { name: "T3_ACP_MCP_ENDPOINT", value: "http://127.0.0.1:9/ambient" },
-            { name: "T3_ACP_MCP_AUTHORIZATION", value: "Bearer ambient-token" },
-            { name: "T3_ACP_MCP_NODE", value: "/ambient/node" },
-            { name: "T3_ACP_MCP_ENTRYPOINT", value: "/ambient/entrypoint.mjs" },
+            { name: "PRISMUX_ACP_MCP_ENDPOINT", value: "http://127.0.0.1:9/ambient" },
+            { name: "PRISMUX_ACP_MCP_AUTHORIZATION", value: "Bearer ambient-token" },
+            { name: "PRISMUX_ACP_MCP_NODE", value: "/ambient/node" },
+            { name: "PRISMUX_ACP_MCP_ENTRYPOINT", value: "/ambient/entrypoint.mjs" },
           ],
         });
         yield* h.refresh();
@@ -490,18 +490,18 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
         expect(agentLaunches).toHaveLength(2);
         expect(agentLaunches[1]?.environment).toMatchObject({
           PRISMUX_THREAD_ID: threadId,
-          T3_ACP_MCP_ENDPOINT: endpoint,
-          T3_ACP_MCP_AUTHORIZATION: "Bearer antigravity-thread-token",
-          T3_ACP_MCP_NODE: process.execPath,
-          T3_ACP_MCP_ENTRYPOINT: entrypoint,
+          PRISMUX_ACP_MCP_ENDPOINT: endpoint,
+          PRISMUX_ACP_MCP_AUTHORIZATION: "Bearer antigravity-thread-token",
+          PRISMUX_ACP_MCP_NODE: process.execPath,
+          PRISMUX_ACP_MCP_ENTRYPOINT: entrypoint,
         });
         // Model refresh and sign-in launches are not part of a thread.
         expect(agentLaunches[0]?.environment).toMatchObject({
           PRISMUX_THREAD_ID: "thread-antigravity-ambient",
-          T3_ACP_MCP_ENDPOINT: "http://127.0.0.1:9/ambient",
-          T3_ACP_MCP_AUTHORIZATION: "Bearer ambient-token",
-          T3_ACP_MCP_NODE: "/ambient/node",
-          T3_ACP_MCP_ENTRYPOINT: "/ambient/entrypoint.mjs",
+          PRISMUX_ACP_MCP_ENDPOINT: "http://127.0.0.1:9/ambient",
+          PRISMUX_ACP_MCP_AUTHORIZATION: "Bearer ambient-token",
+          PRISMUX_ACP_MCP_NODE: "/ambient/node",
+          PRISMUX_ACP_MCP_ENTRYPOINT: "/ambient/entrypoint.mjs",
         });
         yield* h.assertClosed;
       }),

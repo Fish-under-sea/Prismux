@@ -372,7 +372,7 @@ it.effect(
         DesktopCliShim.renderCliShim({
           target: { kind: "appimage", appImage: removedAppImage, executableName: "prismux" },
           shimPath: launcher,
-          t3Home: baseDir,
+          prismuxHome: baseDir,
         }),
       );
       yield* fs.writeFileString(updatedAppImage, "", { mode: 0o755 });
@@ -432,10 +432,10 @@ it.effect(
 
       const startInput = yield* Deferred.await(daemonStarted);
       yield* Deferred.await(windowStarted);
-      assert.equal(startInput?.t3Token, "signed-payload.signed-hmac");
-      assert.notEqual(startInput?.t3Token, "raw-unsigned-desktop-bootstrap-token");
-      assert.equal(startInput?.t3Url, "ws://127.0.0.1:3773/ws");
-      assert.equal(startInput?.t3HttpUrl, "http://127.0.0.1:3773");
+      assert.equal(startInput?.coreToken, "signed-payload.signed-hmac");
+      assert.notEqual(startInput?.coreToken, "raw-unsigned-desktop-bootstrap-token");
+      assert.equal(startInput?.coreUrl, "ws://127.0.0.1:3773/ws");
+      assert.equal(startInput?.coreHttpUrl, "http://127.0.0.1:3773");
 
       yield* (yield* DesktopShutdown.DesktopShutdown).request;
       yield* Fiber.join(app);
@@ -443,7 +443,7 @@ it.effect(
 );
 
 it.effect.each(["failure", "timeout"] as const)(
-  "starts prismuxDaemon without t3Token when bearer exchange hits %s and never falls back to raw desktopBootstrapToken",
+  "starts prismuxDaemon without coreToken when bearer exchange hits %s and never falls back to raw desktopBootstrapToken",
   (scenario) =>
     Effect.gen(function* () {
       const windowStarted = yield* Deferred.make<void>();
@@ -478,11 +478,11 @@ it.effect.each(["failure", "timeout"] as const)(
 
       const startInput = yield* Deferred.await(daemonStarted);
       assert.isUndefined(
-        startInput?.t3Token,
-        `expected undefined t3Token on bearer ${scenario}, never raw bootstrap token`,
+        startInput?.coreToken,
+        `expected undefined coreToken on bearer ${scenario}, never raw bootstrap token`,
       );
-      assert.equal(startInput?.t3Url, "ws://127.0.0.1:3773/ws");
-      assert.equal(startInput?.t3HttpUrl, "http://127.0.0.1:3773");
+      assert.equal(startInput?.coreUrl, "ws://127.0.0.1:3773/ws");
+      assert.equal(startInput?.coreHttpUrl, "http://127.0.0.1:3773");
 
       yield* (yield* DesktopShutdown.DesktopShutdown).request;
       yield* Fiber.join(app);

@@ -113,7 +113,7 @@ const withDescriptorServer = <A, E, R>(
   Effect.acquireUseRelease(
     Effect.callback<NodeHttp.Server>((resume) => {
       const server = NodeHttp.createServer((request, response) => {
-        if (request.url === "/.well-known/t3/environment") {
+        if (request.url === "/.well-known/prismux/environment") {
           response.writeHead(200, { "content-type": "application/json" });
           response.end(JSON.stringify(descriptor));
           return;
@@ -147,7 +147,7 @@ describe("t3 pair", () => {
               if (command.args[0] === "serve" && command.args[1] === "--bg") {
                 const target = String(command.args.at(-1));
                 const descriptor = yield* Effect.promise(async () =>
-                  (await fetch(new URL("/.well-known/t3/environment", target))).json(),
+                  (await fetch(new URL("/.well-known/prismux/environment", target))).json(),
                 );
                 expect(descriptor).toEqual(testDescriptor);
                 serving = true;
@@ -186,7 +186,7 @@ describe("t3 pair", () => {
                 if (String(input).startsWith(origin)) return fetch(input, init);
                 assert.equal(
                   String(input),
-                  "https://pair-test.tail.ts.net/.well-known/t3/environment",
+                  "https://pair-test.tail.ts.net/.well-known/prismux/environment",
                 );
                 return serving
                   ? Response.json(testDescriptor)
@@ -611,10 +611,10 @@ describe("t3 pair", () => {
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Effect.provideService(HostProcess.Platform, "darwin"),
           Effect.provideService(FetchHttpClient.Fetch, async (input) => {
-            if (String(input) === "http://127.0.0.2:3773/.well-known/t3/environment") {
+            if (String(input) === "http://127.0.0.2:3773/.well-known/prismux/environment") {
               return Response.json(testDescriptor);
             }
-            assert.equal(String(input), "https://pair-test.tail.ts.net/.well-known/t3/environment");
+            assert.equal(String(input), "https://pair-test.tail.ts.net/.well-known/prismux/environment");
             return new Response(null, { status: 503 });
           }),
           Effect.flip,
@@ -677,10 +677,10 @@ describe("t3 pair", () => {
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Effect.provideService(HostProcess.Platform, "linux"),
           Effect.provideService(FetchHttpClient.Fetch, async (input) => {
-            if (String(input) === "http://127.0.0.1:3773/.well-known/t3/environment") {
+            if (String(input) === "http://127.0.0.1:3773/.well-known/prismux/environment") {
               return Response.json(testDescriptor);
             }
-            assert.equal(String(input), "https://pair-test.tail.ts.net/.well-known/t3/environment");
+            assert.equal(String(input), "https://pair-test.tail.ts.net/.well-known/prismux/environment");
             return new Response(null, { status: 503 });
           }),
           Effect.flip,
@@ -741,7 +741,7 @@ describe("auth session revoke", () => {
   ] as const)("$label", ({ recorded, lockHeld, server, outcome }) =>
     provideCliTestLayers(
       Effect.gen(function* () {
-        const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-cli-revoke-test-"));
+        const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "prismux-cli-revoke-test-"));
         const statePath = NodePath.join(baseDir, "userdata", "server-runtime.json");
         const issued = JSON.parse(
           yield* captureStdout(
@@ -844,7 +844,7 @@ describe("auth scope options", () => {
     ({ group, action }) =>
       Effect.gen(function* () {
         const baseDir = NodeFS.mkdtempSync(
-          NodePath.join(NodeOS.tmpdir(), "t3-cli-auth-scopes-test-"),
+          NodePath.join(NodeOS.tmpdir(), "prismux-cli-auth-scopes-test-"),
         );
         const output = yield* captureStdout(
           runCli([
@@ -910,7 +910,7 @@ describe("auth pairing create --base-url", () => {
     "rejects %s before issuing a token",
     (baseUrl) =>
       Effect.gen(function* () {
-        const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-cli-base-url-test-"));
+        const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "prismux-cli-base-url-test-"));
         const error = yield* runCli([
           "auth",
           "pairing",
@@ -942,7 +942,7 @@ describe("auth pairing create --base-url", () => {
     "prints a pair URL for %s",
     (baseUrl) =>
       Effect.gen(function* () {
-        const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-cli-base-url-test-"));
+        const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "prismux-cli-base-url-test-"));
         const output = yield* captureStdout(
           runCli([
             "auth",
@@ -974,7 +974,7 @@ describe("scripted auth output", () => {
     ].map((command) => ({ command, label: command.join(" ") })),
   )("prints only the result for $label after removing an abandoned upload", ({ command }) =>
     Effect.gen(function* () {
-      const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-cli-quiet-test-"));
+      const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "prismux-cli-quiet-test-"));
       const attachmentsDir = NodePath.join(baseDir, "userdata", "attachments");
       NodeFS.mkdirSync(attachmentsDir, { recursive: true });
       // An abandoned upload makes config resolution log that it removed it.

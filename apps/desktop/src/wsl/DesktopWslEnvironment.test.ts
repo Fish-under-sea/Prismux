@@ -25,7 +25,7 @@ import {
   buildWslRuntimePruneScript,
   buildWslRuntimeProbeScript,
   parseResolvedPath,
-  parseT3Home,
+  parsePrismuxHome,
   parseWslRuntimeRoot,
   windowsToWslPathImpl,
 } from "./DesktopWslEnvironment.ts";
@@ -120,12 +120,12 @@ describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed
       [
         "set -eu",
         "work=$(mktemp -d)",
-        'stage="$work/stage/t3-0.0.0-linux-x64"',
+        'stage="$work/stage/prismux-0.0.0-linux-x64"',
         'mkdir -p "$stage/node_modules/node-pty/build/Release" "$work/home"',
-        `printf '%s' ${sh(serverEntry)} > "$stage/t3"`,
-        'chmod +x "$stage/t3"',
+        `printf '%s' ${sh(serverEntry)} > "$stage/prismux"`,
+        'chmod +x "$stage/prismux"',
         `printf '%s' 'pty-native-payload' > "$stage/node_modules/node-pty/build/Release/pty.node"`,
-        `tar -czf "$work/wsl-runtime.tar.gz" -C "$work/stage" t3-0.0.0-linux-x64`,
+        `tar -czf "$work/wsl-runtime.tar.gz" -C "$work/stage" prismux-0.0.0-linux-x64`,
         `printf 'work:%s\\n' "$work"`,
         `printf 'archiveSha:%s\\n' "$(sha256sum "$work/wsl-runtime.tar.gz" | cut -d ' ' -f 1)"`,
       ].join("\n"),
@@ -138,23 +138,23 @@ describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed
     const archiveSha = readField(result.stdout, "archiveSha");
     const runtimeId = `sha256-${archiveSha}`;
     // WSL does not inherit HOME; embed the fixture's override in the script.
-    const installScript = (archive = archivePath, sha = archiveSha, t3Home: string | null = null) =>
+    const installScript = (archive = archivePath, sha = archiveSha, prismuxHome: string | null = null) =>
       [
         `HOME=${sh(`${work}/home`)}`,
         "export HOME",
-        buildWslRuntimeInstallScript(archive, runtimeId, sha, t3Home),
+        buildWslRuntimeInstallScript(archive, runtimeId, sha, prismuxHome),
       ].join("\n");
     return {
       work,
       archivePath,
       archiveSha,
       runtimeId,
-      runtimeParent: `${work}/home/.t3/wsl-runtime`,
-      runtimeRoot: `${work}/home/.t3/wsl-runtime/${runtimeId}`,
-      serverEntry: `${work}/home/.t3/wsl-runtime/${runtimeId}/t3`,
+      runtimeParent: `${work}/home/.prismux/wsl-runtime`,
+      runtimeRoot: `${work}/home/.prismux/wsl-runtime/${runtimeId}`,
+      serverEntry: `${work}/home/.prismux/wsl-runtime/${runtimeId}/prismux`,
       installScript,
-      install: (archive?: string, sha?: string, t3Home?: string | null) =>
-        runShell(installScript(archive, sha, t3Home)),
+      install: (archive?: string, sha?: string, prismuxHome?: string | null) =>
+        runShell(installScript(archive, sha, prismuxHome)),
     };
   };
 
@@ -202,20 +202,20 @@ describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed
 
   it("stages the runtime under the login shell's PRISMUX_HOME and reports it to the launcher", () => {
     const fixture = createFixture();
-    const t3Home = `${fixture.work}/home/.config/t3 home`;
-    const install = fixture.install(undefined, undefined, t3Home);
+    const prismuxHome = `${fixture.work}/home/.config/t3 home`;
+    const install = fixture.install(undefined, undefined, prismuxHome);
     expect(install.status, install.stderr).toBe(0);
-    expect(parseWslRuntimeRoot(install.stdout)).toBe(`${t3Home}/wsl-runtime/${fixture.runtimeId}`);
-    expect(runShell(`test ! -e ${sh(`${fixture.work}/home/.t3`)}`).status).toBe(0);
+    expect(parseWslRuntimeRoot(install.stdout)).toBe(`${prismuxHome}/wsl-runtime/${fixture.runtimeId}`);
+    expect(runShell(`test ! -e ${sh(`${fixture.work}/home/.prismux`)}`).status).toBe(0);
 
     const probe = runShell(
       [
-        `bash() { ( export PRISMUX_HOME=${sh(t3Home)}; eval "$2" ); }`,
+        `bash() { ( export PRISMUX_HOME=${sh(prismuxHome)}; eval "$2" ); }`,
         buildWslRuntimeProbeScript(),
       ].join("\n"),
     );
     expect(probe.status, probe.stderr).toBe(0);
-    expect(parseT3Home(probe.stdout)).toBe(t3Home);
+    expect(parsePrismuxHome(probe.stdout)).toBe(prismuxHome);
   });
 
   it("keeps the inherited PATH when bash is unavailable", () => {
@@ -505,7 +505,7 @@ describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed
         "set -eu",
         "work=$(mktemp -d)",
         'home="$work/home"',
-        'runtime_parent="$home/.t3/wsl-runtime"',
+        'runtime_parent="$home/.prismux/wsl-runtime"',
         'mkdir -p "$runtime_parent"',
         'make_ready() { mkdir -p "$runtime_parent/$1"; printf ready > "$runtime_parent/$1/.prismux-wsl-runtime-ready"; }',
         "make_ready sha256-current",

@@ -214,14 +214,14 @@ export const layerWindowsRegistry = (loadFfi: () => Promise<typeof import("ffi-r
               throw new Error(`no registry access on ${architecture}`);
             }
             const { DataType, load, open } = await loadFfi();
-            open({ library: "t3-advapi32", path: "advapi32.dll" });
+            open({ library: "prismux-advapi32", path: "advapi32.dll" });
             const call = (
               funcName: string,
               paramsType: Array<(typeof DataType)[keyof typeof DataType]>,
               paramsValue: Array<unknown>,
             ): number =>
               load({
-                library: "t3-advapi32",
+                library: "prismux-advapi32",
                 funcName,
                 retType: DataType.I32,
                 paramsType,

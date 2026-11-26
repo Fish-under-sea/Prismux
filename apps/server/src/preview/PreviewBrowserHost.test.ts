@@ -62,7 +62,7 @@ const diagnose = (input: {
   return PreviewBrowserHost.diagnoseLaunchFailure({
     executable: "/home/me/.t3/tools/chrome-headless-shell/linux64/154/chrome-headless-shell",
     output: input.output,
-    setupCommand: "sudo t3 browser setup",
+    setupCommand: "sudo prismux browser setup",
   }).pipe(
     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     Effect.provideService(HostProcess.Platform, input.platform),
@@ -81,7 +81,7 @@ describe("diagnoseLaunchFailure", () => {
         ldd: "",
       });
       expect(error).toBeInstanceOf(PreviewBrowserHost.PreviewBrowserRootError);
-      expect(error?.message).toContain("T3 server is running as root");
+      expect(error?.message).toContain("Prismux server is running as root");
       expect(error?.message).toContain("T3 server's environment and restart the server");
       expect(error?.message).toContain("PRISMUX_SERVER_BROWSER_SANDBOX=0 t3 serve");
       expect(error?.message).toContain("Environment=PRISMUX_SERVER_BROWSER_SANDBOX=0");
@@ -98,7 +98,7 @@ describe("diagnoseLaunchFailure", () => {
         ldd: "",
       });
       expect(error).toBeInstanceOf(PreviewBrowserHost.PreviewBrowserSandboxError);
-      expect(error?.message).toContain("Run `sudo t3 browser setup` on the host");
+      expect(error?.message).toContain("Run `sudo prismux browser setup` on the host");
     }),
   );
 
@@ -113,7 +113,7 @@ describe("diagnoseLaunchFailure", () => {
         _tag: "PreviewBrowserLibrariesError",
         libraries: ["libglib-2.0.so.0", "libnss3.so", "libX11.so.6"],
       });
-      expect(error?.message).toContain("Run `sudo t3 browser setup` on the host");
+      expect(error?.message).toContain("Run `sudo prismux browser setup` on the host");
     }),
   );
 

@@ -403,7 +403,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
           enabled: true,
           environment: [
             {
-              name: "T3_CODEX_COLLAB_SCRIPT",
+              name: "PRISMUX_CODEX_COLLAB_SCRIPT",
               value: fixtures.codexScriptPath,
               sensitive: false,
             },
@@ -457,7 +457,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
             driver: ProviderDriverKind.make("claudeAgent"),
             enabled: true,
             // Packaged desktop starts in $HOME, where some claude wrappers refuse to run.
-            environment: [{ name: "T3_CLAUDE_REQUIRED_CWD", value: stateDir, sensitive: false }],
+            environment: [{ name: "PRISMUX_CLAUDE_REQUIRED_CWD", value: stateDir, sensitive: false }],
             config: makeClaudeConfig({
               enabled: true,
               binaryPath: fixtures.claudeBinaryPath,
@@ -490,7 +490,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
             enabled: true,
             environment: [
               {
-                name: "T3_CLAUDE_SETTINGS_SOURCES",
+                name: "PRISMUX_CLAUDE_SETTINGS_SOURCES",
                 // The merged `effective` settings read as exempting Opus 5; the flag tier's
                 // top-level cap still applies to it.
                 value: JSON.stringify([
@@ -537,7 +537,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
           [claudeId]: {
             driver: ProviderDriverKind.make("claudeAgent"),
             enabled: true,
-            environment: [{ name: "T3_CLAUDE_SETTINGS_UNSUPPORTED", value: "1", sensitive: false }],
+            environment: [{ name: "PRISMUX_CLAUDE_SETTINGS_UNSUPPORTED", value: "1", sensitive: false }],
             config: makeClaudeConfig({
               enabled: true,
               binaryPath: fixtures.claudeBinaryPath,
@@ -741,9 +741,9 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
             driver: ProviderDriverKind.make("claudeAgent"),
             enabled: true,
             environment: [
-              { name: "T3_CLAUDE_RESET_MARKER", value: marker, sensitive: false },
+              { name: "PRISMUX_CLAUDE_RESET_MARKER", value: marker, sensitive: false },
               ...(claim.usageFailsAfterClaim
-                ? [{ name: "T3_CLAUDE_USAGE_FAILS_AFTER_CLAIM", value: "1", sensitive: false }]
+                ? [{ name: "PRISMUX_CLAUDE_USAGE_FAILS_AFTER_CLAIM", value: "1", sensitive: false }]
                 : []),
             ],
             config: makeClaudeConfig({
@@ -806,15 +806,15 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
           driver: ProviderDriverKind.make("claudeAgent"),
           enabled: true,
           environment: [
-            { name: "T3_CLAUDE_PROBE_LOG", value: probeLog, sensitive: false },
+            { name: "PRISMUX_CLAUDE_PROBE_LOG", value: probeLog, sensitive: false },
             ...(state === "ready"
               ? []
               : [
                   {
                     name:
                       state === "signed-out"
-                        ? "T3_CLAUDE_LOGIN_MARKER"
-                        : "T3_CLAUDE_USAGE_FAILS_UNTIL",
+                        ? "PRISMUX_CLAUDE_LOGIN_MARKER"
+                        : "PRISMUX_CLAUDE_USAGE_FAILS_UNTIL",
                     value: recovered,
                     sensitive: false,
                   },

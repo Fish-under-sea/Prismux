@@ -362,7 +362,7 @@ const openReaders = async (page: Page, cdp: CDPSession) => {
         ids(frameTree).map(async (frameId) => {
           const world = await session.send("Page.createIsolatedWorld", {
             frameId,
-            worldName: "t3-preview",
+            worldName: "prismux-preview",
           });
           return world.executionContextId;
         }),
@@ -522,7 +522,7 @@ const readPageMetrics = async (cdp: CDPSession) => {
   const { frameTree } = await cdp.send("Page.getFrameTree");
   const { executionContextId } = await cdp.send("Page.createIsolatedWorld", {
     frameId: frameTree.frame.id,
-    worldName: "t3-preview-metrics",
+    worldName: "prismux-preview-metrics",
   });
   let { cssVisualViewport } = await cdp.send("Page.getLayoutMetrics");
   // Desktop zoom applies asynchronously; bracket the CSS metrics to reject a torn read.
@@ -616,7 +616,7 @@ const shrinkPng = async (cdp: CDPSession, png: string, scale: number) => {
   const { frameTree } = await cdp.send("Page.getFrameTree");
   const { executionContextId } = await cdp.send("Page.createIsolatedWorld", {
     frameId: frameTree.frame.id,
-    worldName: "t3-preview-screenshot",
+    worldName: "prismux-preview-screenshot",
   });
   const { result, exceptionDetails } = await cdp.send("Runtime.callFunctionOn", {
     functionDeclaration: SHRINK_PNG,
@@ -753,7 +753,7 @@ const capture = async (
   const accessibilityTree = (dotted ? maskTree(redacted, dotted) : redacted)
     .slice(0, MAX_VISIBLE_TEXT_LENGTH)
     .replace(/\[ref=((?:f\d+)?e\d+)\]/g, (_match, nativeRef: string) => {
-      const ref = `t3-${generation}-${nativeRef}`;
+      const ref = `prismux-${generation}-${nativeRef}`;
       state.refs.set(ref, nativeRef);
       return `[ref=${ref}]`;
     });
@@ -1280,7 +1280,7 @@ export const recordingEncoderScript = (frameRate: BrowserRecordingFrameRate) => 
       context.restore();
     }
   };
-  window.__t3Recorder = {
+  window.__prismuxRecorder = {
     async frame(base64, cssWidth) {
       if (tooLarge) return false;
       // A per-character atob copy costs ~30 ms on a 3200x1800 frame and throttles recordings.

@@ -124,8 +124,8 @@ describe("session cookie isolation", () => {
       development: true,
     });
 
-    expect(first).toMatch(/^t3_session_5775_[a-f0-9]{12}$/);
-    expect(second).toMatch(/^t3_session_5775_[a-f0-9]{12}$/);
+    expect(first).toMatch(/^prismux_session_5775_[a-f0-9]{12}$/);
+    expect(second).toMatch(/^prismux_session_5775_[a-f0-9]{12}$/);
     expect(first).not.toBe(second);
   });
 
@@ -148,8 +148,8 @@ describe("session cookie isolation", () => {
       development: false,
     });
 
-    expect(first).toMatch(/^t3_session_[a-f0-9]{12}$/);
-    expect(second).toMatch(/^t3_session_[a-f0-9]{12}$/);
+    expect(first).toMatch(/^prismux_session_[a-f0-9]{12}$/);
+    expect(second).toMatch(/^prismux_session_[a-f0-9]{12}$/);
     expect(first).not.toBe(second);
   });
 

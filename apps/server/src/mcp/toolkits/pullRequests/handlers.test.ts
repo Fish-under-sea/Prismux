@@ -70,11 +70,11 @@ function makeProject(
     locator: {
       source: "git-remote",
       remoteName: "origin",
-      remoteUrl: "git@github.com:T3Tools/Prismux.git",
+      remoteUrl: "git@github.com:PrismuxTools/Prismux.git",
     },
     provider: SourceControlProviderKind.make("github"),
-    displayName: "T3Tools/Prismux",
-    owner: "T3Tools",
+    displayName: "PrismuxTools/Prismux",
+    owner: "PrismuxTools",
     name: "Prismux",
   },
 ): OrchestrationProjectShell {
@@ -262,7 +262,7 @@ describe("pull request toolkit handlers", () => {
         .call("link_pull_request", { threadId: bareId, number: 123 })
         .pipe(Effect.flip);
       expect(error.message).toBe(
-        `Thread ${bareId} was not found. Did you mean \`mcp:${bareId}\`? Thread ids belong to one environment: for a thread on a linked one, find it with \`t3_environment_links\` and pass its \`environmentId\` to a tool that takes one.`,
+        `Thread ${bareId} was not found. Did you mean \`mcp:${bareId}\`? Thread ids belong to one environment: for a thread on a linked one, find it with \`prismux_environment_links\` and pass its \`environmentId\` to a tool that takes one.`,
       );
       expect(error).toMatchObject({ _tag: "OrchestratorMcpFailure", code: "thread_not_found" });
       expect(yield* Ref.get(harness.commands)).toEqual([]);
@@ -273,13 +273,13 @@ describe("pull request toolkit handlers", () => {
     Effect.gen(function* () {
       const harness = yield* makeHarness();
       const result = yield* harness.call("link_pull_request", {
-        url: "https://github.com/T3Tools/Prismux/pull/123/files",
+        url: "https://github.com/PrismuxTools/Prismux/pull/123/files",
       });
       expect(result).toEqual({
         host: "github.com",
         repository: "t3tools/prismux",
         number: 123,
-        url: "https://github.com/T3Tools/Prismux/pull/123/files",
+        url: "https://github.com/PrismuxTools/Prismux/pull/123/files",
         alreadyLinked: false,
       });
       expect(yield* Ref.get(harness.commands)).toMatchObject([

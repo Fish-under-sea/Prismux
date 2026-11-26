@@ -22,7 +22,7 @@ import { AntigravityIcon, ClaudeAI, OpenAI } from "../Icons";
 import { ProviderPackageIcon } from "../chat/ProviderPackageIcon";
 import { providerClients } from "./providerDriverMeta";
 
-const ACP_REGISTRY_ICON_CACHE = "t3-acp-registry-icons-v1";
+const ACP_REGISTRY_ICON_CACHE = "prismux-acp-registry-icons-v1";
 const MAX_ICON_BYTES = 512 * 1_024;
 const inFlightIcons = new Map<string, Promise<Blob>>();
 

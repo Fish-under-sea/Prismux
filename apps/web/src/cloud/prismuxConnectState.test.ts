@@ -1,7 +1,7 @@
 import type { EnvironmentCloudLinkStateResult } from "@prismux/core-contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { cloudChangeReplacesLink } from "./t3ConnectState";
+import { cloudChangeReplacesLink } from "./prismuxConnectState";
 
 function linkState(input: {
   readonly linked: boolean;

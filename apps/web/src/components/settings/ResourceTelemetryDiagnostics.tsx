@@ -136,7 +136,7 @@ function categoryLabel(
       return resolve(msg("Electron utility"));
     case "resource-monitor":
       return resolve(msg("Monitor"));
-    case "unknown-t3":
+    case "unknown-prismux":
       return resolve(msg("Prismux process"));
   }
 }
@@ -964,7 +964,7 @@ function ResourceTelemetryDiagnosticsBody({
   };
 
   const snapshot = telemetry.data;
-  const allPrismux = snapshot?.groups.allT3;
+  const allPrismux = snapshot?.groups.allPrismux;
 
   const signalProcess = async (process: ResourceTelemetryProcess, signal: ServerProcessSignal) => {
     const targetEnvironmentId = environmentId;

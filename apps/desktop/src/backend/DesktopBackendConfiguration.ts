@@ -166,7 +166,7 @@ const logBackendObservabilitySettingsReadFailure = (
 };
 
 function resourceMonitorBinaryName(platform: NodeJS.Platform): string {
-  return platform === "win32" ? "t3-resource-monitor.exe" : "t3-resource-monitor";
+  return platform === "win32" ? "prismux-resource-monitor.exe" : "prismux-resource-monitor";
 }
 
 const resolveResourceMonitorPath = Effect.fn(
@@ -293,7 +293,7 @@ interface WslPreflightSuccess {
   readonly windowsEntryPath: string;
   readonly runtime: WslPreflightRuntime;
   readonly resolvedPath: string;
-  readonly t3Home: string | null;
+  readonly prismuxHome: string | null;
   readonly runtimeId?: string;
 }
 
@@ -429,7 +429,7 @@ const runWslPreflight = Effect.fn("desktop.backendConfiguration.wslPreflight")(f
       const runtime = yield* wslEnv.prepareRuntime(
         runningDistro,
         input.runtimeArchive,
-        stagedProbe.t3Home,
+        stagedProbe.prismuxHome,
       );
       if (runtime.ok) {
         yield* wslServerTree.cleanupLegacy;
@@ -437,9 +437,9 @@ const runWslPreflight = Effect.fn("desktop.backendConfiguration.wslPreflight")(f
           _tag: "Ready",
           runningDistro,
           windowsEntryPath: environment.backendEntryPath,
-          runtime: { kind: "executable", entryPath: `${runtime.linuxAppRoot}/t3` },
+          runtime: { kind: "executable", entryPath: `${runtime.linuxAppRoot}/prismux` },
           resolvedPath: stagedProbe.resolvedPath,
-          t3Home: stagedProbe.t3Home,
+          prismuxHome: stagedProbe.prismuxHome,
           runtimeId: input.runtimeArchive.runtimeId,
         } as const;
       }
@@ -486,7 +486,7 @@ const runWslPreflight = Effect.fn("desktop.backendConfiguration.wslPreflight")(f
       linuxEntryPath: `${mounted.linuxAppRoot}/apps/server/dist/bin.mjs`,
     },
     resolvedPath: nodePtyResult.resolvedPath,
-    t3Home: nodePtyResult.t3Home,
+    prismuxHome: nodePtyResult.prismuxHome,
   } as const;
 });
 
@@ -539,7 +539,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       mode: "desktop" as const,
       noBrowser: true,
       port: backendExposure.port,
-      t3Home: environment.baseDir,
+      prismuxHome: environment.baseDir,
       host: backendExposure.bindHost,
       desktopBootstrapToken: input.bootstrapToken,
       desktopBootstrapSecret: input.bootstrapSecret,
@@ -611,7 +611,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     mode: "desktop" as const,
     noBrowser: true,
     port: input.port,
-    // Omit t3Home to keep the Linux backend from sharing the primary's Windows SQLite file.
+    // Omit prismuxHome to keep the Linux backend from sharing the primary's Windows SQLite file.
     host: wslBindHost,
     desktopBootstrapToken: input.bootstrapToken,
     desktopBootstrapSecret: input.bootstrapSecret,
@@ -681,12 +681,12 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     }
   }
 
-  const parentEnvWithoutT3Home: Record<string, string | undefined> = {};
+  const parentEnvWithoutPrismuxHome: Record<string, string | undefined> = {};
   for (const [key, value] of Object.entries(env)) {
     if (key === "PRISMUX_HOME") continue;
-    parentEnvWithoutT3Home[key] = value;
+    parentEnvWithoutPrismuxHome[key] = value;
   }
-  const wslEnv = mergeWslEnv(parentEnvWithoutT3Home.WSLENV, forwardedEnvNames);
+  const wslEnv = mergeWslEnv(parentEnvWithoutPrismuxHome.WSLENV, forwardedEnvNames);
 
   const baseConfig = {
     executablePath: "wsl.exe",
@@ -694,7 +694,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       preflight._tag === "Ready" ? preflight.windowsEntryPath : environment.backendEntryPath,
     cwd: environment.backendCwd,
     env: {
-      ...parentEnvWithoutT3Home,
+      ...parentEnvWithoutPrismuxHome,
       ...backendChildEnvPatch(),
       ...forwardedEnv,
       ...(wslEnv !== undefined ? { WSLENV: wslEnv } : {}),
@@ -749,7 +749,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       "--exec",
       "env",
       `PATH=${launchPath}`,
-      ...(preflight.t3Home === null ? [] : [`PRISMUX_HOME=${preflight.t3Home}`]),
+      ...(preflight.prismuxHome === null ? [] : [`PRISMUX_HOME=${preflight.prismuxHome}`]),
       ...command,
       "--bootstrap-fd",
       "0",
@@ -758,7 +758,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     preflightFailure: Option.none(),
     ...(preflight.runtimeId === undefined
       ? {}
-      : { wslRuntimeId: preflight.runtimeId, wslT3Home: preflight.t3Home }),
+      : { wslRuntimeId: preflight.runtimeId, wslPrismuxHome: preflight.prismuxHome }),
   } satisfies DesktopBackendManager.DesktopBackendStartConfig;
 });
 

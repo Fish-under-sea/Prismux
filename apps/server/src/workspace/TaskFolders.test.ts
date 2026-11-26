@@ -446,10 +446,10 @@ it.live("adopts the checkouts a project's own layout command makes, and runs its
           worktreeLayout: {
             // A plain project's folder is no worktree, even when the command leaves a `.git` there.
             create:
-              'mkdir -p "$T3_WORKTREE_PROJECT_PATH/cache" && git init -q "$T3_WORKTREE_PROJECT_PATH" && printf %s "$T3_WORKTREE_REPOSITORIES" > "$T3_WORKTREE_PROJECT_PATH/chosen" && git -C "$T3_PROJECT_ROOT/api" worktree add -q -b "$T3_WORKTREE_BRANCH" "$T3_WORKTREE_PROJECT_PATH/api" "$T3_WORKTREE_BASE"',
+              'mkdir -p "$PRISMUX_WORKTREE_PROJECT_PATH/cache" && git init -q "$PRISMUX_WORKTREE_PROJECT_PATH" && printf %s "$PRISMUX_WORKTREE_REPOSITORIES" > "$PRISMUX_WORKTREE_PROJECT_PATH/chosen" && git -C "$PRISMUX_PROJECT_ROOT/api" worktree add -q -b "$PRISMUX_WORKTREE_BRANCH" "$PRISMUX_WORKTREE_PROJECT_PATH/api" "$PRISMUX_WORKTREE_BASE"',
             // Cleanup never deletes files that exist only here, so the teardown clears its own.
             remove:
-              'touch "$T3_PROJECT_ROOT/torn-down" && rm -rf "$T3_WORKTREE_PROJECT_PATH/cache" "$T3_WORKTREE_PROJECT_PATH/chosen" "$T3_WORKTREE_PROJECT_PATH/.git"',
+              'touch "$PRISMUX_PROJECT_ROOT/torn-down" && rm -rf "$PRISMUX_WORKTREE_PROJECT_PATH/cache" "$PRISMUX_WORKTREE_PROJECT_PATH/chosen" "$PRISMUX_WORKTREE_PROJECT_PATH/.git"',
           },
         }),
       );
@@ -518,26 +518,26 @@ it.live(
         });
 
         yield* attempt(
-          'mkdir -p "$T3_WORKTREE_PROJECT_PATH" && git -C "$T3_PROJECT_ROOT/api" worktree add -q -b "$T3_WORKTREE_BRANCH" "$T3_WORKTREE_PROJECT_PATH/api" && exit 1',
+          'mkdir -p "$PRISMUX_WORKTREE_PROJECT_PATH" && git -C "$PRISMUX_PROJECT_ROOT/api" worktree add -q -b "$PRISMUX_WORKTREE_BRANCH" "$PRISMUX_WORKTREE_PROJECT_PATH/api" && exit 1',
         );
         assert.equal(yield* worktreeCount(api), 1);
 
         // A clone has no worktree registration to remove, and no thread branch to rename.
         const refused = yield* attempt(
-          'mkdir -p "$T3_WORKTREE_PROJECT_PATH" && git clone -q "$T3_PROJECT_ROOT/api" "$T3_WORKTREE_PROJECT_PATH/api"',
+          'mkdir -p "$PRISMUX_WORKTREE_PROJECT_PATH" && git clone -q "$PRISMUX_PROJECT_ROOT/api" "$PRISMUX_WORKTREE_PROJECT_PATH/api"',
         );
         assert.include(refused.detail, "is not a Git worktree of");
 
         // The refused checkout's folder is deleted, so its registration must go too.
         const wrongBranch = yield* attempt(
-          'mkdir -p "$T3_WORKTREE_PROJECT_PATH" && git -C "$T3_PROJECT_ROOT/api" worktree add -q -b other "$T3_WORKTREE_PROJECT_PATH/api"',
+          'mkdir -p "$PRISMUX_WORKTREE_PROJECT_PATH" && git -C "$PRISMUX_PROJECT_ROOT/api" worktree add -q -b other "$PRISMUX_WORKTREE_PROJECT_PATH/api"',
         );
         assert.include(wrongBranch.detail, "is not on the branch feature");
         assert.equal(yield* worktreeCount(api), 1);
 
         // A branch that was there before the command checked it out outlives the rollback.
         yield* attempt(
-          'mkdir -p "$T3_WORKTREE_PROJECT_PATH" && git -C "$T3_PROJECT_ROOT/web" worktree add -q "$T3_WORKTREE_PROJECT_PATH/web" "$T3_WORKTREE_BRANCH" && exit 1',
+          'mkdir -p "$PRISMUX_WORKTREE_PROJECT_PATH" && git -C "$PRISMUX_PROJECT_ROOT/web" worktree add -q "$PRISMUX_WORKTREE_PROJECT_PATH/web" "$PRISMUX_WORKTREE_BRANCH" && exit 1',
         );
         assert.equal(yield* worktreeCount(web), 1);
         assert.deepEqual((yield* run(web, "branch", "--format=%(refname:short)")).split("\n"), [
@@ -563,7 +563,7 @@ it.live.each([{ linked: false }, { linked: true }])(
           JSON.stringify({
             worktreeLayout: {
               create:
-                '(git worktree add -q "$T3_WORKTREE_PROJECT_PATH" "$T3_WORKTREE_BRANCH" 2>/dev/null || git worktree add -q -b "$T3_WORKTREE_BRANCH" "$T3_WORKTREE_PROJECT_PATH") && touch "$T3_WORKTREE_PROJECT_PATH/prepared"',
+                '(git worktree add -q "$PRISMUX_WORKTREE_PROJECT_PATH" "$PRISMUX_WORKTREE_BRANCH" 2>/dev/null || git worktree add -q -b "$PRISMUX_WORKTREE_BRANCH" "$PRISMUX_WORKTREE_PROJECT_PATH") && touch "$PRISMUX_WORKTREE_PROJECT_PATH/prepared"',
             },
           }),
         );

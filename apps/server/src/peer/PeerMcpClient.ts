@@ -35,7 +35,7 @@ export interface PeerCallLimits {
 
 /**
  * Calls a linked environment's T3 MCP tools as this environment's outside
- * agent. Each call carries the calling agent's limits in `T3-Mode-Limit`, so
+ * agent. Each call carries the calling agent's limits in `Prismux-Mode-Limit`, so
  * the peer enforces the narrower of those and the link's own access.
  */
 export class PeerMcpClient extends Context.Service<
@@ -47,7 +47,7 @@ export class PeerMcpClient extends Context.Service<
       readonly tool: string;
       readonly arguments: Record<string, unknown>;
       readonly limits: PeerCallLimits;
-      /** The thread here the call is made for, sent as `T3-Sender-Thread`. */
+      /** The thread here the call is made for, sent as `Prismux-Sender-Thread`. */
       readonly sender?: OrchestrationV2LinkedSender;
       readonly success: S;
     }) => Effect.Effect<S["Type"], OrchestratorMcpFailure>;

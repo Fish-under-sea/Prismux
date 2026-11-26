@@ -15,12 +15,12 @@ it("removes URL credentials, query parameters, and fragments from error transpor
 });
 
 it.each([
-  ["git@github.com:T3Tools/prismux.git", "T3Tools/prismux"],
-  ["github.com:T3Tools/prismux.git", "T3Tools/prismux"],
-  ["gitlab.com:T3Tools/platform/prismux", "T3Tools/platform/prismux"],
-  ["https://github.com/T3Tools/prismux.git", "T3Tools/prismux"],
-  ["https://github.com/T3Tools/prismux.git?view=compact", "T3Tools/prismux"],
-  ["https://github.com/T3Tools/prismux.git#section", "T3Tools/prismux"],
+  ["git@github.com:PrismuxTools/prismux.git", "PrismuxTools/prismux"],
+  ["github.com:PrismuxTools/prismux.git", "PrismuxTools/prismux"],
+  ["gitlab.com:PrismuxTools/platform/prismux", "PrismuxTools/platform/prismux"],
+  ["https://github.com/PrismuxTools/prismux.git", "PrismuxTools/prismux"],
+  ["https://github.com/PrismuxTools/prismux.git?view=compact", "PrismuxTools/prismux"],
+  ["https://github.com/PrismuxTools/prismux.git#section", "PrismuxTools/prismux"],
   ["C:/repos/prismux", null],
 ])("reads the repository path of %s", (remoteUrl, expected) => {
   assert.strictEqual(repositoryPathFromRemoteUrl(remoteUrl), expected);

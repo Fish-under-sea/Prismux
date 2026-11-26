@@ -7,11 +7,11 @@ const parse = (url: string) => definition.parseChangeRequestUrl(new URL(url));
 
 describe("GitHub change request URLs", () => {
   it("reads a pull request on any host, lower-casing host and repository", () => {
-    expect(parse("https://github.com/T3Tools/Prismux/pull/123/files?w=1#diff")).toEqual({
+    expect(parse("https://github.com/PrismuxTools/Prismux/pull/123/files?w=1#diff")).toEqual({
       host: "github.com",
       repository: "t3tools/prismux",
       number: 123,
-      repositoryUrl: "https://github.com/T3Tools/Prismux",
+      repositoryUrl: "https://github.com/PrismuxTools/Prismux",
     });
     expect(parse("https://GHE.Example.com:8443/acme/web/pull/42/")).toEqual({
       host: "ghe.example.com",

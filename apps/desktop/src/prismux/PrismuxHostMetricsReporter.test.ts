@@ -47,14 +47,14 @@ describe("PrismuxHostMetricsReporter", () => {
       mainPid: 1000,
       cpuCores: 32,
       collectedAt: 1_700_000_010_000,
-      t3BackendSnapshot: {
+      coreBackendSnapshot: {
         desiredRunning: true,
         ready: true,
         activePid: Option.some(2000),
         restartAttempt: 0,
         restartScheduled: false,
       },
-      t3HttpUrl: "http://127.0.0.1:3773",
+      coreHttpUrl: "http://127.0.0.1:3773",
     });
 
     assert.equal(payload.mainPid, 1000);
@@ -67,7 +67,7 @@ describe("PrismuxHostMetricsReporter", () => {
     assert.equal(payload.electronProcesses[0]?.cumulativeCpuSeconds, 4.5);
     assert.equal(payload.electronProcesses[1]?.cpuPercent, 4.2);
     assert.equal(payload.electronProcesses[1]?.cumulativeCpuSeconds, 12.8);
-    assert.deepEqual(payload.t3Server, {
+    assert.deepEqual(payload.coreServer, {
       pid: 2000,
       ready: true,
       desiredRunning: true,
@@ -83,7 +83,7 @@ describe("PrismuxHostMetricsReporter", () => {
       mainPid: 5555,
       collectedAt: 1_700_000_020_000,
       cpuCores: 8,
-      t3BackendSnapshot: {
+      coreBackendSnapshot: {
         desiredRunning: true,
         ready: true,
         activePid: Option.some(5555),
@@ -92,12 +92,12 @@ describe("PrismuxHostMetricsReporter", () => {
       },
     });
 
-    assert.equal(payload.t3Server?.pid, 5555);
-    assert.equal(payload.t3Server?.hostedBy, "electron-in-process");
+    assert.equal(payload.coreServer?.pid, 5555);
+    assert.equal(payload.coreServer?.hostedBy, "electron-in-process");
   });
 
   it.effect(
-    "posts payload with Bearer auth to /v1/resources/host-metrics and injects PRISMUX_T3_SERVER_PID into child env",
+    "posts payload with Bearer auth to /v1/resources/host-metrics and injects PRISMUX_CORE_SERVER_PID into child env",
     () =>
       Effect.gen(function* () {
         const captured: Array<{
@@ -124,7 +124,7 @@ describe("PrismuxHostMetricsReporter", () => {
           mainPid: 4242,
           collectedAt: 1_700_000_030_000,
           cpuCores: 8,
-          t3BackendSnapshot: {
+          coreBackendSnapshot: {
             desiredRunning: true,
             ready: true,
             activePid: Option.some(9191),
@@ -150,11 +150,11 @@ describe("PrismuxHostMetricsReporter", () => {
           hostEnv: {},
           catalogPath: "C:\\Prismux\\official.json",
           mainPid: 4242,
-          t3ServerPid: 9191,
-          t3HttpUrl: "http://127.0.0.1:3773",
+          coreServerPid: 9191,
+          coreHttpUrl: "http://127.0.0.1:3773",
         });
         assert.equal(env.PRISMUX_MAIN_PID, "4242");
-        assert.equal(env.PRISMUX_T3_SERVER_PID, "9191");
+        assert.equal(env.PRISMUX_CORE_SERVER_PID, "9191");
       }),
   );
 

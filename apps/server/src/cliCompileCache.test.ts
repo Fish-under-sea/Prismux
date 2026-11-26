@@ -11,7 +11,7 @@ it.live("loads the CLI with its cache settings only when the command needs it", 
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-cache-test-" });
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "prismux-cli-cache-test-" });
     const report = `
       import { getCompileCacheDir, registerHooks } from 'node:module';
       registerHooks({ resolve(specifier, context, nextResolve) {

@@ -17,6 +17,42 @@ describe("buildRuntimeInstructions", () => {
     assert.notInclude(instructions, "<pull_request_linking>");
   });
 
+  it("injects pull_request_linking on demand only for PR/issue/git prompts and omits it for prose or non-PR subagents", () => {
+    const plainProse = buildRuntimeInstructions({
+      harness: "acpRegistry",
+      model: '["magpie","group/deepseek"]',
+      prompt: "初稿实数为 104 个汉字。请出定稿：删掉「最后」和「从前」，分段输出小说正文即可。",
+      isSubagent: true,
+    });
+    assert.include(plainProse, "<runtime_info>");
+    assert.notInclude(plainProse, "<pull_request_linking>");
+
+    const plainTopLevel = buildRuntimeInstructions({
+      harness: "Codex",
+      prompt: "Explain how async/await works in TypeScript.",
+    });
+    assert.notInclude(plainTopLevel, "<pull_request_linking>");
+
+    const prPrompt = buildRuntimeInstructions({
+      harness: "Antigravity",
+      prompt: "open a PR for this fix",
+    });
+    assert.include(prPrompt, "<pull_request_linking>");
+
+    const zhGitPrompt = buildRuntimeInstructions({
+      harness: "Codex",
+      prompt: "帮我提交这个分支并发起代码审查",
+    });
+    assert.include(zhGitPrompt, "<pull_request_linking>");
+
+    const nonGitProject = buildRuntimeInstructions({
+      harness: "Codex",
+      prompt: "review this draft",
+      isGitProject: false,
+    });
+    assert.notInclude(nonGitProject, "<pull_request_linking>");
+  });
+
   it("links PRs the agent creates, takes over, or pushes to, and no others", () => {
     const instructions = buildRuntimeInstructions({ harness: "Codex" });
 

@@ -287,15 +287,15 @@ describe("ssh tunnel scripts", () => {
       "v1.2.3",
     ]) {
       assert.throws(
-        () => SshTunnel.buildRemoteT3RunnerScript({ archiveVersion }),
+        () => SshTunnel.buildRemotePrismuxRunnerScript({ archiveVersion }),
         SshTunnel.SshInvalidArchiveVersionError,
         undefined,
         archiveVersion,
       );
     }
     assert.include(
-      SshTunnel.buildRemoteT3RunnerScript(ARCHIVE),
-      "T3_ARCHIVE_VERSION='1.2.3-preview.20260911.4'",
+      SshTunnel.buildRemotePrismuxRunnerScript(ARCHIVE),
+      "PRISMUX_ARCHIVE_VERSION='1.2.3-preview.20260911.4'",
     );
   });
 
@@ -321,7 +321,7 @@ describe("ssh tunnel scripts", () => {
           { mode: 0o755 },
         );
         const runner = NodePath.join(root, "run-t3.sh");
-        NodeFS.writeFileSync(runner, SshTunnel.buildRemoteT3RunnerScript(ARCHIVE));
+        NodeFS.writeFileSync(runner, SshTunnel.buildRemotePrismuxRunnerScript(ARCHIVE));
         const result = NodeChildProcess.spawnSync("sh", [runner, "--version"], {
           encoding: "utf8",
           env: { HOME: NodePath.join(root, "home"), PATH: `${bin}:${process.env.PATH ?? ""}` },
@@ -366,7 +366,7 @@ describe("ssh tunnel scripts", () => {
           { mode: 0o755 },
         );
         const runner = NodePath.join(root, "run-t3.sh");
-        NodeFS.writeFileSync(runner, SshTunnel.buildRemoteT3RunnerScript(ARCHIVE));
+        NodeFS.writeFileSync(runner, SshTunnel.buildRemotePrismuxRunnerScript(ARCHIVE));
         const result = NodeChildProcess.spawnSync("sh", [runner, "serve"], {
           encoding: "utf8",
           env: { HOME: NodePath.join(root, "home"), PATH: `${bin}:${process.env.PATH ?? ""}` },
@@ -436,7 +436,7 @@ describe("ssh tunnel scripts", () => {
         { mode: 0o755 },
       );
       const runner = NodePath.join(root, "run-t3.sh");
-      NodeFS.writeFileSync(runner, SshTunnel.buildRemoteT3RunnerScript(ARCHIVE));
+      NodeFS.writeFileSync(runner, SshTunnel.buildRemotePrismuxRunnerScript(ARCHIVE));
       const result = NodeChildProcess.spawnSync(NodePath.join(bin, "sh"), [runner, "--version"], {
         encoding: "utf8",
         env: { HOME: home, PATH: bin },
@@ -475,7 +475,7 @@ describe("ssh tunnel scripts", () => {
         { mode: 0o755 },
       );
       const runner = NodePath.join(root, "run-t3.sh");
-      NodeFS.writeFileSync(runner, SshTunnel.buildRemoteT3RunnerScript(ARCHIVE));
+      NodeFS.writeFileSync(runner, SshTunnel.buildRemotePrismuxRunnerScript(ARCHIVE));
       const result = NodeChildProcess.spawnSync(NodePath.join(bin, "sh"), [runner, "--version"], {
         encoding: "utf8",
         env: { HOME: home, PATH: bin },
@@ -524,7 +524,7 @@ describe("ssh tunnel scripts", () => {
         yield* fs.chmod(bash, 0o755);
         yield* fs.writeFileString(
           startupFile,
-          "if shopt -q login_shell; then export T3_SSH_LOGIN_ENV=loaded; fi\n",
+          "if shopt -q login_shell; then export PRISMUX_SSH_LOGIN_ENV=loaded; fi\n",
         );
         const target = { alias: "login-test", hostname: "login-test", username: null, port: null };
         const remoteCommands: string[] = [];
@@ -543,7 +543,7 @@ describe("ssh tunnel scripts", () => {
         );
         yield* fs.writeFileString(
           `${directory}/.zprofile`,
-          "if [[ -o login ]]; then export T3_SSH_LOGIN_ENV=loaded; fi\n",
+          "if [[ -o login ]]; then export PRISMUX_SSH_LOGIN_ENV=loaded; fi\n",
         );
         const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const cases = [
@@ -580,11 +580,11 @@ describe("ssh tunnel scripts", () => {
                 SHELL: shell,
                 BASH_ENV: startupFile,
                 ZDOTDIR: directory,
-                T3_SSH_LOGIN_ENV: "",
+                PRISMUX_SSH_LOGIN_ENV: "",
               },
               stdin: {
                 stream: Stream.make(
-                  new TextEncoder().encode('printf "%s:%s" "${T3_SSH_LOGIN_ENV:-missing}" "$1"'),
+                  new TextEncoder().encode('printf "%s:%s" "${PRISMUX_SSH_LOGIN_ENV:-missing}" "$1"'),
                 ),
                 endOnDone: true,
               },

@@ -1,6 +1,6 @@
 import type { DesktopBridge, DesktopUpdateState } from "@prismux/core-contracts";
 
-const FALLBACK_TRIAGE_COMMAND = "npx t3 triage";
+const FALLBACK_TRIAGE_COMMAND = "npx prismux triage";
 const DOWNLOAD_URL = "https://github.com/Fish-under-sea/Prismux/releases";
 const ISSUE_URL = "https://github.com/Fish-under-sea/Prismux/issues/new";
 const LAST_FAILURE_KEY = "prismux:boot-failed-at";
@@ -29,7 +29,7 @@ export async function resolveTriageCommand(bridge: DesktopBridge | undefined) {
     const state = await bridge?.cliCommand.getState();
     // Windows reports onPath from its PATH entry alone; only an existing launcher proves it runs.
     if (state?.launcherPath) {
-      return state.onPath ? "t3 triage" : `${launcherCommand(state.launcherPath)} triage`;
+      return state.onPath ? "prismux triage" : `${launcherCommand(state.launcherPath)} triage`;
     }
   } catch (error) {
     console.warn("Could not read the desktop CLI state.", error);

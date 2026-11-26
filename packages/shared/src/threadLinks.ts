@@ -4,13 +4,16 @@ import * as Schema from "effect/Schema";
 
 import { DEFAULT_HOSTED_APP_URL } from "./connectAuth.ts";
 
-export const THREAD_LINK_PROTOCOL = "t3-thread";
+export const THREAD_LINK_PROTOCOL = "prismux-thread";
+const LEGACY_THREAD_LINK_PROTOCOL = "t3-thread";
 const V1_PREFIX = `${THREAD_LINK_PROTOCOL}://v1/`;
 const V2_PREFIX = `${THREAD_LINK_PROTOCOL}://v2/`;
+const LEGACY_V1_PREFIX = `${LEGACY_THREAD_LINK_PROTOCOL}://v1/`;
+const LEGACY_V2_PREFIX = `${LEGACY_THREAD_LINK_PROTOCOL}://v2/`;
 const HOSTED_PREFIX = `${DEFAULT_HOSTED_APP_URL}/threads/`;
 const HOSTED_SEGMENT = "[A-Za-z0-9_%-]+";
 const HOSTED_LINK = `${HOSTED_PREFIX.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}${HOSTED_SEGMENT}/${HOSTED_SEGMENT}`;
-const THREAD_HREF = String.raw`t3-thread:\/\/v[12]\/`;
+const THREAD_HREF = String.raw`(?:prismux-thread|t3-thread):\/\/v[12]\/`;
 // A label stops at any bracket, so a run of unclosed brackets is scanned once, not once per bracket.
 const LABEL = String.raw`[^[\]\n]*`;
 // Earlier alternatives claim text so later ones cannot match inside it: an escaped character opens
@@ -72,12 +75,22 @@ function parseHostedThreadLink(href: string): ThreadLink | null {
  */
 export function parseThreadLinkHref(href: string): ThreadLink | null {
   if (href.startsWith(HOSTED_PREFIX)) return parseHostedThreadLink(href);
-  if (href.startsWith(V1_PREFIX)) {
-    const threadId = Option.getOrNull(decodeThreadId(href.slice(V1_PREFIX.length)));
+  const v1Prefix = href.startsWith(V1_PREFIX)
+    ? V1_PREFIX
+    : href.startsWith(LEGACY_V1_PREFIX)
+      ? LEGACY_V1_PREFIX
+      : null;
+  if (v1Prefix !== null) {
+    const threadId = Option.getOrNull(decodeThreadId(href.slice(v1Prefix.length)));
     return threadId === null ? null : { environmentId: null, threadId };
   }
-  if (!href.startsWith(V2_PREFIX)) return null;
-  const path = href.slice(V2_PREFIX.length);
+  const v2Prefix = href.startsWith(V2_PREFIX)
+    ? V2_PREFIX
+    : href.startsWith(LEGACY_V2_PREFIX)
+      ? LEGACY_V2_PREFIX
+      : null;
+  if (v2Prefix === null) return null;
+  const path = href.slice(v2Prefix.length);
   const slash = path.indexOf("/");
   if (slash < 0) return null;
   const environmentId = Option.getOrNull(decodeEnvironmentId(path.slice(0, slash)));
@@ -156,7 +169,11 @@ export function formatHostedThreadLink(
 }
 
 export function hasThreadLinks(markdown: string): boolean {
-  return markdown.includes(`${THREAD_LINK_PROTOCOL}://v`) || markdown.includes(HOSTED_PREFIX);
+  return (
+    markdown.includes(`${THREAD_LINK_PROTOCOL}://v`) ||
+    markdown.includes(`${LEGACY_THREAD_LINK_PROTOCOL}://v`) ||
+    markdown.includes(HOSTED_PREFIX)
+  );
 }
 
 /** Every thread the markdown's links can name, so their titles are keyed reads. */

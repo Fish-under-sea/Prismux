@@ -13,7 +13,7 @@ import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
-import * as T3ProjectFileLoader from "./T3ProjectFileLoader.ts";
+import * as PrismuxProjectFileLoader from "./PrismuxProjectFileLoader.ts";
 
 const FAVICON_CACHE_CAPACITY = 512;
 const ICON_SOURCE_SCAN_BYTES = 128 * 1024;
@@ -148,7 +148,7 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
-  const projectFileLoader = yield* T3ProjectFileLoader.T3ProjectFileLoader;
+  const projectFileLoader = yield* PrismuxProjectFileLoader.PrismuxProjectFileLoader;
 
   const resolveIconHref = (href: string): ReadonlyArray<string> => {
     // Browsers strip surrounding whitespace from URL attributes; file paths keep theirs.

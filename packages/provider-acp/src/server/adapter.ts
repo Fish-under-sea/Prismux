@@ -40,7 +40,7 @@ import * as HostProcess from "@prismux/core-shared/HostProcess";
 import { HTML_RENDER_TOOL_NAME } from "@prismux/core-shared/htmlRender";
 import { modelSelectionsEqual } from "@prismux/core-shared/model";
 import { type SelfInvocation, selfInvocationArgs } from "@prismux/core-shared/nodeRuntime";
-import { resolveT3McpToolId } from "@prismux/core-shared/t3McpToolPresentation";
+import { resolvePrismuxMcpToolId } from "@prismux/core-shared/prismuxMcpToolPresentation";
 import {
   compactDynamicToolOutput,
   htmlRenderFromToolItem,
@@ -118,8 +118,8 @@ import {
 } from "./sessionConfig.ts";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
 import {
-  t3AcpPromptWithInstructions,
-  type T3AcpInstructionState,
+  resolvePrismuxAcpPromptPlan,
+  type PrismuxAcpInstructionState,
 } from "@prismux/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@prismux/provider-core/server/runtimeInstructions";
 import * as IdAllocator from "@prismux/provider-core/server/IdAllocator";
@@ -1123,11 +1123,11 @@ const ACP_MCP_CALL_LAUNCHER = [
   "@echo off",
   "setlocal EnableExtensions DisableDelayedExpansion",
   'set "ELECTRON_RUN_AS_NODE=1"',
-  "if not defined T3_ACP_MCP_ENTRYPOINT goto packaged",
-  '"%T3_ACP_MCP_NODE%" "%T3_ACP_MCP_ENTRYPOINT%" acp-mcp-call %*',
+  "if not defined PRISMUX_ACP_MCP_ENTRYPOINT goto packaged",
+  '"%PRISMUX_ACP_MCP_NODE%" "%PRISMUX_ACP_MCP_ENTRYPOINT%" acp-mcp-call %*',
   "exit /b %errorlevel%",
   ":packaged",
-  '"%T3_ACP_MCP_NODE%" acp-mcp-call %*',
+  '"%PRISMUX_ACP_MCP_NODE%" acp-mcp-call %*',
   "",
 ].join("\r\n");
 
@@ -1163,23 +1163,23 @@ function acpMcpContext(
   return {
     servers: [
       {
-        name: "t3-code",
+        name: "prismux",
         command: self.command,
         args: [...selfInvocationArgs(self, ["acp-mcp-bridge"])],
         env: [
           { name: "ELECTRON_RUN_AS_NODE", value: "1" },
-          { name: "T3_ACP_MCP_ENDPOINT", value: session.endpoint },
-          { name: "T3_ACP_MCP_AUTHORIZATION", value: session.authorizationHeader },
+          { name: "PRISMUX_ACP_MCP_ENDPOINT", value: session.endpoint },
+          { name: "PRISMUX_ACP_MCP_AUTHORIZATION", value: session.authorizationHeader },
         ],
       },
     ],
-    acpServers: [{ type: "acp", name: "t3-code", serverId: "t3-code" }],
+    acpServers: [{ type: "acp", name: "prismux", serverId: "prismux" }],
     httpServers:
       mcpOverHttp === true
         ? [
             {
               type: "http",
-              name: "t3-code",
+              name: "prismux",
               url: session.endpoint,
               headers: [
                 { name: "Authorization", value: session.authorizationHeader },
@@ -1198,11 +1198,11 @@ function acpMcpContext(
       // the same variable (PortScanner.AGENT_THREAD_ENV; a string literal here
       // because this package cannot reach apps/server).
       PRISMUX_THREAD_ID: session.threadId,
-      T3_ACP_MCP_ENDPOINT: session.endpoint,
-      T3_ACP_MCP_AUTHORIZATION: session.authorizationHeader,
-      T3_ACP_MCP_NODE: self.command,
-      ...(self.entrypoint === undefined ? {} : { T3_ACP_MCP_ENTRYPOINT: self.entrypoint }),
-      ...(callLauncher === undefined ? {} : { T3_ACP_MCP_CALL: callLauncher }),
+      PRISMUX_ACP_MCP_ENDPOINT: session.endpoint,
+      PRISMUX_ACP_MCP_AUTHORIZATION: session.authorizationHeader,
+      PRISMUX_ACP_MCP_NODE: self.command,
+      ...(self.entrypoint === undefined ? {} : { PRISMUX_ACP_MCP_ENTRYPOINT: self.entrypoint }),
+      ...(callLauncher === undefined ? {} : { PRISMUX_ACP_MCP_CALL: callLauncher }),
     },
   };
 }
@@ -2441,7 +2441,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const configuredRuntimeMode = yield* Ref.make<
           ProviderAdapter.ProviderAdapterV2RuntimePolicy["runtimeMode"] | null
         >(null);
-        const promptInstructionStates = yield* Ref.make(new Map<string, T3AcpInstructionState>());
+        const promptInstructionStates = yield* Ref.make(new Map<string, PrismuxAcpInstructionState>());
         const promptRuntimeInstructions = yield* Ref.make(new Map<string, string>());
         // Unique markers keep delayed prompt completions from clearing later compactions.
         const compactionMarkers = yield* Ref.make(new Map<string, symbol>());
@@ -2974,7 +2974,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               elicitation: { form: {}, ...(flavor.onUrlElicitation ? { url: {} } : {}) },
               ...(flavor.clientCapabilitiesMeta ? { _meta: flavor.clientCapabilitiesMeta } : {}),
             },
-            clientInfo: { name: "t3-code", version: "0.0.0" },
+            clientInfo: { name: "prismux", version: "0.0.0" },
             onTermination: (error) =>
               Effect.sync(() => agentRequests.clear()).pipe(Effect.andThen(onTermination(error))),
             ...(promptInactivityTimeoutMillis === undefined
@@ -4858,7 +4858,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             const input =
               mcpIdentity.input ?? unknownRecord(rawInputRecord?.arguments) ?? rawInputRecord ?? {};
             let output = rawOutput === undefined ? undefined : acpMcpToolCallOutput(rawOutput);
-            const isHtmlRender = resolveT3McpToolId(toolName) === HTML_RENDER_TOOL_NAME;
+            const isHtmlRender = resolvePrismuxMcpToolId(toolName) === HTML_RENDER_TOOL_NAME;
             const isError =
               compactDynamicToolOutput(output)?.isError === true ||
               compactDynamicToolOutput(rawOutputRecord?.result)?.isError === true;
@@ -7335,8 +7335,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               Effect.fail(
                 EffectAcpErrors.AcpRequestError.internalError(
                   disposition === "ask"
-                    ? `The active T3 runtime policy requires approval for ${operation}. Request permission with session/request_permission before retrying.`
-                    : `The active T3 runtime policy does not allow ${operation}.`,
+                    ? `The active Prismux runtime policy requires approval for ${operation}. Request permission with session/request_permission before retrying.`
+                    : `The active Prismux runtime policy does not allow ${operation}.`,
                 ),
               ),
             ),
@@ -9251,11 +9251,23 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           sessionId: string,
         ) {
           const mcpSession = yield* mcpSessions.read(turnInput.threadId);
+          const sessionSetup = yield* Ref.get(activeSessionSetup);
+          const isSubagent = turnInput.appThread.lineage.relationshipToParent === "subagent";
+          const mcpCapabilities = sessionSetup?.initializeResult.agentCapabilities?.mcpCapabilities;
+          const hasNativeMcp =
+            mcpCapabilities?.acp === true ||
+            (flavor.mcpOverHttp === true && mcpCapabilities?.http === true);
           const instructionState = {
             interactionMode: turnInput.runtimePolicy.interactionMode,
-            hasT3Mcp: mcpSession !== undefined,
+            hasPrismuxMcp: mcpSession !== undefined,
+            hasBrowserTools: mcpSession?.browserToolsAvailable ?? true,
             hasDeviceTools: mcpSession?.capabilities?.has("device") === true,
-          } satisfies T3AcpInstructionState;
+            isSubagent,
+            hasNativeMcp,
+            hasLinkedEnvironments: mcpSession?.hasLinkedEnvironments === true,
+            hasOpenPreview: mcpSession?.hasOpenPreview === true,
+            hasOpenDeviceSession: mcpSession?.hasOpenDeviceSession === true,
+          } satisfies PrismuxAcpInstructionState;
           const userText =
             flavor.rewriteUserText === undefined
               ? turnInput.message.text
@@ -9282,27 +9294,39 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           // while the prompt is prepared still resends the notes in this prompt.
           const previousInstructionState = (yield* Ref.get(promptInstructionStates)).get(sessionId);
           const compactionMarker = (yield* Ref.get(compactionMarkers)).get(sessionId);
-          const text = t3AcpPromptWithInstructions({
+          const promptPlan = resolvePrismuxAcpPromptPlan({
             prompt: messageText,
             state: instructionState,
             ...(previousInstructionState === undefined || compactionMarker !== undefined
               ? {}
               : { previousState: previousInstructionState }),
           });
-          const sessionSetup = yield* Ref.get(activeSessionSetup);
+          const text = promptPlan.text;
+          const prevRuntimeText =
+            compactionMarker !== undefined
+              ? undefined
+              : (yield* Ref.get(promptRuntimeInstructions)).get(sessionId);
+          const sessionCarriesPrLinking =
+            sessionSetup !== null &&
+            flavor.sessionCarriesPullRequestLinking?.(sessionSetup.initializeResult) === true;
+          const prLinkingAlreadySent =
+            prevRuntimeText !== undefined && prevRuntimeText.includes("<pull_request_linking>");
           const runtimeInstructions = buildRuntimeInstructions({
             harness: flavor.runtimeHarness ?? driver,
             model: turnInput.modelSelection.model,
             runtimePolicy: turnInput.runtimePolicy,
-            pullRequestLinking:
-              sessionSetup === null ||
-              flavor.sessionCarriesPullRequestLinking?.(sessionSetup.initializeResult) !== true,
+            prompt: messageText,
+            isSubagent,
+            pullRequestLinking: sessionCarriesPrLinking
+              ? false
+              : prLinkingAlreadySent
+                ? true
+                : undefined,
           });
           // The agent keeps its own history, so resend only after compaction or when the text changes.
           const sendRuntimeInstructions =
             !isNativeSlashCommand &&
-            (compactionMarker !== undefined ||
-              (yield* Ref.get(promptRuntimeInstructions)).get(sessionId) !== runtimeInstructions);
+            (compactionMarker !== undefined || prevRuntimeText !== runtimeInstructions);
           const promptText = flavor.buildAttachmentPrompt ? text.trim() : text;
           const prompt: Array<EffectAcpSchema.ContentBlock> =
             promptText.length > 0 ? [{ type: "text", text: promptText }] : [];
@@ -9318,7 +9342,13 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           }
           return {
             prompt,
-            instructionState: text === messageText ? undefined : instructionState,
+            instructionState:
+              !isNativeSlashCommand &&
+              (promptPlan.injected ||
+                previousInstructionState === undefined ||
+                compactionMarker !== undefined)
+                ? promptPlan.nextState
+                : undefined,
             runtimeInstructions: sendRuntimeInstructions ? runtimeInstructions : undefined,
             compactionMarker,
           };

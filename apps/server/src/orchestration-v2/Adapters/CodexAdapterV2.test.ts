@@ -157,8 +157,8 @@ describe("CodexAdapterV2 assistant message streaming", () => {
 
 describe("CodexAdapterV2 runtime policy", () => {
   it.effect.each([undefined, false, true])(
-    "selects native collaboration modes without prompt overrides with hasT3Mcp=%s",
-    (hasT3Mcp) =>
+    "selects native collaboration modes without prompt overrides with hasPrismuxMcp=%s",
+    (hasPrismuxMcp) =>
       Effect.gen(function* () {
         for (const interactionMode of ["plan", "default"] as const) {
           for (const reasoningEffort of [undefined, "high"] as const) {
@@ -173,7 +173,7 @@ describe("CodexAdapterV2 runtime policy", () => {
                   ? {}
                   : { options: [{ id: "reasoningEffort", value: reasoningEffort }] }),
               },
-              ...(hasT3Mcp === undefined ? {} : { hasT3Mcp }),
+              ...(hasPrismuxMcp === undefined ? {} : { hasPrismuxMcp }),
             });
 
             assert.deepEqual(params.collaborationMode, {
@@ -186,7 +186,7 @@ describe("CodexAdapterV2 runtime policy", () => {
             assert.equal(params.effort, reasoningEffort);
             // Non-Bedrock providers request `detailed` so GPT-5.5/6.* catalogues (whose default is `none`) still emit summaries.
             assert.equal(params.summary, "detailed");
-            assert.equal(params.additionalContext !== undefined, hasT3Mcp === true);
+            assert.equal(params.additionalContext !== undefined, hasPrismuxMcp === true);
           }
         }
       }),
@@ -313,7 +313,7 @@ describe("CodexAdapterV2 runtime policy", () => {
           codexInput: [{ type: "text", text: "test" }],
           runtimePolicy: { runtimeMode, interactionMode: "default", cwd: "/work/app", workspace },
           modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
-          hasT3Mcp: false,
+          hasPrismuxMcp: false,
         });
 
       const autoAcceptEdits = yield* build("auto-accept-edits");
@@ -324,9 +324,9 @@ describe("CodexAdapterV2 runtime policy", () => {
       assert.deepEqual((yield* build("approval-required")).sandboxPolicy, { type: "readOnly" });
       assert.deepEqual((yield* build("full-access")).sandboxPolicy, { type: "dangerFullAccess" });
       // The folder list reaches the model without Prismux's MCP tools.
-      assert.deepEqual(Object.keys(autoAcceptEdits.additionalContext ?? {}), ["t3_code_workspace"]);
+      assert.deepEqual(Object.keys(autoAcceptEdits.additionalContext ?? {}), ["prismux_workspace"]);
       assert.include(
-        autoAcceptEdits.additionalContext?.["t3_code_workspace"]?.value,
+        autoAcceptEdits.additionalContext?.["prismux_workspace"]?.value,
         "- api (Git repository): /work/api",
       );
     }),
@@ -380,14 +380,14 @@ describe("CodexAdapterV2 runtime policy", () => {
         codexInput: [{ type: "text", text: "what's on my list?" }],
         runtimePolicy: policy,
         modelSelection,
-        hasT3Mcp: true,
+        hasPrismuxMcp: true,
         appContext,
       });
       assert.deepEqual(withT3.additionalContext?.["mcp_app_todos_list_todos_item-1"], {
         kind: "untrusted",
         value: "Filtered to overdue",
       });
-      assert.isDefined(withT3.additionalContext?.["t3_code_runtime"]);
+      assert.isDefined(withT3.additionalContext?.["prismux_runtime"]);
     }),
   );
 });
@@ -2757,17 +2757,17 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             "features.concurrent_reasoning_summaries": true,
             "shell_environment_policy.set.PRISMUX_THREAD_ID": `thread-${scenario}`,
             "mcp_servers.envprobe.env.PRISMUX_THREAD_ID": `thread-${scenario}`,
-            "mcp_servers.t3-code": {
+            "mcp_servers.prismux": {
               url: "http://127.0.0.1:43123/mcp",
               tool_timeout_sec: 3_900,
               http_headers: { Authorization: "Bearer secret-codex-token" },
-              disabled_tools: ["t3_thread_wait", "delegate_task"],
+              disabled_tools: ["prismux_thread_wait", "delegate_task"],
             },
-            "mcp_servers.t3-code-direct": {
+            "mcp_servers.prismux-direct": {
               url: "http://127.0.0.1:43123/mcp",
               tool_timeout_sec: 3_900,
               http_headers: { Authorization: "Bearer secret-codex-token" },
-              enabled_tools: ["t3_thread_wait", "delegate_task"],
+              enabled_tools: ["prismux_thread_wait", "delegate_task"],
               omit_tools_from: ["code_mode", "deferred"],
             },
           },
@@ -2857,15 +2857,15 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       };
       const currentConfig = {
         "tools.update_plan.enabled": true,
-        "mcp_servers.t3-code": {
+        "mcp_servers.prismux": {
           url: "http://127.0.0.1:42000/mcp",
           http_headers: { Authorization: "Bearer current-token" },
         },
         "mcp_servers.extra.command": "cat",
       };
       for (const recordedMcp of [
-        { mcp_servers: { "t3-code": recordedServer } },
-        { "mcp_servers.t3-code": recordedServer, "mcp_servers.extra.command": "echo" },
+        { mcp_servers: { "prismux": recordedServer } },
+        { "mcp_servers.prismux": recordedServer, "mcp_servers.extra.command": "echo" },
       ]) {
         const entries = codexReplayPreamble({
           nativeThreadId: "replayed-mcp-thread",
@@ -4179,11 +4179,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         codexInput: [{ type: "text", text: "work" }],
         runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
         modelSelection,
-        hasT3Mcp: true,
+        hasPrismuxMcp: true,
         cyberAccess: { defaultProgram: "daybreakBlue" },
       });
       assert.include(
-        params.additionalContext?.t3_code_orchestration_01?.value ?? "",
+        params.additionalContext?.prismux_orchestration_01?.value ?? "",
         "delegate_task",
       );
       const entries = codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "work" });
@@ -9443,8 +9443,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             item: {
               type: "mcpToolCall",
               id: COMPLETED_WAIT_ITEM,
-              server: "t3-code",
-              tool: "t3_thread_wait",
+              server: "prismux",
+              tool: "prismux_thread_wait",
               status: "inProgress",
               arguments: { threadId: "thread:completed-wait", timeoutMs: 30000 },
             },
@@ -9463,8 +9463,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             item: {
               type: "mcpToolCall",
               id: COMPLETED_WAIT_ITEM,
-              server: "t3-code",
-              tool: "t3_thread_wait",
+              server: "prismux",
+              tool: "prismux_thread_wait",
               status: "completed",
               arguments: { threadId: "thread:completed-wait", timeoutMs: 30000 },
               result: { content: [{ type: "text", text: "idle" }] },
@@ -9484,8 +9484,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             item: {
               type: "mcpToolCall",
               id: ORPHAN_WAIT_ITEM,
-              server: "t3-code",
-              tool: "t3_thread_wait",
+              server: "prismux",
+              tool: "prismux_thread_wait",
               status: "inProgress",
               arguments: {
                 threadId:
@@ -12064,7 +12064,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               codexInput: [{ type: "text", text }],
               runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
               modelSelection: CODEX_TEST_MODEL_SELECTION,
-              hasT3Mcp: true,
+              hasPrismuxMcp: true,
             }),
             (params): CodexReplay.CodexAppServerReplayEntry => ({
               type: "expect_outbound",

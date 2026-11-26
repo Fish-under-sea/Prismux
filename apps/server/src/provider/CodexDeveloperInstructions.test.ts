@@ -1,6 +1,6 @@
 import * as NodeAssert from "node:assert/strict";
 
-import { T3_CODE_DEVICE_TOOL_INSTRUCTIONS } from "@prismux/provider-core/server/orchestrationInstructions";
+import { PRISMUX_DEVICE_TOOL_INSTRUCTIONS } from "@prismux/provider-core/server/orchestrationInstructions";
 import { describe, it } from "vite-plus/test";
 
 import {
@@ -46,7 +46,7 @@ describe("Codex runtime context", () => {
 describe("Codex orchestration context", () => {
   it("routes subagents native first, delegate_task for the rest", () => {
     const orchestration = Object.entries(buildCodexAdditionalContext({ model: "gpt-6.1-sol" }))
-      .filter(([key]) => key.startsWith("t3_code_orchestration_"))
+      .filter(([key]) => key.startsWith("prismux_orchestration_"))
       .map(([, entry]) => entry.value)
       .join("\n");
 
@@ -59,7 +59,7 @@ describe("Codex orchestration context", () => {
     NodeAssert.ok(
       orchestration.includes("Every new delegate review or re-check is a new `delegate_task`"),
     );
-    NodeAssert.ok(orchestration.includes("never a `t3_thread_send`"));
+    NodeAssert.ok(orchestration.includes("never a `prismux_thread_send`"));
     NodeAssert.ok(!orchestration.includes("inheritedOptions"));
     NodeAssert.ok(!orchestration.includes("Prefer native"));
     // The ACP terminal fallback is ACP-only; Codex agents never need it.
@@ -67,18 +67,42 @@ describe("Codex orchestration context", () => {
   });
 });
 
-describe("Codex device context", () => {
-  it("adds the shared device block only when the session holds device access", () => {
-    const tools = (device: boolean) =>
-      buildCodexAdditionalContext({ model: "gpt-6.1-sol" }, { browser: true, device }).t3_code_tools
-        ?.value ?? "";
+describe("Codex device and on-demand context", () => {
+  it("adds device/browser/PR blocks strictly on demand and keeps delegated children minimal", () => {
+    const tools = (device: boolean, prompt?: string) =>
+      buildCodexAdditionalContext(
+        { model: "gpt-6.1-sol" },
+        { browser: true, device, prompt },
+      ).prismux_tools?.value ?? "";
 
-    NodeAssert.ok(tools(true).includes(T3_CODE_DEVICE_TOOL_INSTRUCTIONS));
-    NodeAssert.ok(!tools(true).includes("ToolSearch"));
-    NodeAssert.ok(!tools(false).includes("## Prismux devices"));
+    // Plain prompt without device/browser intent gets zero device/browser dump
+    NodeAssert.equal(tools(true, "Explain this helper function."), "");
+    NodeAssert.ok(
+      tools(true, "Launch the app on iOS simulator and screenshot it.").includes(
+        PRISMUX_DEVICE_TOOL_INSTRUCTIONS,
+      ),
+    );
+    NodeAssert.ok(!tools(true, "Check iOS simulator").includes("ToolSearch"));
+    NodeAssert.ok(!tools(false, "Check iOS simulator").includes("## Prismux devices"));
+    NodeAssert.ok(
+      tools(false, "Open http://localhost:3000 in the browser").includes("## Prismux browser"),
+    );
+
+    // Delegated child with plain prose task gets ONLY prismux_runtime (no parent orchestration)
+    const childCtx = buildCodexAdditionalContext(
+      { model: "gpt-6.1-sol" },
+      {
+        browser: true,
+        device: true,
+        isSubagent: true,
+        prompt: "删掉「最后」和「从前」，分段输出小说正文即可。",
+      },
+    );
+    NodeAssert.deepEqual(Object.keys(childCtx), ["prismux_runtime"]);
+    NodeAssert.ok(!childCtx.prismux_runtime!.value.includes("<pull_request_linking>"));
   });
 });
 
 function runtimeInstructions(runtime: Parameters<typeof buildCodexAdditionalContext>[0]) {
-  return buildCodexAdditionalContext(runtime).t3_code_runtime!.value;
+  return buildCodexAdditionalContext(runtime).prismux_runtime!.value;
 }

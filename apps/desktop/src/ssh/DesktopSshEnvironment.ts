@@ -75,15 +75,15 @@ export class DesktopSshEnvironment extends Context.Service<
 >()("@prismux/desktop/ssh/DesktopSshEnvironment") {}
 
 export interface DesktopSshEnvironmentLayerOptions {
-  readonly resolveCliRunner?: Effect.Effect<SshTunnel.RemoteT3RunnerOptions>;
+  readonly resolveCliRunner?: Effect.Effect<SshTunnel.RemotePrismuxRunnerOptions>;
   readonly resolveLauncherId?: Effect.Effect<string | null>;
 }
 
 export const resolveDesktopSshCliRunner = (
   environment: DesktopEnvironment.DesktopEnvironment["Service"],
   env: NodeJS.ProcessEnv,
-): SshTunnel.RemoteT3RunnerOptions => {
-  const devRemoteEntryPath = Option.getOrUndefined(environment.devRemoteT3ServerEntryPath);
+): SshTunnel.RemotePrismuxRunnerOptions => {
+  const devRemoteEntryPath = Option.getOrUndefined(environment.devRemoteCoreServerEntryPath);
   if (environment.isDevelopment && devRemoteEntryPath !== undefined) {
     return {
       nodeScriptPath: devRemoteEntryPath,

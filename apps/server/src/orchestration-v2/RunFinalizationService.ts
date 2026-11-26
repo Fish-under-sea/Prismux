@@ -45,7 +45,7 @@ export class RunFinalizationObserver extends Context.Reference<{
     readonly threadId: ThreadId;
     readonly cwds: ReadonlyArray<string>;
   }) => Effect.Effect<void>;
-}>("t3/orchestration-v2/RunFinalizationObserver", {
+}>("prismux/orchestration-v2/RunFinalizationObserver", {
   defaultValue: () => ({
     refresh: () => Effect.void,
     refreshAfterTurn: () => Effect.void,

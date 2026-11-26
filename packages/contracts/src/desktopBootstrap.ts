@@ -12,7 +12,7 @@ export const DesktopBackendBootstrap = Schema.Struct({
   noBrowser: Schema.Boolean,
   port: PortSchema,
   // Omit in WSL to use the Linux home instead of the mapped Windows directory.
-  t3Home: Schema.optional(Schema.String),
+  prismuxHome: Schema.optional(Schema.String),
   host: Schema.String,
   desktopBootstrapToken: Schema.String,
   // Derives rotating tokens instead of trusting desktopBootstrapToken indefinitely; see @prismux/core-shared/desktopBootstrapToken.
@@ -35,7 +35,7 @@ export const DesktopBackendBootstrap = Schema.Struct({
 
 export type DesktopBackendBootstrap = typeof DesktopBackendBootstrap.Type;
 
-/** Written to `<t3Home>/runtime` before update shutdown so the backend retains its managed tunnel. */
+/** Written to `<prismuxHome>/runtime` before update shutdown so the backend retains its managed tunnel. */
 export const DESKTOP_UPDATE_RESTART_MARKER_FILE = "desktop-update-restart";
 
 export const DESKTOP_UPDATE_IN_PROGRESS_MARKER_FILE = "desktop-update-in-progress";

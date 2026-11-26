@@ -218,8 +218,9 @@ import {
 } from "../../provider/claudeUsageLimits.ts";
 import type { ManagedServerProvider } from "@prismux/provider-core/server/snapshot";
 import {
-  T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH,
-  T3_CODE_ORCHESTRATION_INSTRUCTIONS,
+  buildPrismuxOrchestrationSections,
+  detectPrismuxPromptIntent,
+  PRISMUX_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH,
 } from "@prismux/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@prismux/provider-core/server/runtimeInstructions";
 import {
@@ -436,7 +437,7 @@ export function spawnClaudeProcessGroup(
     [
       "-c",
       CLAUDE_GROUP_WATCH_SCRIPT,
-      "t3-claude",
+      "prismux-claude",
       cwd.startsWith("/") ? cwd : `./${cwd}`,
       options.command,
       ...options.args,
@@ -2276,12 +2277,12 @@ function parseClaudeInteger(text: string): number {
 }
 
 // Claude Code defers MCP tools behind ToolSearch, so the agent only finds
-// t3_background_wait when the system prompt says when to reach for it.
+// prismux_background_wait when the system prompt says when to reach for it.
 const CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS = `
 
 ### Background work you wait on
 
-To wait for a background command or Monitor you started (tests, a build), call \`t3_background_wait\` with its task ID before you end your turn. Do not mark work you leave running, or PRs. T3 MCP tools are deferred: load one with ToolSearch before you call it.
+To wait for a background command or Monitor you started (tests, a build), call \`prismux_background_wait\` with its task ID before you end your turn. Do not mark work you leave running, or PRs. Prismux MCP tools are deferred: load one with ToolSearch before you call it.
 `;
 
 // Claude 5.1+ returns text written before a tool call as a progress update, which the API
@@ -2297,7 +2298,7 @@ const subagentDeviceInstructions: HookCallback = () =>
   Promise.resolve({
     hookSpecificOutput: {
       hookEventName: "SubagentStart",
-      additionalContext: T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH,
+      additionalContext: PRISMUX_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH,
     },
   });
 
@@ -2317,8 +2318,14 @@ export function makeClaudeQueryOptions(input: {
   readonly sdkSettings?: string | ClaudeSdkSettings;
   readonly environment?: NodeJS.ProcessEnv;
   readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
-  /** The thread's T3 MCP session holds the `device` capability. */
+  /** The thread's Prismux MCP session holds the `device` capability. */
   readonly deviceToolsAvailable?: boolean;
+  readonly prompt?: string | undefined;
+  readonly isSubagent?: boolean;
+  readonly hasOpenPreview?: boolean;
+  readonly hasOpenDeviceSession?: boolean;
+  readonly hasLinkedEnvironments?: boolean;
+  readonly isGitProject?: boolean;
   readonly tools?: ClaudeAgentSdkQueryTools;
   readonly allowedTools?: ReadonlyArray<string>;
   readonly disallowedTools?: ReadonlyArray<string>;
@@ -2421,7 +2428,21 @@ export function makeClaudeQueryOptions(input: {
               : { ENABLE_TOOL_SEARCH: input.toolSearchOverride }),
           },
         } as ClaudeSdkSettings);
-  const deviceInstructions = input.mcpServers !== undefined && input.deviceToolsAvailable === true;
+  const promptIntent =
+    input.prompt === undefined ? undefined : detectPrismuxPromptIntent(input.prompt);
+  const deviceInstructions =
+    input.mcpServers !== undefined &&
+    input.deviceToolsAvailable === true &&
+    (input.hasOpenDeviceSession === true || promptIntent?.needsDevice === true);
+  const claudeOrchestrationSections =
+    input.mcpServers === undefined
+      ? []
+      : buildPrismuxOrchestrationSections({
+          prompt: input.prompt,
+          isSubagent: input.isSubagent,
+          hasOpenPreview: input.hasOpenPreview,
+          hasLinkedEnvironments: input.hasLinkedEnvironments,
+        });
   const options: ClaudeAgentSdkQueryOptions = {
     model: compiledSelection.apiModelId,
     // T3 names threads; a supplied title skips Claude's redundant naming request.
@@ -2478,14 +2499,21 @@ export function makeClaudeQueryOptions(input: {
         buildRuntimeInstructions({
           harness: "Claude Code",
           runtimePolicy: { cwd: input.cwd, workspace: input.workspace },
+          ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
+          ...(input.isSubagent !== undefined ? { isSubagent: input.isSubagent } : {}),
+          ...(input.isGitProject !== undefined ? { isGitProject: input.isGitProject } : {}),
+          ...(input.prompt === undefined ? { pullRequestLinking: false } : {}),
         }) +
           (input.mcpServers === undefined
             ? ""
-            : T3_CODE_ORCHESTRATION_INSTRUCTIONS +
-              CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS +
-              CLAUDE_SEND_TO_USER_INSTRUCTIONS +
+            : (claudeOrchestrationSections.length > 0
+                ? `\n\n${claudeOrchestrationSections.join("\n\n")}\n`
+                : "") +
+              (input.isSubagent === true
+                ? ""
+                : CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS + CLAUDE_SEND_TO_USER_INSTRUCTIONS) +
               (deviceInstructions
-                ? `\n${T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH}\n`
+                ? `\n${PRISMUX_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH}\n`
                 : "")),
         ...launchAppendSystemPrompt,
       ].join("\n\n"),
@@ -2597,32 +2625,32 @@ export const readClaudeLaunchArgSettings = Effect.fn("ClaudeAdapterV2.readLaunch
   },
 );
 
-export const CLAUDE_T3_MCP_TOOL_WILDCARD = "mcp__t3-code__*";
+export const CLAUDE_PRISMUX_MCP_TOOL_WILDCARD = "mcp__prismux__*";
 
 // Keep in sync with OrchestratorToolkit Tool.Readonly annotations; ClaudeAdapterV2.test.ts checks this.
-export const CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS: ReadonlyArray<string> = [
-  "mcp__t3-code__orchestrator_capabilities",
-  "mcp__t3-code__list_scheduled_tasks",
-  "mcp__t3-code__t3_background_wait",
-  "mcp__t3-code__t3_thread_list",
-  "mcp__t3-code__t3_thread_wait",
-  "mcp__t3-code__t3_worktree_status",
-  "mcp__t3-code__t3_worktree_list",
-  "mcp__t3-code__t3_project_list",
-  "mcp__t3-code__t3_project_read",
-  "mcp__t3-code__t3_thread_search",
-  "mcp__t3-code__t3_preview_list",
-  "mcp__t3-code__t3_environment_read",
-  "mcp__t3-code__t3_environment_links",
-  "mcp__t3-code__t3_theme_read",
-  "mcp__t3-code__html_preview",
-  "mcp__t3-code__html_render",
-  "mcp__t3-code__send_to_user",
-  "mcp__t3-code__t3_submit_output",
+export const CLAUDE_READ_ONLY_PRISMUX_MCP_ALLOWED_TOOLS: ReadonlyArray<string> = [
+  "mcp__prismux__orchestrator_capabilities",
+  "mcp__prismux__list_scheduled_tasks",
+  "mcp__prismux__prismux_background_wait",
+  "mcp__prismux__prismux_thread_list",
+  "mcp__prismux__prismux_thread_wait",
+  "mcp__prismux__prismux_worktree_status",
+  "mcp__prismux__prismux_worktree_list",
+  "mcp__prismux__prismux_project_list",
+  "mcp__prismux__prismux_project_read",
+  "mcp__prismux__prismux_thread_search",
+  "mcp__prismux__prismux_preview_list",
+  "mcp__prismux__prismux_environment_read",
+  "mcp__prismux__prismux_environment_links",
+  "mcp__prismux__prismux_theme_read",
+  "mcp__prismux__html_preview",
+  "mcp__prismux__html_render",
+  "mcp__prismux__send_to_user",
+  "mcp__prismux__prismux_submit_output",
 ];
 
 // request_secret can wait an hour; exceed Claude's default 60 s timeout.
-export const CLAUDE_T3_MCP_TOOL_TIMEOUT_MS = 65 * 60 * 1_000;
+export const CLAUDE_PRISMUX_MCP_TOOL_TIMEOUT_MS = 65 * 60 * 1_000;
 
 // allowedTools pre-approves calls; tools controls availability. Pre-approve T3 tools for headless modes,
 // limited to annotated read-only tools in read-only sandboxes.
@@ -2640,18 +2668,18 @@ export function claudeMcpQueryOverrides(input: {
     return input.allowedTools === undefined ? {} : { allowedTools: input.allowedTools };
   }
   const mcpAllowedTools = input.readOnlySandbox
-    ? CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS
-    : [CLAUDE_T3_MCP_TOOL_WILDCARD];
+    ? CLAUDE_READ_ONLY_PRISMUX_MCP_ALLOWED_TOOLS
+    : [CLAUDE_PRISMUX_MCP_TOOL_WILDCARD];
   return {
     allowedTools: Array.from(new Set([...(input.allowedTools ?? []), ...mcpAllowedTools])),
     mcpServers: {
-      "t3-code": {
+      "prismux": {
         type: "http",
         url: session.endpoint,
         headers: {
           Authorization: session.authorizationHeader,
         },
-        timeout: CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
+        timeout: CLAUDE_PRISMUX_MCP_TOOL_TIMEOUT_MS,
       },
     },
   };
@@ -8964,7 +8992,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const { liveQuery, toolCall } = input;
             if (
               !toolCall.toolName.startsWith("mcp__") ||
-              toolCall.toolName.startsWith("mcp__t3-code__") ||
+              toolCall.toolName.startsWith("mcp__prismux__") ||
               !claudeSupportsMcpApps(liveQuery.capabilities)
             ) {
               return undefined;
@@ -13330,6 +13358,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ? {}
               : { mcpServers: mcpOverrides.mcpServers }),
             deviceToolsAvailable: mcpSession?.capabilities?.has("device") === true,
+            prompt: turnInput.message.text,
+            isSubagent: turnInput.appThread.lineage.relationshipToParent === "subagent",
+            hasOpenPreview: mcpSession?.hasOpenPreview === true,
+            hasOpenDeviceSession: mcpSession?.hasOpenDeviceSession === true,
+            hasLinkedEnvironments: mcpSession?.hasLinkedEnvironments === true,
             permissionMode: queryPolicy.permissionMode,
             ...(queryPolicy.allowDangerouslySkipPermissions === undefined
               ? {}

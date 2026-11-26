@@ -298,14 +298,14 @@ it.effect("rejects a metadata-only response when the screenshot is saved", () =>
 const layerRecordingTools = (calls: Array<unknown>) => {
   const RecordingToolkit = Toolkit.make(
     OrchestratorToolkit.tools.delegate_task,
-    OrchestratorToolkit.tools.t3_thread_list,
-    OrchestratorToolkit.tools.t3_thread_read,
-    OrchestratorToolkit.tools.t3_thread_wait,
-    ProjectToolkit.tools.t3_project_list,
-    ProjectToolkit.tools.t3_project_update,
-    ThreadToolkit.tools.t3_queue,
-    PreviewControlsToolkit.tools.t3_preview_list,
-    ProjectToolkit.tools.t3_thread_launch,
+    OrchestratorToolkit.tools.prismux_thread_list,
+    OrchestratorToolkit.tools.prismux_thread_read,
+    OrchestratorToolkit.tools.prismux_thread_wait,
+    ProjectToolkit.tools.prismux_project_list,
+    ProjectToolkit.tools.prismux_project_update,
+    ThreadToolkit.tools.prismux_queue,
+    PreviewControlsToolkit.tools.prismux_preview_list,
+    ProjectToolkit.tools.prismux_thread_launch,
   );
   const record = McpToolAccess.reads((params: unknown) =>
     Effect.sync(() => calls.push(params)).pipe(
@@ -318,14 +318,14 @@ const layerRecordingTools = (calls: Array<unknown>) => {
     RecordingToolkit,
     McpToolAccess.toLayer(RecordingToolkit, {
       delegate_task: record,
-      t3_thread_list: record,
-      t3_thread_read: record,
-      t3_thread_wait: record,
-      t3_project_list: record,
-      t3_project_update: record,
-      t3_queue: record,
-      t3_preview_list: record,
-      t3_thread_launch: record,
+      prismux_thread_list: record,
+      prismux_thread_read: record,
+      prismux_thread_wait: record,
+      prismux_project_list: record,
+      prismux_project_update: record,
+      prismux_queue: record,
+      prismux_preview_list: record,
+      prismux_thread_launch: record,
     }),
   ).pipe(
     Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
@@ -657,11 +657,11 @@ it.effect("decodes null optional arguments the way it decodes omitted ones", () 
   const calls: Array<unknown> = [];
   return Effect.gen(function* () {
     const thread = { threadId: "thread-null-arguments" };
-    yield* callTool("t3_thread_read", thread);
-    yield* callTool("t3_thread_read", { ...thread, afterPosition: null, view: null });
+    yield* callTool("prismux_thread_read", thread);
+    yield* callTool("prismux_thread_read", { ...thread, afterPosition: null, view: null });
     yield* callTool("delegate_task", { task: "Inspect", target: {} });
     yield* callTool("delegate_task", { task: "Inspect", title: null, target: { model: null } });
-    yield* callTool("t3_project_update", { projectId: "project-1", projectIcon: null });
+    yield* callTool("prismux_project_update", { projectId: "project-1", projectIcon: null });
 
     expect(calls).toHaveLength(5);
     expect(calls[1]).toEqual(calls[0]);
@@ -702,10 +702,10 @@ it.effect("rejects arguments a tool does not declare instead of dropping them", 
   const calls: Array<unknown> = [];
   return Effect.gen(function* () {
     const launch = yield* Effect.flip(
-      callTool("t3_thread_launch", { title: "Repro", scratch: true, prompt: "say hi" }),
+      callTool("prismux_thread_launch", { title: "Repro", scratch: true, prompt: "say hi" }),
     );
     const wait = yield* Effect.flip(
-      callTool("t3_thread_wait", { threadId: "thread-excess-arguments", timeout: 5_000 }),
+      callTool("prismux_thread_wait", { threadId: "thread-excess-arguments", timeout: 5_000 }),
     );
 
     expect(calls).toEqual([]);
@@ -718,7 +718,7 @@ it.effect("accepts a nested key the merged advertised schema shows", () => {
   const calls: Array<unknown> = [];
   return Effect.gen(function* () {
     yield* Effect.exit(
-      callTool("t3_thread_launch", {
+      callTool("prismux_thread_launch", {
         title: "Root",
         projectId: "project-1",
         message: "say hi",
@@ -731,25 +731,25 @@ it.effect("accepts a nested key the merged advertised schema shows", () => {
 });
 
 it.effect(
-  "clamps t3_thread_read page sizes above their maximum instead of rejecting the call",
+  "clamps prismux_thread_read page sizes above their maximum instead of rejecting the call",
   () => {
     const calls: Array<unknown> = [];
     return Effect.gen(function* () {
       const thread = { threadId: "thread-clamped-arguments" };
       // Codex never shows the model these bounds, so an over-large page must still read.
-      yield* callTool("t3_thread_read", {
+      yield* callTool("prismux_thread_read", {
         ...thread,
         limit: 150,
         runLimit: 80,
         maxCharsPerItem: 60_000,
       });
-      yield* callTool("t3_thread_read", {
+      yield* callTool("prismux_thread_read", {
         ...thread,
         limit: 100,
         runLimit: 50,
         maxCharsPerItem: 20_000,
       });
-      yield* callTool("t3_thread_read", { ...thread, limit: 7, runLimit: 1, maxCharsPerItem: 1 });
+      yield* callTool("prismux_thread_read", { ...thread, limit: 7, runLimit: 1, maxCharsPerItem: 1 });
 
       expect(calls).toEqual([
         { ...thread, limit: 100, runLimit: 50, maxCharsPerItem: 20_000 },
@@ -761,12 +761,12 @@ it.effect(
 );
 
 it.effect.each(["limit", "runLimit", "maxCharsPerItem"])(
-  "still rejects a t3_thread_read %s below its minimum",
+  "still rejects a prismux_thread_read %s below its minimum",
   (field) => {
     const calls: Array<unknown> = [];
     return Effect.gen(function* () {
       // Zero is a different request than one item, so it fails rather than answering another question.
-      const rejected = yield* callTool("t3_thread_read", {
+      const rejected = yield* callTool("prismux_thread_read", {
         threadId: "thread-below-minimum",
         [field]: 0,
       }).pipe(Effect.flip);
@@ -778,10 +778,10 @@ it.effect.each(["limit", "runLimit", "maxCharsPerItem"])(
 );
 
 const clampedListLimits = [
-  { tool: "t3_thread_list", input: { allProjects: true }, maximum: 100 },
-  { tool: "t3_project_list", input: {}, maximum: 100 },
-  { tool: "t3_queue", input: { action: "list" }, maximum: 100 },
-  { tool: "t3_preview_list", input: {}, maximum: 50 },
+  { tool: "prismux_thread_list", input: { allProjects: true }, maximum: 100 },
+  { tool: "prismux_project_list", input: {}, maximum: 100 },
+  { tool: "prismux_queue", input: { action: "list" }, maximum: 100 },
+  { tool: "prismux_preview_list", input: {}, maximum: 50 },
 ];
 
 it.effect.each(clampedListLimits)(
@@ -804,7 +804,7 @@ it("keeps cross-tool routing out of the delegate_task description", () => {
   const description = OrchestratorToolkit.tools.delegate_task.description ?? "";
   expect(description).toContain("Start one child agent with only `task`");
   // Review rounds, follow-ups, and polling are routed in the system text.
-  expect(description).not.toContain("t3_thread_send");
+  expect(description).not.toContain("prismux_thread_send");
   expect(description).not.toContain("Do not poll");
   expect(description).not.toContain("Prefer native");
 });
@@ -1566,7 +1566,7 @@ it.effect("gives outside clients an upload URL on the origin their request reach
                 id: 2,
                 method: "tools/call",
                 params: {
-                  name: "t3_attachment_prepare_upload",
+                  name: "prismux_attachment_prepare_upload",
                   arguments: {
                     upload: {
                       type: "image",
@@ -1842,7 +1842,7 @@ it.effect(
 );
 
 it.effect(
-  "narrows an OAuth client's modes to the T3-Mode-Limit it sends, and never widens them",
+  "narrows an OAuth client's modes to the Prismux-Mode-Limit it sends, and never widens them",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -1924,13 +1924,13 @@ it.effect(
             ]),
           ),
         );
-        /** Starts a thread as the client, with `limit` as T3-Mode-Limit; the HTTP status or the outcome. */
+        /** Starts a thread as the client, with `limit` as Prismux-Mode-Limit; the HTTP status or the outcome. */
         const start = (limit: string | undefined, args: Record<string, string> = {}) =>
           Effect.gen(function* () {
             const headers = {
               accept: "application/json, text/event-stream",
               authorization: `Bearer ${clientToken}`,
-              ...(limit === undefined ? {} : { "t3-mode-limit": limit }),
+              ...(limit === undefined ? {} : { "prismux-mode-limit": limit }),
             };
             const initialize = yield* httpClient.post("/mcp", {
               headers,
@@ -2048,7 +2048,7 @@ it.effect("lists optional tools to a deferring client only after tool_search loa
           const headers = {
             accept: "application/json, text/event-stream",
             authorization: `Bearer ${token}`,
-            ...(deferred ? { "t3-tool-exposure": "deferred" } : {}),
+            ...(deferred ? { "prismux-tool-exposure": "deferred" } : {}),
           };
           const initialize = yield* httpClient.post("/mcp", {
             headers,

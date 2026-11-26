@@ -601,7 +601,7 @@ describe('Default/custom merge boundaries & document application', () => {
       document: doc,
       gpuAvailable: false,
       wallpaperActive: true,
-      syncT3DarkClass: true,
+      syncDarkClass: true,
     });
 
     assert.equal(rtGlass.glassActive, true);

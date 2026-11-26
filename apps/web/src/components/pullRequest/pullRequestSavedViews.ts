@@ -25,7 +25,7 @@ export function pullRequestViewMatches(
 }
 
 export const PULL_REQUEST_SAVED_VIEWS = {
-  storageKey: "t3.pullRequests.savedViews",
+  storageKey: "prismux.pullRequests.savedViews",
   schema: Schema.Array(
     Schema.Struct({ ...SavedViewIdentity.fields, preferences: PullRequestListPreferencesSchema }),
   ),

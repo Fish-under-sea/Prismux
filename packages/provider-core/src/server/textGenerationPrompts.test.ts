@@ -36,7 +36,7 @@ describe("buildThreadTitlePrompt", () => {
     expect(defaultInitial).toContain("GitHub, Electron, OAuth, API");
     expect(defaultInitial).toContain("trailing punctuation");
     expect(defaultInitial).toContain("Do not copy and truncate");
-    expect(defaultInitial).not.toContain("Prismux");
+    expect(defaultInitial).not.toContain("T3 Code");
 
     const defaultRegen = buildThreadTitlePrompt({
       message: "User: Fix GitHub OAuth callback\nAssistant: Updated Electron protocol handler",
@@ -45,6 +45,6 @@ describe("buildThreadTitlePrompt", () => {
     expect(defaultRegen).toContain("简体中文");
     expect(defaultRegen).toContain("GitHub, Electron, OAuth, API");
     expect(defaultRegen).toContain("English-only");
-    expect(defaultRegen).not.toContain("Prismux");
+    expect(defaultRegen).not.toContain("T3 Code");
   });
 });

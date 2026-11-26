@@ -858,9 +858,14 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
     readonly codexInput: ReadonlyArray<CodexSchema.V2TurnStartParams__UserInput>;
     readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
     readonly modelSelection: ModelSelection;
-    readonly hasT3Mcp?: boolean;
+    readonly hasPrismuxMcp?: boolean;
     readonly browserToolsAvailable?: boolean;
     readonly deviceToolsAvailable?: boolean;
+    readonly prompt?: string | undefined;
+    readonly isSubagent?: boolean;
+    readonly hasOpenPreview?: boolean;
+    readonly hasOpenDeviceSession?: boolean;
+    readonly hasLinkedEnvironments?: boolean;
     /** ChatGPT token sharing does not accept service tiers. */
     readonly omitServiceTier?: boolean;
     readonly appContext?: ProviderAdapter.ProviderAdapterV2TurnInput["appContext"];
@@ -914,13 +919,24 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
         { kind: "untrusted" as const, value: entry.text },
       ]),
     );
-    const t3Context =
-      input.hasT3Mcp === true
+    const prismuxContext =
+      input.hasPrismuxMcp === true
         ? buildCodexAdditionalContext(
             { model: input.modelSelection.model, reasoningEffort: effort ?? undefined },
             {
               browser: input.browserToolsAvailable ?? true,
               device: input.deviceToolsAvailable ?? false,
+              ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
+              ...(input.isSubagent !== undefined ? { isSubagent: input.isSubagent } : {}),
+              ...(input.hasOpenPreview !== undefined
+                ? { hasOpenPreview: input.hasOpenPreview }
+                : {}),
+              ...(input.hasOpenDeviceSession !== undefined
+                ? { hasOpenDeviceSession: input.hasOpenDeviceSession }
+                : {}),
+              ...(input.hasLinkedEnvironments !== undefined
+                ? { hasLinkedEnvironments: input.hasLinkedEnvironments }
+                : {}),
             },
           )
         : undefined;
@@ -929,13 +945,13 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
     const workspaceContext =
       workspaceInstructions === ""
         ? undefined
-        : { t3_code_workspace: { kind: "application" as const, value: workspaceInstructions } };
+        : { prismux_workspace: { kind: "application" as const, value: workspaceInstructions } };
     const additionalContext =
-      t3Context === undefined &&
+      prismuxContext === undefined &&
       workspaceContext === undefined &&
       Object.keys(appContext).length === 0
         ? undefined
-        : { ...t3Context, ...workspaceContext, ...appContext };
+        : { ...prismuxContext, ...workspaceContext, ...appContext };
     return yield* decodeCodexTurnStartParams({
       threadId: input.nativeThreadId,
       input: input.codexInput,
@@ -1599,11 +1615,11 @@ export const CODEX_THREAD_CONFIG = {
 } as const;
 
 // request_secret can wait an hour; keep Codex's MCP timeout above that.
-const CODEX_T3_MCP_TOOL_TIMEOUT_SEC = 65 * 60;
+const CODEX_PRISMUX_MCP_TOOL_TIMEOUT_SEC = 65 * 60;
 // Holds T3 tools Codex must call directly, never from Code Mode. Calls arrive as
-// `t3-code-direct.<tool>`; t3McpToolPresentation.ts must keep resolving that form.
-const CODEX_T3_DIRECT_MCP_SERVER = "t3-code-direct";
-const CODEX_DIRECT_ONLY_T3_TOOLS = ["t3_thread_wait", "delegate_task"];
+// `prismux-direct.<tool>`; prismuxMcpToolPresentation.ts must keep resolving that form.
+const CODEX_PRISMUX_DIRECT_MCP_SERVER = "prismux-direct";
+const CODEX_DIRECT_ONLY_PRISMUX_TOOLS = ["prismux_thread_wait", "delegate_task"];
 
 /** Names of the stdio MCP servers in a `config/read` config, the ones Codex starts per thread. */
 function codexStdioMcpServerNames(mcpServers: unknown): ReadonlyArray<string> {
@@ -1632,12 +1648,12 @@ function codexThreadRuntimeParams(input: {
   readonly config: Readonly<Record<string, Schema.Json>>;
 } {
   const { mcpSession } = input;
-  const t3Server =
+  const coreServer =
     mcpSession === undefined
       ? undefined
       : {
           url: mcpSession.endpoint,
-          tool_timeout_sec: CODEX_T3_MCP_TOOL_TIMEOUT_SEC,
+          tool_timeout_sec: CODEX_PRISMUX_MCP_TOOL_TIMEOUT_SEC,
           http_headers: { Authorization: mcpSession.authorizationHeader },
         };
   return {
@@ -1658,16 +1674,16 @@ function codexThreadRuntimeParams(input: {
               ]),
             ),
           }),
-      ...(t3Server === undefined
+      ...(coreServer === undefined
         ? {}
         : {
             // Override only T3's servers so launch-argument MCP servers survive.
-            "mcp_servers.t3-code": { ...t3Server, disabled_tools: CODEX_DIRECT_ONLY_T3_TOOLS },
+            "mcp_servers.prismux": { ...coreServer, disabled_tools: CODEX_DIRECT_ONLY_PRISMUX_TOOLS },
             // Code Mode runs a blocking wait or delegate wait as a nested call, and the model
             // keeps polling it. A second, direct-only registration makes it a plain tool call.
-            [`mcp_servers.${CODEX_T3_DIRECT_MCP_SERVER}`]: {
-              ...t3Server,
-              enabled_tools: CODEX_DIRECT_ONLY_T3_TOOLS,
+            [`mcp_servers.${CODEX_PRISMUX_DIRECT_MCP_SERVER}`]: {
+              ...coreServer,
+              enabled_tools: CODEX_DIRECT_ONLY_PRISMUX_TOOLS,
               omit_tools_from: ["code_mode", "deferred"],
             },
           }),
@@ -7775,9 +7791,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               codexInput,
               runtimePolicy: turnInput.runtimePolicy,
               modelSelection: turnInput.modelSelection,
-              hasT3Mcp: mcpSession !== undefined,
+              hasPrismuxMcp: mcpSession !== undefined,
               browserToolsAvailable: mcpSession?.browserToolsAvailable ?? true,
               deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
+              prompt: turnInput.message.text,
+              isSubagent: turnInput.appThread.lineage.relationshipToParent === "subagent",
+              hasOpenPreview: mcpSession?.hasOpenPreview === true,
+              hasOpenDeviceSession: mcpSession?.hasOpenDeviceSession === true,
+              hasLinkedEnvironments: mcpSession?.hasLinkedEnvironments === true,
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),
               ...(codexTurnConfig?.configuredReasoningSummary === undefined

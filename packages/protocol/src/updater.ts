@@ -390,7 +390,7 @@ export interface SystemResourcesResponse {
     memoryBytes: number;
     privateMemoryBytes?: number | null;
   };
-  t3Server: {
+  coreServer: {
     pid: number | null;
     cpuPercent: number | null;
     memoryBytes: number | null;

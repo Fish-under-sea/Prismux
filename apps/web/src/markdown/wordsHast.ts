@@ -457,7 +457,7 @@ function codexDirective(node: Element, walk: Walk, inLink: boolean): ElementCont
   };
 }
 
-const INLINE_PREFIX = "t3-markdown-inline-prefix:";
+const INLINE_PREFIX = "prismux-markdown-inline-prefix:";
 
 function stripPositions(node: ElementContent) {
   delete node.position;
@@ -893,8 +893,8 @@ function insightSource(text: string, options: RenderOptions): InsightSource | nu
   };
   findCode(parse(text, options));
   const nonce = Math.random().toString(36).slice(2);
-  const marker = new RegExp(String.raw`^\[!T3-INSIGHT-${nonce}-(\d+)\](?:\r?\n)?`);
-  const anywhere = new RegExp(String.raw`\[!T3-INSIGHT-${nonce}-(\d+)\]`, "g");
+  const marker = new RegExp(String.raw`^\[!PRISMUX-INSIGHT-${nonce}-(\d+)\](?:\r?\n)?`);
+  const anywhere = new RegExp(String.raw`\[!PRISMUX-INSIGHT-${nonce}-(\d+)\]`, "g");
   const lines = text.split(/(?<=\n)/u);
   const skipped = new Set<number>();
   for (;;) {
@@ -915,7 +915,7 @@ function insightSource(text: string, options: RenderOptions): InsightSource | nu
           if (opening && !skipped.has(lineIndex)) {
             indent = opening[1] ?? "";
             opened++;
-            output = `> [!T3-INSIGHT-${nonce}-${lineIndex}]${ending}`;
+            output = `> [!PRISMUX-INSIGHT-${nonce}-${lineIndex}]${ending}`;
           }
         } else {
           const closing = inCode ? null : INSIGHT_CLOSING.exec(value);
@@ -1127,7 +1127,7 @@ export function wordsHast(text: string, options: WordsHastOptions): Root {
     source,
     options,
     math: new Map(),
-    mathKey: `t3-math-${Math.random().toString(36).slice(2)}`,
+    mathKey: `prismux-math-${Math.random().toString(36).slice(2)}`,
     insightMarker: insights?.marker ?? null,
   };
   transform(tree, walk, false, false);

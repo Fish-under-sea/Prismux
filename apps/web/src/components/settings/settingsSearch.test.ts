@@ -275,7 +275,7 @@ describe("searchSettings", () => {
       "review-guide-model",
       "review-guide-instructions",
       "source-control-writing-style",
-      "t3-connect",
+      "prismux-connect",
       "hold-webhooks-while-offline",
       "tailscale-https",
       "wsl-backend",

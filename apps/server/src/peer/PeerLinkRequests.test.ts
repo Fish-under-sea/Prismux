@@ -179,7 +179,7 @@ const makeLaptopWith = (
       Layer.provide(Layer.mock(ThreadLaunch.ThreadLaunchService)({})),
       Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
       Layer.provide(
-        ServerConfig.layerTest(process.cwd(), { prefix: "t3-peer-link-requests-" }).pipe(
+        ServerConfig.layerTest(process.cwd(), { prefix: "prismux-peer-link-requests-" }).pipe(
           Layer.provide(NodeServices.layer),
         ),
       ),
@@ -198,7 +198,7 @@ const makeLaptopWith = (
       sql: Context.get(database, SqlClient.SqlClient),
       call: (args: Record<string, unknown>, callScope = scope) =>
         server
-          .callTool({ name: "t3_environment_link", arguments: args })
+          .callTool({ name: "prismux_environment_link", arguments: args })
           .pipe(
             Effect.provideService(McpInvocationContext.McpInvocationContext, callScope),
             Effect.provideService(McpSchema.McpServerClient, mcpClient),

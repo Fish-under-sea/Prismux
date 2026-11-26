@@ -102,6 +102,8 @@ export interface KillProtectionCheck {
 
 export interface PortScannerServiceOptions {
   ptyPool?: PersistentPtyPool;
+  coreSupervisor?: CoreServerSupervisor;
+  /** @deprecated Use coreSupervisor */
   t3Supervisor?: CoreServerSupervisor;
   getProtectedPids?: () => number[];
   /** Injectable scanner for deterministic tests. */
@@ -558,7 +560,7 @@ async function defaultKillProcess(
  */
 export class PortScannerService {
   private readonly ptyPool: PersistentPtyPool | undefined;
-  private readonly t3Supervisor: CoreServerSupervisor | undefined;
+  private readonly coreSupervisor: CoreServerSupervisor | undefined;
   private readonly getProtectedPids: (() => number[]) | undefined;
   private readonly scanListeningSocketsFn: () => Promise<RawListeningSocket[]>;
   private readonly inspectProcessesFn: (
@@ -578,7 +580,7 @@ export class PortScannerService {
   constructor(options: PortScannerServiceOptions = {}) {
     const timeoutMs = options.scanTimeoutMs ?? DEFAULT_SCAN_TIMEOUT_MS;
     this.ptyPool = options.ptyPool;
-    this.t3Supervisor = options.t3Supervisor;
+    this.coreSupervisor = options.coreSupervisor ?? options.t3Supervisor;
     this.getProtectedPids = options.getProtectedPids;
     this.scanListeningSocketsFn =
       options.scanListeningSockets ??
@@ -592,16 +594,16 @@ export class PortScannerService {
   private collectProtectedHostPids(): {
     selfPid: number;
     parentPid: number;
-    t3ServerPid: number | null;
+    coreServerPid: number | null;
     prismuxMainPid: number | null;
     extraProtectedPids: Set<number>;
   } {
     const selfPid = process.pid;
     const parentPid = process.ppid;
-    const t3PidRaw = this.t3Supervisor?.getStatus().pid;
-    const t3ServerPid =
-      typeof t3PidRaw === "number" && Number.isInteger(t3PidRaw) && t3PidRaw > 0
-        ? t3PidRaw
+    const corePidRaw = this.coreSupervisor?.getStatus().pid;
+    const coreServerPid =
+      typeof corePidRaw === "number" && Number.isInteger(corePidRaw) && corePidRaw > 0
+        ? corePidRaw
         : null;
 
     const envMainPidRaw = Number.parseInt(
@@ -623,7 +625,7 @@ export class PortScannerService {
     return {
       selfPid,
       parentPid,
-      t3ServerPid,
+      coreServerPid,
       prismuxMainPid,
       extraProtectedPids
     };
@@ -656,7 +658,7 @@ export class PortScannerService {
         reason: `禁止终止 Prismux Daemon 父进程 / 桌面主进程（PID ${pid}）。`
       };
     }
-    if (hostPids.t3ServerPid !== null && pid === hostPids.t3ServerPid) {
+    if (hostPids.coreServerPid !== null && pid === hostPids.coreServerPid) {
       return {
         protected: true,
         reason: `禁止终止 Prismux 托管的核心服务进程（PID ${pid}）。`

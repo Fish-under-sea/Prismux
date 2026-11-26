@@ -90,8 +90,6 @@ export interface ApplyAppearanceOptions {
   wallpaperActive?: boolean;
   /** Optional sync of the host `.dark` class on `documentElement` (defaults to false). */
   syncDarkClass?: boolean;
-  /** @deprecated Use `syncDarkClass`. */
-  syncT3DarkClass?: boolean;
 }
 
 export interface ResolvedSurfaceGlass {
@@ -1740,7 +1738,7 @@ export function applyPrismuxAppearanceToDocument(
     el.classList.toggle('pmx-glass', runtime.glassActive);
   }
 
-  if (opts.syncDarkClass ?? opts.syncT3DarkClass) {
+  if (opts.syncDarkClass ?? opts.syncDarkClass) {
     html.classList.toggle('dark', runtime.isDark);
   }
 

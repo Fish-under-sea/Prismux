@@ -1,6 +1,6 @@
 import type { OrchestrationV2TurnItem } from "@prismux/core-contracts";
 import { HTML_RENDER_TOOL_NAME } from "@prismux/core-shared/htmlRender";
-import { resolveT3McpToolId } from "@prismux/core-shared/t3McpToolPresentation";
+import { resolvePrismuxMcpToolId } from "@prismux/core-shared/prismuxMcpToolPresentation";
 import { formatReadToolLabel, formatSearchToolLabel } from "@prismux/core-shared/toolActivity";
 import {
   MAX_TOOL_OUTPUT_IMAGES,
@@ -37,7 +37,7 @@ type ToolItemBase = Omit<
 function openCodeToolProjectionKind(
   toolName: string,
 ): "command_execution" | "file_change" | "file_search" | "web_search" | "dynamic_tool" {
-  if (toolName.startsWith("mcp__") || resolveT3McpToolId(toolName) !== null) return "dynamic_tool";
+  if (toolName.startsWith("mcp__") || resolvePrismuxMcpToolId(toolName) !== null) return "dynamic_tool";
   const normalized = toolName.toLowerCase();
   if (normalized === "todowrite") {
     return "dynamic_tool";

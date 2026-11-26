@@ -174,7 +174,7 @@ describe("settings sidebar navigation grouping, deduplication & conflict cleanup
     expect(byId.has("boring-sidebar" as never)).toBe(false);
     expect(byId.has("guest-links" as never)).toBe(false);
     expect(byId.has("simlock-hosts" as never)).toBe(false);
-    expect(byId.has("t3-connect" as never)).toBe(false);
+    expect(byId.has("prismux-connect" as never)).toBe(false);
 
     expect(byId.get("prompt-suggestions-beta")?.to).toBe("/settings/chat");
     expect(byId.get("worktree-fast-checkout")?.to).toBe("/settings/source-control");

@@ -1444,7 +1444,7 @@ export const make = Effect.gen(function* () {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const directory = yield* fileSystem
-            .makeTempDirectoryScoped({ prefix: "t3-snapshot-test-" })
+            .makeTempDirectoryScoped({ prefix: "prismux-snapshot-test-" })
             .pipe(
               Effect.mapError(
                 (cause) => new DesktopSnapShotSetupError({ action, reason: "setup-failed", cause }),

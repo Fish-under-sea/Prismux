@@ -158,7 +158,7 @@ function selectionProperties(
 
 function childKind(context: ProviderTurnAnalyticsContext | undefined) {
   if (context?.segment === "native_child") return "native";
-  return context?.origin?.subagent === true ? "t3" : undefined;
+  return context?.origin?.subagent === true ? "prismux" : undefined;
 }
 
 function counters(usage: TurnTokenUsage | undefined): Properties {
@@ -208,7 +208,7 @@ export function providerTurnProperties(
 function requestKind(origin: ProviderTurnOrigin | undefined) {
   if (origin === undefined) return "unknown";
   if (origin.scheduled) return "scheduled";
-  if (origin.subagent) return "t3_child";
+  if (origin.subagent) return "prismux_child";
   if (origin.createdBy === "user") return "user";
   if (origin.creationSource === "provider") return "provider_continuation";
   return origin.createdBy;
@@ -385,7 +385,7 @@ export class ProviderTurnAnalytics extends Context.Reference<{
   }) => Effect.Effect<void>;
   readonly turnCompleted: (report: ProviderTurnReport) => Effect.Effect<void>;
   readonly runSettled: (report: RunSettledReport) => Effect.Effect<void>;
-}>("t3/telemetry/ProviderTurnAnalytics", {
+}>("prismux/telemetry/ProviderTurnAnalytics", {
   defaultValue: () => ({
     runStarted: () => Effect.void,
     turnCompleted: () => Effect.void,

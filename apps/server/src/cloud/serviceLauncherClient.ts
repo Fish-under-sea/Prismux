@@ -44,7 +44,7 @@ export class ServiceLauncherClientError extends Schema.TaggedError<ServiceLaunch
       case "decode-context":
         return "The service launcher supplied invalid startup context.";
       case "version-mismatch":
-        return "The service launcher started a different t3 version.";
+        return "The service launcher started a different prismux version.";
       case "unmanaged":
         return "This server is not managed by the launcher.";
       case "send":
@@ -86,7 +86,7 @@ interface ServiceLauncherProcess {
 }
 
 export const ServiceLauncherHostProcess = Context.Reference<ServiceLauncherProcess>(
-  "t3/cloud/serviceLauncherHostProcess",
+  "prismux/cloud/serviceLauncherHostProcess",
   {
     defaultValue: () => ({
       connected: process.connected && process.send !== undefined,
@@ -162,14 +162,14 @@ export const repointLaunchers = Effect.fn("cloud.service_launcher_client.repoint
       environment["PRISMUX_INSTALL_BIN_DIR"] ||
       (environment["HOME"] ? path.join(environment["HOME"], ".local", "bin") : undefined);
     const candidates = new Set<string>();
-    if (installBinDir !== undefined) candidates.add(path.join(installBinDir, "t3"));
+    if (installBinDir !== undefined) candidates.add(path.join(installBinDir, "prismux"));
     for (const directory of (environment["PATH"] ?? "").split(":")) {
       if (directory.length === 0) continue;
-      const candidate = path.join(directory, "t3");
+      const candidate = path.join(directory, "prismux");
       if (
         yield* fs.exists(candidate).pipe(
           Effect.catch((cause) =>
-            Effect.logWarning("Could not check the t3 command on PATH", {
+            Effect.logWarning("Could not check the prismux command on PATH", {
               launchedAs: candidate,
               cause,
             }).pipe(Effect.as(false)),
@@ -194,7 +194,7 @@ export const repointLaunchers = Effect.fn("cloud.service_launcher_client.repoint
               () => Effect.succeedNone,
             ),
           );
-          // A legacy symlink, or the script install.sh and `t3 update` write.
+          // A legacy symlink, or the script install.sh and `prismux update` write.
           const current = Option.isSome(linkTarget)
             ? path.resolve(path.dirname(launchedAs), linkTarget.value)
             : yield* readPosixLauncherTarget(launchedAs);
@@ -217,7 +217,7 @@ export const repointLaunchers = Effect.fn("cloud.service_launcher_client.repoint
         Effect.catchCause((cause) =>
           Cause.hasInterrupts(cause)
             ? Effect.interrupt
-            : Effect.logWarning("Could not move the t3 command to the updated version", {
+            : Effect.logWarning("Could not move the prismux command to the updated version", {
                 launchedAs,
                 cause,
               }),

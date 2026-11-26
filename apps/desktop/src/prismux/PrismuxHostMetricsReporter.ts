@@ -78,7 +78,7 @@ export interface PrismuxElectronProcessMetricPayload {
   readonly peakWorkingSetBytes?: number | null;
 }
 
-export interface PrismuxHostT3ServerPayload {
+export interface PrismuxHostCoreServerPayload {
   readonly pid: number | null;
   readonly ready: boolean;
   readonly desiredRunning?: boolean;
@@ -97,7 +97,7 @@ export interface PrismuxHostMetricsPayload {
    * so its native scale is total-system CPU% (0–100%), matching Windows Task Manager.
    */
   readonly cpuScale: "system-total";
-  readonly t3Server?: PrismuxHostT3ServerPayload | null;
+  readonly coreServer?: PrismuxHostCoreServerPayload | null;
   readonly electronProcesses: readonly PrismuxElectronProcessMetricPayload[];
 }
 
@@ -123,8 +123,8 @@ export function buildHostMetricsPayload(input: {
   readonly mainPid: number;
   readonly collectedAt: number;
   readonly cpuCores?: number;
-  readonly t3BackendSnapshot?: DesktopBackendManager.DesktopBackendSnapshot | null;
-  readonly t3HttpUrl?: string | null;
+  readonly coreBackendSnapshot?: DesktopBackendManager.DesktopBackendSnapshot | null;
+  readonly coreHttpUrl?: string | null;
 }): PrismuxHostMetricsPayload {
   const cpuCores = Math.max(1, input.cpuCores ?? NodeOS.cpus().length);
   const collectedAt = input.collectedAt;
@@ -155,9 +155,9 @@ export function buildHostMetricsPayload(input: {
     });
   }
 
-  let t3Server: PrismuxHostT3ServerPayload | null | undefined;
-  if (input.t3BackendSnapshot) {
-    const snap = input.t3BackendSnapshot;
+  let coreServer: PrismuxHostCoreServerPayload | null | undefined;
+  if (input.coreBackendSnapshot) {
+    const snap = input.coreBackendSnapshot;
     const rawPid = Option.getOrNull(snap.activePid);
     const pid =
       typeof rawPid === "number" && Number.isInteger(rawPid) && rawPid > 0 ? rawPid : null;
@@ -166,24 +166,24 @@ export function buildHostMetricsPayload(input: {
       : snap.desiredRunning
         ? "starting"
         : "stopped";
-    const hostedBy: PrismuxHostT3ServerPayload["hostedBy"] =
+    const hostedBy: PrismuxHostCoreServerPayload["hostedBy"] =
       pid !== null && pid === input.mainPid ? "electron-in-process" : "electron";
 
-    t3Server = {
+    coreServer = {
       pid,
       ready: snap.ready,
       desiredRunning: snap.desiredRunning,
       state,
       hostedBy,
-      ...(input.t3HttpUrl ? { httpUrl: input.t3HttpUrl } : {}),
+      ...(input.coreHttpUrl ? { httpUrl: input.coreHttpUrl } : {}),
     };
-  } else if (input.t3HttpUrl) {
-    t3Server = {
+  } else if (input.coreHttpUrl) {
+    coreServer = {
       pid: null,
       ready: false,
       state: "external",
       hostedBy: "external",
-      httpUrl: input.t3HttpUrl,
+      httpUrl: input.coreHttpUrl,
     };
   }
 
@@ -192,7 +192,7 @@ export function buildHostMetricsPayload(input: {
     mainPid: input.mainPid,
     cpuCores,
     cpuScale: "system-total",
-    ...(t3Server !== undefined ? { t3Server } : {}),
+    ...(coreServer !== undefined ? { coreServer } : {}),
     electronProcesses,
   };
 }

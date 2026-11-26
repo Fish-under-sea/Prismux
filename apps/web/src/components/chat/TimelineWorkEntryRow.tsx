@@ -22,7 +22,8 @@ import {
   toolGroupAction,
   workEntryViewedImagePath,
 } from "@prismux/client-runtime/work-log/presentation";
-import { t3ToolResultIndicatesFailure } from "@prismux/client-runtime/t3ToolSummary";
+import { prismuxToolResultIndicatesFailure } from "@prismux/client-runtime/prismuxToolSummary";
+import { formatPrismuxMcpToolDisplayName } from "@prismux/core-shared/prismuxMcpToolPresentation";
 import {
   isJsonToolText,
   toolCallLines,
@@ -350,7 +351,7 @@ function threadReadStatus(
 ): ThreadReadStatus | null {
   const payload = entry.structuredPayload;
   if (payload?.type !== "dynamic_tool") return null;
-  if (t3ToolResultIndicatesFailure(payload.output)) return "failed";
+  if (prismuxToolResultIndicatesFailure(payload.output)) return "failed";
   for (const resolver of [resolve, undefined]) {
     for (const status of THREAD_READ_STATUSES) {
       const presentation = resolveWorkEntryToolPresentation(
@@ -1361,7 +1362,9 @@ function FrostedV2StepInspector({
         {item.toolName || elapsedLabel ? (
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/45 bg-muted/35 px-4 py-1.5 text-2xs [[data-pmx-glass='1']_&]:border-foreground/12 [[data-pmx-glass='1']_&]:bg-foreground/[0.04]">
             {item.toolName ? (
-              <span className="font-mono font-medium text-foreground/90">{item.toolName}</span>
+              <span className="font-mono font-medium text-foreground/90">
+                {formatPrismuxMcpToolDisplayName(item.toolName)}
+              </span>
             ) : (
               <span />
             )}

@@ -344,7 +344,7 @@ it.effect("never follows a peer's redirect with the pairing code", () =>
       );
       // Answers as B, then sends every linking request on to another address.
       const front = yield* serveRaw((request) =>
-        request.url.startsWith("/.well-known/t3/environment")
+        request.url.startsWith("/.well-known/prismux/environment")
           ? HttpClient.get(`${b.url}${request.url}`).pipe(
               Effect.flatMap((response) => response.text),
               Effect.map((body) =>
@@ -425,7 +425,7 @@ it.effect("lists a peer as reachable at another address while its first one slee
   Effect.scoped(
     Effect.gen(function* () {
       const b = yield* serveB(box);
-      const described = yield* HttpClient.get(`${b.url}/.well-known/t3/environment`).pipe(
+      const described = yield* HttpClient.get(`${b.url}/.well-known/prismux/environment`).pipe(
         Effect.flatMap((response) => response.text),
         Effect.provide(FetchHttpClient.layer),
       );
@@ -452,7 +452,7 @@ it.effect("resolves a link at its answering address without waiting out a sleepi
   Effect.scoped(
     Effect.gen(function* () {
       const b = yield* serveB(box);
-      const described = yield* HttpClient.get(`${b.url}/.well-known/t3/environment`).pipe(
+      const described = yield* HttpClient.get(`${b.url}/.well-known/prismux/environment`).pipe(
         Effect.flatMap((response) => response.text),
         Effect.provide(FetchHttpClient.layer),
       );
@@ -491,7 +491,7 @@ it.effect("cancelling a descriptor probe aborts its request and leaves later res
         (httpEffect) =>
           Effect.gen(function* () {
             const request = yield* HttpServerRequest.HttpServerRequest;
-            if (request.url.startsWith("/.well-known/t3/environment")) {
+            if (request.url.startsWith("/.well-known/prismux/environment")) {
               yield* Ref.update(requests, (count) => count + 1);
               if (yield* Ref.get(hold)) {
                 return yield* Deferred.succeed(entered, undefined).pipe(
@@ -540,7 +540,7 @@ it.live("one dropped descriptor request does not list a live peer as unreachable
           Effect.gen(function* () {
             const request = yield* HttpServerRequest.HttpServerRequest;
             if (
-              request.url.startsWith("/.well-known/t3/environment") &&
+              request.url.startsWith("/.well-known/prismux/environment") &&
               (yield* Ref.getAndSet(dropNext, false))
             ) {
               return HttpServerResponse.empty({ status: 503 });

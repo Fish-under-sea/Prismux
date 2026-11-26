@@ -11,11 +11,11 @@ import {
 } from "@prismux/core-contracts";
 import type { ToolCallVisibility } from "@prismux/core-contracts/settings";
 import {
-  resolveT3McpSummaryAction,
-  resolveT3McpToolDefinition,
-  type T3McpToolDefinition,
-  type T3McpToolSummaryAction,
-} from "@prismux/core-shared/t3McpToolPresentation";
+  resolvePrismuxMcpSummaryAction,
+  resolvePrismuxMcpToolDefinition,
+  type PrismuxMcpToolDefinition,
+  type PrismuxMcpToolSummaryAction,
+} from "@prismux/core-shared/prismuxMcpToolPresentation";
 import { classifyMarkdownImageSource } from "@prismux/client-runtime/markdown-images";
 import { resolveMediaSource } from "@prismux/client-runtime/media-source";
 import { sourceControlClients } from "@prismux/client-runtime/source-control-clients";
@@ -25,12 +25,12 @@ import { classifyToolActivity } from "@prismux/core-shared/toolActivity";
 import { toolOutputIndicatesFailure } from "@prismux/core-shared/toolOutput";
 
 import {
-  summarizeT3ToolCalls,
-  t3ToolResultIndicatesFailure,
-  type T3ToolSummaryCall,
-} from "@prismux/client-runtime/t3ToolSummary";
+  summarizePrismuxToolCalls,
+  prismuxToolResultIndicatesFailure,
+  type PrismuxToolSummaryCall,
+} from "@prismux/client-runtime/prismuxToolSummary";
 import { mFallback, msg } from "gt-i18n";
-import { t3ToolSentence } from "./t3ToolSentences.ts";
+import { prismuxToolSentence } from "./prismuxToolSentences.ts";
 import type { MFunctionType } from "gt-i18n/types";
 
 export type WorkLogToolLifecycleStatus = RuntimeItemStatus | "stopped" | "idle";
@@ -148,7 +148,7 @@ function workEntryToolName(
     return `${data.server}.${data.tool}`;
   }
   if (typeof data?.toolName === "string") return data.toolName;
-  return resolveT3McpToolDefinition(entry.toolTitle) ? entry.toolTitle : entry.label;
+  return resolvePrismuxMcpToolDefinition(entry.toolTitle) ? entry.toolTitle : entry.label;
 }
 
 function workEntryToolInput(
@@ -171,7 +171,7 @@ function workEntryToolOutput(
     : (data?.output ?? data?.result ?? data?.rawOutput ?? data?.content);
 }
 
-function t3ToolStatusKey(status: string | undefined) {
+function prismuxToolStatusKey(status: string | undefined) {
   return status === "inProgress" ||
     status === "completed" ||
     status === "failed" ||
@@ -181,8 +181,8 @@ function t3ToolStatusKey(status: string | undefined) {
     : "other";
 }
 
-function resolveT3McpToolPresentation(
-  definition: T3McpToolDefinition | null,
+function resolvePrismuxMcpToolPresentation(
+  definition: PrismuxMcpToolDefinition | null,
   status: string | undefined,
   data: unknown,
   resolve: MFunctionType,
@@ -214,9 +214,9 @@ function resolveT3McpToolPresentation(
     number > 0
       ? number
       : null;
-  const sentence = t3ToolSentence(definition.labels);
-  const statusKey = t3ToolStatusKey(status);
-  // A tool added to the shared table after `t3ToolSentences.ts` was generated.
+  const sentence = prismuxToolSentence(definition.labels);
+  const statusKey = prismuxToolStatusKey(status);
+  // A tool added to the shared table after `prismuxToolSentences.ts` was generated.
   const [action, running, completed] = definition.labels;
   const fallbackVerb =
     status === "inProgress"
@@ -300,14 +300,14 @@ export function resolveWorkEntryToolPresentation(
   fallbackStatus?: "inProgress" | "completed",
   resolve: MFunctionType = mFallback,
 ) {
-  const definition = resolveT3McpToolDefinition(
+  const definition = resolvePrismuxMcpToolDefinition(
     workEntryToolName(entry),
     workEntryToolInput(entry),
   );
   const status = entry.toolLifecycleStatus ?? fallbackStatus;
-  return resolveT3McpToolPresentation(
+  return resolvePrismuxMcpToolPresentation(
     definition,
-    definition && t3ToolResultIndicatesFailure(workEntryToolOutput(entry)) ? "failed" : status,
+    definition && prismuxToolResultIndicatesFailure(workEntryToolOutput(entry)) ? "failed" : status,
     entry.toolData,
     resolve,
   );
@@ -342,8 +342,8 @@ function workEntryIndicatesToolFailureFromOutput(
   // "that exit code 2 is expected" as a failed tool.
   if (!workLogEntryIsToolLike(entry) || entry.itemType === "reasoning") return false;
   if (
-    resolveT3McpToolDefinition(workEntryToolName(entry)) &&
-    t3ToolResultIndicatesFailure(workEntryToolOutput(entry))
+    resolvePrismuxMcpToolDefinition(workEntryToolName(entry)) &&
+    prismuxToolResultIndicatesFailure(workEntryToolOutput(entry))
   ) {
     return true;
   }
@@ -648,7 +648,7 @@ function joinClauses(items: ReadonlyArray<string>, resolve: MFunctionType): stri
   );
 }
 
-function t3ToolSummaryCall(entry: WorkLogPresentationEntry): T3ToolSummaryCall {
+function prismuxToolSummaryCall(entry: WorkLogPresentationEntry): PrismuxToolSummaryCall {
   return {
     input: workEntryToolInput(entry),
     output: workEntryToolOutput(entry),
@@ -663,7 +663,7 @@ function t3ToolSummaryCall(entry: WorkLogPresentationEntry): T3ToolSummaryCall {
   };
 }
 
-function summaryActionPriority(action: ToolGroupAction | T3McpToolSummaryAction): number {
+function summaryActionPriority(action: ToolGroupAction | PrismuxMcpToolSummaryAction): number {
   switch (action) {
     case "command":
     case "edit":
@@ -726,35 +726,39 @@ export function summarizeToolGroup(
   }
   entries = toolEntries;
   const groups = new Map<
-    ToolGroupAction | T3McpToolSummaryAction,
+    ToolGroupAction | PrismuxMcpToolSummaryAction,
     {
       action: ToolGroupAction;
-      t3Action: T3McpToolSummaryAction | null;
+      prismuxAction: PrismuxMcpToolSummaryAction | null;
       entries: WorkLogPresentationEntry[];
     }
   >();
   const sources = new Map<string, ToolActivitySource>();
   for (const entry of entries) {
-    const t3Action = resolveT3McpSummaryAction(
+    const prismuxAction = resolvePrismuxMcpSummaryAction(
       workEntryToolName(entry),
-      t3ToolSummaryCall(entry).input,
+      prismuxToolSummaryCall(entry).input,
     );
-    if (entry.toolSource && t3Action === null) {
+    if (entry.toolSource && prismuxAction === null) {
       sources.set(entry.toolSource.key, entry.toolSource);
       continue;
     }
     const action = toolGroupAction(entry);
-    const key = t3Action ?? action;
+    const key = prismuxAction ?? action;
     const group = groups.get(key);
     if (group) group.entries.push(entry);
-    else groups.set(key, { action, t3Action, entries: [entry] });
+    else groups.set(key, { action, prismuxAction, entries: [entry] });
   }
   const summaries = [...groups].map(([action, group], index) => ({
     index,
     count: group.entries.length,
     priority: summaryActionPriority(action),
-    ...(group.t3Action
-      ? summarizeT3ToolCalls(group.t3Action, group.entries.map(t3ToolSummaryCall), resolve)
+    ...(group.prismuxAction
+      ? summarizePrismuxToolCalls(
+          group.prismuxAction,
+          group.entries.map(prismuxToolSummaryCall),
+          resolve,
+        )
       : {
           label: toolGroupActionLabel(
             group.action,
@@ -788,7 +792,7 @@ export function summarizeToolGroup(
   const sourcedCount = entries.filter(
     (entry) =>
       entry.toolSource !== undefined &&
-      resolveT3McpToolDefinition(workEntryToolName(entry)) === null,
+      resolvePrismuxMcpToolDefinition(workEntryToolName(entry)) === null,
   ).length;
   const remainingCount =
     entries.length - sourcedCount - selected.reduce((count, group) => count + group.count, 0);

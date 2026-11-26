@@ -218,7 +218,7 @@ export class CloudCliCredentialRefreshError extends Schema.TaggedError<CloudCliC
     return this.requiresLogin
       ? `Could not refresh the Prismux Connect CLI credential${
           this.oauthErrorCode === undefined ? "" : ` (OAuth error: ${this.oauthErrorCode})`
-        }. Run \`t3 connect login\` to authorize again.`
+        }. Run \`prismux connect login\` to authorize again.`
       : "Could not refresh the Prismux Connect CLI credential.";
   }
 }

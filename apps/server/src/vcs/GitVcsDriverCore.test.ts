@@ -926,7 +926,7 @@ it.effect("resolves a branch's base once while its refs and branch config are un
       yield* git(cwd, ["commit", "-m", "feature"]);
       const lookups = () => {
         const count = spawnedArgs.filter((args) =>
-          args.includes("branch.feature/x.t3-merge-base-ref"),
+          args.includes("branch.feature/x.prismux-merge-base-ref"),
         ).length;
         spawnedArgs.length = 0;
         return count;
@@ -976,7 +976,7 @@ it.effect("resolves a branch's base once while its refs and branch config are un
       yield* driver.statusDetailsLocal(cwd);
       assert.equal(lookups(), 0);
 
-      yield* git(cwd, ["config", "branch.feature/x.t3-merge-base-ref", "refs/heads/main"]);
+      yield* git(cwd, ["config", "branch.feature/x.prismux-merge-base-ref", "refs/heads/main"]);
       yield* driver.statusDetailsLocal(cwd);
       assert.equal(lookups(), 1);
 
@@ -1003,7 +1003,7 @@ it.effect("resolves a branch's base once while its refs and branch config are un
         "--unset",
         "branch.feature/x.t3-merge-base",
       ]);
-      yield* git(cwd, ["config", "--unset", "branch.feature/x.t3-merge-base-ref"]);
+      yield* git(cwd, ["config", "--unset", "branch.feature/x.prismux-merge-base-ref"]);
       failRemoteLookup = true;
       yield* driver.getReviewDiffPreview({ cwd });
       failRemoteLookup = false;
@@ -4992,7 +4992,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         yield* git(cwd, ["config", "branch.t3/temporary.t3-merge-base", "main"]);
         yield* git(cwd, [
           "config",
-          "branch.t3/temporary.t3-merge-base-ref",
+          "branch.t3/temporary.prismux-merge-base-ref",
           "refs/remotes/upstream/main",
         ]);
         yield* writeTextFile(cwd, "feature.txt", "thread work\n");
@@ -6340,7 +6340,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
             GIT_TERMINAL_PROMPT: "1",
             SSH_ASKPASS: "ssh-askpass",
             SSH_ASKPASS_REQUIRE: "force",
-            T3_TEST_SSH_ASKPASS_LOG: sshLogPath,
+            PRISMUX_TEST_SSH_ASKPASS_LOG: sshLogPath,
           }),
         );
       }),
@@ -7372,7 +7372,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           const renamed = `${branch}-renamed`;
           assert.equal(yield* git(cwd, ["config", `branch.${renamed}.remote`]), "origin");
           assert.equal(
-            yield* git(cwd, ["config", `branch.${renamed}.t3-merge-base-ref`]),
+            yield* git(cwd, ["config", `branch.${renamed}.prismux-merge-base-ref`]),
             `refs/remotes/origin/${initialBranch}`,
           );
         }
@@ -9821,7 +9821,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
               initialBranch,
             );
             assert.equal(
-              yield* driver.readConfigValue(cwd, "branch.feature/push.t3-merge-base-ref"),
+              yield* driver.readConfigValue(cwd, "branch.feature/push.prismux-merge-base-ref"),
               `refs/heads/${initialBranch}`,
             );
           }
@@ -10207,7 +10207,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
             baseBranch,
           );
           assert.equal(
-            yield* driver.readConfigValue(cwd, `branch.${branch}.t3-merge-base-ref`),
+            yield* driver.readConfigValue(cwd, `branch.${branch}.prismux-merge-base-ref`),
             local ? `refs/heads/${baseBranch}` : `refs/remotes/upstream/${baseBranch}`,
           );
           assert.equal(yield* git(cwd, ["rev-parse", `refs/heads/${baseBranch}`]), upstreamDevSha);
@@ -10252,7 +10252,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           yield* git(cwd, ["config", `branch.feature/y.${baseKey}`, "release/v2"]);
           yield* git(cwd, [
             "config",
-            "branch.feature/y.t3-merge-base-ref",
+            "branch.feature/y.prismux-merge-base-ref",
             "refs/heads/release/v2",
           ]);
           yield* writeTextFile(cwd, "feature.txt", "feature\n");
@@ -10273,7 +10273,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           );
           assert.equal(yield* driver.readBranchBase(cwd, "feature/y"), "release/v2");
           assert.equal(
-            yield* driver.readConfigValue(cwd, "branch.feature/y.t3-merge-base-ref"),
+            yield* driver.readConfigValue(cwd, "branch.feature/y.prismux-merge-base-ref"),
             "refs/heads/release/v2",
           );
         }),

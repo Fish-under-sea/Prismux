@@ -127,7 +127,7 @@ export const otlpResource = (
   serviceVersion: packageJson.version,
   attributes: {
     "service.namespace": "prismux",
-    "service.runtime": "t3-server",
+    "service.runtime": "prismux-server",
     "prismux.server.managed_by": config.mode === "desktop" ? "desktop" : "standalone",
     "service.instance.id": processServiceInstanceId(config.otelEnvironment.resourceAttributes),
     ...releaseResourceAttributes(telemetryChannel, config.otelEnvironment.resourceAttributes),

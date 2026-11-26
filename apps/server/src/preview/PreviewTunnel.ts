@@ -24,9 +24,9 @@ const PREVIEW_TUNNEL_ROUTE = "/api/preview/tunnel";
  * Marks a refusal about the port itself, so a client can tell "nothing listens there" from a proxy
  * in front of the environment answering 502 because the environment is down.
  */
-export const PREVIEW_TUNNEL_PORT_REFUSED_HEADER = "x-t3-tunnel-port-refused";
+export const PREVIEW_TUNNEL_PORT_REFUSED_HEADER = "x-prismux-tunnel-port-refused";
 /** Marks a refusal because the tunnel is switched off here, by the setting or by policy. */
-export const PREVIEW_TUNNEL_DISABLED_HEADER = "x-t3-tunnel-disabled";
+export const PREVIEW_TUNNEL_DISABLED_HEADER = "x-prismux-tunnel-disabled";
 
 const CONNECT_TIMEOUT = "5 seconds";
 

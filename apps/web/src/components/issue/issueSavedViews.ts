@@ -25,7 +25,7 @@ export function issueViewMatches(
 }
 
 export const ISSUE_SAVED_VIEWS = {
-  storageKey: "t3.issues.savedViews",
+  storageKey: "prismux.issues.savedViews",
   schema: Schema.Array(
     Schema.Struct({ ...SavedViewIdentity.fields, preferences: IssueListPreferencesSchema }),
   ),

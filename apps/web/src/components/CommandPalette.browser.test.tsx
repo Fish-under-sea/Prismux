@@ -94,7 +94,7 @@ describe("CommandPalette open intents", () => {
         <div
           data-thread-context-drop="true"
           ref={(node) => {
-            node?.addEventListener("t3-thread-context-drop", onDrop);
+            node?.addEventListener("prismux-thread-context-drop", onDrop);
           }}
           style={{ position: "fixed", bottom: 0, width: 300, height: 100 }}
         >

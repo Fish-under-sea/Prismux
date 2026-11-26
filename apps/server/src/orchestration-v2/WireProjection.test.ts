@@ -218,7 +218,7 @@ describe("orchestration V2 wire projection", () => {
     const item = {
       ...base,
       type: "dynamic_tool" as const,
-      toolName: "mcp__t3-code__device_screenshot",
+      toolName: "mcp__prismux__device_screenshot",
       input: { deviceId: "phone" },
       output: {
         content: [{ type: "image", source: { type: "base64", media_type: "image/png", data } }],
@@ -229,7 +229,7 @@ describe("orchestration V2 wire projection", () => {
     });
     expect(item.output.content[0]?.source.data).toBe(data);
 
-    const t3McpApp = {
+    const prismuxMcpApp = {
       attachmentId: "app-html",
       server: "repro",
       tool: "chart",
@@ -240,12 +240,12 @@ describe("orchestration V2 wire projection", () => {
       ...item,
       toolName: "repro.chart",
       output: {
-        t3McpApp,
+        prismuxMcpApp,
         result: { content: [text, { type: "image", mimeType: "image/png", data }] },
       },
     };
     expect(projectTurnItemForDetail(appItem)).toMatchObject({
-      output: { t3McpApp, result: { content: [text, { type: "image", mimeType: "image/png" }] } },
+      output: { prismuxMcpApp, result: { content: [text, { type: "image", mimeType: "image/png" }] } },
     });
     const largeOutput = projectTurnItemForDetail(appItem);
     expect(
@@ -253,7 +253,7 @@ describe("orchestration V2 wire projection", () => {
     ).not.toContain(data);
 
     const smallApp = {
-      t3McpApp,
+      prismuxMcpApp,
       result: { content: [text, { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" }] },
     };
     expect(projectTurnItemForDetail({ ...appItem, output: smallApp })).toMatchObject({
@@ -262,7 +262,7 @@ describe("orchestration V2 wire projection", () => {
 
     const forged = projectTurnItemForDetail({
       ...appItem,
-      output: { t3McpApp: { ...t3McpApp, resourceUri: data }, result: { content: [text] } },
+      output: { prismuxMcpApp: { ...prismuxMcpApp, resourceUri: data }, result: { content: [text] } },
     });
     expect(
       JSON.stringify(forged.type === "dynamic_tool" ? forged.output : null).length,

@@ -83,7 +83,7 @@ const makeFixture = Effect.fn("makeAntigravityTextGenerationFixture")(function* 
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-antigravity-text-test-" });
+  const root = yield* fs.makeTempDirectoryScoped({ prefix: "prismux-antigravity-text-test-" });
   const profileDirectory = path.join(root, "profile");
   const projectDirectory = path.join(root, "project");
   const waiverFilePath = path.join(root, "prismux-data", "config", "subscription-waiver.json");
@@ -575,7 +575,7 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
         const path = yield* Path.Path;
         const target =
           kind === "symlink"
-            ? yield* fs.makeTempDirectoryScoped({ prefix: "t3-antigravity-link-test-" })
+            ? yield* fs.makeTempDirectoryScoped({ prefix: "prismux-antigravity-link-test-" })
             : undefined;
         const fixture = yield* makeFixture({
           startupSkills: true,

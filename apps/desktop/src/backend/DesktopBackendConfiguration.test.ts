@@ -251,7 +251,7 @@ describe("DesktopBackendConfiguration", () => {
         assert.equal(first.bootstrap.noBrowser, true);
         assert.equal(first.bootstrap.port, 4888);
         assert.equal(first.bootstrap.host, "0.0.0.0");
-        assert.equal(first.bootstrap.t3Home, environment.baseDir);
+        assert.equal(first.bootstrap.prismuxHome, environment.baseDir);
         assert.equal(first.bootstrap.tailscaleServeEnabled, true);
         assert.equal(first.bootstrap.tailscaleServePort, 8443);
         assert.match(first.bootstrap.desktopBootstrapSecret ?? "", /^[0-9a-f]{64}$/i);
@@ -358,7 +358,7 @@ describe("DesktopBackendConfiguration", () => {
                     ok: true,
                     nodePath: "/usr/bin/node",
                     resolvedPath: "/usr/bin:/bin",
-                    t3Home: null,
+                    prismuxHome: null,
                   };
                 },
                 getDistroIp: (distro) => {
@@ -390,12 +390,12 @@ describe("DesktopBackendConfiguration", () => {
       windowsArchivePath: string;
       runtimeId: string;
       sha256: string;
-      t3Home: string | null;
+      prismuxHome: string | null;
     }> = [];
     let probeCount = 0;
     let legacyCleanupCount = 0;
-    const t3Home = "/home/test/.config/t3";
-    const linuxAppRoot = `${t3Home}/wsl-runtime/1.2.3-x64`;
+    const prismuxHome = "/home/test/.config/t3";
+    const linuxAppRoot = `${prismuxHome}/wsl-runtime/1.2.3-x64`;
     const resolvedPath = "/home/test/.local/bin:/usr/bin:/bin";
 
     return withPackagedWslHarness(
@@ -411,13 +411,13 @@ describe("DesktopBackendConfiguration", () => {
               windowsArchivePath: archive.windowsPath,
               runtimeId: archive.runtimeId,
               sha256: archive.sha256,
-              t3Home: archiveT3Home,
+              prismuxHome: archiveT3Home,
             });
             return { ok: true, linuxAppRoot };
           },
           probeRuntime: () => {
             probeCount += 1;
-            return { ok: true, resolvedPath, t3Home };
+            return { ok: true, resolvedPath, prismuxHome };
           },
           ensureNodePty: () => {
             throw new Error("the staged runtime must not probe for node-pty");
@@ -435,7 +435,7 @@ describe("DesktopBackendConfiguration", () => {
               windowsArchivePath: archivePath,
               runtimeId: `sha256-${archiveHash}`,
               sha256: archiveHash,
-              t3Home,
+              prismuxHome,
             },
           ]);
           assert.equal(probeCount, 1);
@@ -451,14 +451,14 @@ describe("DesktopBackendConfiguration", () => {
             "--exec",
             "env",
             `PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${resolvedPath}`,
-            `PRISMUX_HOME=${t3Home}`,
-            `${linuxAppRoot}/t3`,
+            `PRISMUX_HOME=${prismuxHome}`,
+            `${linuxAppRoot}/prismux`,
             "--bootstrap-fd",
             "0",
           ]);
           assert.notInclude(config.args, "/usr/bin/node");
           assert.equal(config.wslRuntimeId, `sha256-${archiveHash}`);
-          assert.equal(config.wslT3Home, t3Home);
+          assert.equal(config.wslPrismuxHome, prismuxHome);
           assert.equal(legacyCleanupCount, 1);
           assert.isTrue(Option.isNone(config.preflightFailure));
         }),
@@ -481,7 +481,7 @@ describe("DesktopBackendConfiguration", () => {
             ok: true,
             nodePath: "/usr/bin/node",
             resolvedPath: "/usr/bin:/bin",
-            t3Home: null,
+            prismuxHome: null,
           }),
         }),
       },
@@ -497,9 +497,9 @@ describe("DesktopBackendConfiguration", () => {
 
           assert.deepEqual(observedRuntimeIds, [`sha256-${firstHash}`, `sha256-${secondHash}`]);
           assert.equal(first.wslRuntimeId, observedRuntimeIds[0]);
-          assert.include(first.args, `/runtime/sha256-${firstHash}/t3`);
+          assert.include(first.args, `/runtime/sha256-${firstHash}/prismux`);
           assert.equal(second.wslRuntimeId, observedRuntimeIds[1]);
-          assert.include(second.args, `/runtime/sha256-${secondHash}/t3`);
+          assert.include(second.args, `/runtime/sha256-${secondHash}/prismux`);
           assert.isUndefined(invalidIdentity.wslRuntimeId);
           assert.include(invalidIdentity.args, "/usr/bin/node");
           assert.include(invalidIdentity.args, `${mountedAppRoot}/apps/server/dist/bin.mjs`);
@@ -520,7 +520,7 @@ describe("DesktopBackendConfiguration", () => {
               ok: true,
               nodePath: "/usr/bin/node",
               resolvedPath: "/usr/bin:/bin",
-              t3Home: null,
+              prismuxHome: null,
             };
           },
         }),
@@ -562,7 +562,7 @@ describe("DesktopBackendConfiguration", () => {
               ok: true,
               nodePath: "/usr/bin/node",
               resolvedPath: "/usr/bin:/bin",
-              t3Home: null,
+              prismuxHome: null,
             };
           },
         }),
@@ -644,7 +644,7 @@ describe("DesktopBackendConfiguration", () => {
                   isAvailable: true,
                   distros: [{ name: "Ubuntu", isDefault: true, version: 2 }],
                   windowsToWslPath: () => Option.some(linuxAppRoot),
-                  ensureNodePty: () => ({ ok: true, nodePath, resolvedPath, t3Home: null }),
+                  ensureNodePty: () => ({ ok: true, nodePath, resolvedPath, prismuxHome: null }),
                   getDistroIp: () => Option.some("172.27.0.99"),
                 }),
               ),
@@ -845,7 +845,7 @@ describe("DesktopBackendConfiguration", () => {
           const config = yield* configuration.resolvePrimary;
 
           assert.equal(config.executablePath, process.execPath);
-          assert.equal(config.bootstrap.t3Home, environment.baseDir);
+          assert.equal(config.bootstrap.prismuxHome, environment.baseDir);
           assert.isTrue(Option.isNone(config.preflightFailure));
         }).pipe(
           Effect.provide(
@@ -952,8 +952,8 @@ describe("DesktopBackendConfiguration", () => {
       });
       const resourcesPath = path.join(baseDir, "resources");
       const dirname = `${resourcesPath}/app.asar/apps/desktop/dist-electron`;
-      const embeddedMonitorPath = `${resourcesPath}/app.asar/apps/desktop/prod-resources/resource-monitor/t3-resource-monitor`;
-      const monitorPath = path.join(resourcesPath, "resource-monitor/t3-resource-monitor");
+      const embeddedMonitorPath = `${resourcesPath}/app.asar/apps/desktop/prod-resources/resource-monitor/prismux-resource-monitor`;
+      const monitorPath = path.join(resourcesPath, "resource-monitor/prismux-resource-monitor");
       yield* fileSystem.makeDirectory(
         `${resourcesPath}/app.asar/apps/desktop/prod-resources/resource-monitor`,
         { recursive: true },

@@ -603,7 +603,7 @@ export const isolateDeepSeekProbeHistory = Effect.fn("AcpRegistryProbe.isolateDe
     // DeepSeek persists session/new before any prompt and does not advertise session/delete.
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-dsh-acp-probe-" });
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "prismux-dsh-acp-probe-" });
     const patchPath = path.join(directory, "probe.json");
     const patch = yield* encodeJson([
       { id: "session-persistence-jsonl", config: { root: path.join(directory, "sessions") } },
@@ -672,7 +672,7 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
             fs: { readTextFile: false, writeTextFile: false },
             terminal: false,
           },
-          clientInfo: { name: "t3-code-provider-test", version: "0.0.0" },
+          clientInfo: { name: "prismux-provider-test", version: "0.0.0" },
           authenticateOnAuthRequired: false,
           onInitialized: (initializeResult) =>
             Ref.set(
@@ -959,7 +959,7 @@ const makeAcpRegistryManagementRuntime = Effect.fn("AcpRegistryProbe.makeManagem
           fs: { readTextFile: false, writeTextFile: false },
           terminal: false,
         },
-        clientInfo: { name: "t3-code-session-manager", version: "0.0.0" },
+        clientInfo: { name: "prismux-session-manager", version: "0.0.0" },
         authenticateOnAuthRequired: false,
         ...(input.settings.authMethodId ? { authMethodId: input.settings.authMethodId } : {}),
       }).pipe(

@@ -327,12 +327,12 @@ const make = Effect.gen(function* () {
             ...hostEnvironment,
             // A `GIT_DIR` the server inherited would point the command's Git at another repository.
             ...VcsProcess.unsetInheritedRepositoryEnv(hostEnvironment, hostPlatform),
-            T3_PROJECT_ROOT: taskFolder.projectRoot,
-            T3_WORKTREE_ROOT: taskFolder.root,
-            T3_WORKTREE_PROJECT_PATH: taskFolder.projectPath,
-            T3_WORKTREE_BRANCH: branch,
-            T3_WORKTREE_BASE: baseBranch ?? "",
-            T3_WORKTREE_REPOSITORIES: repositories.join("\n"),
+            PRISMUX_PROJECT_ROOT: taskFolder.projectRoot,
+            PRISMUX_WORKTREE_ROOT: taskFolder.root,
+            PRISMUX_WORKTREE_PROJECT_PATH: taskFolder.projectPath,
+            PRISMUX_WORKTREE_BRANCH: branch,
+            PRISMUX_WORKTREE_BASE: baseBranch ?? "",
+            PRISMUX_WORKTREE_REPOSITORIES: repositories.join("\n"),
           },
           timeoutMs: LAYOUT_COMMAND_TIMEOUT_MS,
         })

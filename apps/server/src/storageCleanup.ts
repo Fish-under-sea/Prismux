@@ -21,7 +21,7 @@ import type {
   ThreadId,
 } from "@prismux/core-contracts";
 import { resolveWorktreeCleanup } from "@prismux/core-shared/projectSettings";
-import { resolveWorktreeT3Home } from "@prismux/core-shared/devHome";
+import { resolveWorktreePrismuxHome } from "@prismux/core-shared/devHome";
 import { makeDrainableWorker } from "@prismux/core-shared/DrainableWorker";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -1043,6 +1043,7 @@ const make = Effect.gen(function* () {
             "--max-count=1",
             "HEAD",
             // Checkpoint refs hold workspace snapshots, not commits a user could lose.
+            "--exclude=refs/prismux/*",
             "--exclude=refs/t3/*",
             "--all",
             "--reflog",
@@ -1142,7 +1143,7 @@ const make = Effect.gen(function* () {
     // A git worktree's dev home is seeded from real data, so its threads and any
     // copied settings can point at the developer's real worktrees.
     const isWorktreeDevHome =
-      (yield* resolveWorktreeT3Home(config.baseDir)) === path.resolve(config.baseDir);
+      (yield* resolveWorktreePrismuxHome(config.baseDir)) === path.resolve(config.baseDir);
     for (const directory of isWorktreeDevHome
       ? [config.worktreesDir]
       : managedWorktreesDirectories(
@@ -2128,7 +2129,10 @@ const make = Effect.gen(function* () {
     for (const row of rows) {
       // Derive ownership from tombstones, never from absence in this database:
       // another T3 home can own refs in the same Git repository.
-      const prefixes = [`refs/t3/checkpoints/${Base64Url.encode(row.threadId)}/turn/`];
+      const prefixes = [
+        `refs/prismux/checkpoints/${Base64Url.encode(row.threadId)}/turn/`,
+        `refs/t3/checkpoints/${Base64Url.encode(row.threadId)}/turn/`,
+      ];
       if (row.scopeId !== null) {
         prefixes.push(
           (yield* checkpointRefForScopeOrdinal({
@@ -2175,6 +2179,8 @@ const make = Effect.gen(function* () {
           args: [
             "for-each-ref",
             "--format=%(refname)",
+            "refs/prismux/checkpoints/",
+            "refs/prismux/orchestration-v2/checkpoints/",
             "refs/t3/checkpoints/",
             "refs/t3/orchestration-v2/checkpoints/",
           ],

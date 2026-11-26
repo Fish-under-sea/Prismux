@@ -52,8 +52,8 @@ import {
 const OVERLAY_ATTRIBUTE = "data-prismux-annotation-ui";
 const INPUT_LAYER_ATTRIBUTE = "data-prismux-annotation-input";
 const Z_INDEX_OVERLAY = 2147483646;
-const PRIMARY = "var(--t3-primary)";
-const PRIMARY_FILL = "color-mix(in srgb, var(--t3-primary) 10%, transparent)";
+const PRIMARY = "var(--prismux-primary)";
+const PRIMARY_FILL = "color-mix(in srgb, var(--prismux-primary) 10%, transparent)";
 const MAX_MARQUEE_ELEMENTS = 20;
 const ELEMENT_CONTEXT_TIMEOUT_MS = 5_000;
 const CONTENT_LAYER_Z_INDEX = 1;
@@ -172,22 +172,22 @@ const applyAnnotationTheme = (
   if (!theme) return;
   host.style.colorScheme = theme.colorScheme;
   const variables = {
-    "--t3-radius": theme.radius,
-    "--t3-background": theme.background,
-    "--t3-foreground": theme.foreground,
-    "--t3-popover": theme.popover,
-    "--t3-popover-foreground": theme.popoverForeground,
-    "--t3-primary": theme.primary,
-    "--t3-primary-foreground": theme.primaryForeground,
-    "--t3-muted": theme.muted,
-    "--t3-muted-foreground": theme.mutedForeground,
-    "--t3-accent": theme.accent,
-    "--t3-accent-foreground": theme.accentForeground,
-    "--t3-border": theme.border,
-    "--t3-input": theme.input,
-    "--t3-ring": theme.ring,
-    "--t3-font-sans": theme.fontSans,
-    "--t3-font-mono": theme.fontMono,
+    "--prismux-radius": theme.radius,
+    "--prismux-background": theme.background,
+    "--prismux-foreground": theme.foreground,
+    "--prismux-popover": theme.popover,
+    "--prismux-popover-foreground": theme.popoverForeground,
+    "--prismux-primary": theme.primary,
+    "--prismux-primary-foreground": theme.primaryForeground,
+    "--prismux-muted": theme.muted,
+    "--prismux-muted-foreground": theme.mutedForeground,
+    "--prismux-accent": theme.accent,
+    "--prismux-accent-foreground": theme.accentForeground,
+    "--prismux-border": theme.border,
+    "--prismux-input": theme.input,
+    "--prismux-ring": theme.ring,
+    "--prismux-font-sans": theme.fontSans,
+    "--prismux-font-mono": theme.fontMono,
   };
   for (const [name, value] of Object.entries(variables)) {
     host.style.setProperty(name, value);
@@ -799,7 +799,7 @@ function startAnnotation(
     voiceStatus.setAttribute("aria-label", state.status ?? "Voice input");
     voiceStatus.setAttribute("aria-live", recording ? "off" : "polite");
     voiceStatusText.textContent = state.status;
-    voiceStatusText.style.color = state.phase === "error" ? "var(--t3-destructive)" : "";
+    voiceStatusText.style.color = state.phase === "error" ? "var(--prismux-destructive)" : "";
     voiceStatusText.hidden = recording;
     waveform.hidden = !recording;
     voiceElapsed.hidden = !recording;
@@ -1573,7 +1573,7 @@ function startAnnotation(
           regions.push(region);
           const regionBox = createBox(
             PRIMARY,
-            "color-mix(in srgb, var(--t3-primary) 6%, transparent)",
+            "color-mix(in srgb, var(--prismux-primary) 6%, transparent)",
           );
           regionBox.setAttribute("data-region-id", region.id);
           positionBox(regionBox, rect);

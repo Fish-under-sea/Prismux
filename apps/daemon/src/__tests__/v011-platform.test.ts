@@ -41,7 +41,7 @@ import {
 } from "../system/ResourceMonitorService.js";
 import {
   ServiceDiagnosticsService,
-  normalizeT3HttpProbeUrl
+  normalizeCoreHttpProbeUrl
 } from "../system/ServiceDiagnosticsService.js";
 import {
   AppUpdater,
@@ -1527,11 +1527,11 @@ test("PortScannerService collapses IPv4/IPv6 dual-stack duplicate listeners pref
 
 test("ServiceDiagnosticsService marks desktop-hosted T3 Server ok via HTTP liveness probe even when bare WS RPC is disconnected", async () => {
   assert.equal(
-    normalizeT3HttpProbeUrl("ws://127.0.0.1:3773/ws?orchestrationProtocol=2"),
+    normalizeCoreHttpProbeUrl("ws://127.0.0.1:3773/ws?orchestrationProtocol=2"),
     "http://127.0.0.1:3773/"
   );
   assert.equal(
-    normalizeT3HttpProbeUrl("http://127.0.0.1:3773/health"),
+    normalizeCoreHttpProbeUrl("http://127.0.0.1:3773/health"),
     "http://127.0.0.1:3773/health"
   );
 
@@ -1562,7 +1562,7 @@ test("ServiceDiagnosticsService marks desktop-hosted T3 Server ok via HTTP liven
   };
 
   try {
-    // 1. Live HTTP 200 derived from wsUrl / t3ServerUrl -> status: "ok"
+    // 1. Live HTTP 200 derived from wsUrl / coreServerUrl -> status: "ok"
     const diagFromWsUrl = new ServiceDiagnosticsService({
       dataDir: makeTempDir("prismux-diag-t3-ok-"),
       version: "0.1.1-alpha.1",
@@ -1575,7 +1575,7 @@ test("ServiceDiagnosticsService marks desktop-hosted T3 Server ok via HTTP liven
       resolve7za: () => "7za.exe"
     });
     const reportOk = await diagFromWsUrl.runDiagnostics(true);
-    const t3OkItem = reportOk.items.find((i) => i.id === "host.t3_server");
+    const t3OkItem = reportOk.items.find((i) => i.id === "host.core_server");
     assert.ok(t3OkItem);
     assert.equal(t3OkItem.status, "ok");
     assert.equal(receivedMethod, "GET");
@@ -1584,10 +1584,10 @@ test("ServiceDiagnosticsService marks desktop-hosted T3 Server ok via HTTP liven
     assert.ok(!t3OkItem.summary.includes(secretToken));
     assert.ok(!(t3OkItem.detail ?? "").includes(secretToken));
 
-    // 2. Auth-gated 401 via PRISMUX_T3_SERVER_URL env var still confirms HTTP server is alive
+    // 2. Auth-gated 401 via PRISMUX_CORE_SERVER_URL env var still confirms HTTP server is alive
     responseStatus = 401;
-    const prevEnv = process.env["PRISMUX_T3_SERVER_URL"];
-    process.env["PRISMUX_T3_SERVER_URL"] = mockT3Http.baseUrl;
+    const prevEnv = process.env["PRISMUX_CORE_SERVER_URL"];
+    process.env["PRISMUX_CORE_SERVER_URL"] = mockT3Http.baseUrl;
     try {
       const diagFromEnv = new ServiceDiagnosticsService({
         dataDir: makeTempDir("prismux-diag-t3-env-"),
@@ -1599,14 +1599,14 @@ test("ServiceDiagnosticsService marks desktop-hosted T3 Server ok via HTTP liven
         resolve7za: () => "7za.exe"
       });
       const reportEnv = await diagFromEnv.runDiagnostics(true);
-      const t3EnvItem = reportEnv.items.find((i) => i.id === "host.t3_server");
+      const t3EnvItem = reportEnv.items.find((i) => i.id === "host.core_server");
       assert.equal(t3EnvItem?.status, "ok");
       assert.ok(t3EnvItem?.summary.includes("HTTP 401"));
     } finally {
       if (prevEnv === undefined) {
-        delete process.env["PRISMUX_T3_SERVER_URL"];
+        delete process.env["PRISMUX_CORE_SERVER_URL"];
       } else {
-        process.env["PRISMUX_T3_SERVER_URL"] = prevEnv;
+        process.env["PRISMUX_CORE_SERVER_URL"] = prevEnv;
       }
     }
   } finally {
@@ -1619,13 +1619,13 @@ test("ServiceDiagnosticsService marks desktop-hosted T3 Server ok via HTTP liven
     version: "0.1.1-alpha.1",
     headless: true,
     startedAt: Date.now(),
-    t3ServerUrl: mockT3Http.baseUrl,
+    coreServerUrl: mockT3Http.baseUrl,
     cliProbe: async () => ({ found: true, version: "1.0.0", latencyMs: 1 }),
     detectAndroidSdk: () => ({ sdkRoot: null, adbPath: null }),
     resolve7za: () => "7za.exe"
   });
   const reportDown = await diagDown.runDiagnostics(true);
-  const t3DownItem = reportDown.items.find((i) => i.id === "host.t3_server");
+  const t3DownItem = reportDown.items.find((i) => i.id === "host.core_server");
   assert.equal(t3DownItem?.status, "degraded");
   assert.ok(t3DownItem?.summary.includes("未响应"));
 });
@@ -1891,9 +1891,9 @@ test("ResourceMonitorService fuses Electron host-metrics + OS process tree + T3 
   try {
     // 1. Before Electron pushes, OS process tree auto-discovers T3 Server + pwsh + Claude Code and excludes self probe
     const autoSnap = await monitor.getResources({ forceRefresh: true });
-    assert.equal(autoSnap.t3Server?.pid, 2000);
-    assert.equal(autoSnap.t3Server?.hostedBy, "electron");
-    assert.equal(autoSnap.t3Server?.memoryBytes, 120_000_000);
+    assert.equal(autoSnap.coreServer?.pid, 2000);
+    assert.equal(autoSnap.coreServer?.hostedBy, "electron");
+    assert.equal(autoSnap.coreServer?.memoryBytes, 120_000_000);
     assert.ok(autoSnap.processes.some((p) => p.pid === 2101 && p.category === "agent" && p.name === "Claude Code"));
     assert.ok(autoSnap.processes.some((p) => p.pid === 2100 && p.category === "terminal" && p.name === "PowerShell 7"));
     assert.ok(!autoSnap.processes.some((p) => p.pid === 99999), "Self probe must be excluded");
@@ -1904,7 +1904,7 @@ test("ResourceMonitorService fuses Electron host-metrics + OS process tree + T3 
       mainPid: 1000,
       cpuCores: 8,
       cpuScale: "single-core",
-      t3Server: {
+      coreServer: {
         pid: 2000,
         ready: true,
         desiredRunning: true,
@@ -1921,7 +1921,7 @@ test("ResourceMonitorService fuses Electron host-metrics + OS process tree + T3 
     });
     assert.equal(ingest.ok, true);
     assert.equal(ingest.acceptedProcesses, 4);
-    assert.equal(ingest.t3ServerPid, 2000);
+    assert.equal(ingest.coreServerPid, 2000);
 
     // Push a second time to mark Electron CPU% as warmed past initial 0-call
     monitor.ingestHostMetrics({
@@ -1929,7 +1929,7 @@ test("ResourceMonitorService fuses Electron host-metrics + OS process tree + T3 
       mainPid: 1000,
       cpuCores: 8,
       cpuScale: "single-core",
-      t3Server: {
+      coreServer: {
         pid: 2000,
         ready: true,
         desiredRunning: true,
@@ -1952,9 +1952,9 @@ test("ResourceMonitorService fuses Electron host-metrics + OS process tree + T3 
     assert.equal(fused.desktop?.memoryBytes, 155_000_000 + 240_000_000 + 130_000_000 + 45_000_000);
     // 8 + 24 + 16 + 4 = 52 single-core % / 8 cores = 6.5% total-system CPU%
     assert.equal(fused.desktop?.cpuPercent, 6.5);
-    assert.equal(fused.t3Server?.pid, 2000);
-    assert.ok(fused.t3Server?.cpuPercent !== null && fused.t3Server.cpuPercent > 0);
-    assert.equal(fused.t3Server?.memoryBytes, 120_000_000);
+    assert.equal(fused.coreServer?.pid, 2000);
+    assert.ok(fused.coreServer?.cpuPercent !== null && fused.coreServer.cpuPercent > 0);
+    assert.equal(fused.coreServer?.memoryBytes, 120_000_000);
     assert.equal(fused.activeAgentCount, 1);
     assert.ok(fused.activeTerminalCount >= 1);
     // Total memory sums all unique PIDs without double-counting Main/Daemon/T3
@@ -2018,7 +2018,7 @@ test("PrismuxDaemon exposes POST /v1/resources/host-metrics and live Windows pro
         collectedAt: Date.now(),
         mainPid: process.pid,
         cpuScale: "single-core",
-        t3Server: {
+        coreServer: {
           pid: busyChild.pid,
           ready: true,
           desiredRunning: true,
@@ -2030,9 +2030,9 @@ test("PrismuxDaemon exposes POST /v1/resources/host-metrics and live Windows pro
       })
     });
     assert.equal(postRes.status, 200);
-    const postJson = (await postRes.json()) as { ok: boolean; t3ServerPid: number | null };
+    const postJson = (await postRes.json()) as { ok: boolean; coreServerPid: number | null };
     assert.equal(postJson.ok, true);
-    assert.equal(postJson.t3ServerPid, busyChild.pid);
+    assert.equal(postJson.coreServerPid, busyChild.pid);
 
     // 3. Real OS live sampling pass 1 (primes baseline) + pass 2 (computes real delta CPU%)
     const firstRes = await fetch(`${ready.httpUrl}/v1/system/resources?refresh=1`, { headers });
@@ -2040,11 +2040,11 @@ test("PrismuxDaemon exposes POST /v1/resources/host-metrics and live Windows pro
     const snap1 = (await firstRes.json()) as ExtendedSystemResourcesResponse;
     assert.equal(snap1.ok, true);
     assert.ok(snap1.daemon.memoryBytes > 10 * 1024 * 1024, `Expected real daemon RAM, got ${snap1.daemon.memoryBytes}`);
-    assert.ok(snap1.t3Server !== null, "Expected t3Server to be populated");
-    assert.equal(snap1.t3Server?.pid, busyChild.pid);
+    assert.ok(snap1.coreServer !== null, "Expected coreServer to be populated");
+    assert.equal(snap1.coreServer?.pid, busyChild.pid);
     assert.ok(
-      typeof snap1.t3Server?.memoryBytes === "number" && snap1.t3Server.memoryBytes > 5 * 1024 * 1024,
-      `Expected real T3 Server RAM > 5MB, got ${String(snap1.t3Server?.memoryBytes)}`
+      typeof snap1.coreServer?.memoryBytes === "number" && snap1.coreServer.memoryBytes > 5 * 1024 * 1024,
+      `Expected real T3 Server RAM > 5MB, got ${String(snap1.coreServer?.memoryBytes)}`
     );
 
     await new Promise((r) => setTimeout(r, 450));
@@ -2054,14 +2054,14 @@ test("PrismuxDaemon exposes POST /v1/resources/host-metrics and live Windows pro
     assert.equal(snap2.ok, true);
     assert.ok(snap2.totalMemoryBytes > snap2.daemon.memoryBytes, "Total RAM must exceed daemon-only RAM");
     assert.ok(
-      typeof snap2.t3Server?.cpuPercent === "number" && snap2.t3Server.cpuPercent > 0,
-      `Expected live T3 Server CPU% > 0, got ${String(snap2.t3Server?.cpuPercent)}`
+      typeof snap2.coreServer?.cpuPercent === "number" && snap2.coreServer.cpuPercent > 0,
+      `Expected live T3 Server CPU% > 0, got ${String(snap2.coreServer?.cpuPercent)}`
     );
     assert.ok(
       typeof snap2.totalCpuPercent === "number" && snap2.totalCpuPercent > 0,
       `Expected live total CPU% > 0, got ${String(snap2.totalCpuPercent)}`
     );
-    assert.ok(snap2.processes.some((p) => p.pid === busyChild.pid && p.role === "t3-server"));
+    assert.ok(snap2.processes.some((p) => p.pid === busyChild.pid && p.role === "core-server"));
     assert.ok(snap2.processes.some((p) => p.pid === process.pid && p.role === "daemon"));
   } finally {
     try {

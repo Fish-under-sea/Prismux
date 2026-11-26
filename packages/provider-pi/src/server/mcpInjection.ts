@@ -5,12 +5,12 @@ import * as Result from "effect/Result";
 
 import type { McpProviderSessionConfig } from "@prismux/provider-core/server/mcpSession";
 import {
-  PI_T3_MCP_EXTENSION_FILENAME,
-  PI_T3_MCP_EXTENSION_SOURCE,
-  T3_MCP_BEARER_ENV,
-  T3_MCP_URL_ENV,
-  T3_PI_RUNTIME_MODE_ENV,
-  T3_PI_MCP_EXTENSION_PATH_ENV,
+  PI_PRISMUX_MCP_EXTENSION_FILENAME,
+  PI_PRISMUX_MCP_EXTENSION_SOURCE,
+  PRISMUX_MCP_BEARER_ENV,
+  PRISMUX_MCP_URL_ENV,
+  PRISMUX_PI_RUNTIME_MODE_ENV,
+  PRISMUX_PI_MCP_EXTENSION_PATH_ENV,
 } from "./mcpExtensionSource.ts";
 
 const RESERVED_PI_LAUNCH_ARGUMENTS = new Set([
@@ -221,8 +221,8 @@ function withoutToolSelectionArgs(args: ReadonlyArray<string>): ReadonlyArray<st
   return filtered;
 }
 
-function piT3McpExtensionDestPath(cacheDir: string): string {
-  return `${cacheDir.replace(/\\/g, "/")}/${PI_T3_MCP_EXTENSION_FILENAME}`;
+function piPrismuxMcpExtensionDestPath(cacheDir: string): string {
+  return `${cacheDir.replace(/\\/g, "/")}/${PI_PRISMUX_MCP_EXTENSION_FILENAME}`;
 }
 
 function isWindowsRenameLock(error: unknown): boolean {
@@ -232,26 +232,26 @@ function isWindowsRenameLock(error: unknown): boolean {
   return code === "EBUSY" || code === "EPERM" || code === "EACCES";
 }
 
-export const materializePiT3McpExtension = Effect.fn("materializePiT3McpExtension")(function* (
+export const materializePiPrismuxMcpExtension = Effect.fn("materializePiPrismuxMcpExtension")(function* (
   cacheDir: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
   yield* fs.makeDirectory(cacheDir, { recursive: true });
-  const dest = piT3McpExtensionDestPath(cacheDir);
+  const dest = piPrismuxMcpExtensionDestPath(cacheDir);
   const existing = yield* fs.readFileString(dest).pipe(Effect.orElseSucceed(() => ""));
-  if (existing !== PI_T3_MCP_EXTENSION_SOURCE) {
+  if (existing !== PI_PRISMUX_MCP_EXTENSION_SOURCE) {
     // Concurrent pi launches read this file: stage it in a per-call directory
     // and rename so readers and other writers never see a partial file.
     yield* Effect.scoped(
       Effect.gen(function* () {
         const stagingDir = yield* fs.makeTempDirectoryScoped({ directory: cacheDir });
-        const staging = `${stagingDir.replace(/\\/g, "/")}/${PI_T3_MCP_EXTENSION_FILENAME}`;
-        yield* fs.writeFileString(staging, PI_T3_MCP_EXTENSION_SOURCE);
+        const staging = `${stagingDir.replace(/\\/g, "/")}/${PI_PRISMUX_MCP_EXTENSION_FILENAME}`;
+        yield* fs.writeFileString(staging, PI_PRISMUX_MCP_EXTENSION_SOURCE);
         for (let attempt = 0; attempt <= 20; attempt += 1) {
           const renamed = yield* Effect.result(fs.rename(staging, dest));
           if (Result.isSuccess(renamed)) return;
           const current = yield* fs.readFileString(dest).pipe(Effect.orElseSucceed(() => ""));
-          if (current === PI_T3_MCP_EXTENSION_SOURCE) return;
+          if (current === PI_PRISMUX_MCP_EXTENSION_SOURCE) return;
           if (!isWindowsRenameLock(renamed.failure) || attempt === 20) {
             return yield* renamed.failure;
           }
@@ -280,8 +280,8 @@ export function buildPiRpcLaunch(input: {
   readonly args: ReadonlyArray<string>;
   readonly env: NodeJS.ProcessEnv;
 } {
-  const hasT3Extension = input.disableExtensions !== true && input.extensionPath !== undefined;
-  const hasT3Mcp = hasT3Extension && input.mcpSession !== undefined;
+  const hasPrismuxExtension = input.disableExtensions !== true && input.extensionPath !== undefined;
+  const hasPrismuxMcp = hasPrismuxExtension && input.mcpSession !== undefined;
   const extensionSafeArgs =
     input.disableExtensions === true
       ? withoutExplicitExtensions(input.launchArgs)
@@ -303,7 +303,7 @@ export function buildPiRpcLaunch(input: {
     ...(input.disableTools === true ? ["--no-tools"] : []),
   ];
   if (
-    hasT3Extension &&
+    hasPrismuxExtension &&
     input.extensionPath !== undefined &&
     !hasExplicitExtension(args, input.extensionPath)
   ) {
@@ -311,27 +311,27 @@ export function buildPiRpcLaunch(input: {
   }
   const environment = { ...input.environment };
   // MCP credentials belong to this T3 session; discard inherited server/parent credentials.
-  delete environment[T3_MCP_URL_ENV];
-  delete environment[T3_MCP_BEARER_ENV];
-  delete environment[T3_PI_MCP_EXTENSION_PATH_ENV];
+  delete environment[PRISMUX_MCP_URL_ENV];
+  delete environment[PRISMUX_MCP_BEARER_ENV];
+  delete environment[PRISMUX_PI_MCP_EXTENSION_PATH_ENV];
 
   return {
     args,
     env: {
       ...environment,
-      ...(hasT3Extension && input.extensionPath !== undefined
-        ? { [T3_PI_MCP_EXTENSION_PATH_ENV]: input.extensionPath }
+      ...(hasPrismuxExtension && input.extensionPath !== undefined
+        ? { [PRISMUX_PI_MCP_EXTENSION_PATH_ENV]: input.extensionPath }
         : {}),
-      ...(hasT3Extension && input.runtimeMode !== undefined
+      ...(hasPrismuxExtension && input.runtimeMode !== undefined
         ? {
-            [T3_PI_RUNTIME_MODE_ENV]:
+            [PRISMUX_PI_RUNTIME_MODE_ENV]:
               input.runtimeMode === "auto" ? "approval-required" : input.runtimeMode,
           }
         : {}),
-      ...(hasT3Mcp && input.mcpSession !== undefined
+      ...(hasPrismuxMcp && input.mcpSession !== undefined
         ? {
-            [T3_MCP_URL_ENV]: input.mcpSession.endpoint,
-            [T3_MCP_BEARER_ENV]: bearerTokenFromAuthorizationHeader(
+            [PRISMUX_MCP_URL_ENV]: input.mcpSession.endpoint,
+            [PRISMUX_MCP_BEARER_ENV]: bearerTokenFromAuthorizationHeader(
               input.mcpSession.authorizationHeader,
             ),
           }

@@ -164,7 +164,7 @@ describe("1:1 Antigravity Native /btw (Side Question) Mode", () => {
     });
     expect(projected.startsWith(rawQuestion)).toBe(true);
     expect(projected).not.toContain("[旁路只读提问]");
-    expect(projected).toContain('<t3_context version="1">');
+    expect(projected).toContain('<prismux_context version="1">');
     expect(projected).toContain(
       `<context kind="${BTW_GUARDRAIL_CONTEXT_KIND}" id="${BTW_READONLY_GUARDRAIL_CONTEXT_ID}">`,
     );

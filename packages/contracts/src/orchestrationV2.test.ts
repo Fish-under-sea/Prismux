@@ -707,14 +707,14 @@ describe("withMessageSenderNote", () => {
     senderThreadId: ThreadId.make("t"),
   } as const;
   it.each([
-    [thread, "Hi", '[Prismux: the agent in T3 thread "t" sent this message, not the user.]\n\nHi'],
-    [thread, "", '[Prismux: the agent in T3 thread "t" sent this message, not the user.]'],
+    [thread, "Hi", '[Prismux: the agent in Prismux thread "t" sent this message, not the user.]\n\nHi'],
+    [thread, "", '[Prismux: the agent in Prismux thread "t" sent this message, not the user.]'],
     [thread, " /git/review staged", " /git/review staged"],
     [thread, "$deploy ship it", "$deploy ship it"],
     [
       thread,
       "$25 left",
-      '[Prismux: the agent in T3 thread "t" sent this message, not the user.]\n\n$25 left',
+      '[Prismux: the agent in Prismux thread "t" sent this message, not the user.]\n\n$25 left',
     ],
     [
       {
@@ -727,7 +727,7 @@ describe("withMessageSenderNote", () => {
         },
       },
       "Hi",
-      '[Prismux: the agent in T3 thread "r" on linked environment "e" sent this message, not the user.]\n\nHi',
+      '[Prismux: the agent in Prismux thread "r" on linked environment "e" sent this message, not the user.]\n\nHi',
     ],
     [
       { createdBy: "user", creationSource: "web", scheduledTaskId: ScheduledTaskId.make("s") },

@@ -75,7 +75,7 @@ function roleBadgeMeta(proc: NormalizedProcessResource): {
         label: "服务",
         tone: "bg-muted text-muted-foreground",
       };
-    case "t3-server":
+    case "core-server":
       return {
         label: "核心",
         tone: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
@@ -112,7 +112,7 @@ function ProcessRoleIcon({ proc }: { readonly proc: NormalizedProcessResource })
       return <MonitorIcon aria-hidden className="size-3 shrink-0 text-indigo-600 dark:text-indigo-400" />;
     case "electron-gpu":
       return <LayersIcon aria-hidden className="size-3 shrink-0 text-purple-600 dark:text-purple-400" />;
-    case "t3-server":
+    case "core-server":
       return <ServerIcon aria-hidden className="size-3 shrink-0 text-emerald-600 dark:text-emerald-400" />;
     case "daemon":
       return <CpuIcon aria-hidden className="size-3 shrink-0 text-amber-600 dark:text-amber-400" />;
@@ -283,12 +283,12 @@ export function ResourcesStatusPopover({
     sortedCoreProcesses.length > 0;
   const sampledTimeLabel = formatSampleTimestamp(summary.collectedAt);
 
-  const t3SubLabel =
-    summary.t3ServerHostedBy === "electron-in-process"
+  const coreSubLabel =
+    summary.coreServerHostedBy === "electron-in-process"
       ? "宿主同进程"
-      : summary.t3ServerPid !== null
-        ? `PID ${summary.t3ServerPid}`
-        : summary.t3ServerState === "running"
+      : summary.coreServerPid !== null
+        ? `PID ${summary.coreServerPid}`
+        : summary.coreServerState === "running"
           ? "运行中"
           : null;
 
@@ -422,21 +422,21 @@ export function ResourcesStatusPopover({
         ) : null}
 
         <div
-          data-testid="resources-card-t3"
+          data-testid="resources-card-core"
           className="rounded-lg border border-border/70 bg-muted/35 p-2"
         >
           <div className="flex items-center justify-between gap-1 text-[11px] text-muted-foreground">
             <span className="truncate">Prismux Server</span>
-            {t3SubLabel ? (
-              <span className="shrink-0 font-mono text-[10px]">{t3SubLabel}</span>
+            {coreSubLabel ? (
+              <span className="shrink-0 font-mono text-[10px]">{coreSubLabel}</span>
             ) : null}
           </div>
           <div className="mt-0.5 flex items-baseline justify-between gap-2">
             <span className="font-semibold text-foreground">
-              {formatCpuPercent(summary.t3ServerCpuPercent)}
+              {formatCpuPercent(summary.coreServerCpuPercent)}
             </span>
             <span className="text-[11px] font-medium text-foreground/85">
-              {formatBytesCompact(summary.t3ServerMemoryBytes)}
+              {formatBytesCompact(summary.coreServerMemoryBytes)}
             </span>
           </div>
         </div>
@@ -624,7 +624,7 @@ export function ResourcesStatusPopover({
           );
         })}
 
-        {/* 2. Live Agent & terminal child processes spawned under T3 Server / Electron / Daemon */}
+        {/* 2. Live Agent & terminal child processes spawned under Prismux Server / Electron / Daemon */}
         {sortedActiveChildren.length > 0 ? (
           <div
             data-testid="resources-active-children-section"
@@ -691,7 +691,7 @@ export function ResourcesStatusPopover({
           </div>
         ) : null}
 
-        {/* 3. Workbench core process breakdown (Electron Main / Renderer / GPU / T3 Server / Daemon) */}
+        {/* 3. Workbench core process breakdown (Electron Main / Renderer / GPU / Prismux Server / Daemon) */}
         {sortedCoreProcesses.length > 0 ? (
           <div
             data-testid="resources-core-processes-section"

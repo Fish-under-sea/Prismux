@@ -158,11 +158,11 @@ describe("ProjectSetupScriptRunner", () => {
       expect(written).toBe(
         ` ${[
           "$env.LAST_EXIT_CODE = 0",
-          "let __t3f = try { mktemp --tmpdir-path $env.PRISMUX_WORKTREE_PATH --suffix .nu .t3-setup-XXXXXXXX } catch {|e| print -e $e.msg; null }",
-          `if $__t3f == null { $env.LAST_EXIT_CODE = 1 } else { try { [$"rm --permanent ($__t3f | to nuon)" "${escaped}"] | str join (char newline) | save --force --raw $__t3f; ^$nu.current-exe --login --commands $"cd $env.PRISMUX_WORKTREE_PATH; source ($__t3f | to nuon)" } catch {|e| if $e != null and $e.exit_code? == null { print -e $e.msg }; if $env.LAST_EXIT_CODE == 0 { $env.LAST_EXIT_CODE = 1 } } }`,
-          "let __t3c = $env.LAST_EXIT_CODE",
-          "try { if $__t3f != null and ($__t3f | path exists) { rm --permanent $__t3f } } catch {|e| print -e $e.msg }",
-          `print $"\\n${sentinel}($__t3c)"`,
+          "let __prismuxf = try { mktemp --tmpdir-path $env.PRISMUX_WORKTREE_PATH --suffix .nu .prismux-setup-XXXXXXXX } catch {|e| print -e $e.msg; null }",
+          `if $__prismuxf == null { $env.LAST_EXIT_CODE = 1 } else { try { [$"rm --permanent ($__prismuxf | to nuon)" "${escaped}"] | str join (char newline) | save --force --raw $__prismuxf; ^$nu.current-exe --login --commands $"cd $env.PRISMUX_WORKTREE_PATH; source ($__prismuxf | to nuon)" } catch {|e| if $e != null and $e.exit_code? == null { print -e $e.msg }; if $env.LAST_EXIT_CODE == 0 { $env.LAST_EXIT_CODE = 1 } } }`,
+          "let __prismuxc = $env.LAST_EXIT_CODE",
+          "try { if $__prismuxf != null and ($__prismuxf | path exists) { rm --permanent $__prismuxf } } catch {|e| print -e $e.msg }",
+          `print $"\\n${sentinel}($__prismuxc)"`,
         ].join("; ")}\r`,
       );
     }),
