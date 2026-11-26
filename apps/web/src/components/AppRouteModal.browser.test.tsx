@@ -67,4 +67,24 @@ describe("AppRouteModal", () => {
 
     await expect.element(settings).toHaveAttribute("data-open");
   });
+
+  it("recovers visibility via entrance failsafe if data-starting-style stalls on an open modal", async () => {
+    await using _screen = await render(
+      <AppRouteModal label="Settings">
+        <p>Recovered settings content</p>
+      </AppRouteModal>,
+      { router: "/settings/general" },
+    );
+
+    const settingsEl = page.getByRole("dialog", { name: "Settings" }).element() as HTMLElement;
+    // Simulate a wedged starting-style frame before the 260ms failsafe deadline
+    settingsEl.setAttribute("data-starting-style", "");
+    await vi.waitFor(
+      () => {
+        expect(settingsEl.hasAttribute("data-starting-style")).toBe(false);
+        expect(Number.parseFloat(getComputedStyle(settingsEl).opacity)).toBeGreaterThan(0.95);
+      },
+      { timeout: 1000 },
+    );
+  });
 });

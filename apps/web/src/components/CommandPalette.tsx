@@ -330,6 +330,9 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   return (
     <ComposerHandleContext value={composerHandleRef}>
       <ThreadContextDragGhost />
+      <div className="contents" inert={state.open}>
+        {children}
+      </div>
       <CommandDialog
         open={state.open}
         onOpenChange={(open, eventDetails) => {
@@ -341,9 +344,6 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           setOpen(open);
         }}
       >
-        <div className="contents" inert={state.open}>
-          {children}
-        </div>
         <CommandPaletteDialog
           mode={state.mode}
           session={state.session}
@@ -388,9 +388,18 @@ function CommandPaletteDialog(props: {
         if (restoreWorkspaceFocusFromPalette()) return false;
         const returnFocus = getCommandPaletteReturnFocus();
         if (returnFocus === false) return false;
+        const activeAppModal = document.querySelector<HTMLElement>(
+          "[data-app-modal]:not([data-closed]):not([data-ending-style])",
+        );
+        if (activeAppModal) {
+          // Behind the Settings/Usage modal the workspace composer is inert; only return focus
+          // when the opener itself lives inside the active modal.
+          return returnFocus instanceof HTMLElement && activeAppModal.contains(returnFocus)
+            ? returnFocus
+            : false;
+        }
         const composer = composerHandleRef?.current;
-        // Behind the Settings modal the composer is inert and cannot take focus.
-        if (!composer || document.querySelector("[data-app-modal]")) return returnFocus;
+        if (!composer) return returnFocus;
         composer.focusAtEnd();
         return false;
       }}

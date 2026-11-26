@@ -1,4 +1,4 @@
-import { createRef } from "react";
+import { createRef, useState } from "react";
 import { describe, expect, it } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
@@ -104,5 +104,69 @@ describe("dialog initial focus", () => {
     });
 
     await expect.element(page.getByRole("dialog")).toHaveFocus();
+  });
+
+  it("renders RetainedWhileClosed children in a single pass while open and preserves snapshot while closing", async () => {
+    const renderedLabels: Array<string | null> = [];
+
+    function TrackedBody({ label }: { readonly label: string | null }) {
+      renderedLabels.push(label);
+      return <p data-testid="retained-body">{label ?? "empty"}</p>;
+    }
+
+    function Harness() {
+      const [open, setOpen] = useState(true);
+      const [label, setLabel] = useState<string | null>("step-1");
+      return (
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogPopup>
+            <DialogTitle>Tracked dialog</DialogTitle>
+            <TrackedBody label={label} />
+            <button type="button" onClick={() => setLabel("step-2")}>
+              Step 2
+            </button>
+            <button type="button" onClick={() => setLabel("step-3")}>
+              Step 3
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setLabel(null);
+                setOpen(false);
+              }}
+            >
+              Close empty
+            </button>
+          </DialogPopup>
+        </Dialog>
+      );
+    }
+
+    await using _screen = await render(<Harness />);
+    await expect.element(page.getByTestId("retained-body")).toHaveTextContent("step-1");
+    const rendersAfterMount = renderedLabels.length;
+
+    // Each state update while open must cause strictly 1 render of the dialog body (no double render from render-phase setState)
+    await act(() => {
+      (page.getByRole("button", { name: "Step 2" }).element() as HTMLElement).click();
+    });
+    await expect.element(page.getByTestId("retained-body")).toHaveTextContent("step-2");
+    expect(renderedLabels.length - rendersAfterMount).toBe(1);
+
+    await act(() => {
+      (page.getByRole("button", { name: "Step 3" }).element() as HTMLElement).click();
+    });
+    await expect.element(page.getByTestId("retained-body")).toHaveTextContent("step-3");
+    expect(renderedLabels.length - rendersAfterMount).toBe(2);
+
+    // Closing while clearing parent data must not flash "empty" before unmount
+    await act(() => {
+      (page.getByRole("button", { name: "Close empty" }).element() as HTMLElement).click();
+    });
+    const closingBody = page.getByTestId("retained-body").query();
+    if (closingBody) {
+      expect(closingBody.textContent).toBe("step-3");
+    }
+    await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
   });
 });

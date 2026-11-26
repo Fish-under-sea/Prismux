@@ -11,7 +11,6 @@ import {
 
 import { APP_STAGE_LABEL } from "../branding";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
-import { observeResize } from "../lib/observeResize";
 import { cn } from "../lib/utils";
 import { primaryServerConfigAtom } from "../state/server";
 import {
@@ -155,7 +154,7 @@ export function SidebarSkyTopbarExtension({
   const anchorRef = useRef<HTMLDivElement | null>(null);
   const [metrics, setMetrics] = useState<SkyExtensionMetrics>(DEFAULT_SKY_EXTENSION_METRICS);
 
-  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- measures live DOM geometry (sidebar right edge -> first session tab left edge) via ResizeObserver and MutationObserver
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- measures live DOM geometry (sidebar right edge -> first session tab left edge) via targeted ResizeObserver and narrow structural MutationObservers without style subtree thrashing
   useEffect(() => {
     const anchor = anchorRef.current;
     const wrapper = anchor?.closest<HTMLElement>('[data-slot="sidebar-wrapper"]') ?? null;
@@ -164,15 +163,87 @@ export function SidebarSkyTopbarExtension({
       return;
     }
 
+    let disposed = false;
     let rafId: number | null = null;
+    let lastExtWidth: string | null = null;
+    let lastSeamAlpha: string | null = null;
+    let lastFeatherInset: string | null = null;
+    let observedSidebar: HTMLElement | null = null;
+    let observedTabBar: HTMLElement | null = null;
+    let observedFirstTab: HTMLElement | null = null;
+
+    const resizeObserver =
+      typeof ResizeObserver === "function"
+        ? // oxlint-disable-next-line prismux/no-raw-resize-observer -- intentionally rAF-batched without ReactDOM.flushSync to avoid synchronous layout feedback loops
+          new ResizeObserver(() => {
+            scheduleMeasure();
+          })
+        : null;
+    resizeObserver?.observe(wrapper);
+
+    const tabBarObserver =
+      typeof MutationObserver === "function"
+        ? new MutationObserver(() => {
+            scheduleMeasure();
+          })
+        : null;
+
+    const syncTargets = (
+      sidebarContainer: HTMLElement | null,
+      tabBar: HTMLElement | null,
+      firstTab: HTMLElement | null,
+    ) => {
+      if (resizeObserver) {
+        if (observedSidebar && observedSidebar !== sidebarContainer) {
+          resizeObserver.unobserve(observedSidebar);
+        }
+        if (sidebarContainer && sidebarContainer !== observedSidebar) {
+          resizeObserver.observe(sidebarContainer);
+        }
+        observedSidebar = sidebarContainer;
+
+        if (observedTabBar && observedTabBar !== tabBar) {
+          resizeObserver.unobserve(observedTabBar);
+        }
+        if (tabBar && tabBar !== observedTabBar) {
+          resizeObserver.observe(tabBar);
+        }
+
+        if (observedFirstTab && observedFirstTab !== firstTab) {
+          resizeObserver.unobserve(observedFirstTab);
+        }
+        if (firstTab && firstTab !== observedFirstTab) {
+          resizeObserver.observe(firstTab);
+        }
+        observedFirstTab = firstTab;
+      }
+
+      if (tabBarObserver && observedTabBar !== tabBar) {
+        tabBarObserver.disconnect();
+        if (tabBar) {
+          tabBarObserver.observe(tabBar, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ["data-workspace-tab"],
+          });
+        }
+      }
+      observedTabBar = tabBar;
+    };
+
     const measure = () => {
       rafId = null;
+      if (disposed) return;
       const sidebarContainer = wrapper.querySelector<HTMLElement>('[data-slot="sidebar-container"]');
       const tabBar = wrapper.querySelector<HTMLElement>("[data-workspace-tabbar]");
       const firstTab =
         tabBar?.querySelector<HTMLElement>("[data-workspace-tab]") ??
         tabBar?.querySelector<HTMLElement>('[role="tablist"] > *') ??
         null;
+
+      syncTargets(sidebarContainer, tabBar, firstTab);
+
       const sidebarRect = sidebarContainer?.getBoundingClientRect() ?? null;
       const tabBarRect = tabBar?.getBoundingClientRect() ?? null;
       const firstTabRect = firstTab?.getBoundingClientRect() ?? null;
@@ -185,9 +256,21 @@ export function SidebarSkyTopbarExtension({
         hasTabBar: tabBar !== null,
       });
 
-      wrapper.style.setProperty("--pmx-sky-ext-width", `${next.extensionWidth}px`);
-      wrapper.style.setProperty("--pmx-sky-seam-alpha", String(next.seamAlpha));
-      wrapper.style.setProperty("--pmx-sky-right-feather-inset", `${next.featherInset}px`);
+      const nextExtWidth = `${next.extensionWidth}px`;
+      const nextSeamAlpha = String(next.seamAlpha);
+      const nextFeatherInset = `${next.featherInset}px`;
+      if (lastExtWidth !== nextExtWidth) {
+        wrapper.style.setProperty("--pmx-sky-ext-width", nextExtWidth);
+        lastExtWidth = nextExtWidth;
+      }
+      if (lastSeamAlpha !== nextSeamAlpha) {
+        wrapper.style.setProperty("--pmx-sky-seam-alpha", nextSeamAlpha);
+        lastSeamAlpha = nextSeamAlpha;
+      }
+      if (lastFeatherInset !== nextFeatherInset) {
+        wrapper.style.setProperty("--pmx-sky-right-feather-inset", nextFeatherInset);
+        lastFeatherInset = nextFeatherInset;
+      }
 
       setMetrics((prev) =>
         prev.extensionWidth === next.extensionWidth &&
@@ -200,7 +283,7 @@ export function SidebarSkyTopbarExtension({
     };
 
     const scheduleMeasure = () => {
-      if (rafId !== null) return;
+      if (disposed || rafId !== null) return;
       rafId = window.requestAnimationFrame(measure);
     };
 
@@ -209,29 +292,23 @@ export function SidebarSkyTopbarExtension({
       scheduleMeasure();
     }
 
-    const resizeTargets: Element[] = [wrapper];
-    const sidebarContainer = wrapper.querySelector<HTMLElement>('[data-slot="sidebar-container"]');
-    if (sidebarContainer) resizeTargets.push(sidebarContainer);
-    const tabBar = wrapper.querySelector<HTMLElement>("[data-workspace-tabbar]");
-    if (tabBar) resizeTargets.push(tabBar);
-    const stopObservingResize = observeResize(resizeTargets, scheduleMeasure);
-
-    const mutationObserver =
+    const wrapperObserver =
       typeof MutationObserver === "function"
         ? new MutationObserver(scheduleMeasure)
         : null;
-    mutationObserver?.observe(wrapper, {
+    wrapperObserver?.observe(wrapper, {
       childList: true,
-      subtree: true,
       attributes: true,
-      attributeFilter: ["style", "data-workspace-tab", "data-sidebar-state"],
+      attributeFilter: ["data-sidebar-state", "data-sidebar-motion-phase"],
     });
     window.addEventListener("resize", scheduleMeasure);
 
     return () => {
+      disposed = true;
       if (rafId !== null) window.cancelAnimationFrame(rafId);
-      stopObservingResize();
-      mutationObserver?.disconnect();
+      resizeObserver?.disconnect();
+      tabBarObserver?.disconnect();
+      wrapperObserver?.disconnect();
       window.removeEventListener("resize", scheduleMeasure);
       clearSkyExtensionCssVars(wrapper);
     };

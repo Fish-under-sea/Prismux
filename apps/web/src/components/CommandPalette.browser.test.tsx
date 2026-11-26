@@ -1,3 +1,6 @@
+import "~/index.css";
+
+import { useState } from "react";
 import { threadKey } from "@prismux/client-runtime/state/entities";
 import { EnvironmentId, ProjectId, ThreadId } from "@prismux/core-contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -10,6 +13,7 @@ import { LAST_USED_PROJECT_STORAGE_KEY } from "../hooks/useHandleNewThread";
 import { removeLocalStorageItem } from "../hooks/useLocalStorage";
 import { makeThreadFixture } from "../test-fixtures";
 import type { Project, Thread } from "../types";
+import { AppRouteModal } from "./AppRouteModal";
 import { CommandPalette } from "./CommandPalette";
 
 const entities = vi.hoisted(() => ({
@@ -307,5 +311,75 @@ describe("CommandPalette open intents", () => {
         projectId: ProjectId.make("lima"),
       }),
     );
+  });
+
+  it("isolates AppRouteModal as a sibling of CommandDialog so Esc -> immediate Settings open has zero nested-dialog race or focus steal", async () => {
+    setup();
+
+    function WorkspaceWithSettingsModal() {
+      const [settingsOpen, setSettingsOpen] = useState(false);
+      return (
+        <CommandPalette>
+          <div data-testid="workspace-shell">
+            <button type="button" onClick={() => setSettingsOpen(true)}>
+              Open Settings
+            </button>
+            {settingsOpen ? (
+              <AppRouteModal label="Settings">
+                <input aria-label="Settings search field" />
+              </AppRouteModal>
+            ) : null}
+          </div>
+        </CommandPalette>
+      );
+    }
+
+    await using _screen = await render(<WorkspaceWithSettingsModal />, {
+      router: "/settings/general",
+    });
+
+    // 1. Open CommandPalette: workspace becomes inert and palette input gets focus
+    openCommandPalette({});
+    const paletteInput = page.getByPlaceholder("Search commands, projects, and threads...");
+    await expect.element(paletteInput).toHaveFocus();
+    const workspaceShell = page.getByTestId("workspace-shell").element() as HTMLElement;
+    expect(workspaceShell.closest("[inert]")).not.toBeNull();
+    // Workspace must NOT be nested inside the CommandDialog popup/root DOM
+    expect(workspaceShell.closest('[role="dialog"]')).toBeNull();
+
+    // 2. Press Esc to start closing CommandPalette (200ms exit transition), then IMMEDIATELY open Settings
+    await userEvent.keyboard("{Escape}");
+    expect(useCommandPaletteStore.getState().open).toBe(false);
+    expect(workspaceShell.closest("[inert]")).toBeNull();
+
+    await act(() => {
+      (page.getByRole("button", { name: "Open Settings" }).element() as HTMLElement).click();
+    });
+
+    const settingsDialog = page.getByRole("dialog", { name: "Settings" });
+    await expect.element(settingsDialog).toBeVisible();
+    const settingsEl = settingsDialog.element() as HTMLElement;
+
+    // AppRouteModal must NOT be treated by Base UI as a nested dialog of CommandDialog
+    expect(settingsEl.hasAttribute("data-nested")).toBe(false);
+    expect(settingsEl.getAttribute("data-app-modal")).toBe("");
+    const palettePopup = document.querySelector<HTMLElement>("[data-command-palette]");
+    expect(palettePopup?.style.getPropertyValue("--nested-dialogs") ?? "").toBe("");
+
+    // Wait deterministically for CommandDialog's exit animation to unmount and AppRouteModal to reach full opacity
+    await vi.waitFor(
+      () => {
+        expect(document.querySelector("[data-command-palette]")).toBeNull();
+        expect(Number.parseFloat(getComputedStyle(settingsEl).opacity)).toBeGreaterThan(0.95);
+      },
+      { timeout: 1000 },
+    );
+
+    // Settings input stays interactive and focus is never stolen away
+    const settingsInput = page.getByRole("textbox", { name: "Settings search field" });
+    await settingsInput.click();
+    await userEvent.keyboard("appearance");
+    await expect.element(settingsInput).toHaveFocus();
+    await expect.element(settingsInput).toHaveValue("appearance");
   });
 });

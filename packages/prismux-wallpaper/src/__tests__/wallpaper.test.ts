@@ -28,6 +28,7 @@ import {
   computeWallpaperStageStyles,
   dispatchWebWallpaperRuntimeState,
   disposeVideoElement,
+  disposeWebWallGLCanvas,
   resolveEffectiveLiveFps,
   silenceAndBlankIframe,
   WATCHDOG_BACKOFF_MS,
@@ -51,6 +52,7 @@ import {
 import {
   computeFilterCounts,
   computeVirtualWindow,
+  createBlobUrlRegistry,
   createWallpaperStore,
   filterPlayableWallpapers,
   filterVisibleWallpapers,
@@ -1549,5 +1551,75 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
     assert.match(panelCss, /\.pmx-wp-qp__card--gated/);
     assert.match(panelCss, /\.pmx-wp-card--gated/);
     assert.match(panelCss, /\.pmx-wp-gate-banner\s*\{/);
+  });
+
+  it("releases WebWallGL contexts via WEBGL_lose_context + zeroed canvas and revokes offline blob URLs on replace/remove/reset", () => {
+    // L1: WebWallGL cleanup calls deleteBuffer, deleteProgram, WEBGL_lose_context.loseContext(), and zeroes canvas dimensions
+    const calls: string[] = [];
+    const fakeCanvas = { width: 1920, height: 1080 };
+    const fakeBuf = {} as WebGLBuffer;
+    const fakeProg = {} as WebGLProgram;
+    const fakeGl = {
+      deleteBuffer: (buf: WebGLBuffer | null) => {
+        if (buf === fakeBuf) calls.push("deleteBuffer");
+      },
+      deleteProgram: (prog: WebGLProgram | null) => {
+        if (prog === fakeProg) calls.push("deleteProgram");
+      },
+      getExtension: (name: "WEBGL_lose_context") => {
+        calls.push(`getExtension:${name}`);
+        return {
+          loseContext: () => {
+            calls.push("loseContext");
+          },
+        };
+      },
+    };
+    disposeWebWallGLCanvas(fakeCanvas, fakeGl, fakeBuf, fakeProg);
+    assert.deepEqual(calls, [
+      "deleteBuffer",
+      "deleteProgram",
+      "getExtension:WEBGL_lose_context",
+      "loseContext",
+    ]);
+    assert.equal(fakeCanvas.width, 0);
+    assert.equal(fakeCanvas.height, 0);
+
+    // L3: BlobUrlRegistry tracks offline blob URLs and revokes on replace, remove, reconcile, and revokeAll
+    const revoked: string[] = [];
+    const registry = createBlobUrlRegistry((url) => revoked.push(url));
+    registry.track("local-1", "blob:http://localhost/one");
+    registry.track("local-2", "blob:http://localhost/two");
+    assert.equal(registry.size, 2);
+
+    // Replacing same ID revokes previous URL immediately
+    registry.track("local-1", "blob:http://localhost/one-v2");
+    assert.deepEqual(revoked, ["blob:http://localhost/one"]);
+    assert.equal(registry.size, 2);
+
+    // Reconciling against updated wallpaper inventory revokes removed & URL-replaced items
+    registry.reconcile([
+      {
+        id: "local-1",
+        mediaUrl: "blob:http://localhost/one-v2",
+        previewUrl: "blob:http://localhost/one-v2",
+      },
+      {
+        id: "local-2",
+        mediaUrl: "http://127.0.0.1:47910/v1/wallpapers/media/local-2",
+        previewUrl: null,
+      },
+    ]);
+    assert.deepEqual(revoked, ["blob:http://localhost/one", "blob:http://localhost/two"]);
+    assert.equal(registry.size, 1);
+
+    // revokeAll clears remaining tracked URLs on reset/unmount
+    registry.revokeAll();
+    assert.deepEqual(revoked, [
+      "blob:http://localhost/one",
+      "blob:http://localhost/two",
+      "blob:http://localhost/one-v2",
+    ]);
+    assert.equal(registry.size, 0);
   });
 });

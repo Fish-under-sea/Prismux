@@ -19,10 +19,11 @@ import {
   PlaybackEffectsSection,
 } from "./renderers/PlaybackSections.js";
 import { UserPropsDrillPanel } from "./renderers/UserPropsDrillPanel.js";
-import type { WallpaperStore } from "./store.js";
+import type { BlobUrlRegistry, WallpaperStore } from "./store.js";
 import {
   computeFilterCounts,
   computeVirtualWindow,
+  createBlobUrlRegistry,
   filterVisibleWallpapers,
   findWallpaperById,
   isWallpaperGatedByEngine,
@@ -284,6 +285,21 @@ export function WallpaperSettingsView({
   const [enablingEngine, setEnablingEngine] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const gridRef = useRef<HTMLDivElement | null>(null);
+  const offlineBlobRegistryRef = useRef<BlobUrlRegistry | null>(null);
+  offlineBlobRegistryRef.current ??= createBlobUrlRegistry();
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- reconciles browser object URLs with external wallpaper inventory to prevent blob memory leaks
+  useEffect(() => {
+    offlineBlobRegistryRef.current?.reconcile(wallpapers);
+  }, [wallpapers]);
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- revokes browser object URLs held by this settings view on unmount
+  useEffect(() => {
+    const registry = offlineBlobRegistryRef.current;
+    return () => {
+      registry?.revokeAll();
+    };
+  }, []);
 
   const current = useMemo(
     () => findWallpaperById(wallpapers, settings.selectedId),
@@ -366,9 +382,11 @@ export function WallpaperSettingsView({
         const created: WallpaperItem[] = [];
         for (const f of Array.from(files)) {
           const isVideo = f.type.startsWith("video/") || /\.(mp4|webm|mov)$/i.test(f.name);
+          const id = `custom:local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
           const url = URL.createObjectURL(f);
+          offlineBlobRegistryRef.current?.track(id, url);
           created.push({
-            id: `custom:local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+            id,
             title: f.name.replace(/\.[^.]+$/, ""),
             type: isVideo ? "video" : "image",
             source: "custom",
@@ -1337,6 +1355,15 @@ export function WallpaperSettingsView({
               armed={armedConfirm === "resetAll"}
               prompt="确定要将所有壁纸与播放设置恢复为出厂默认吗？此操作不可撤销。"
               onConfirm={() => {
+                const registry = offlineBlobRegistryRef.current;
+                if (registry && registry.size > 0) {
+                  const blobIds = new Set(registry.ids());
+                  store.setWallpapers(wallpapers.filter((item) => !blobIds.has(item.id)));
+                  if (settings.selectedId && blobIds.has(settings.selectedId)) {
+                    store.clearWallpaper();
+                  }
+                  registry.revokeAll();
+                }
                 store.resetTab("library");
                 store.resetTab("playback");
                 store.resetTab("rotation");

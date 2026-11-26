@@ -1406,6 +1406,77 @@ export function createWallpaperStore(
   return store;
 }
 
+export interface BlobUrlRegistry {
+  track(id: string, url: string): void;
+  revoke(id: string): void;
+  reconcile(items: readonly Pick<WallpaperItem, "id" | "mediaUrl" | "previewUrl">[]): void;
+  revokeAll(): void;
+  ids(): string[];
+  readonly size: number;
+}
+
+/**
+ * Tracks offline-imported `URL.createObjectURL` URLs by wallpaper ID and revokes them
+ * whenever an entry is replaced, removed, reset, or its owner unmounts.
+ */
+export function createBlobUrlRegistry(
+  revokeFn: (url: string) => void = (url) => {
+    if (typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") {
+      URL.revokeObjectURL(url);
+    }
+  },
+): BlobUrlRegistry {
+  const urls = new Map<string, string>();
+  const safeRevoke = (url: string) => {
+    try {
+      revokeFn(url);
+    } catch {
+      // Ignore already-revoked or restricted-env revoke errors
+    }
+  };
+  return {
+    track(id, url) {
+      const existing = urls.get(id);
+      if (existing && existing !== url) {
+        safeRevoke(existing);
+      }
+      urls.set(id, url);
+    },
+    revoke(id) {
+      const existing = urls.get(id);
+      if (!existing) return;
+      urls.delete(id);
+      safeRevoke(existing);
+    },
+    reconcile(items) {
+      if (urls.size === 0) return;
+      const byId = new Map<string, Pick<WallpaperItem, "id" | "mediaUrl" | "previewUrl">>();
+      for (const item of items) {
+        byId.set(item.id, item);
+      }
+      for (const [id, url] of urls.entries()) {
+        const current = byId.get(id);
+        if (!current || (current.mediaUrl !== url && current.previewUrl !== url)) {
+          urls.delete(id);
+          safeRevoke(url);
+        }
+      }
+    },
+    revokeAll() {
+      for (const url of urls.values()) {
+        safeRevoke(url);
+      }
+      urls.clear();
+    },
+    ids() {
+      return [...urls.keys()];
+    },
+    get size() {
+      return urls.size;
+    },
+  };
+}
+
 export function useWallpaperStore(store: WallpaperStore): WallpaperRuntimeSnapshot {
   return useSyncExternalStore(
     store.subscribe,

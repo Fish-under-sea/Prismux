@@ -1,9 +1,11 @@
+import { useState } from "react";
 import { page, userEvent } from "vite-plus/test/browser";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import "~/index.css";
 
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
+import { SidebarSkyTopbarExtension } from "../SidebarStageBackdrop";
 import { Sidebar, SidebarProvider, SidebarRail, SidebarTrigger, useSidebar } from "./sidebar";
 
 function CollapseFromInside() {
@@ -180,4 +182,98 @@ it("opens the mobile sheet without a transition while panel animations are off",
   const popup = document.querySelector<HTMLElement>('[data-mobile="true"][data-sidebar="sidebar"]');
   expect(popup).not.toBeNull();
   expect(getComputedStyle(popup!).transitionDuration).toBe("0s");
+});
+
+it("memoizes SidebarProvider context value across unrelated parent rerenders", async () => {
+  await page.viewport(1280, 800);
+  const seenContexts: Array<ReturnType<typeof useSidebar>> = [];
+
+  function ContextProbe() {
+    const ctx = useSidebar();
+    seenContexts.push(ctx);
+    return <output data-testid="sidebar-state">{ctx.state}</output>;
+  }
+
+  function ParentHarness() {
+    const [tick, setTick] = useState(0);
+    return (
+      <>
+        <button type="button" onClick={() => setTick((v) => v + 1)}>
+          Bump {tick}
+        </button>
+        <SidebarProvider defaultOpen>
+          <ContextProbe />
+        </SidebarProvider>
+      </>
+    );
+  }
+
+  await using screen = await render(<ParentHarness />, { router: false });
+  const initialCtx = seenContexts.at(-1);
+  expect(initialCtx).toBeDefined();
+
+  await act(() => {
+    (screen.getByRole("button", { name: /Bump/ }).element() as HTMLElement).click();
+  });
+  await act(() => {
+    (screen.getByRole("button", { name: /Bump/ }).element() as HTMLElement).click();
+  });
+
+  // Even across parent rerenders, contextValue reference remains identical
+  expect(seenContexts.at(-1)).toBe(initialCtx);
+});
+
+it("does not thrash or rewrite unchanged sky CSS variables when inner child style attributes mutate", async () => {
+  await page.viewport(1280, 800);
+  await using screen = await render(
+    <SidebarProvider defaultOpen>
+      <div data-slot="sidebar-container" style={{ width: 280, height: 600 }} />
+      <div
+        data-workspace-tabbar="pane-1"
+        style={{ position: "absolute", left: 340, top: 0, height: 38 }}
+      >
+        <div data-workspace-tab="tab-1">Tab 1</div>
+      </div>
+      <div data-testid="inner-scroll-viewport" />
+      <SidebarSkyTopbarExtension minutesOverride={10 * 60 + 30} />
+    </SidebarProvider>,
+    { router: false },
+  );
+
+  const wrapper = screen.container.querySelector<HTMLElement>('[data-slot="sidebar-wrapper"]')!;
+  await vi.waitFor(() => {
+    expect(wrapper.style.getPropertyValue("--pmx-sky-ext-width")).not.toBe("");
+  });
+  const initialExtWidth = wrapper.style.getPropertyValue("--pmx-sky-ext-width");
+
+  const setPropertySpy = vi.spyOn(wrapper.style, "setProperty");
+  const rafSpy = vi.spyOn(window, "requestAnimationFrame");
+  const innerViewport = screen.getByTestId("inner-scroll-viewport").element() as HTMLElement;
+  const sidebarContainer = screen.container.querySelector<HTMLElement>(
+    '[data-slot="sidebar-container"]',
+  )!;
+
+  try {
+    // Simulate ScrollArea writing CSS vars to an inner descendant's style attribute repeatedly
+    for (let i = 0; i < 10; i += 1) {
+      innerViewport.style.setProperty("--scroll-area-overflow-y-end", `${i * 8}px`);
+    }
+    // Flush MutationObserver microtasks; inner child style edits must schedule zero sky recalcs or CSS writes
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(rafSpy).not.toHaveBeenCalled();
+    expect(setPropertySpy).not.toHaveBeenCalled();
+
+    // Resizing the sidebar container itself still triggers a real update via targeted ResizeObserver
+    sidebarContainer.style.width = "320px";
+    await vi.waitFor(() => {
+      expect(setPropertySpy).toHaveBeenCalledWith(
+        "--pmx-sky-ext-width",
+        expect.not.stringMatching(new RegExp(`^${initialExtWidth}$`)),
+      );
+    });
+  } finally {
+    rafSpy.mockRestore();
+    setPropertySpy.mockRestore();
+  }
 });

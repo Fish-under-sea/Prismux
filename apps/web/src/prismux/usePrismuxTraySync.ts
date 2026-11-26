@@ -195,11 +195,12 @@ export function usePrismuxTraySync(): void {
         | undefined;
       return {
         pathname: state.location.pathname,
-        environmentId: params?.environmentId,
-        threadId: params?.threadId,
-        draftId: params?.draftId,
+        environmentId: params?.environmentId ?? "",
+        threadId: params?.threadId ?? "",
+        draftId: params?.draftId ?? "",
       };
     },
+    structuralSharing: true,
   });
   const routeSnapshotRef = useRef(routeSnapshot);
   routeSnapshotRef.current = routeSnapshot;

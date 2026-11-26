@@ -515,10 +515,7 @@ function WebWallGLStageCanvas({
       if (!ro) {
         window.removeEventListener("resize", onFallbackResize);
       }
-      if (gl) {
-        if (posBuffer) gl.deleteBuffer(posBuffer);
-        if (program) gl.deleteProgram(program);
-      }
+      disposeWebWallGLCanvas(canvas, gl, posBuffer, program);
     };
   }, []);
 
@@ -567,6 +564,33 @@ function WebWallGLStageCanvas({
   );
 }
 
+export interface WebWallGLDisposableContextLike {
+  deleteBuffer(buffer: WebGLBuffer | null): void;
+  deleteProgram(program: WebGLProgram | null): void;
+  getExtension(name: "WEBGL_lose_context"): { loseContext(): void } | null;
+}
+
+export function disposeWebWallGLCanvas(
+  canvas: Pick<HTMLCanvasElement, "width" | "height"> | null | undefined,
+  gl: WebWallGLDisposableContextLike | null | undefined,
+  posBuffer: WebGLBuffer | null,
+  program: WebGLProgram | null,
+): void {
+  if (gl) {
+    try {
+      if (posBuffer) gl.deleteBuffer(posBuffer);
+      if (program) gl.deleteProgram(program);
+      gl.getExtension("WEBGL_lose_context")?.loseContext();
+    } catch {
+      // Ignore context-loss cleanup errors on torn-down canvases
+    }
+  }
+  if (canvas) {
+    canvas.width = 0;
+    canvas.height = 0;
+  }
+}
+
 function AmbientBackdrop({ src }: { src: string }) {
   return (
     <img
@@ -580,7 +604,7 @@ function AmbientBackdrop({ src }: { src: string }) {
   );
 }
 
-interface ImageCrossfadeStageProps {
+export interface ImageCrossfadeStageProps {
   src: string;
   slides?: string[];
   slideIntervalMs?: number | null;
@@ -590,7 +614,7 @@ interface ImageCrossfadeStageProps {
   transitionMs: number;
 }
 
-function ImageCrossfadeStage({
+export function ImageCrossfadeStage({
   src,
   slides,
   slideIntervalMs,
@@ -637,6 +661,20 @@ function ImageCrossfadeStage({
     };
   }, [effectiveSrc]);
 
+  // Release the faded-out previous 4K/8K bitmap once crossfade completes (fallback when transitionend does not fire).
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- schedules a timer to drop the faded-out previous wallpaper bitmap if transitionend never fires
+  useEffect(() => {
+    const previousSrc = slots.previous;
+    if (!previousSrc || !slots.ready) return;
+    const delayMs = transitionMs > 0 ? transitionMs + 50 : 0;
+    const timer = setTimeout(() => {
+      setSlots((prev) =>
+        prev.previous === previousSrc && prev.ready ? { ...prev, previous: null } : prev,
+      );
+    }, delayMs);
+    return () => clearTimeout(timer);
+  }, [slots.previous, slots.ready, transitionMs]);
+
   return (
     <>
       {showAmbient ? <AmbientBackdrop src={slots.current} /> : null}
@@ -645,7 +683,18 @@ function ImageCrossfadeStage({
           key={`prev:${slots.previous}`}
           src={slots.previous}
           alt=""
+          data-pmx-wp-slot="previous"
           className="pmx-wp-stage__media"
+          onTransitionEnd={(event) => {
+            if (event.propertyName === "opacity" && slots.ready && slots.previous) {
+              const finishedPrevious = slots.previous;
+              setSlots((prev) =>
+                prev.previous === finishedPrevious && prev.ready
+                  ? { ...prev, previous: null }
+                  : prev,
+              );
+            }
+          }}
           style={{
             ...mediaStyle,
             opacity: slots.ready ? 0 : 1,
@@ -657,8 +706,9 @@ function ImageCrossfadeStage({
         key={`curr:${slots.current}`}
         src={slots.current}
         alt=""
+        data-pmx-wp-slot="current"
         className="pmx-wp-stage__media"
-        onLoad={() => setSlots((prev) => ({ ...prev, ready: true }))}
+        onLoad={() => setSlots((prev) => (prev.ready ? prev : { ...prev, ready: true }))}
         style={{
           ...mediaStyle,
           opacity: slots.ready || !slots.previous ? 1 : 0,
