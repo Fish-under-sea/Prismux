@@ -73,7 +73,7 @@ it.effect(
           return span;
         },
       });
-      yield* runReplayFixture({
+      const result = yield* runReplayFixture({
         fixtureName: fixture.name,
         buildInput: fixture.buildInput,
         driver,
@@ -81,9 +81,14 @@ it.effect(
         materializeWorkspace: (transcript, workspace) =>
           Effect.succeed(materializeReplayTranscriptWorkspace(transcript, workspace)),
       }).pipe(Effect.withTracer(tracer), Effect.withTracerEnabled(true));
+      const contextInjectionWrites = [...result.projections.values()].reduce(
+        (total, projection) =>
+          total + projection.turnItems.filter((item) => item.type === "context_injection").length,
+        0,
+      );
       assert.equal(
         writes.reduce((total, count) => total + count, 0),
-        6,
+        6 + contextInjectionWrites,
       );
       assert.isTrue(writes.every((count) => count <= 3));
     }),

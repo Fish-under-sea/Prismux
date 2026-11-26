@@ -25,7 +25,13 @@ export const THREAD_HISTORY_INLINE_WORK_ITEM_LIMIT = 150;
 export const OLDER_THREAD_USER_TURN_LIMIT = 20;
 
 export function isConversationHistoryItem(item: Pick<OrchestrationV2TurnItem, "type">): boolean {
-  return !["command_execution", "reasoning", "file_change", "dynamic_tool"].includes(item.type);
+  return ![
+    "command_execution",
+    "reasoning",
+    "file_change",
+    "dynamic_tool",
+    "context_injection",
+  ].includes(item.type);
 }
 export const THREAD_HISTORY_MAX_RAW_TURNS = 150;
 

@@ -2115,6 +2115,163 @@ describe("AcpAdapterV2", () => {
       }).pipe(Effect.provide(layerTest)),
   );
 
+  it.live(
+    "emits deduplicated context_injection items from watchTurnUsage and preserves DSH skill toolName",
+    () =>
+      Effect.gen(function* () {
+        const instanceId = ProviderInstanceId.make("acp-dsh-ctx-skill");
+        const threadId = ThreadId.make("thread-acp-dsh-ctx-skill");
+        const promptGate = yield* Deferred.make<EffectAcpSchema.PromptResponse>();
+        let sessionUpdateHandler:
+          | Parameters<AcpSessionRuntime.AcpSessionRuntime["Service"]["handleSessionUpdate"]>[0]
+          | undefined;
+        let activeSessionId = "mock-dsh-ctx-session";
+        const dshInjections = [
+          {
+            nativeId: "dsh-ctx:10:agent-instructions",
+            sourceKey: "agent-instructions",
+            sourceKind: "agent-instructions" as const,
+            form: "instructions" as const,
+            label: "~/.dsh/AGENTS.md",
+            sourcePath: "~/.dsh/AGENTS.md",
+            statusLabel: "已载入",
+            digest: "digest-inst-1",
+            baseline: true,
+            files: [{ action: "set" as const, path: "~/.dsh/AGENTS.md", digest: "digest-inst-1" }],
+            content: "<system-reminder>\nRules\n</system-reminder>",
+            timestampMs: 1_794_083_211_685,
+          },
+          {
+            nativeId: "dsh-ctx:11:runtime-context",
+            sourceKey: "runtime-context",
+            sourceKind: "runtime-context" as const,
+            form: "snapshot" as const,
+            label: "runtime-context",
+            sourcePath: null,
+            statusLabel: "已载入",
+            digest: "digest-rt-1",
+            sections: [{ name: "working-directory", text: "/repo" }],
+            content: "working-directory: /repo",
+            timestampMs: 1_794_083_211_686,
+          },
+        ] as const;
+        const adapter = yield* makeAcpAdapterV2({
+          instanceId,
+          selfInvocation: yield* resolveSelfInvocation(),
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            watchTurnUsage: () =>
+              Effect.succeed({
+                sampleLive: () => Effect.undefined,
+                readContextInjections: () => Effect.succeed(dshInjections),
+                collectFinal: () =>
+                  Effect.succeed({
+                    contextInjections: dshInjections,
+                  }),
+              }),
+            makeRuntime: makeMockRuntime({
+              childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+              mockAgentPath: yield* bundledMockAgentPath,
+              environment: { PRISMUX_ACP_HANG_PROMPT_FOREVER: "1" },
+              wrapRuntime: (runtime) => ({
+                ...runtime,
+                start: () =>
+                  runtime.start().pipe(
+                    Effect.tap((started) =>
+                      Effect.sync(() => {
+                        activeSessionId = started.sessionId;
+                      }),
+                    ),
+                  ),
+                handleSessionUpdate: (handler) =>
+                  Effect.sync(() => {
+                    sessionUpdateHandler = handler;
+                  }).pipe(Effect.andThen(runtime.handleSessionUpdate(handler))),
+                prompt: () => Deferred.await(promptGate),
+              }),
+            }),
+          },
+        });
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtime = yield* adapter.openSession({
+          providerSessionId: ProviderSessionId.make("session-dsh-ctx-skill"),
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const eventQueue = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) => Queue.offer(eventQueue, event)),
+          Effect.forkScoped,
+        );
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const now = yield* DateTime.now;
+        yield* runtime.startTurn(
+          makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 1 }),
+        );
+        if (sessionUpdateHandler === undefined) {
+          return yield* Effect.die("sessionUpdateHandler must be registered");
+        }
+        yield* sessionUpdateHandler({
+          sessionId: activeSessionId,
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "dsh-skill-1",
+            title: "Skill: core-rules-dsh",
+            kind: "other",
+            status: "completed",
+            rawInput: { name: "core-rules-dsh" },
+            content: [
+              {
+                type: "content",
+                content: { type: "text", text: "# Core Rules\nAlways test." },
+              },
+            ],
+            _meta: { dshToolName: "skill", skillName: "core-rules-dsh" },
+          },
+        });
+        yield* Deferred.succeed(promptGate, { stopReason: "end_turn" });
+
+        const events: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
+        for (;;) {
+          const event = yield* Queue.take(eventQueue);
+          events.push(event);
+          if (event.type === "turn.terminal") break;
+        }
+
+        const ctxItems = events.flatMap((event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "context_injection"
+            ? [event.turnItem]
+            : [],
+        );
+        // Emitted once each with zero duplicates across startTurn + session_update + collectFinal.
+        assert.lengthOf(ctxItems, 2);
+        assert.deepEqual(
+          ctxItems.map((item) => item.label),
+          ["~/.dsh/AGENTS.md", "runtime-context"],
+        );
+
+        const skillItems = events.flatMap((event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "dynamic_tool"
+            ? [event.turnItem]
+            : [],
+        );
+        assert.lengthOf(skillItems, 1);
+        assert.equal(skillItems[0]?.toolName, "skill");
+        assert.equal(skillItems[0]?.title, "Skill: core-rules-dsh");
+      }).pipe(Effect.provide(layerTest)),
+  );
+
   it.live.each(["details", "none"] as const)(
     "fails the turn on an ACP v2 idle error with %s, settles its open tool, and accepts the next prompt",
     (details) =>
@@ -2755,7 +2912,10 @@ describe("AcpAdapterV2", () => {
     {
       // Without a `mode` category, T3 derives no mode state and only the config option switches.
       modeIds: "Copilot URL collaboration_mode",
-      environment: { PRISMUX_ACP_COPILOT_MODES: "1", PRISMUX_ACP_MODE_OPTION_CATEGORY: "collaboration_mode" },
+      environment: {
+        PRISMUX_ACP_COPILOT_MODES: "1",
+        PRISMUX_ACP_MODE_OPTION_CATEGORY: "collaboration_mode",
+      },
       planModeId: "https://agentclientprotocol.com/protocol/session-modes#plan",
       buildModeId: "https://agentclientprotocol.com/protocol/session-modes#agent",
     },
@@ -3237,7 +3397,9 @@ describe("AcpAdapterV2", () => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "prismux-acp-mode-only-" });
+      const directory = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "prismux-acp-mode-only-",
+      });
       const statusPath = path.join(directory, "status.json");
       const sessionId = "mode-only-session";
       const modeOption = (currentValue: string) => ({
@@ -5231,7 +5393,10 @@ describe("AcpAdapterV2", () => {
       assert.deepEqual(webItem("grok-web-search", "completed"), {
         title: "Web search: prismux",
         patterns: ["prismux"],
-        results: [{ url: "https://prismux.app" }, { url: "https://github.com/Fish-under-sea/Prismux" }],
+        results: [
+          { url: "https://prismux.app" },
+          { url: "https://github.com/Fish-under-sea/Prismux" },
+        ],
       });
       assert.deepEqual(webItem("antigravity-web-search", "completed"), {
         title: "Web search: top story on Hacker News today",
@@ -6099,7 +6264,9 @@ describe("AcpAdapterV2", () => {
       Effect.gen(function* () {
         const harness = yield* makePromptInactivityHarness({
           environment: (runtimeOrdinal) =>
-            runtimeOrdinal === 1 ? { PRISMUX_ACP_EMIT_TRACKED_TOOL_CALL_KIND_THEN_HANG: "execute" } : {},
+            runtimeOrdinal === 1
+              ? { PRISMUX_ACP_EMIT_TRACKED_TOOL_CALL_KIND_THEN_HANG: "execute" }
+              : {},
         });
         yield* harness.startTurn(1);
         yield* harness.runtime.events.pipe(
@@ -7464,8 +7631,9 @@ describe("AcpAdapterV2", () => {
           ? replacementMcpServer.env
           : undefined;
       assert.equal(
-        replacementMcpEnvironment?.find((variable) => variable.name === "PRISMUX_ACP_MCP_AUTHORIZATION")
-          ?.value,
+        replacementMcpEnvironment?.find(
+          (variable) => variable.name === "PRISMUX_ACP_MCP_AUTHORIZATION",
+        )?.value,
         "Bearer rollback-target-token",
       );
       const snapshotAfterRollback = yield* runtime.readThreadSnapshot({
@@ -9385,7 +9553,7 @@ describe("AcpAdapterV2", () => {
           capabilities: AcpProviderCapabilitiesV2,
           enablePostSettleContinuation: true,
           extractSubagentUpdate: (toolCall) =>
-            (toolCall.toolCallId !== "tool-call-generic-1"
+            toolCall.toolCallId !== "tool-call-generic-1"
               ? undefined
               : subagentPhase === "spawn"
                 ? {
@@ -9405,7 +9573,7 @@ describe("AcpAdapterV2", () => {
                     status: "completed",
                     childSessionId,
                     result: "SUB_DONE",
-                  }),
+                  },
           makeRuntime: makeMockRuntime({
             childProcessSpawner,
             mockAgentPath,

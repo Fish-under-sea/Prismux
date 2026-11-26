@@ -3388,84 +3388,89 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
-  it.effect("normalizes Pi TodoWrite and update_plan tool calls into todo_list plans and turn items", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const { runtime, takeEvent } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      yield* startTurn(runtime, providerThread);
-      yield* fake.takeRequest("prompt");
-      yield* fake.emit({ type: "agent_start" });
+  it.effect(
+    "normalizes Pi TodoWrite and update_plan tool calls into todo_list plans and turn items",
+    () =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakePi;
+        const { runtime, takeEvent } = yield* openRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+        yield* startTurn(runtime, providerThread);
+        yield* fake.takeRequest("prompt");
+        yield* fake.emit({ type: "agent_start" });
 
-      yield* fake.emit({
-        type: "tool_execution_start",
-        toolCallId: "todo-call-1",
-        toolName: "TodoWrite",
-        args: {
-          todos: [
-            { id: "s1", content: "Inspect adapter", status: "completed" },
-            { id: "s2", content: "Emit todo_list", status: "in_progress" },
-            { id: "s3", content: "Verify tests", status: "pending" },
-          ],
-        },
-      });
+        yield* fake.emit({
+          type: "tool_execution_start",
+          toolCallId: "todo-call-1",
+          toolName: "TodoWrite",
+          args: {
+            todos: [
+              { id: "s1", content: "Inspect adapter", status: "completed" },
+              { id: "s2", content: "Emit todo_list", status: "in_progress" },
+              { id: "s3", content: "Verify tests", status: "pending" },
+            ],
+          },
+        });
 
-      const firstPlan = yield* takeEvent((event) => event.type === "plan.updated");
-      const firstItem = yield* takeEvent(
-        (event) => event.type === "turn_item.updated" && event.turnItem.type === "todo_list",
-      );
-      if (firstPlan.type !== "plan.updated" || firstPlan.plan.kind !== "todo_list") {
-        return yield* Effect.die("Expected todo_list plan.updated event");
-      }
-      if (firstItem.type !== "turn_item.updated" || firstItem.turnItem.type !== "todo_list") {
-        return yield* Effect.die("Expected todo_list turn_item.updated event");
-      }
-      assert.equal(firstPlan.plan.status, "active");
-      assert.deepEqual(firstPlan.plan.steps, [
-        { id: "s1", text: "Inspect adapter", status: "completed" },
-        { id: "s2", text: "Emit todo_list", status: "running" },
-        { id: "s3", text: "Verify tests", status: "pending" },
-      ]);
-      assert.equal(firstItem.turnItem.planId, firstPlan.plan.id);
-      assert.equal(firstItem.turnItem.status, "running");
+        const firstPlan = yield* takeEvent((event) => event.type === "plan.updated");
+        const firstItem = yield* takeEvent(
+          (event) => event.type === "turn_item.updated" && event.turnItem.type === "todo_list",
+        );
+        if (firstPlan.type !== "plan.updated" || firstPlan.plan.kind !== "todo_list") {
+          return yield* Effect.die("Expected todo_list plan.updated event");
+        }
+        if (firstItem.type !== "turn_item.updated" || firstItem.turnItem.type !== "todo_list") {
+          return yield* Effect.die("Expected todo_list turn_item.updated event");
+        }
+        assert.equal(firstPlan.plan.status, "active");
+        assert.deepEqual(firstPlan.plan.steps, [
+          { id: "s1", text: "Inspect adapter", status: "completed" },
+          { id: "s2", text: "Emit todo_list", status: "running" },
+          { id: "s3", text: "Verify tests", status: "pending" },
+        ]);
+        assert.equal(firstItem.turnItem.planId, firstPlan.plan.id);
+        assert.equal(firstItem.turnItem.status, "running");
 
-      yield* fake.emit({
-        type: "tool_execution_end",
-        toolCallId: "todo-call-2",
-        toolName: "update_plan",
-        args: {
-          steps: [
-            { id: "s1", step: "Inspect adapter", status: "done" },
-            { id: "s2", step: "Emit todo_list", status: "completed" },
-            { id: "s3", step: "Verify tests", status: "completed" },
-          ],
-        },
-        result: { content: [{ type: "text", text: "ok" }] },
-        isError: false,
-      });
+        yield* fake.emit({
+          type: "tool_execution_end",
+          toolCallId: "todo-call-2",
+          toolName: "update_plan",
+          args: {
+            steps: [
+              { id: "s1", step: "Inspect adapter", status: "done" },
+              { id: "s2", step: "Emit todo_list", status: "completed" },
+              { id: "s3", step: "Verify tests", status: "completed" },
+            ],
+          },
+          result: { content: [{ type: "text", text: "ok" }] },
+          isError: false,
+        });
 
-      const completedPlan = yield* takeEvent((event) => event.type === "plan.updated");
-      const completedItem = yield* takeEvent(
-        (event) => event.type === "turn_item.updated" && event.turnItem.type === "todo_list",
-      );
-      if (completedPlan.type !== "plan.updated" || completedPlan.plan.kind !== "todo_list") {
-        return yield* Effect.die("Expected completed todo_list plan");
-      }
-      if (completedItem.type !== "turn_item.updated" || completedItem.turnItem.type !== "todo_list") {
-        return yield* Effect.die("Expected completed todo_list item");
-      }
-      assert.equal(completedPlan.plan.id, firstPlan.plan.id);
-      assert.equal(completedPlan.plan.status, "completed");
-      assert.equal(completedItem.turnItem.status, "completed");
-      assert.deepEqual(
-        completedPlan.plan.steps.map((step) => step.status),
-        ["completed", "completed", "completed"],
-      );
-    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+        const completedPlan = yield* takeEvent((event) => event.type === "plan.updated");
+        const completedItem = yield* takeEvent(
+          (event) => event.type === "turn_item.updated" && event.turnItem.type === "todo_list",
+        );
+        if (completedPlan.type !== "plan.updated" || completedPlan.plan.kind !== "todo_list") {
+          return yield* Effect.die("Expected completed todo_list plan");
+        }
+        if (
+          completedItem.type !== "turn_item.updated" ||
+          completedItem.turnItem.type !== "todo_list"
+        ) {
+          return yield* Effect.die("Expected completed todo_list item");
+        }
+        assert.equal(completedPlan.plan.id, firstPlan.plan.id);
+        assert.equal(completedPlan.plan.status, "completed");
+        assert.equal(completedItem.turnItem.status, "completed");
+        assert.deepEqual(
+          completedPlan.plan.steps.map((step) => step.status),
+          ["completed", "completed", "completed"],
+        );
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
   it.effect(
@@ -4294,7 +4299,123 @@ describe("PiAdapterV2", () => {
         completed.type === "provider_turn.updated" ? completed.providerTurn.tokenUsage : undefined,
         { inputTokens: 50_668, cachedInputTokens: 40_101 },
       );
+      assert.deepEqual(
+        completed.type === "provider_turn.updated"
+          ? completed.providerTurn.turnTokenUsage
+          : undefined,
+        {
+          usageScope: "main_agent",
+          usageStatus: "complete",
+          hasSubagents: false,
+          inputTokens: 50_668,
+          cachedInputTokens: 40_101,
+          cacheCreationTokens: 10_561,
+          outputTokens: 123,
+        },
+      );
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect(
+    "accumulates multi-step message_end token usage into turnTokenUsage across tool calls",
+    () =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakePi;
+        fake.queueState({
+          sessionFile: FAKE_SESSION_FILE,
+          model: { provider: "anthropic", id: "claude-sonnet-4-5", contextWindow: 200_000 },
+        });
+        const { runtime, takeEvent } = yield* openRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+        yield* startTurn(runtime, providerThread);
+        yield* fake.takeRequest("prompt");
+        yield* fake.emit({ type: "response", command: "prompt", success: true });
+        yield* fake.emit({ type: "agent_start" });
+
+        // Step 1: tool-use step with cacheWrite + reasoning
+        yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
+        yield* fake.emit({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "claude-sonnet-4-5",
+            usage: {
+              input: 1_000,
+              cacheRead: 4_000,
+              cacheWrite: 500,
+              output: 200,
+              reasoning: 60,
+              totalTokens: 5_700,
+            },
+            stopReason: "tool_use",
+          },
+        });
+        yield* fake.emit({
+          type: "tool_execution_start",
+          toolCallId: "tc-1",
+          toolName: "read",
+          args: { path: "README.md" },
+        });
+        yield* fake.emit({
+          type: "tool_execution_end",
+          toolCallId: "tc-1",
+          toolName: "read",
+          isError: false,
+          result: { content: [{ type: "text", text: "ok" }] },
+        });
+
+        // Step 2: final answer step with cacheRead + reasoning
+        yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
+        yield* fake.emit({
+          type: "message_update",
+          usage: {
+            input: 250,
+            cacheRead: 5_500,
+            cacheWrite: 100,
+            output: 350,
+            reasoning: 90,
+            totalTokens: 6_200,
+          },
+          assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "All set." },
+        });
+        yield* fake.emit({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "claude-sonnet-4-5",
+            content: [{ type: "text", text: "All set." }],
+            stopReason: "stop",
+          },
+        });
+
+        yield* fake.emit({ type: "agent_settled" });
+        const completed = yield* takeEvent(
+          (event) =>
+            event.type === "provider_turn.updated" && event.providerTurn.status === "completed",
+        );
+        assert.deepEqual(
+          completed.type === "provider_turn.updated"
+            ? completed.providerTurn.turnTokenUsage
+            : undefined,
+          {
+            usageScope: "main_agent",
+            usageStatus: "complete",
+            hasSubagents: false,
+            inputTokens: 1_000 + 4_000 + 500 + (250 + 5_500 + 100),
+            cachedInputTokens: 4_000 + 5_500,
+            cacheCreationTokens: 500 + 100,
+            outputTokens: 200 + 350,
+            reasoningTokens: 60 + 90,
+            models: ["anthropic/claude-sonnet-4-5"],
+          },
+        );
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
   it.effect.each(["turn window", "full tree"] as const)(

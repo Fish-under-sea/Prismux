@@ -360,7 +360,9 @@ export const AntigravityDriver: ProviderDriver<
         });
         yield* Effect.addFinalizer(() =>
           sessionId
-            ? runtime.deleteSession(sessionId).pipe(Effect.timeoutOption("5 seconds"), Effect.ignore)
+            ? runtime
+                .deleteSession(sessionId)
+                .pipe(Effect.timeoutOption("5 seconds"), Effect.ignore)
             : Effect.void,
         );
         return {
@@ -485,8 +487,8 @@ export const AntigravityDriver: ProviderDriver<
       probe,
       probeUsage: usage.probe,
       clearUsage: usage.clear,
-      hydrateCatalog: Effect.suspend(
-        (): Effect.Effect<void> => refreshModels().pipe(Effect.ignore),
+      hydrateCatalog: Effect.suspend((): Effect.Effect<void> =>
+        refreshModels().pipe(Effect.ignore),
       ),
       auth: { type: auth.authMethod, label: antigravityAuthLabel(auth.authMethod) },
       ...(rememberedRuntimeModes ? { rememberedRuntimeModes } : {}),
@@ -542,6 +544,20 @@ export const AntigravityDriver: ProviderDriver<
           : Effect.void;
       },
       continuationRequests,
+      getDiscoveredSkills: (cwd) =>
+        provider.snapshot.getSnapshot.pipe(
+          Effect.map((snapshot) => {
+            const workspace = snapshot.workspaceSnapshots?.find((entry) => entry.cwd === cwd);
+            const skills = workspace?.skills ?? snapshot.skills ?? [];
+            return skills
+              .filter((skill) => skill.enabled)
+              .map((skill) => ({
+                name: skill.name,
+                ...(skill.description ? { description: skill.description } : {}),
+              }));
+          }),
+          Effect.orElseSucceed(() => []),
+        ),
       nativeLogging: (threadId) =>
         makeNativeLogger({
           nativeEventLogger: loggers.native,

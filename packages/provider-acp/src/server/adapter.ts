@@ -74,6 +74,10 @@ import type * as EffectAcpSchema from "@prismux/effect-acp/compat";
 
 import { formatReadToolLabel, formatSearchToolLabel } from "@prismux/core-shared/toolActivity";
 import { isWorkspaceImagePreviewPath } from "@prismux/core-shared/mediaPreview";
+import {
+  buildContextInjectionTurnItem,
+  type TrackedContextInjectionPayload,
+} from "@prismux/provider-core/server/contextInjectionTracker";
 import * as ProviderHost from "@prismux/provider-core/server/ProviderHost";
 import { makeAcpMcpOverAcpBridge, type AcpMcpOverAcpBridge } from "./mcpOverAcpBridge.ts";
 import { mcpToolPresentation } from "@prismux/provider-core/server/mcpToolPresentation";
@@ -384,14 +388,21 @@ export interface AcpTurnLiveTokenUsage {
   readonly durationMs?: number;
 }
 
+export interface AcpTurnContextInjection extends TrackedContextInjectionPayload {
+  readonly nativeId?: string | undefined;
+  readonly timestampMs?: number | undefined;
+}
+
 export interface AcpTurnUsageSample {
   readonly usage?: TurnTokenUsage;
   readonly liveTokenUsage?: AcpTurnLiveTokenUsage;
   readonly models?: ReadonlyArray<string>;
+  readonly contextInjections?: ReadonlyArray<AcpTurnContextInjection>;
 }
 
 export interface AcpTurnUsageWatcher {
   readonly sampleLive: () => Effect.Effect<AcpTurnUsageSample | undefined>;
+  readonly readContextInjections?: () => Effect.Effect<ReadonlyArray<AcpTurnContextInjection>>;
   readonly collectFinal: () => Effect.Effect<AcpTurnUsageSample | undefined>;
 }
 
@@ -499,6 +510,16 @@ export interface AcpAdapterV2Flavor {
     readonly sessionId: string;
     readonly cwd: string;
   }) => Effect.Effect<AcpTurnUsageWatcher | undefined>;
+  /**
+   * Optional read-only per-turn context injection observer (0 LLM prompt token overhead)
+   * for ACP agents that do not write structured context injections to a local session log.
+   */
+  readonly readTurnContextInjections?: (input: {
+    readonly providerThreadId: ProviderThreadId;
+    readonly sessionId: string;
+    readonly cwd: string;
+    readonly turnInput: ProviderAdapter.ProviderAdapterV2TurnInput;
+  }) => Effect.Effect<ReadonlyArray<AcpTurnContextInjection>>;
   readonly requiresSignIn?: (cause: unknown) => boolean;
   /**
    * Runs before attachment paths, T3 instructions and native slash-command detection,
@@ -1842,6 +1863,7 @@ interface ActiveAcpTurn {
   turnUsageWatcher: AcpTurnUsageWatcher | undefined;
   observedTurnUsage: AcpTurnUsageSample | undefined;
   liveTokenUsage: OrchestrationV2ProviderTurnTokenUsage | undefined;
+  readonly emittedContextInjectionKeys: Set<string>;
   backgroundFinalizeGeneration: number;
   /** `replyEndsWithUsageUpdate`: output arrived and its closing `usage_update` has not. */
   replyOpen: boolean;
@@ -2441,7 +2463,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const configuredRuntimeMode = yield* Ref.make<
           ProviderAdapter.ProviderAdapterV2RuntimePolicy["runtimeMode"] | null
         >(null);
-        const promptInstructionStates = yield* Ref.make(new Map<string, PrismuxAcpInstructionState>());
+        const promptInstructionStates = yield* Ref.make(
+          new Map<string, PrismuxAcpInstructionState>(),
+        );
         const promptRuntimeInstructions = yield* Ref.make(new Map<string, string>());
         // Unique markers keep delayed prompt completions from clearing later compactions.
         const compactionMarkers = yield* Ref.make(new Map<string, symbol>());
@@ -4713,7 +4737,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           }
           const todoPlanUpdate =
             flavor.extractTodoPlanUpdate?.(toolCall) ?? extractAcpTodoToolPlanUpdate(toolCall);
-          if (todoPlanUpdate !== undefined && todoPlanUpdate.kind === "items" && todoPlanUpdate.plan.length > 0) {
+          if (
+            todoPlanUpdate !== undefined &&
+            todoPlanUpdate.kind === "items" &&
+            todoPlanUpdate.plan.length > 0
+          ) {
             yield* emitPlan(context, todoPlanUpdate, false).pipe(Effect.orDie);
             if (previous === undefined || context.todoPlanToolCallIds.has(toolCall.toolCallId)) {
               context.todoPlanToolCallIds.add(toolCall.toolCallId);
@@ -5061,10 +5089,16 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     ...(inputVariant === "monitor" ? { monitor: true } : {}),
                   };
                 } else {
+                  const toolMeta = unknownRecord(toolCall.data.meta);
+                  const dshToolName =
+                    typeof toolMeta?.dshToolName === "string"
+                      ? toolMeta.dshToolName.trim().toLowerCase()
+                      : undefined;
                   turnItem = {
                     ...base,
                     type: "dynamic_tool",
-                    toolName: toolCall.title ?? toolCall.kind ?? null,
+                    toolName:
+                      dshToolName === "skill" ? "skill" : (toolCall.title ?? toolCall.kind ?? null),
                     input: rawInput ?? {},
                     ...(rawOutput === undefined ? {} : { output: rawOutput }),
                   };
@@ -5073,6 +5107,55 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           }
           yield* emitProviderEvent({ type: "turn_item.updated", driver, turnItem });
           yield* rearmDeferredFinalize(context);
+        });
+
+        const emitContextInjections = Effect.fnUntraced(function* (
+          context: ActiveAcpTurn,
+          injections: ReadonlyArray<AcpTurnContextInjection> | undefined,
+        ) {
+          if (injections === undefined || injections.length === 0) return;
+          for (const injection of injections) {
+            const dedupeKey = injection.nativeId ?? `${injection.sourceKey}:${injection.digest}`;
+            if (context.emittedContextInjectionKeys.has(dedupeKey)) continue;
+            context.emittedContextInjectionKeys.add(dedupeKey);
+            const nativeItemId =
+              injection.nativeId !== undefined
+                ? `${context.nativeThreadId}:ctx:${injection.nativeId}`
+                : `${context.nativeTurnId}:ctx:${injection.sourceKey}:${injection.digest.slice(0, 12)}`;
+            const occurredAt =
+              injection.timestampMs !== undefined &&
+              Number.isFinite(injection.timestampMs) &&
+              injection.timestampMs > 0
+                ? DateTime.makeUnsafe(injection.timestampMs)
+                : yield* DateTime.now;
+            const ordinal = yield* resolveItemOrdinal(context, nativeItemId);
+            yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver,
+              turnItem: buildContextInjectionTurnItem({
+                id: idAllocator.derive.turnItemFromProviderItem({ driver, nativeItemId }),
+                threadId: context.input.threadId,
+                runId: context.input.runId,
+                nodeId: context.input.rootNodeId,
+                providerThreadId: context.input.providerThread.id,
+                providerTurnId: context.providerTurnId,
+                nativeItemRef: { driver, nativeId: nativeItemId, strength: "weak" },
+                ordinal,
+                occurredAt,
+                payload: injection,
+              }),
+            });
+          }
+        });
+
+        const pollWatcherContextInjections = Effect.fnUntraced(function* (context: ActiveAcpTurn) {
+          if (context.turnUsageWatcher?.readContextInjections === undefined) return;
+          const injections = yield* context.turnUsageWatcher
+            .readContextInjections()
+            .pipe(
+              Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<AcpTurnContextInjection>)),
+            );
+          yield* emitContextInjections(context, injections);
         });
 
         /**
@@ -5882,6 +5965,16 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             return;
           if (yield* projectAgentTerminalUpdate(notification, context)) return;
           if (yield* projectDetachedBackgroundCommand(notification, context)) return;
+          if (
+            context !== null &&
+            context.nativeThreadId === notification.sessionId &&
+            !context.finalized &&
+            context.turnUsageWatcher?.readContextInjections !== undefined &&
+            (update.sessionUpdate === "usage_update" ||
+              acpRootSessionUpdateIngestsOutput(notification))
+          ) {
+            yield* pollWatcherContextInjections(context);
+          }
           if (flavor.replyEndsWithUsageUpdate === true) {
             if (context === null) {
               // A reply can end before its continuation run starts; replay its end with its output.
@@ -5933,10 +6026,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   });
                   if (liveTokenUsage !== undefined) {
                     context.liveTokenUsage = liveTokenUsage;
-                    effectiveContextUsage = enrichAcpContextUsage(
-                      stateEvent.usage,
-                      liveTokenUsage,
-                    );
+                    effectiveContextUsage = enrichAcpContextUsage(stateEvent.usage, liveTokenUsage);
                     const reportedModel =
                       effectiveSample.models?.at(-1) ?? effectiveSample.usage?.models?.at(-1);
                     const liveTurn: OrchestrationV2ProviderTurn = {
@@ -8923,6 +9013,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               .pipe(Effect.catchCause(() => Effect.undefined));
             if (finalSample !== undefined) {
               context.observedTurnUsage = finalSample;
+              if (finalSample.contextInjections !== undefined) {
+                yield* emitContextInjections(context, finalSample.contextInjections);
+              }
               const finalLiveTokenUsage = buildAcpProviderTurnTokenUsage({
                 contextUsage: context.contextUsage,
                 sample: finalSample,
@@ -8942,6 +9035,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 }
               }
             }
+            yield* pollWatcherContextInjections(context);
           }
           const turn = providerTurnPayload(context, settledStatus, now);
           yield* Ref.update(providerTurns, (current) => {
@@ -9814,6 +9908,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               turnUsageWatcher,
               observedTurnUsage: undefined,
               liveTokenUsage: undefined,
+              emittedContextInjectionKeys: new Set(),
               backgroundFinalizeGeneration: 0,
               replyOpen: false,
               nativePromptId: undefined,
@@ -9848,6 +9943,22 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               threadId: turnInput.threadId,
               providerTurn: runningTurn,
             });
+            if (!isContinuationTurn && flavor.readTurnContextInjections !== undefined) {
+              const observedInjections = yield* flavor
+                .readTurnContextInjections({
+                  providerThreadId: turnInput.providerThread.id,
+                  sessionId: requestedSessionId,
+                  cwd: turnInput.runtimePolicy.cwd ?? providerSession.cwd,
+                  turnInput,
+                })
+                .pipe(
+                  Effect.catchCause(() =>
+                    Effect.succeed([] as ReadonlyArray<AcpTurnContextInjection>),
+                  ),
+                );
+              yield* emitContextInjections(context, observedInjections);
+            }
+            yield* pollWatcherContextInjections(context);
             const activeProviderThread: OrchestrationV2ProviderThread = {
               ...turnInput.providerThread,
               providerSessionId: input.providerSessionId,

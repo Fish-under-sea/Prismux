@@ -355,6 +355,7 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
         const watcher = makeDshTurnUsageWatcher({ dshHome, sessionId, cwd });
         return {
           sampleLive: () => Effect.sync(() => watcher.readTurnDelta()),
+          readContextInjections: () => Effect.sync(() => watcher.readContextInjections()),
           collectFinal: () => Effect.promise(() => watcher.collectFinal()),
         };
       });

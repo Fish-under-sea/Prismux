@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
@@ -6,8 +7,16 @@ import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
 import * as NodeZlib from "node:zlib";
 
-import type { TurnTokenUsage } from "@prismux/core-contracts";
+import type {
+  OrchestrationV2ContextInjectionCatalogEntry,
+  OrchestrationV2ContextInjectionFileChange,
+  OrchestrationV2ContextInjectionForm,
+  OrchestrationV2ContextInjectionSection,
+  OrchestrationV2ContextInjectionSourceKind,
+  TurnTokenUsage,
+} from "@prismux/core-contracts";
 import * as HostProcess from "@prismux/core-shared/HostProcess";
+import type { TrackedContextInjectionPayload } from "@prismux/provider-core/server/contextInjectionTracker";
 import { totalTokens, type UsageRecord } from "@prismux/provider-core/server/usage";
 
 import { resolveDshDesktopHome } from "./dshLocal.ts";
@@ -807,11 +816,220 @@ interface ParsedDshAssistantStep {
   readonly modelDurationMs: number | undefined;
 }
 
+export interface DshContextInjectionEvent extends TrackedContextInjectionPayload {
+  readonly seq: number;
+  readonly timestampMs?: number | undefined;
+  readonly nativeId: string;
+}
+
 interface ParsedDshSessionLog {
   readonly sessionId: string | undefined;
   readonly maxSeq: number;
   readonly steps: ReadonlyArray<ParsedDshAssistantStep>;
+  readonly contextInjections: ReadonlyArray<DshContextInjectionEvent>;
   readonly turnEndSeqs: ReadonlyArray<number>;
+}
+
+const DSH_MAX_SKILL_CATALOG_ENTRIES = 200;
+
+function sha256Hex(value: string): string {
+  return NodeCrypto.createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function asTrimmedString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function extractDshMessageContentText(data: Record<string, unknown>): string | null {
+  const rawContent = data.content ?? asRecord(data.message)?.content;
+  if (typeof rawContent === "string") {
+    const trimmed = rawContent.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  if (!Array.isArray(rawContent)) return null;
+  const chunks: Array<string> = [];
+  for (const block of rawContent) {
+    if (typeof block === "string") {
+      const trimmed = block.trim();
+      if (trimmed.length > 0) chunks.push(trimmed);
+      continue;
+    }
+    const rec = asRecord(block);
+    if (rec === undefined) continue;
+    if (typeof rec.text === "string" && rec.text.trim().length > 0) {
+      chunks.push(rec.text.trim());
+    }
+  }
+  return chunks.length > 0 ? chunks.join("\n\n") : null;
+}
+
+function formatDshInstructionLabel(
+  files: ReadonlyArray<OrchestrationV2ContextInjectionFileChange>,
+): string {
+  if (files.length === 0) return "agent-instructions";
+  if (files.length === 1) return files[0]!.path;
+  if (files.length === 2) return `${files[0]!.path}, ${files[1]!.path}`;
+  return `${files[0]!.path} +${files.length - 1}`;
+}
+
+function parseDshContextInjectionRecord(
+  rec: Record<string, unknown>,
+  index: number,
+): DshContextInjectionEvent | undefined {
+  const data = asRecord(rec.data);
+  if (data === undefined) return undefined;
+  const source = asRecord(data.source);
+  if (source === undefined) return undefined;
+
+  const rawKind = asTrimmedString(source.kind);
+  if (rawKind === undefined || rawKind === "user" || rawKind === "tool-jobs") {
+    return undefined;
+  }
+
+  const rawForm = asTrimmedString(source.form);
+  let sourceKind: OrchestrationV2ContextInjectionSourceKind;
+  if (
+    rawKind === "agent-instructions" ||
+    rawKind === "runtime-context" ||
+    rawKind === "skill-catalog" ||
+    rawKind === "time-context" ||
+    rawKind === "prismux-instructions"
+  ) {
+    sourceKind = rawKind;
+  } else if (rawForm === "instructions" || rawForm === "catalog" || rawForm === "snapshot") {
+    sourceKind = "other";
+  } else {
+    return undefined;
+  }
+
+  const seq = asFiniteNumber(rec.seq) ?? index;
+  const timestampMs = asFiniteNumber(rec.time);
+  const messageId = asTrimmedString(data.id);
+  const nativeId = `dsh-ctx:${messageId ?? seq}:${sourceKind}`;
+  const content = extractDshMessageContentText(data);
+  const baseline = source.baseline === true ? true : undefined;
+  const explicitSupersedes = source.supersedesPrevious === true ? true : undefined;
+
+  if (sourceKind === "agent-instructions") {
+    const rawChanges = Array.isArray(source.changes) ? source.changes : [];
+    const files: Array<OrchestrationV2ContextInjectionFileChange> = [];
+    for (const rawChange of rawChanges) {
+      const change = asRecord(rawChange);
+      if (change === undefined) continue;
+      const action = change.action;
+      const path = asTrimmedString(change.path);
+      if (path === undefined || (action !== "set" && action !== "replace" && action !== "remove")) {
+        continue;
+      }
+      const scope = asTrimmedString(change.scope);
+      const digest = asTrimmedString(change.digest);
+      files.push({
+        action,
+        path,
+        ...(scope === undefined ? {} : { scope }),
+        ...(digest === undefined ? {} : { digest }),
+      });
+    }
+    const hasReplace = files.some((file) => file.action === "replace");
+    const allRemoved = files.length > 0 && files.every((file) => file.action === "remove");
+    const supersedesPrevious = explicitSupersedes ?? (!baseline && hasReplace ? true : undefined);
+    const statusLabel = allRemoved
+      ? "已移除"
+      : supersedesPrevious || hasReplace
+        ? "已更新"
+        : "已载入";
+    const digest = sha256Hex(
+      JSON.stringify([
+        files.map((file) => [file.action, file.path, file.digest ?? ""]),
+        content ?? "",
+      ]),
+    );
+    return {
+      seq,
+      ...(timestampMs === undefined ? {} : { timestampMs }),
+      nativeId,
+      sourceKey: sourceKind,
+      sourceKind,
+      form: "instructions",
+      label: formatDshInstructionLabel(files),
+      sourcePath: files[0]?.path ?? null,
+      statusLabel,
+      digest,
+      ...(baseline === undefined ? {} : { baseline }),
+      ...(supersedesPrevious === undefined ? {} : { supersedesPrevious }),
+      ...(files.length > 0 ? { files } : {}),
+      content,
+    };
+  }
+
+  if (sourceKind === "skill-catalog") {
+    const rawEntries = Array.isArray(source.entries) ? source.entries : [];
+    const entries: Array<OrchestrationV2ContextInjectionCatalogEntry> = [];
+    for (const rawEntry of rawEntries) {
+      const entry = asRecord(rawEntry);
+      if (entry === undefined) continue;
+      const name = asTrimmedString(entry.name);
+      if (name === undefined) continue;
+      entries.push({
+        name,
+        description: typeof entry.description === "string" ? entry.description.trim() : "",
+      });
+      if (entries.length >= DSH_MAX_SKILL_CATALOG_ENTRIES) break;
+    }
+    const digest = sha256Hex(JSON.stringify([entries, content ?? ""]));
+    return {
+      seq,
+      ...(timestampMs === undefined ? {} : { timestampMs }),
+      nativeId,
+      sourceKey: sourceKind,
+      sourceKind,
+      form: "catalog",
+      label: "skill-catalog",
+      sourcePath: null,
+      statusLabel: explicitSupersedes ? "已更新" : "已载入",
+      digest,
+      ...(baseline === undefined ? {} : { baseline }),
+      ...(explicitSupersedes === undefined ? {} : { supersedesPrevious: explicitSupersedes }),
+      ...(entries.length > 0 ? { entries } : {}),
+      content,
+    };
+  }
+
+  const form: OrchestrationV2ContextInjectionForm =
+    rawForm === "instructions" ||
+    rawForm === "catalog" ||
+    rawForm === "snapshot" ||
+    rawForm === "notice"
+      ? rawForm
+      : "snapshot";
+  const rawSections = Array.isArray(source.sections) ? source.sections : [];
+  const sections: Array<OrchestrationV2ContextInjectionSection> = [];
+  for (const rawSection of rawSections) {
+    const section = asRecord(rawSection);
+    if (section === undefined) continue;
+    const name = asTrimmedString(section.name);
+    if (name === undefined || typeof section.text !== "string") continue;
+    sections.push({ name, text: section.text });
+  }
+  const digest = sha256Hex(JSON.stringify([sourceKind, sections, content ?? ""]));
+  return {
+    seq,
+    ...(timestampMs === undefined ? {} : { timestampMs }),
+    nativeId,
+    sourceKey: sourceKind,
+    sourceKind,
+    form,
+    label: sourceKind === "other" ? rawKind : sourceKind,
+    sourcePath: null,
+    statusLabel: explicitSupersedes ? "已更新" : "已载入",
+    digest,
+    ...(baseline === undefined ? {} : { baseline }),
+    ...(explicitSupersedes === undefined ? {} : { supersedesPrevious: explicitSupersedes }),
+    ...(sections.length > 0 ? { sections } : {}),
+    content,
+  };
 }
 
 function parseDshSessionRecords(
@@ -845,6 +1063,7 @@ function parseDshSessionRecords(
     firstTokenTime: number | undefined;
   } | null = null;
   const steps: Array<ParsedDshAssistantStep> = [];
+  const contextInjections: Array<DshContextInjectionEvent> = [];
   const turnEndSeqs: Array<number> = [];
 
   for (let index = 0; index < records.length; index += 1) {
@@ -856,6 +1075,22 @@ function parseDshSessionRecords(
     const type = rec.type;
     const data = asRecord(rec.data);
     const time = asFiniteNumber(rec.time);
+
+    if (type === "user/message") {
+      if (
+        options?.skipSeededPrefix &&
+        isSeeded &&
+        lastEndSeedIndex !== -1 &&
+        index <= lastEndSeedIndex
+      ) {
+        continue;
+      }
+      const parsedInjection = parseDshContextInjectionRecord(rec, index);
+      if (parsedInjection !== undefined) {
+        contextInjections.push(parsedInjection);
+      }
+      continue;
+    }
 
     if (type === "model/selection") {
       const selected = formatDshModelId(data);
@@ -1009,7 +1244,7 @@ function parseDshSessionRecords(
     }
   }
 
-  return { sessionId, maxSeq, steps, turnEndSeqs };
+  return { sessionId, maxSeq, steps, contextInjections, turnEndSeqs };
 }
 
 export interface DshLiveTokenUsage {
@@ -1030,11 +1265,13 @@ export interface DshTurnUsageDelta {
   readonly stepCount: number;
   readonly hasTurnEnd: boolean;
   readonly tornFrame: boolean;
+  readonly contextInjections?: ReadonlyArray<DshContextInjectionEvent>;
 }
 
 export interface DshTurnUsageWatcher {
   readonly baselineSeq: number;
   readonly readTurnDelta: () => DshTurnUsageDelta | undefined;
+  readonly readContextInjections: () => ReadonlyArray<DshContextInjectionEvent>;
   readonly collectFinal: () => Promise<DshTurnUsageDelta | undefined>;
 }
 
@@ -1085,7 +1322,10 @@ export function makeDshTurnUsageWatcher(input: MakeDshTurnUsageWatcherInput): Ds
   let lastStat:
     | { readonly filePath: string; readonly mtimeMs: number; readonly size: number }
     | undefined;
+  let lastParsed: ParsedDshSessionLog | undefined;
+  let lastTornFrame = false;
   let lastDelta: DshTurnUsageDelta | undefined;
+  let lastDeltaComputedForStat = false;
   if (initialFile !== undefined) {
     try {
       const st = NodeFS.statSync(initialFile);
@@ -1098,10 +1338,19 @@ export function makeDshTurnUsageWatcher(input: MakeDshTurnUsageWatcherInput): Ds
   }
   const initialDecoded =
     initialFile === undefined ? undefined : readDshSessionFileSync(initialFile);
-  const baselineSeq =
-    initialDecoded === undefined ? 0 : parseDshSessionRecords(initialDecoded.records).maxSeq;
+  if (initialDecoded !== undefined) {
+    lastParsed = parseDshSessionRecords(initialDecoded.records);
+    lastTornFrame = initialDecoded.tornFrame;
+  }
+  const baselineSeq = lastParsed?.maxSeq ?? 0;
 
-  const readTurnDelta = (): DshTurnUsageDelta | undefined => {
+  const ensureParsed = ():
+    | {
+        readonly parsed: ParsedDshSessionLog;
+        readonly tornFrame: boolean;
+        readonly changed: boolean;
+      }
+    | undefined => {
     const filePath = findDshSessionFile(dshHome, sessionId, cwd);
     if (filePath === undefined) return undefined;
     let stat: NodeFS.Stats | undefined;
@@ -1112,21 +1361,40 @@ export function makeDshTurnUsageWatcher(input: MakeDshTurnUsageWatcherInput): Ds
     }
     if (
       lastStat !== undefined &&
+      lastParsed !== undefined &&
       lastStat.filePath === filePath &&
       lastStat.mtimeMs === stat.mtimeMs &&
       lastStat.size === stat.size
     ) {
-      return lastDelta;
+      return { parsed: lastParsed, tornFrame: lastTornFrame, changed: false };
     }
-
     const decoded = readDshSessionFileSync(filePath);
     if (decoded === undefined) return undefined;
-
     const parsed = parseDshSessionRecords(decoded.records);
+    lastStat = { filePath, mtimeMs: stat.mtimeMs, size: stat.size };
+    lastParsed = parsed;
+    lastTornFrame = decoded.tornFrame;
+    lastDeltaComputedForStat = false;
+    return { parsed, tornFrame: decoded.tornFrame, changed: true };
+  };
+
+  const readContextInjections = (): ReadonlyArray<DshContextInjectionEvent> => {
+    const state = ensureParsed();
+    if (state === undefined) return [];
+    return state.parsed.contextInjections.filter((entry) => entry.seq > baselineSeq);
+  };
+
+  const readTurnDelta = (): DshTurnUsageDelta | undefined => {
+    const state = ensureParsed();
+    if (state === undefined) return undefined;
+    if (!state.changed && lastDeltaComputedForStat) {
+      return lastDelta;
+    }
+    const { parsed, tornFrame } = state;
     const turnSteps = parsed.steps.filter((step) => step.seq > baselineSeq);
     if (turnSteps.length === 0) {
-      lastStat = { filePath, mtimeMs: stat.mtimeMs, size: stat.size };
       lastDelta = undefined;
+      lastDeltaComputedForStat = true;
       return undefined;
     }
 
@@ -1229,16 +1497,21 @@ export function makeDshTurnUsageWatcher(input: MakeDshTurnUsageWatcherInput): Ds
       ...(modelDurationMs !== undefined ? { durationMs: modelDurationMs } : {}),
     };
 
+    const turnContextInjections = parsed.contextInjections.filter(
+      (entry) => entry.seq > baselineSeq,
+    );
+
     const result: DshTurnUsageDelta = {
       usage,
       liveTokenUsage,
       models,
       stepCount: turnSteps.length,
       hasTurnEnd,
-      tornFrame: decoded.tornFrame,
+      tornFrame,
+      ...(turnContextInjections.length > 0 ? { contextInjections: turnContextInjections } : {}),
     };
-    lastStat = { filePath, mtimeMs: stat.mtimeMs, size: stat.size };
     lastDelta = result;
+    lastDeltaComputedForStat = true;
     return result;
   };
 
@@ -1268,6 +1541,7 @@ export function makeDshTurnUsageWatcher(input: MakeDshTurnUsageWatcherInput): Ds
   return {
     baselineSeq,
     readTurnDelta,
+    readContextInjections,
     collectFinal,
   };
 }

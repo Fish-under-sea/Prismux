@@ -4,6 +4,10 @@ import * as DocumentText from "../../provider/DocumentText.ts";
 import { brokenRuntimeError } from "../../provider/providerCompatibility.ts";
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
 import { historyResponseItems } from "@prismux/provider-core/server/handoffBudget";
+import {
+  buildContextInjectionTurnItem,
+  createTurnContextInjectionTracker,
+} from "@prismux/provider-core/server/contextInjectionTracker";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
 import {
   mcpToolPresentation,
@@ -55,7 +59,10 @@ import {
   dynamicToolSurface,
   dynamicToolTitle,
 } from "@prismux/core-shared/toolActivity";
-import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@prismux/core-shared/model";
+import {
+  getModelSelectionStringOptionValue,
+  modelSelectionsEqual,
+} from "@prismux/core-shared/model";
 import { appendGeneratedImageEmbeds } from "@prismux/core-shared/generatedImageMarkdown";
 import { resolveSpawnCommand } from "@prismux/core-shared/shell";
 import { mcpToolResultOutput } from "@prismux/core-shared/toolOutput";
@@ -1678,7 +1685,10 @@ function codexThreadRuntimeParams(input: {
         ? {}
         : {
             // Override only T3's servers so launch-argument MCP servers survive.
-            "mcp_servers.prismux": { ...coreServer, disabled_tools: CODEX_DIRECT_ONLY_PRISMUX_TOOLS },
+            "mcp_servers.prismux": {
+              ...coreServer,
+              disabled_tools: CODEX_DIRECT_ONLY_PRISMUX_TOOLS,
+            },
             // Code Mode runs a blocking wait or delegate wait as a nested call, and the model
             // keeps polling it. A second, direct-only registration makes it a plain tool call.
             [`mcp_servers.${CODEX_PRISMUX_DIRECT_MCP_SERVER}`]: {
@@ -2054,6 +2064,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
   adapterOptions: CodexAdapterV2Options,
 ) {
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+  const hostHomeDir = yield* HostProcess.HomeDirectory;
+  const hostPlatform = yield* HostProcess.Platform;
+  const hostEnvironment = yield* HostProcess.Environment;
+  const contextInjectionTracker = createTurnContextInjectionTracker();
   const readMcpSession = (threadId: ThreadId | null) =>
     threadId === null ? Effect.undefined : mcpSessions.read(threadId);
   const { clientFactory, digest, fileSystem, idAllocator, serverConfig } = adapterOptions;
@@ -2722,6 +2736,60 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           });
           yield* rememberRootProviderThread(input.turnInput.providerThread);
           yield* emitMcpStartupFailures(context);
+          if (
+            input.turnInput.restartContinuationOfRunId === undefined &&
+            input.turnInput.resume !== true
+          ) {
+            const additionalContext =
+              nativeThreadId == null
+                ? undefined
+                : (yield* Ref.get(additionalContextByThread)).get(nativeThreadId);
+            const prismuxInstructions =
+              additionalContext === undefined
+                ? undefined
+                : Object.entries(additionalContext)
+                    .map(([key, entry]) => `${key}: ${entry.value}`)
+                    .join("\n\n");
+            const observedInjections = contextInjectionTracker.observeTurn({
+              providerThreadId: String(context.providerThread.id),
+              agent: "codex",
+              cwd: context.input.runtimePolicy.cwd,
+              homeDir: hostHomeDir,
+              env: resolvedRuntime?.environment ?? adapterOptions.environment ?? hostEnvironment,
+              platform: hostPlatform,
+              branch: context.input.appThread.branch,
+              runtimeMode: context.input.runtimePolicy.runtimeMode,
+              interactionMode: context.input.runtimePolicy.interactionMode,
+              model: context.input.modelSelection.model,
+              ...(prismuxInstructions ? { prismuxInstructions } : {}),
+            });
+            for (const injection of observedInjections) {
+              const nativeItemId = `context-injection:${context.providerTurnId}:${injection.sourceKey}:${injection.digest.slice(0, 12)}`;
+              const { ordinal, startedAt: itemStartedAt } = yield* resolveItemPosition(
+                context,
+                nativeItemId,
+              );
+              yield* emitProviderEvent({
+                type: "turn_item.updated",
+                driver: CODEX_PROVIDER,
+                turnItem: buildContextInjectionTurnItem({
+                  id: idAllocator.derive.turnItemFromProviderItem({
+                    driver: CODEX_PROVIDER,
+                    nativeItemId,
+                  }),
+                  threadId: context.projectionThreadId,
+                  runId: context.projectionRunId,
+                  nodeId: context.providerNodeId,
+                  providerThreadId: context.providerThread.id,
+                  providerTurnId: context.providerTurnId,
+                  nativeItemRef: { ...codexNativeItemRef(nativeItemId), strength: "weak" },
+                  ordinal,
+                  occurredAt: itemStartedAt,
+                  payload: injection,
+                }),
+              });
+            }
+          }
           return context;
         });
 

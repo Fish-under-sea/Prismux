@@ -1855,7 +1855,67 @@ const OrchestrationV2LinkRequestFields = {
   failure: Schema.optional(Schema.String),
 } as const;
 
+export const OrchestrationV2ContextInjectionSourceKind = Schema.Literals([
+  "agent-instructions",
+  "runtime-context",
+  "skill-catalog",
+  "time-context",
+  "prismux-instructions",
+  "other",
+]);
+export type OrchestrationV2ContextInjectionSourceKind =
+  typeof OrchestrationV2ContextInjectionSourceKind.Type;
+
+export const OrchestrationV2ContextInjectionForm = Schema.Literals([
+  "instructions",
+  "catalog",
+  "snapshot",
+  "notice",
+]);
+export type OrchestrationV2ContextInjectionForm = typeof OrchestrationV2ContextInjectionForm.Type;
+
+export const OrchestrationV2ContextInjectionFileChange = Schema.Struct({
+  action: Schema.Literals(["set", "replace", "remove"]),
+  scope: Schema.optional(TrimmedNonEmptyString),
+  path: TrimmedNonEmptyString,
+  digest: Schema.optional(TrimmedNonEmptyString),
+});
+export type OrchestrationV2ContextInjectionFileChange =
+  typeof OrchestrationV2ContextInjectionFileChange.Type;
+
+export const OrchestrationV2ContextInjectionSection = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  text: Schema.String,
+});
+export type OrchestrationV2ContextInjectionSection =
+  typeof OrchestrationV2ContextInjectionSection.Type;
+
+export const OrchestrationV2ContextInjectionCatalogEntry = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  description: Schema.String,
+});
+export type OrchestrationV2ContextInjectionCatalogEntry =
+  typeof OrchestrationV2ContextInjectionCatalogEntry.Type;
+
 export const OrchestrationV2TurnItem = Schema.Union([
+  Schema.Struct({
+    ...OrchestrationV2TurnItemBaseFields,
+    type: Schema.Literal("context_injection"),
+    sourceKind: OrchestrationV2ContextInjectionSourceKind,
+    form: Schema.optional(OrchestrationV2ContextInjectionForm),
+    label: TrimmedNonEmptyString,
+    sourcePath: Schema.optional(Schema.NullOr(Schema.String)),
+    statusLabel: Schema.optional(Schema.NullOr(Schema.String)),
+    digest: Schema.optional(Schema.NullOr(Schema.String)),
+    baseline: Schema.optional(Schema.Boolean),
+    supersedesPrevious: Schema.optional(Schema.Boolean),
+    files: Schema.optional(Schema.Array(OrchestrationV2ContextInjectionFileChange)),
+    sections: Schema.optional(Schema.Array(OrchestrationV2ContextInjectionSection)),
+    entries: Schema.optional(Schema.Array(OrchestrationV2ContextInjectionCatalogEntry)),
+    content: Schema.optional(Schema.NullOr(Schema.String)),
+    /** Set on the wire when content was withheld; fetch it with getTurnItem. */
+    contentOmitted: Schema.optional(Schema.Boolean),
+  }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("notification"),
@@ -2753,6 +2813,24 @@ const OrchestrationV2TurnItemJsonBaseFields = {
 } as const;
 
 export const OrchestrationV2TurnItemJson = Schema.Union([
+  Schema.Struct({
+    ...OrchestrationV2TurnItemJsonBaseFields,
+    type: Schema.Literal("context_injection"),
+    sourceKind: OrchestrationV2ContextInjectionSourceKind,
+    form: Schema.optional(OrchestrationV2ContextInjectionForm),
+    label: TrimmedNonEmptyString,
+    sourcePath: Schema.optional(Schema.NullOr(Schema.String)),
+    statusLabel: Schema.optional(Schema.NullOr(Schema.String)),
+    digest: Schema.optional(Schema.NullOr(Schema.String)),
+    baseline: Schema.optional(Schema.Boolean),
+    supersedesPrevious: Schema.optional(Schema.Boolean),
+    files: Schema.optional(Schema.Array(OrchestrationV2ContextInjectionFileChange)),
+    sections: Schema.optional(Schema.Array(OrchestrationV2ContextInjectionSection)),
+    entries: Schema.optional(Schema.Array(OrchestrationV2ContextInjectionCatalogEntry)),
+    content: Schema.optional(Schema.NullOr(Schema.String)),
+    /** Set on the wire when content was withheld; fetch it with getTurnItem. */
+    contentOmitted: Schema.optional(Schema.Boolean),
+  }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("notification"),

@@ -2,7 +2,13 @@ import { describe, expect, it } from "vite-plus/test";
 import { ThreadId, TurnItemId, type OrchestrationV2TurnItem } from "@prismux/core-contracts";
 import * as DateTime from "effect/DateTime";
 
-import { isJsonToolText, turnItemOutputImages, turnItemOutputText } from "./itemDetail.ts";
+import {
+  isJsonToolText,
+  turnItemHasDetail,
+  turnItemNeedsDetailFetch,
+  turnItemOutputImages,
+  turnItemOutputText,
+} from "./itemDetail.ts";
 
 describe("isJsonToolText", () => {
   it.each([
@@ -180,5 +186,47 @@ describe("MCP app tool output", () => {
       ],
     });
     expect(turnItemOutputText(bounded)).toBe("chart\n[image]");
+  });
+});
+
+describe("context_injection item detail helpers", () => {
+  it("reports detail availability, lazy fetch need, and text fallback cleanly", () => {
+    const inlineItem: OrchestrationV2TurnItem = {
+      id: TurnItemId.make("ctx-1"),
+      threadId: ThreadId.make("thread"),
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "completed",
+      title: "~/.dsh/AGENTS.md",
+      startedAt: null,
+      completedAt: null,
+      updatedAt: DateTime.makeUnsafe("2026-11-26T00:00:00Z"),
+      type: "context_injection",
+      sourceKind: "agent-instructions",
+      form: "instructions",
+      label: "~/.dsh/AGENTS.md",
+      sourcePath: "~/.dsh/AGENTS.md",
+      statusLabel: "已载入",
+      content: "<system-reminder>\nWorkspace instructions\n</system-reminder>",
+      digest: "abc123",
+    };
+    expect(turnItemHasDetail(inlineItem)).toBe(true);
+    expect(turnItemNeedsDetailFetch(inlineItem)).toBe(false);
+    expect(turnItemOutputText(inlineItem)).toContain("Workspace instructions");
+
+    const omittedItem: OrchestrationV2TurnItem = {
+      ...inlineItem,
+      id: TurnItemId.make("ctx-2"),
+      content: null,
+      contentOmitted: true,
+    };
+    expect(turnItemHasDetail(omittedItem)).toBe(true);
+    expect(turnItemNeedsDetailFetch(omittedItem)).toBe(true);
+    expect(turnItemOutputText(omittedItem)).toBeNull();
   });
 });

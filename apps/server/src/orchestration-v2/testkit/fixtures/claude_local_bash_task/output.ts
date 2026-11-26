@@ -28,7 +28,9 @@ export function assertClaudeLocalBashTaskOutput(
   assertVisibleTurnItemsMirrorLocalTurnItems(projection);
   assertUserMessagesInclude(projection, [CLAUDE_LOCAL_BASH_TASK_PROMPT]);
   assert.deepEqual(
-    projection.turnItems.filter((item) => item.type !== "checkpoint").map((item) => item.type),
+    projection.turnItems
+      .filter((item) => item.type !== "checkpoint" && item.type !== "context_injection")
+      .map((item) => item.type),
     ["user_message", "assistant_message", "command_execution", "assistant_message"],
   );
 

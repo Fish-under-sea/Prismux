@@ -6,6 +6,7 @@ import {
   type ProviderSetupError,
 } from "@prismux/core-contracts";
 import type { SelfInvocation } from "@prismux/core-shared/nodeRuntime";
+import * as HostProcess from "@prismux/core-shared/HostProcess";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -15,6 +16,10 @@ import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as EffectAcpErrors from "@prismux/effect-acp/errors";
 
+import {
+  createTurnContextInjectionTracker,
+  type ContextInjectionSkillEntry,
+} from "@prismux/provider-core/server/contextInjectionTracker";
 import * as ProviderHost from "@prismux/provider-core/server/ProviderHost";
 import type { AntigravityAuth } from "../../provider/AntigravityAuth.ts";
 import type * as AcpSessionRuntime from "@prismux/provider-acp/server/AcpSessionRuntime";
@@ -101,6 +106,10 @@ export interface AntigravityAdapterV2Options {
   readonly continuationRequests?: Parameters<typeof makeAcpAdapterV2>[0]["continuationRequests"];
   /** The agent's GEMINI_HOME. Its session logs show turns that ended on an upstream error. */
   readonly profileDirectory?: string;
+  /** Optional read-only provider callback returning cached official skills discovered for `cwd`. */
+  readonly getDiscoveredSkills?: (
+    cwd: string,
+  ) => Effect.Effect<ReadonlyArray<ContextInjectionSkillEntry>>;
 }
 
 /**
@@ -138,12 +147,16 @@ interface AntigravityFlavorServices {
   readonly fileSystem: FileSystem.FileSystem;
   readonly path: Path.Path;
   readonly host: ProviderHost.ProviderHost["Service"];
+  readonly homeDir?: string;
+  readonly environment?: NodeJS.ProcessEnv;
+  readonly platform?: NodeJS.Platform;
 }
 
 export function makeAntigravityAcpAdapterFlavor(
   options: AntigravityAdapterV2Options & AntigravityFlavorServices,
 ): AcpAdapterV2Flavor {
   const { profileDirectory } = options;
+  const contextInjectionTracker = createTurnContextInjectionTracker();
   const antigravityClientFileRoots = (cwd: string | null) =>
     cwd === null ? [options.host.paths.attachmentsDir] : [cwd, options.host.paths.attachmentsDir];
   const makeRuntime = Effect.fn("AntigravityAdapterV2.makeRuntime")(
@@ -290,6 +303,34 @@ export function makeAntigravityAcpAdapterFlavor(
     promptInactivityTimeout: "15 minutes",
     reportsPerTurnPromptUsage: true,
     geminiPromptUsage: true,
+    // Strictly read-only observation of standard local markdown rules & official discoveredSkills (zero state.vscdb/Keyring/Cookie access).
+    readTurnContextInjections: Effect.fn("AntigravityAdapterV2.readTurnContextInjections")(
+      function* ({ providerThreadId, cwd, turnInput }) {
+        const discoveredSkills =
+          options.getDiscoveredSkills === undefined
+            ? undefined
+            : yield* options
+                .getDiscoveredSkills(cwd)
+                .pipe(
+                  Effect.catchCause(() =>
+                    Effect.succeed([] as ReadonlyArray<ContextInjectionSkillEntry>),
+                  ),
+                );
+        return contextInjectionTracker.observeTurn({
+          providerThreadId: String(providerThreadId),
+          agent: "antigravity",
+          cwd,
+          homeDir: options.homeDir ?? (yield* HostProcess.HomeDirectory),
+          env: options.environment ?? (yield* HostProcess.Environment),
+          platform: options.platform ?? (yield* HostProcess.Platform),
+          branch: turnInput.appThread.branch,
+          runtimeMode: turnInput.runtimePolicy.runtimeMode,
+          interactionMode: turnInput.runtimePolicy.interactionMode,
+          model: turnInput.modelSelection.model,
+          ...(discoveredSkills === undefined ? {} : { discoveredSkills }),
+        });
+      },
+    ),
     ...(profileDirectory === undefined
       ? {}
       : {
@@ -318,6 +359,9 @@ export const makeAntigravityAdapterV2 = Effect.fn("makeAntigravityAdapterV2")(fu
     fileSystem: yield* FileSystem.FileSystem,
     path: yield* Path.Path,
     host: yield* ProviderHost.ProviderHost,
+    homeDir: yield* HostProcess.HomeDirectory,
+    environment: yield* HostProcess.Environment,
+    platform: yield* HostProcess.Platform,
   };
   return yield* makeAcpAdapterV2({
     instanceId: options.instanceId,

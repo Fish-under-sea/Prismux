@@ -26,6 +26,7 @@ import * as Schema from "effect/Schema";
 
 import { coalesceLiveUpdatedEvents } from "./ThreadLiveEventCoalescer.ts";
 import {
+  boundContextInjectionForStorage,
   makeLiveBodyDeduper,
   projectTurnItemForWire,
   projectTurnItemForDetail,
@@ -245,7 +246,10 @@ describe("orchestration V2 wire projection", () => {
       },
     };
     expect(projectTurnItemForDetail(appItem)).toMatchObject({
-      output: { prismuxMcpApp, result: { content: [text, { type: "image", mimeType: "image/png" }] } },
+      output: {
+        prismuxMcpApp,
+        result: { content: [text, { type: "image", mimeType: "image/png" }] },
+      },
     });
     const largeOutput = projectTurnItemForDetail(appItem);
     expect(
@@ -262,7 +266,10 @@ describe("orchestration V2 wire projection", () => {
 
     const forged = projectTurnItemForDetail({
       ...appItem,
-      output: { prismuxMcpApp: { ...prismuxMcpApp, resourceUri: data }, result: { content: [text] } },
+      output: {
+        prismuxMcpApp: { ...prismuxMcpApp, resourceUri: data },
+        result: { content: [text] },
+      },
     });
     expect(
       JSON.stringify(forged.type === "dynamic_tool" ? forged.output : null).length,
@@ -531,5 +538,52 @@ describe("live body deduper", () => {
   it("ships a reply whole when its message arrives after it", () => {
     const first = reply(1, "a");
     expect([first, message(2, "a")].map(makeLiveBodyDeduper())[0]).toBe(first);
+  });
+
+  it("keeps small context_injection inline on wire and omits/restores oversized content cleanly", () => {
+    const smallItem: OrchestrationV2TurnItem = {
+      ...base,
+      type: "context_injection",
+      sourceKind: "agent-instructions",
+      form: "instructions",
+      label: "~/.dsh/AGENTS.md",
+      sourcePath: "~/.dsh/AGENTS.md",
+      statusLabel: "已载入",
+      digest: "digest-small",
+      baseline: true,
+      files: [{ action: "set", path: "~/.dsh/AGENTS.md", digest: "digest-small" }],
+      content: "<system-reminder>\nKeep changes atomic.\n</system-reminder>",
+    };
+    expect(projectTurnItemForWire(smallItem)).toEqual(smallItem);
+
+    const largeContent = "A".repeat(40_000);
+    const largeItem: OrchestrationV2TurnItem = {
+      ...smallItem,
+      content: largeContent,
+    };
+    const wireLarge = projectTurnItemForWire(largeItem);
+    expect(wireLarge).toMatchObject({
+      type: "context_injection",
+      label: "~/.dsh/AGENTS.md",
+      content: null,
+      contentOmitted: true,
+    });
+    const detailLarge = projectTurnItemForDetail(largeItem);
+    expect(detailLarge).toMatchObject({
+      type: "context_injection",
+      content: largeContent,
+    });
+    expect(detailLarge).not.toHaveProperty("contentOmitted");
+
+    const hugeStorage = boundContextInjectionForStorage({
+      ...smallItem,
+      content: "B".repeat(400_000),
+    });
+    expect(
+      Buffer.byteLength(
+        hugeStorage.type === "context_injection" ? (hugeStorage.content ?? "") : "",
+        "utf8",
+      ),
+    ).toBeLessThanOrEqual(256 * 1024);
   });
 });
