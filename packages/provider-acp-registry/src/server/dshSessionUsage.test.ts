@@ -50,7 +50,14 @@ describe("dshSessionUsage", () => {
   describe("scanZstdFrames & decodeDshSessionJsonl", () => {
     it("scans and decodes concatenated multi-frame Zstandard JSONL buffers", () => {
       const frame1 = compressFrame([
-        { type: "session", version: 4, id: "sess-multi", createdAt: 1_700_000_000_000, isSeeded: false, delegationDepth: 0 },
+        {
+          type: "session",
+          version: 4,
+          id: "sess-multi",
+          createdAt: 1_700_000_000_000,
+          isSeeded: false,
+          delegationDepth: 0,
+        },
       ]);
       const frame2 = compressFrame([
         { seq: 1, type: "step/start", time: 1_700_000_001_000, data: { turn: 1, step: 1 } },
@@ -61,7 +68,11 @@ describe("dshSessionUsage", () => {
             seq: 2,
             type: "assistant/message",
             time: 1_700_000_004_000,
-            data: { turn: 1, step: 1, usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 } },
+            data: {
+              turn: 1,
+              step: 1,
+              usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 },
+            },
           },
         ],
         false,
@@ -84,10 +95,19 @@ describe("dshSessionUsage", () => {
     });
 
     it("gracefully recovers complete frames when the final frame is torn mid-write", () => {
-      const frame1 = compressFrame([{ type: "session", version: 4, id: "sess-torn", createdAt: 1 }]);
-      const frame2 = compressFrame([{ seq: 1, type: "step/start", time: 1000, data: { turn: 1, step: 1 } }]);
+      const frame1 = compressFrame([
+        { type: "session", version: 4, id: "sess-torn", createdAt: 1 },
+      ]);
+      const frame2 = compressFrame([
+        { seq: 1, type: "step/start", time: 1000, data: { turn: 1, step: 1 } },
+      ]);
       const frame3 = compressFrame([
-        { seq: 2, type: "assistant/message", time: 2000, data: { turn: 1, step: 1, padding: "x".repeat(400) } },
+        {
+          seq: 2,
+          type: "assistant/message",
+          time: 2000,
+          data: { turn: 1, step: 1, padding: "x".repeat(400) },
+        },
       ]);
 
       // Truncate in header, mid-block, and mid-checksum
@@ -133,7 +153,9 @@ describe("dshSessionUsage", () => {
     });
 
     it("encodes project keys and segments identically to DSH", () => {
-      expect(encodeDshProjectKey("D:\\Fish-code\\AGY\\Prismux")).toBe("--D-Fish-code-AGY-Prismux--");
+      expect(encodeDshProjectKey("D:\\Fish-code\\AGY\\Prismux")).toBe(
+        "--D-Fish-code-AGY-Prismux--",
+      );
       expect(encodeDshSegment("c84fb8fd-a786-4c31-b2e8-28c7bcfbadf1")).toBe(
         "c84fb8fd-a786-4c31-b2e8-28c7bcfbadf1",
       );
@@ -141,7 +163,9 @@ describe("dshSessionUsage", () => {
     });
 
     it("formats clean human-friendly model strings and strips proxy prefixes for rateModel", () => {
-      expect(formatDshModelId({ provider: "magpie", model: "group/deepseek" })).toBe("group/deepseek");
+      expect(formatDshModelId({ provider: "magpie", model: "group/deepseek" })).toBe(
+        "group/deepseek",
+      );
       expect(formatDshModelId('["magpie","group/deepseek"]')).toBe("group/deepseek");
       expect(formatDshModelId(undefined, { provider: "magpie", model: "deepseek-chat" })).toBe(
         "deepseek-chat",
@@ -153,9 +177,13 @@ describe("dshSessionUsage", () => {
     it("estimates reasoning tokens conservatively when omitted and clamps explicit values", () => {
       expect(estimateDshReasoningTokens(100, 42, [])).toBe(42);
       expect(estimateDshReasoningTokens(100, 250, [])).toBe(100);
-      expect(estimateDshReasoningTokens(100, undefined, [{ type: "text", text: "Hello world" }])).toBe(0);
       expect(
-        estimateDshReasoningTokens(100, undefined, [{ type: "reasoning", text: "Thinking deeply..." }]),
+        estimateDshReasoningTokens(100, undefined, [{ type: "text", text: "Hello world" }]),
+      ).toBe(0);
+      expect(
+        estimateDshReasoningTokens(100, undefined, [
+          { type: "reasoning", text: "Thinking deeply..." },
+        ]),
       ).toBe(100);
 
       const estimated = estimateDshReasoningTokens(100, undefined, [
@@ -175,7 +203,11 @@ describe("dshSessionUsage", () => {
     it("extracts first non-empty token delta timestamps across compact and raw stream shapes", () => {
       expect(
         extractDshStreamFirstTokenTime([
-          { type: "chunk", time: 1000, chunk: { type: "block-start", index: 0, blockType: "text" } },
+          {
+            type: "chunk",
+            time: 1000,
+            chunk: { type: "block-start", index: 0, blockType: "text" },
+          },
           { type: "text-chunks", time0: 1200, index: 0, dt: [15, 30], texts: ["", "Hi", "!"] },
         ]),
       ).toBe(1215);
@@ -188,9 +220,24 @@ describe("dshSessionUsage", () => {
 
       expect(
         extractDshStreamFirstTokenTime([
-          { type: "tool-call-chunks", time0: 3100, index: 0, dt: [], id: "tc-1", name: "pwsh", args: [""] },
+          {
+            type: "tool-call-chunks",
+            time0: 3100,
+            index: 0,
+            dt: [],
+            id: "tc-1",
+            name: "pwsh",
+            args: [""],
+          },
         ]),
       ).toBe(3100);
+
+      expect(
+        extractDshStreamFirstTokenTime([
+          { type: "chunk", time: 4500, chunk: { type: "text-delta", text: "final" } },
+          { type: "chunk", time: 4100, chunk: { type: "reasoning-delta", reasoning: "thought" } },
+        ]),
+      ).toBe(4100);
     });
   });
 
@@ -205,8 +252,21 @@ describe("dshSessionUsage", () => {
 
       // Turn 1 (already on disk before watcher starts)
       const turn1Frame = compressFrame([
-        { type: "session", version: 4, id: sessionId, createdAt: 1_700_000_000_000, cwd, isSeeded: false, delegationDepth: 0 },
-        { seq: 1, type: "model/selection", time: 1_700_000_000_100, data: { provider: "magpie", model: "group/deepseek" } },
+        {
+          type: "session",
+          version: 4,
+          id: sessionId,
+          createdAt: 1_700_000_000_000,
+          cwd,
+          isSeeded: false,
+          delegationDepth: 0,
+        },
+        {
+          seq: 1,
+          type: "model/selection",
+          time: 1_700_000_000_100,
+          data: { provider: "magpie", model: "group/deepseek" },
+        },
         { seq: 2, type: "step/start", time: 1_700_000_000_200, data: { turn: 1, step: 1 } },
         {
           seq: 3,
@@ -216,8 +276,13 @@ describe("dshSessionUsage", () => {
             turn: 1,
             step: 1,
             usage: { inputTokens: 1000, outputTokens: 50, totalTokens: 1050 },
-            message: { source: { provider: "magpie", model: "group/deepseek" }, content: [{ type: "text", text: "old" }] },
-            stream: [{ type: "text-chunks", time0: 1_700_000_000_500, index: 0, dt: [], texts: ["old"] }],
+            message: {
+              source: { provider: "magpie", model: "group/deepseek" },
+              content: [{ type: "text", text: "old" }],
+            },
+            stream: [
+              { type: "text-chunks", time0: 1_700_000_000_500, index: 0, dt: [], texts: ["old"] },
+            ],
           },
         },
         { seq: 4, type: "turn/end", time: 1_700_000_001_300, data: { turn: 1 } },
@@ -242,7 +307,13 @@ describe("dshSessionUsage", () => {
           data: {
             turn: 2,
             step: 1,
-            usage: { inputTokens: 500, outputTokens: 80, totalTokens: 51780, cacheReadTokens: 50000, cacheWriteTokens: 1200 },
+            usage: {
+              inputTokens: 500,
+              outputTokens: 80,
+              totalTokens: 51780,
+              cacheReadTokens: 50000,
+              cacheWriteTokens: 1200,
+            },
             message: {
               source: { provider: "magpie", model: "group/deepseek" },
               content: [
@@ -251,7 +322,13 @@ describe("dshSessionUsage", () => {
               ],
             },
             stream: [
-              { type: "reasoning-chunks", time0: 1_700_000_011_000, index: 0, dt: [], texts: ["think"] }, // ttft = 1000, decode = 2000
+              {
+                type: "reasoning-chunks",
+                time0: 1_700_000_011_000,
+                index: 0,
+                dt: [],
+                texts: ["think"],
+              }, // ttft = 1000, decode = 2000
             ],
           },
         },
@@ -283,13 +360,24 @@ describe("dshSessionUsage", () => {
           data: {
             turn: 2,
             step: 2,
-            usage: { inputTokens: 357, outputTokens: 189, totalTokens: 51746, cacheReadTokens: 51200 },
+            usage: {
+              inputTokens: 357,
+              outputTokens: 189,
+              totalTokens: 51746,
+              cacheReadTokens: 51200,
+            },
             message: {
               source: { provider: "magpie", model: "group/deepseek" },
               content: [{ type: "text", text: "PowerShell 7.5" }],
             },
             stream: [
-              { type: "text-chunks", time0: 1_700_000_016_000, index: 0, dt: [], texts: ["PowerShell"] }, // ttft = 2000, decode = 2000
+              {
+                type: "text-chunks",
+                time0: 1_700_000_016_000,
+                index: 0,
+                dt: [],
+                texts: ["PowerShell"],
+              }, // ttft = 2000, decode = 2000
             ],
           },
         },
@@ -336,6 +424,426 @@ describe("dshSessionUsage", () => {
       NodeFS.utimesSync(filePath, 1_700_000_020, 1_700_000_020);
       expect(watcher.readTurnDelta()).toBe(final);
     });
+
+    it("omits bogus decodeMs on single-packet 1ms micro-burst responses (128 tok, TTFT 6.66s, dur 6.66s)", async () => {
+      const root = createTempDir("prismux-dsh-microburst-");
+      const cwd = "D:\\Fish-code\\Prismux";
+      const sessionId = "sess-microburst";
+      const sessionDir = NodePath.join(root, "sessions", encodeDshProjectKey(cwd), sessionId);
+      NodeFS.mkdirSync(sessionDir, { recursive: true });
+      const filePath = NodePath.join(sessionDir, "session.v4.jsonl.zstd");
+
+      NodeFS.writeFileSync(
+        filePath,
+        compressFrame([
+          {
+            type: "session",
+            version: 4,
+            id: sessionId,
+            createdAt: 1_795_687_360_000,
+            cwd,
+            isSeeded: false,
+            delegationDepth: 0,
+          },
+        ]),
+      );
+
+      const watcher = makeDshTurnUsageWatcher({ dshHome: root, sessionId, cwd, settleWaitMs: 0 });
+      NodeFS.appendFileSync(
+        filePath,
+        compressFrame([
+          { seq: 116, type: "step/start", time: 1_795_687_368_902, data: { turn: 5, step: 1 } },
+          {
+            seq: 119,
+            type: "assistant/message",
+            time: 1_795_687_375_558, // modelDurationMs = 6656ms
+            data: {
+              turn: 5,
+              step: 1,
+              usage: { inputTokens: 43_944, outputTokens: 128, totalTokens: 44_072 },
+              message: {
+                source: { provider: "magpie", model: "group/deepseek" },
+                content: [
+                  { type: "text", text: "Buffered full reply delivered in a single packet." },
+                ],
+              },
+              stream: [
+                {
+                  type: "chunk",
+                  time: 1_795_687_375_557,
+                  chunk: { type: "block-start", index: 0, blockType: "text" },
+                },
+                {
+                  type: "text-chunks",
+                  time0: 1_795_687_375_557,
+                  index: 0,
+                  dt: [],
+                  texts: ["Buffered full reply"],
+                },
+                { type: "chunk", time: 1_795_687_375_557, chunk: { type: "block-end", index: 0 } },
+                { type: "chunk", time: 1_795_687_375_557, chunk: { type: "usage" } },
+                { type: "chunk", time: 1_795_687_375_558, chunk: { type: "finish" } },
+              ],
+            },
+          },
+          { seq: 120, type: "step/end", time: 1_795_687_375_559, data: { turn: 5, step: 1 } },
+          { seq: 121, type: "turn/end", time: 1_795_687_375_560, data: { turn: 5 } },
+        ]),
+      );
+
+      const final = await watcher.collectFinal();
+      expect(final).toBeDefined();
+      expect(final?.usage.inputTokens).toBe(43_944);
+      expect(final?.usage.outputTokens).toBe(128);
+      expect(final?.usage.ttftMs).toBe(6_655);
+      expect(final?.usage.modelDurationMs).toBe(6_656);
+      // 1ms buffered flush must never emit decodeMs=1 (which would inflate TPS to 128000 tok/s).
+      expect(final?.usage.decodeMs).toBeUndefined();
+      expect(final?.liveTokenUsage.decodeMs).toBeUndefined();
+    });
+
+    it("prevents multi-step partial decodeSum inflation (242 tok, TTFT 3.54s, dur 7.37s) on buffered and mixed steps", async () => {
+      const root = createTempDir("prismux-dsh-multistep-burst-");
+      const cwd = "D:\\Fish-code\\Prismux";
+      const sessionId = "sess-multistep-burst";
+      const sessionDir = NodePath.join(root, "sessions", encodeDshProjectKey(cwd), sessionId);
+      NodeFS.mkdirSync(sessionDir, { recursive: true });
+      const filePath = NodePath.join(sessionDir, "session.v4.jsonl.zstd");
+
+      NodeFS.writeFileSync(
+        filePath,
+        compressFrame([
+          {
+            type: "session",
+            version: 4,
+            id: sessionId,
+            createdAt: 1_795_689_270_000,
+            cwd,
+            isSeeded: false,
+            delegationDepth: 0,
+          },
+        ]),
+      );
+
+      // Turn A: exact real DSH structure (step 1 buffered 170 tok in 1ms + 291ms finish delay;
+      // step 2 buffered 72 tok in 0ms).
+      const watcherA = makeDshTurnUsageWatcher({ dshHome: root, sessionId, cwd, settleWaitMs: 0 });
+      NodeFS.appendFileSync(
+        filePath,
+        compressFrame([
+          { seq: 126, type: "step/start", time: 1_795_689_280_342, data: { turn: 6, step: 1 } },
+          {
+            seq: 129,
+            type: "assistant/message",
+            time: 1_795_689_285_237, // dur = 4895ms, ttft = 4603ms, rawDecode = 292ms, tokSpan = 1ms
+            data: {
+              turn: 6,
+              step: 1,
+              usage: {
+                inputTokens: 2_473,
+                cacheReadTokens: 43_776,
+                outputTokens: 170,
+                totalTokens: 46_419,
+              },
+              message: {
+                source: { provider: "magpie", model: "group/deepseek" },
+                content: [
+                  { type: "reasoning", text: "Checking environment before running pwsh." },
+                  { type: "tool-call", name: "pwsh", arguments: { command: "echo ok" } },
+                ],
+              },
+              stream: [
+                {
+                  type: "chunk",
+                  time: 1_795_689_284_945,
+                  chunk: { type: "block-start", index: 0, blockType: "reasoning" },
+                },
+                {
+                  type: "reasoning-chunks",
+                  time0: 1_795_689_284_945,
+                  index: 0,
+                  dt: [0, 0, 0, 1, 0],
+                  texts: ["a", "b", "c", "d", "e", "f"],
+                },
+                {
+                  type: "chunk",
+                  time: 1_795_689_284_946,
+                  chunk: { type: "block-start", index: 1, blockType: "tool-call" },
+                },
+                {
+                  type: "tool-call-chunks",
+                  time0: 1_795_689_284_946,
+                  index: 1,
+                  dt: [],
+                  id: "tc-1",
+                  name: "pwsh",
+                  args: ['{"command":"echo ok"}'],
+                },
+                { type: "chunk", time: 1_795_689_285_236, chunk: { type: "block-end", index: 0 } },
+                { type: "chunk", time: 1_795_689_285_236, chunk: { type: "usage" } },
+                { type: "chunk", time: 1_795_689_285_236, chunk: { type: "finish" } },
+              ],
+            },
+          },
+          { seq: 134, type: "step/end", time: 1_795_689_285_974, data: { turn: 6, step: 1 } },
+          { seq: 135, type: "step/start", time: 1_795_689_285_987, data: { turn: 6, step: 2 } },
+          {
+            seq: 136,
+            type: "assistant/message",
+            time: 1_795_689_288_457, // dur = 2470ms, ttft = 2470ms, rawDecode = 0ms
+            data: {
+              turn: 6,
+              step: 2,
+              usage: {
+                inputTokens: 379,
+                cacheReadTokens: 46_080,
+                outputTokens: 72,
+                totalTokens: 46_531,
+              },
+              message: {
+                source: { provider: "magpie", model: "group/deepseek" },
+                content: [{ type: "text", text: "Connected." }],
+              },
+              stream: [
+                {
+                  type: "chunk",
+                  time: 1_795_689_288_457,
+                  chunk: { type: "block-start", index: 0, blockType: "text" },
+                },
+                {
+                  type: "text-chunks",
+                  time0: 1_795_689_288_457,
+                  index: 0,
+                  dt: [],
+                  texts: ["Connected."],
+                },
+                { type: "chunk", time: 1_795_689_288_457, chunk: { type: "block-end", index: 0 } },
+                { type: "chunk", time: 1_795_689_288_457, chunk: { type: "usage" } },
+                { type: "chunk", time: 1_795_689_288_457, chunk: { type: "finish" } },
+              ],
+            },
+          },
+          { seq: 137, type: "step/end", time: 1_795_689_288_458, data: { turn: 6, step: 2 } },
+          { seq: 138, type: "turn/end", time: 1_795_689_288_459, data: { turn: 6 } },
+        ]),
+      );
+
+      const finalA = await watcherA.collectFinal();
+      expect(finalA).toBeDefined();
+      expect(finalA?.usage.outputTokens).toBe(242);
+      expect(finalA?.usage.ttftMs).toBe(3_537);
+      expect(finalA?.usage.modelDurationMs).toBe(7_365);
+      // Must NOT emit decodeMs=292 (which produced 242 / 0.292 = 829 tok/s).
+      expect(finalA?.usage.decodeMs).toBeUndefined();
+      expect(finalA?.liveTokenUsage.decodeMs).toBeUndefined();
+
+      // Turn B: step 1 genuinely streams for 292ms (tokSpan = 260ms, valid step decodeMs = 292),
+      // while step 2 is a 0ms buffered flush. Partial decodeSum must still be omitted so 242 total
+      // tokens are never divided by step 1's 292ms alone.
+      const watcherB = makeDshTurnUsageWatcher({ dshHome: root, sessionId, cwd, settleWaitMs: 0 });
+      NodeFS.appendFileSync(
+        filePath,
+        compressFrame([
+          { seq: 201, type: "step/start", time: 1_795_689_300_000, data: { turn: 7, step: 1 } },
+          {
+            seq: 202,
+            type: "assistant/message",
+            time: 1_795_689_304_895, // dur = 4895ms, ttft = 4603ms, valid decode = 292ms
+            data: {
+              turn: 7,
+              step: 1,
+              usage: { inputTokens: 1_000, outputTokens: 170, totalTokens: 1_170 },
+              message: {
+                source: { provider: "magpie", model: "group/deepseek" },
+                content: [{ type: "reasoning", text: "streamed" }],
+              },
+              stream: [
+                {
+                  type: "reasoning-chunks",
+                  time0: 1_795_689_304_603,
+                  index: 0,
+                  dt: [130, 130],
+                  texts: ["part1", "part2", "part3"],
+                },
+                { type: "chunk", time: 1_795_689_304_895, chunk: { type: "finish" } },
+              ],
+            },
+          },
+          { seq: 203, type: "step/end", time: 1_795_689_304_900, data: { turn: 7, step: 1 } },
+          { seq: 204, type: "step/start", time: 1_795_689_305_000, data: { turn: 7, step: 2 } },
+          {
+            seq: 205,
+            type: "assistant/message",
+            time: 1_795_689_307_470, // dur = 2470ms, buffered decode = 0ms
+            data: {
+              turn: 7,
+              step: 2,
+              usage: { inputTokens: 400, outputTokens: 72, totalTokens: 472 },
+              message: {
+                source: { provider: "magpie", model: "group/deepseek" },
+                content: [{ type: "text", text: "ok" }],
+              },
+              stream: [
+                { type: "text-chunks", time0: 1_795_689_307_470, index: 0, dt: [], texts: ["ok"] },
+                { type: "chunk", time: 1_795_689_307_470, chunk: { type: "finish" } },
+              ],
+            },
+          },
+          { seq: 206, type: "turn/end", time: 1_795_689_307_471, data: { turn: 7 } },
+        ]),
+      );
+
+      const finalB = await watcherB.collectFinal();
+      expect(finalB).toBeDefined();
+      expect(finalB?.usage.outputTokens).toBe(242);
+      expect(finalB?.usage.ttftMs).toBe(3_537);
+      expect(finalB?.usage.modelDurationMs).toBe(7_365);
+      expect(finalB?.usage.decodeMs).toBeUndefined();
+      expect(finalB?.liveTokenUsage.decodeMs).toBeUndefined();
+    });
+
+    it("rejects buffered >2000 tok/s tool-call bursts and isolates committed decodeMs from retried attempts", async () => {
+      const root = createTempDir("prismux-dsh-retry-burst-");
+      const cwd = "D:\\Fish-code\\Prismux";
+      const sessionId = "sess-retry-burst";
+      const sessionDir = NodePath.join(root, "sessions", encodeDshProjectKey(cwd), sessionId);
+      NodeFS.mkdirSync(sessionDir, { recursive: true });
+      const filePath = NodePath.join(sessionDir, "session.v4.jsonl.zstd");
+
+      NodeFS.writeFileSync(
+        filePath,
+        compressFrame([
+          {
+            type: "session",
+            version: 4,
+            id: sessionId,
+            createdAt: 1_794_085_100_000,
+            cwd,
+            isSeeded: false,
+            delegationDepth: 0,
+          },
+        ]),
+      );
+
+      // 1. Buffered tool-call burst with 158ms trailing finish delay (745 tok / 0.158s = 4715 tok/s)
+      const watcherBurst = makeDshTurnUsageWatcher({
+        dshHome: root,
+        sessionId,
+        cwd,
+        settleWaitMs: 0,
+      });
+      NodeFS.appendFileSync(
+        filePath,
+        compressFrame([
+          { seq: 1, type: "step/start", time: 1_794_085_122_455, data: { turn: 1, step: 1 } },
+          {
+            seq: 2,
+            type: "assistant/message",
+            time: 1_794_085_127_470, // dur = 5015ms, rawDecode = 158ms -> 4715 tok/s > 2000
+            data: {
+              turn: 1,
+              step: 1,
+              usage: {
+                inputTokens: 1_469,
+                cacheReadTokens: 128_256,
+                outputTokens: 745,
+                totalTokens: 130_470,
+              },
+              message: {
+                source: { provider: "magpie", model: "group/deepseek" },
+                content: [{ type: "tool-call", name: "edit", arguments: "{}" }],
+              },
+              stream: [
+                {
+                  type: "tool-call-chunks",
+                  time0: 1_794_085_127_312,
+                  index: 0,
+                  dt: [],
+                  id: "tc-1",
+                  name: "edit",
+                  args: ["{}"],
+                },
+                { type: "chunk", time: 1_794_085_127_470, chunk: { type: "finish" } },
+              ],
+            },
+          },
+          { seq: 3, type: "turn/end", time: 1_794_085_127_471, data: { turn: 1 } },
+        ]),
+      );
+      const burstResult = await watcherBurst.collectFinal();
+      expect(burstResult?.usage.outputTokens).toBe(745);
+      expect(burstResult?.usage.modelDurationMs).toBe(5_015);
+      expect(burstResult?.usage.ttftMs).toBe(4_857);
+      expect(burstResult?.usage.decodeMs).toBeUndefined();
+
+      // 2. Failed assistant/attempt followed by retry: decodeMs uses committed stream, not failed attempt
+      const watcherRetry = makeDshTurnUsageWatcher({
+        dshHome: root,
+        sessionId,
+        cwd,
+        settleWaitMs: 0,
+      });
+      NodeFS.appendFileSync(
+        filePath,
+        compressFrame([
+          { seq: 10, type: "step/start", time: 1_794_318_708_563, data: { turn: 2, step: 1 } },
+          {
+            seq: 11,
+            type: "assistant/attempt",
+            time: 1_794_318_719_643,
+            data: {
+              turn: 2,
+              step: 1,
+              stream: [
+                {
+                  type: "reasoning-chunks",
+                  time0: 1_794_318_713_499,
+                  index: 0,
+                  dt: [100],
+                  texts: ["aborted", " attempt"],
+                },
+              ],
+            },
+          },
+          {
+            seq: 12,
+            type: "assistant/message",
+            time: 1_794_318_729_581, // dur = 21018ms
+            data: {
+              turn: 2,
+              step: 1,
+              usage: {
+                inputTokens: 173,
+                cacheReadTokens: 58_624,
+                outputTokens: 855,
+                totalTokens: 59_652,
+              },
+              message: {
+                source: { provider: "magpie", model: "group/deepseek" },
+                content: [{ type: "text", text: "retry ok" }],
+              },
+              stream: [
+                {
+                  type: "text-chunks",
+                  time0: 1_794_318_724_356,
+                  index: 0,
+                  dt: [2_500, 2_500],
+                  texts: ["retry ", "succeeded ", "cleanly"],
+                },
+                { type: "chunk", time: 1_794_318_729_581, chunk: { type: "finish" } },
+              ],
+            },
+          },
+          { seq: 13, type: "turn/end", time: 1_794_318_729_582, data: { turn: 2 } },
+        ]),
+      );
+      const retryResult = await watcherRetry.collectFinal();
+      expect(retryResult?.usage.modelDurationMs).toBe(21_018);
+      expect(retryResult?.usage.ttftMs).toBe(4_936); // 1794318713499 - 1794318708563
+      expect(retryResult?.usage.decodeMs).toBe(5_225); // 1794318729581 - 1794318724356 (committed stream only)
+      expect(retryResult!.usage.ttftMs!).toBeLessThanOrEqual(retryResult!.usage.modelDurationMs!);
+      expect(retryResult!.usage.decodeMs!).toBeLessThanOrEqual(retryResult!.usage.modelDurationMs!);
+    });
   });
 
   describe("scanDshUsageRecords & scanDshUsageFiles", () => {
@@ -363,7 +871,16 @@ describe("dshSessionUsage", () => {
       NodeFS.writeFileSync(
         freshFile,
         Buffer.concat([
-          compressFrame([{ type: "session", version: 4, id: "sess-fresh", createdAt: freshTime - 5000, isSeeded: false, delegationDepth: 0 }]),
+          compressFrame([
+            {
+              type: "session",
+              version: 4,
+              id: "sess-fresh",
+              createdAt: freshTime - 5000,
+              isSeeded: false,
+              delegationDepth: 0,
+            },
+          ]),
           compressFrame([
             { seq: 1, type: "step/start", time: freshTime - 4000, data: { turn: 1, step: 1 } },
             {
@@ -373,12 +890,19 @@ describe("dshSessionUsage", () => {
               data: {
                 turn: 1,
                 step: 1,
-                usage: { inputTokens: 357, outputTokens: 189, totalTokens: 51746, cacheReadTokens: 51200 },
+                usage: {
+                  inputTokens: 357,
+                  outputTokens: 189,
+                  totalTokens: 51746,
+                  cacheReadTokens: 51200,
+                },
                 message: {
                   source: { provider: "magpie", model: '["magpie","group/deepseek"]' },
                   content: [{ type: "text", text: "ok" }],
                 },
-                stream: [{ type: "text-chunks", time0: freshTime - 3000, index: 0, dt: [], texts: ["ok"] }],
+                stream: [
+                  { type: "text-chunks", time0: freshTime - 3000, index: 0, dt: [], texts: ["ok"] },
+                ],
               },
             },
           ]),
@@ -391,7 +915,14 @@ describe("dshSessionUsage", () => {
       NodeFS.writeFileSync(
         staleFile,
         compressFrame([
-          { type: "session", version: 4, id: "sess-stale", createdAt: staleTime, isSeeded: false, delegationDepth: 0 },
+          {
+            type: "session",
+            version: 4,
+            id: "sess-stale",
+            createdAt: staleTime,
+            isSeeded: false,
+            delegationDepth: 0,
+          },
           {
             seq: 1,
             type: "assistant/message",
@@ -400,7 +931,10 @@ describe("dshSessionUsage", () => {
               turn: 1,
               step: 1,
               usage: { inputTokens: 999, outputTokens: 111, totalTokens: 1110 },
-              message: { source: { provider: "magpie", model: "old-model" }, content: [{ type: "text", text: "old" }] },
+              message: {
+                source: { provider: "magpie", model: "old-model" },
+                content: [{ type: "text", text: "old" }],
+              },
             },
           },
         ]),
@@ -412,7 +946,14 @@ describe("dshSessionUsage", () => {
       NodeFS.writeFileSync(
         forkedFile,
         [
-          { type: "session", version: 4, id: "sess-fork", createdAt: freshTime, isSeeded: true, delegationDepth: 0 },
+          {
+            type: "session",
+            version: 4,
+            id: "sess-fork",
+            createdAt: freshTime,
+            isSeeded: true,
+            delegationDepth: 0,
+          },
           {
             seq: 1,
             type: "assistant/message",
@@ -432,8 +973,16 @@ describe("dshSessionUsage", () => {
             data: {
               turn: 2,
               step: 1,
-              usage: { inputTokens: 100, outputTokens: 50, totalTokens: 250, cacheWriteTokens: 100 },
-              message: { source: { provider: "magpie-anthropic", model: "dragon-api-max/claude-opus-5-5" }, content: [] },
+              usage: {
+                inputTokens: 100,
+                outputTokens: 50,
+                totalTokens: 250,
+                cacheWriteTokens: 100,
+              },
+              message: {
+                source: { provider: "magpie-anthropic", model: "dragon-api-max/claude-opus-5-5" },
+                content: [],
+              },
             },
           },
         ]

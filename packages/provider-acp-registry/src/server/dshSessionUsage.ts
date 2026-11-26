@@ -18,6 +18,9 @@ const DEFAULT_DSH_USAGE_FILE_CACHE_MAX_ENTRIES = 500;
 const DSH_SCAN_CONCURRENCY = 4;
 const DEFAULT_FINAL_SETTLE_WAIT_MS = 260;
 const FINAL_SETTLE_POLL_INTERVAL_MS = 40;
+const MIN_STEP_DECODE_MS = 50;
+const MAX_PLAUSIBLE_DECODE_TPS = 2_000;
+const MAX_SINGLE_PACKET_OUTPUT_TOKENS = 20;
 const zstdDecompressAsync = NodeUtil.promisify(NodeZlib.zstdDecompress);
 
 /** Byte range occupied by one structurally complete RFC 8878 Zstandard frame. */
@@ -69,8 +72,7 @@ export function scanZstdFrames(
     const checksum = (descriptor & 0x04) !== 0;
     const dictionaryFlag = descriptor & 0x03;
     const dictionaryBytes = dictionaryFlag === 3 ? 4 : dictionaryFlag;
-    const contentSizeBytes =
-      contentSizeFlag === 0 ? (singleSegment ? 1 : 0) : 1 << contentSizeFlag;
+    const contentSizeBytes = contentSizeFlag === 0 ? (singleSegment ? 1 : 0) : 1 << contentSizeFlag;
     const remainingHeaderBytes = (singleSegment ? 0 : 1) + dictionaryBytes + contentSizeBytes;
     if (buffer.length - offset < remainingHeaderBytes) {
       return { frames, tornStart: start };
@@ -87,9 +89,7 @@ export function scanZstdFrames(
       const blockType = (blockHeader >>> 1) & 0x03;
       const blockSize = blockHeader >>> 3;
       if (blockType === 0x03) {
-        throw new Error(
-          `corrupt Zstandard session log: reserved block type at byte ${offset - 3}`,
-        );
+        throw new Error(`corrupt Zstandard session log: reserved block type at byte ${offset - 3}`);
       }
       const payloadBytes = blockType === 0x01 ? 1 : blockSize;
       if (buffer.length - offset < payloadBytes) {
@@ -304,9 +304,7 @@ export function resolveDshHomeDir(
   const pathApi = platform === "win32" ? NodePath.win32 : NodePath.posix;
   const envHome = resolveEnvHome(env, platform);
   const resolvedHome =
-    homeDir && homeDir.trim().length > 0
-      ? homeDir.trim()
-      : envHome ?? NodeOS.homedir();
+    homeDir && homeDir.trim().length > 0 ? homeDir.trim() : (envHome ?? NodeOS.homedir());
 
   const resolvePathPreservingDrive = (value: string) =>
     platform !== "win32" && /^[A-Za-z]:[\\/]/u.test(value) ? value : pathApi.resolve(value);
@@ -317,9 +315,7 @@ export function resolveDshHomeDir(
   }
 
   const normalizeForCompare = (value: string) =>
-    platform === "win32"
-      ? pathApi.resolve(value).toLowerCase()
-      : resolvePathPreservingDrive(value);
+    platform === "win32" ? pathApi.resolve(value).toLowerCase() : resolvePathPreservingDrive(value);
   const homeMatchesEnv =
     homeDir === undefined ||
     (envHome !== undefined && normalizeForCompare(resolvedHome) === normalizeForCompare(envHome));
@@ -579,10 +575,7 @@ function asNonNegInt(value: unknown): number {
  * Formats DSH model attribution into a human-friendly model string (never a raw ACP tuple
  * string like `["magpie","group/deepseek"]`).
  */
-export function formatDshModelId(
-  source: unknown,
-  fallbackSelection?: unknown,
-): string | undefined {
+export function formatDshModelId(source: unknown, fallbackSelection?: unknown): string | undefined {
   const extract = (raw: unknown): string | undefined => {
     if (typeof raw === "string") {
       const trimmed = raw.trim();
@@ -590,7 +583,11 @@ export function formatDshModelId(
       if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
         try {
           const parsed = JSON.parse(trimmed) as unknown;
-          if (Array.isArray(parsed) && typeof parsed[1] === "string" && parsed[1].trim().length > 0) {
+          if (
+            Array.isArray(parsed) &&
+            typeof parsed[1] === "string" &&
+            parsed[1].trim().length > 0
+          ) {
             return parsed[1].trim();
           }
         } catch {
@@ -677,31 +674,60 @@ export function estimateDshReasoningTokens(
   return Math.max(1, Math.min(clampedOutput - 1, rawEstimate));
 }
 
-function firstRunMemberTime(
+interface DshStreamTiming {
+  readonly firstTokenTime: number | undefined;
+  readonly lastTokenTime: number | undefined;
+  readonly hasTerminalFrame: boolean;
+}
+
+function isPlausibleDecodeWindow(outputTokens: number, decodeMs: number): boolean {
+  if (!Number.isFinite(outputTokens) || outputTokens <= 0) return false;
+  if (!Number.isFinite(decodeMs) || decodeMs < MIN_STEP_DECODE_MS) return false;
+  const tps = outputTokens / (decodeMs / 1_000);
+  return Number.isFinite(tps) && tps > 0 && tps <= MAX_PLAUSIBLE_DECODE_TPS;
+}
+
+function runMemberTimeBounds(
   time0: number,
   dt: ReadonlyArray<unknown>,
   fragments: ReadonlyArray<unknown>,
-): number | undefined {
+): { readonly firstTime: number; readonly lastTime: number } | undefined {
   let time = time0;
+  let firstTime: number | undefined;
+  let lastTime: number | undefined;
   for (let index = 0; index < fragments.length; index += 1) {
     if (index > 0) {
       const gap = asFiniteNumber(dt[index - 1]);
-      if (gap !== undefined) time += gap;
+      if (gap !== undefined && gap > 0) time += gap;
     }
     const fragment = fragments[index];
     if (typeof fragment === "string" && fragment !== "") {
-      return time;
+      if (firstTime === undefined || time < firstTime) firstTime = time;
+      if (lastTime === undefined || time > lastTime) lastTime = time;
     }
   }
-  return undefined;
+  return firstTime !== undefined && lastTime !== undefined ? { firstTime, lastTime } : undefined;
 }
 
 /**
- * Extracts the timestamp (ms) of the first non-empty output token delta from a DSH
- * compact `data.stream` array, matching `@deepseek-ai/dsh-llm#assistantStreamFirstTokenTime`.
+ * Analyzes a DSH compact `data.stream` array across all reasoning, text, and tool-call
+ * chunks to extract both first/last non-empty token delta timestamps and whether terminal
+ * stream frames (`block-end` / `usage` / `finish`) are present.
  */
-export function extractDshStreamFirstTokenTime(stream: unknown): number | undefined {
-  if (!Array.isArray(stream)) return undefined;
+function analyzeDshStreamTiming(stream: unknown): DshStreamTiming {
+  if (!Array.isArray(stream)) {
+    return { firstTokenTime: undefined, lastTokenTime: undefined, hasTerminalFrame: false };
+  }
+
+  let firstTokenTime: number | undefined;
+  let lastTokenTime: number | undefined;
+  let hasTerminalFrame = false;
+
+  const recordTokenTime = (time: number): void => {
+    if (firstTokenTime === undefined || time < firstTokenTime) firstTokenTime = time;
+    if (lastTokenTime === undefined || time > lastTokenTime) lastTokenTime = time;
+  };
+
   for (const rawRecord of stream) {
     const record = asRecord(rawRecord);
     if (record === undefined) continue;
@@ -709,42 +735,62 @@ export function extractDshStreamFirstTokenTime(stream: unknown): number | undefi
     if (type === "chunk") {
       const time = asFiniteNumber(record.time);
       const chunk = asRecord(record.chunk);
-      if (time === undefined || chunk === undefined) continue;
+      if (chunk === undefined) continue;
       const chunkType = chunk.type;
-      if (
-        (chunkType === "text-delta" || chunkType === "reasoning-delta") &&
-        typeof chunk.text === "string" &&
-        chunk.text !== ""
-      ) {
-        return time;
+      if (chunkType === "block-end" || chunkType === "usage" || chunkType === "finish") {
+        hasTerminalFrame = true;
+        continue;
       }
+      if (time === undefined) continue;
       if (
+        (chunkType === "text-delta" && typeof chunk.text === "string" && chunk.text !== "") ||
+        (chunkType === "reasoning-delta" &&
+          ((typeof chunk.text === "string" && chunk.text !== "") ||
+            (typeof chunk.reasoning === "string" && chunk.reasoning !== "")))
+      ) {
+        recordTokenTime(time);
+      } else if (
         chunkType === "tool-call-delta" &&
         ((typeof chunk.argumentsDelta === "string" && chunk.argumentsDelta !== "") ||
           (typeof chunk.name === "string" && chunk.name.length > 0))
       ) {
-        return time;
+        recordTokenTime(time);
       }
     } else if (type === "text-chunks" || type === "reasoning-chunks") {
       const time0 = asFiniteNumber(record.time0);
+      if (time0 === undefined) continue;
       const dt = Array.isArray(record.dt) ? record.dt : [];
       const texts = Array.isArray(record.texts) ? record.texts : [];
-      if (time0 === undefined) continue;
-      const found = firstRunMemberTime(time0, dt, texts);
-      if (found !== undefined) return found;
+      const bounds = runMemberTimeBounds(time0, dt, texts);
+      if (bounds !== undefined) {
+        recordTokenTime(bounds.firstTime);
+        recordTokenTime(bounds.lastTime);
+      }
     } else if (type === "tool-call-chunks") {
       const time0 = asFiniteNumber(record.time0);
       if (time0 === undefined) continue;
       if (typeof record.name === "string" && record.name.length > 0) {
-        return time0;
+        recordTokenTime(time0);
       }
       const dt = Array.isArray(record.dt) ? record.dt : [];
       const args = Array.isArray(record.args) ? record.args : [];
-      const found = firstRunMemberTime(time0, dt, args);
-      if (found !== undefined) return found;
+      const bounds = runMemberTimeBounds(time0, dt, args);
+      if (bounds !== undefined) {
+        recordTokenTime(bounds.firstTime);
+        recordTokenTime(bounds.lastTime);
+      }
     }
   }
-  return undefined;
+
+  return { firstTokenTime, lastTokenTime, hasTerminalFrame };
+}
+
+/**
+ * Extracts the timestamp (ms) of the first non-empty output token delta from a DSH
+ * compact `data.stream` array, matching `@deepseek-ai/dsh-llm#assistantStreamFirstTokenTime`.
+ */
+export function extractDshStreamFirstTokenTime(stream: unknown): number | undefined {
+  return analyzeDshStreamTiming(stream).firstTokenTime;
 }
 
 interface ParsedDshAssistantStep {
@@ -864,11 +910,20 @@ function parseDshSessionRecords(
         (openStep.step === undefined || msgStep === undefined || openStep.step === msgStep)
           ? openStep
           : null;
-      const firstTokenTime =
-        matchedStep?.firstTokenTime ?? extractDshStreamFirstTokenTime(data.stream);
+      const messageStreamTiming = analyzeDshStreamTiming(data.stream);
+      const ttftFirstTokenTime = matchedStep?.firstTokenTime ?? messageStreamTiming.firstTokenTime;
+      // Measure committed output decode time from the committed assistant/message stream itself
+      // rather than an earlier failed `assistant/attempt` before a retry backoff.
+      const decodeFirstTokenTime =
+        messageStreamTiming.firstTokenTime ?? matchedStep?.firstTokenTime;
       openStep = null;
 
-      if (options?.skipSeededPrefix && isSeeded && lastEndSeedIndex !== -1 && index <= lastEndSeedIndex) {
+      if (
+        options?.skipSeededPrefix &&
+        isSeeded &&
+        lastEndSeedIndex !== -1 &&
+        index <= lastEndSeedIndex
+      ) {
         continue;
       }
 
@@ -879,9 +934,7 @@ function parseDshSessionRecords(
       const cachedInputTokens = asNonNegInt(usage.cacheReadTokens);
       const cacheCreationTokens = asNonNegInt(usage.cacheWriteTokens);
       const outputTokens = asNonNegInt(usage.outputTokens);
-      if (
-        uncachedInputTokens + cachedInputTokens + cacheCreationTokens + outputTokens === 0
-      ) {
+      if (uncachedInputTokens + cachedInputTokens + cacheCreationTokens + outputTokens === 0) {
         continue;
       }
 
@@ -900,8 +953,8 @@ function parseDshSessionRecords(
           ? Math.max(0, Math.round(endMs - stepStartMs))
           : undefined;
       const rawTtftMs =
-        stepStartMs !== undefined && firstTokenTime !== undefined
-          ? Math.max(0, Math.round(firstTokenTime - stepStartMs))
+        stepStartMs !== undefined && ttftFirstTokenTime !== undefined
+          ? Math.max(0, Math.round(ttftFirstTokenTime - stepStartMs))
           : undefined;
       const ttftMs =
         rawTtftMs === undefined
@@ -909,9 +962,35 @@ function parseDshSessionRecords(
           : modelDurationMs === undefined
             ? rawTtftMs
             : Math.min(rawTtftMs, modelDurationMs);
+      const rawDecodeMs =
+        decodeFirstTokenTime !== undefined && endMs !== undefined && outputTokens > 0
+          ? Math.max(0, Math.round(endMs - decodeFirstTokenTime))
+          : undefined;
+      const clampedDecodeMs =
+        rawDecodeMs === undefined
+          ? undefined
+          : modelDurationMs === undefined
+            ? rawDecodeMs
+            : Math.min(rawDecodeMs, modelDurationMs);
+      const tokenSpanMs =
+        messageStreamTiming.firstTokenTime !== undefined &&
+        messageStreamTiming.lastTokenTime !== undefined
+          ? Math.max(
+              0,
+              Math.round(messageStreamTiming.lastTokenTime - messageStreamTiming.firstTokenTime),
+            )
+          : undefined;
+      const isBufferedTokenBurst =
+        messageStreamTiming.hasTerminalFrame &&
+        tokenSpanMs !== undefined &&
+        (tokenSpanMs <= 0
+          ? outputTokens > MAX_SINGLE_PACKET_OUTPUT_TOKENS
+          : outputTokens / (tokenSpanMs / 1_000) > MAX_PLAUSIBLE_DECODE_TPS);
       const decodeMs =
-        firstTokenTime !== undefined && endMs !== undefined && outputTokens > 0
-          ? Math.max(0, Math.round(endMs - firstTokenTime))
+        clampedDecodeMs !== undefined &&
+        !isBufferedTokenBurst &&
+        isPlausibleDecodeWindow(outputTokens, clampedDecodeMs)
+          ? clampedDecodeMs
           : undefined;
 
       steps.push({
@@ -1003,7 +1082,9 @@ export function makeDshTurnUsageWatcher(input: MakeDshTurnUsageWatcherInput): Ds
   const settleWaitMs = input.settleWaitMs ?? DEFAULT_FINAL_SETTLE_WAIT_MS;
 
   const initialFile = findDshSessionFile(dshHome, sessionId, cwd);
-  let lastStat: { readonly filePath: string; readonly mtimeMs: number; readonly size: number } | undefined;
+  let lastStat:
+    | { readonly filePath: string; readonly mtimeMs: number; readonly size: number }
+    | undefined;
   let lastDelta: DshTurnUsageDelta | undefined;
   if (initialFile !== undefined) {
     try {
@@ -1057,7 +1138,8 @@ export function makeDshTurnUsageWatcher(input: MakeDshTurnUsageWatcherInput): Ds
     let modelDurationSum = 0;
     let hasModelDuration = false;
     let decodeSum = 0;
-    let hasDecode = false;
+    let outputStepsCount = 0;
+    let decodedOutputStepsCount = 0;
     let ttftSum = 0;
     let ttftCount = 0;
     const models: Array<string> = [];
@@ -1072,9 +1154,12 @@ export function makeDshTurnUsageWatcher(input: MakeDshTurnUsageWatcherInput): Ds
         modelDurationSum += step.modelDurationMs;
         hasModelDuration = true;
       }
-      if (step.decodeMs !== undefined) {
-        decodeSum += step.decodeMs;
-        hasDecode = true;
+      if (step.outputTokens > 0) {
+        outputStepsCount += 1;
+        if (step.decodeMs !== undefined) {
+          decodeSum += step.decodeMs;
+          decodedOutputStepsCount += 1;
+        }
       }
       if (step.ttftMs !== undefined) {
         ttftSum += step.ttftMs;
@@ -1087,8 +1172,27 @@ export function makeDshTurnUsageWatcher(input: MakeDshTurnUsageWatcherInput): Ds
 
     const totalInputTokens = uncachedInput + cachedInput + cacheCreation;
     const clampedReasoning = Math.min(outputTokens, reasoningTokens);
-    const modelDurationMs = hasModelDuration ? Math.max(0, Math.round(modelDurationSum)) : undefined;
-    const decodeMs = hasDecode ? Math.max(0, Math.round(decodeSum)) : undefined;
+    const modelDurationMs = hasModelDuration
+      ? Math.max(0, Math.round(modelDurationSum))
+      : undefined;
+    // Only emit an aggregated turn decodeMs when EVERY output-producing step recorded a
+    // plausible decode window; otherwise outputTokens summed across all steps would be
+    // divided by only a subset of steps' decode time.
+    const rawAggregatedDecodeMs =
+      outputStepsCount > 0 && decodedOutputStepsCount === outputStepsCount
+        ? Math.max(0, Math.round(decodeSum))
+        : undefined;
+    const clampedAggregatedDecodeMs =
+      rawAggregatedDecodeMs === undefined
+        ? undefined
+        : modelDurationMs === undefined
+          ? rawAggregatedDecodeMs
+          : Math.min(rawAggregatedDecodeMs, modelDurationMs);
+    const decodeMs =
+      clampedAggregatedDecodeMs !== undefined &&
+      isPlausibleDecodeWindow(outputTokens, clampedAggregatedDecodeMs)
+        ? clampedAggregatedDecodeMs
+        : undefined;
     const rawAvgTtftMs = ttftCount > 0 ? Math.max(0, Math.round(ttftSum / ttftCount)) : undefined;
     const ttftMs =
       rawAvgTtftMs === undefined
@@ -1304,7 +1408,9 @@ async function parseDshUsageFileRecordsAsync(
  * returning per-file `UsageRecord` batches suitable for `UsageService` (`kind: "scan"`).
  * Skips files whose `mtimeMs < sinceMs` and reuses bounded-LRU cached parses for unchanged `(mtimeMs, size)`.
  */
-export async function scanDshUsageFiles(input: ScanDshUsageInput): Promise<DshUsageScanFilesResult> {
+export async function scanDshUsageFiles(
+  input: ScanDshUsageInput,
+): Promise<DshUsageScanFilesResult> {
   const sessionsDir = NodePath.join(input.dshHome, "sessions");
   const sinceMs = input.sinceMs;
   const untilMs = input.untilMs;
@@ -1319,7 +1425,10 @@ export async function scanDshUsageFiles(input: ScanDshUsageInput): Promise<DshUs
     return { sessionsDir, missing, error: !missing, files: [] };
   }
 
-  const sessionTargets: Array<{ readonly sessionDirPath: string; readonly fallbackSessionId: string }> = [];
+  const sessionTargets: Array<{
+    readonly sessionDirPath: string;
+    readonly fallbackSessionId: string;
+  }> = [];
   let error = false;
 
   for (const projectEntry of projectEntries) {
@@ -1342,7 +1451,9 @@ export async function scanDshUsageFiles(input: ScanDshUsageInput): Promise<DshUs
     }
   }
 
-  const results: Array<DshUsageScannedFile | undefined> = Array.from({ length: sessionTargets.length });
+  const results: Array<DshUsageScannedFile | undefined> = Array.from({
+    length: sessionTargets.length,
+  });
   const queue = sessionTargets.entries();
   const worker = async (): Promise<void> => {
     for (const [index, target] of queue) {

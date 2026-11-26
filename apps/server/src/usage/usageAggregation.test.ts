@@ -336,10 +336,64 @@ describe("UsageCallLog aggregation and telemetry math", () => {
     expect(computeUsageOutputTps(0, 2000, 200)).toBeNull();
     // Sub-10ms noise rejected; buffered single-packet micro-bursts fall back to total duration
     expect(computeUsageOutputTps(50, 5, null)).toBeNull();
+    expect(computeUsageOutputTps(128, 15, null)).toBeNull();
     expect(computeUsageOutputTps(73, 26_125, 26_124)).toBeCloseTo(2.79, 2);
     expect(computeUsageOutputTps(2081, 26_182, 25_425)).toBeCloseTo(79.48, 2);
+    // Reproduces DSH buffered 1ms micro-burst (128 tok, TTFT 6.66s, dur 6.66s -> ~19.23 tok/s)
+    expect(computeUsageOutputTps(128, 6_656, 6_655)).toBeCloseTo(19.23, 2);
+    // Reproduces DSH multi-step turn without bogus partial decodeMs (242 tok, TTFT 3.54s, dur 7.37s -> ~63.22 tok/s)
+    expect(computeUsageOutputTps(242, 7_365, 3_537)).toBeCloseTo(63.22, 2);
+    // Reproduces DSH buffered tool-call burst exceeding 2000 tok/s post-TTFT (745 tok, TTFT 4.86s, dur 5.02s -> ~148.55 tok/s)
+    expect(computeUsageOutputTps(745, 5_015, 4_857)).toBeCloseTo(148.55, 2);
     // Normal streaming post-TTFT throughput stays exact
     expect(computeUsageOutputTps(1356, 17_070, 7_728)).toBeCloseTo(145.15, 2);
+  });
+
+  it("clamps ttftMs <= durationMs and computes realistic DSH callLog TPS on buffered bursts", () => {
+    const t = Date.parse("2026-08-07T10:02:55.558Z");
+    const result = aggregate([
+      record({
+        provider: "dsh",
+        model: "group/deepseek",
+        timestampMs: t,
+        dedupeKey: "dsh:sess-1:119",
+        ttftMs: 6_655,
+        durationMs: 6_656,
+        totals: {
+          uncachedInputTokens: 43_944,
+          cachedInputTokens: 0,
+          cacheCreationTokens: 0,
+          outputTokens: 128,
+          reasoningTokens: 0,
+        },
+      }),
+      record({
+        provider: "dsh",
+        model: "group/deepseek",
+        timestampMs: t + 1_000,
+        dedupeKey: "dsh:sess-1:skew",
+        ttftMs: 4_500,
+        durationMs: 4_000,
+        totals: {
+          uncachedInputTokens: 500,
+          cachedInputTokens: 0,
+          cacheCreationTokens: 0,
+          outputTokens: 100,
+          reasoningTokens: 0,
+        },
+      }),
+    ]);
+
+    expect(result.callLogs).toHaveLength(2);
+    const skewLog = result.callLogs[0];
+    expect(skewLog?.ttftMs).toBe(4_000);
+    expect(skewLog?.durationMs).toBe(4_000);
+    expect(skewLog?.tps).toBe(25);
+
+    const burstLog = result.callLogs[1];
+    expect(burstLog?.ttftMs).toBe(6_655);
+    expect(burstLog?.durationMs).toBe(6_656);
+    expect(burstLog?.tps).toBeCloseTo(19.23, 2);
   });
 
   it("preserves ttftMs and max durationMs across merged UsageRecord copies", () => {

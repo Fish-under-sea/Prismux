@@ -76,7 +76,7 @@ export function computeUsageOutputTps(
     }
   }
   const totalTps = outputTokens / (durationMs / 1000);
-  if (!Number.isFinite(totalTps) || totalTps <= 0) return null;
+  if (!Number.isFinite(totalTps) || totalTps <= 0 || totalTps > MAX_POST_TTFT_TPS) return null;
   return Math.round(totalTps * 100) / 100;
 }
 
@@ -87,14 +87,20 @@ function readOptionalTiming(
   const extended = record as UsageRecord & UsageRecordTiming;
   const rawTtft = explicit?.ttftMs ?? extended.ttftMs;
   const rawDuration = explicit?.durationMs ?? extended.durationMs;
-  const ttftMs =
-    typeof rawTtft === "number" && Number.isFinite(rawTtft) && rawTtft >= 0
-      ? Math.round(rawTtft * 100) / 100
-      : null;
   const durationMs =
     typeof rawDuration === "number" && Number.isFinite(rawDuration) && rawDuration > 0
       ? Math.round(rawDuration * 100) / 100
       : null;
+  const rawNormalizedTtft =
+    typeof rawTtft === "number" && Number.isFinite(rawTtft) && rawTtft >= 0
+      ? Math.round(rawTtft * 100) / 100
+      : null;
+  const ttftMs =
+    rawNormalizedTtft === null
+      ? null
+      : durationMs === null
+        ? rawNormalizedTtft
+        : Math.min(rawNormalizedTtft, durationMs);
   return { ttftMs, durationMs };
 }
 
@@ -400,10 +406,7 @@ export class UsageAggregator {
 
   constructor(options: AggregateOptions) {
     this.#options = options;
-    this.#maxCallLogs = Math.max(
-      0,
-      Math.trunc(options.maxCallLogs ?? DEFAULT_MAX_USAGE_CALL_LOGS),
-    );
+    this.#maxCallLogs = Math.max(0, Math.trunc(options.maxCallLogs ?? DEFAULT_MAX_USAGE_CALL_LOGS));
     this.#toDay = makeDayFormatter(options.timeZone);
     if (options.resolution === "hour") {
       if (options.sinceTimeMs === undefined || options.untilTimeMs === undefined) {
