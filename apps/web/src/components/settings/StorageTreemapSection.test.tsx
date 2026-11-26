@@ -177,14 +177,28 @@ describe("StorageTreemapSection drill-down and cleanup builders", () => {
       actions: ["clean-cache", "clean-logs"],
     });
 
+    const managedWithSharedAction: readonly DaemonStorageNodeDto[] = [
+      ...SAMPLE_CATEGORIES,
+      {
+        id: "worktrees-secondary",
+        name: "Secondary Worktrees",
+        path: "C:/Users/demo/.prismux/worktrees-secondary",
+        bytes: 900_000_000,
+        fileCount: 310,
+        tier: "managed",
+        categoryId: "worktrees",
+        cleanable: true,
+        cleanAction: "clean-worktrees",
+      },
+    ];
     const managedReq = buildManagedCleanRequest(
-      SAMPLE_CATEGORIES,
+      managedWithSharedAction,
       new Set(["worktrees", "memory-db", "cache"]),
     );
     expect(managedReq).toEqual({
       targetIds: ["worktrees"],
-      actions: ["clean-worktrees"],
     });
+    expect(managedReq?.actions).toBeUndefined();
 
     expect(buildCompactDatabaseCleanRequest()).toEqual({ actions: ["compact-db"] });
   });

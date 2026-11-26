@@ -1,4 +1,12 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { useStableCallback } from "../hooks/useStableCallback";
 import {
@@ -260,19 +268,34 @@ export function PrismuxTelemetryProvider({
     killStalePty,
   ]);
 
-  const value: PrismuxTelemetryContextValue = {
-    portsState,
-    portsPopoverOpen,
-    setPortsPopoverOpen,
-    refreshSystemPorts,
-    killSystemPort,
-    systemResources,
-    resourcesLoading,
-    resourcesError,
-    refreshSystemResources,
-    setSystemResourcesSnapshot,
-    killStalePty,
-  };
+  // oxlint-disable-next-line prismux/no-manual-memo -- preserves stable context value reference across parent re-renders even outside compiler transforms
+  const value = useMemo<PrismuxTelemetryContextValue>(
+    () => ({
+      portsState,
+      portsPopoverOpen,
+      setPortsPopoverOpen,
+      refreshSystemPorts,
+      killSystemPort,
+      systemResources,
+      resourcesLoading,
+      resourcesError,
+      refreshSystemResources,
+      setSystemResourcesSnapshot,
+      killStalePty,
+    }),
+    [
+      portsState,
+      portsPopoverOpen,
+      refreshSystemPorts,
+      killSystemPort,
+      systemResources,
+      resourcesLoading,
+      resourcesError,
+      refreshSystemResources,
+      setSystemResourcesSnapshot,
+      killStalePty,
+    ],
+  );
 
   return <PrismuxTelemetryContext value={value}>{children}</PrismuxTelemetryContext>;
 }

@@ -165,6 +165,11 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
   usePrismuxTraySync();
   const runtime = useOptionalPrismuxRuntime();
   const telemetry = useOptionalPrismuxTelemetry();
+  const setSystemResourcesSnapshot = telemetry?.setSystemResourcesSnapshot;
+  const setPortsPopoverOpen = telemetry?.setPortsPopoverOpen;
+  const refreshSystemResourcesAction =
+    telemetry?.refreshSystemResources ?? runtime?.refreshSystemResources;
+  const refreshSystemPortsAction = telemetry?.refreshSystemPorts ?? runtime?.refreshSystemPorts;
   const scrollStripRef = useRef<HTMLDivElement | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
 
@@ -637,20 +642,22 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
     }
   }, []);
 
+  const daemonReady = Boolean(runtime?.daemonInfo.ready);
+  const daemonClient = runtime?.daemon ?? null;
   const fetchLiveResources = useCallback(
     async (options: { forceRefresh: boolean; showSpinner: boolean }) => {
-      if (!runtime?.daemonInfo.ready) return;
+      if (!daemonReady) return;
       if (options.showSpinner) {
         setManualResourcesLoading(true);
       }
       try {
-        if (typeof runtime.daemon?.fetchSystemResources === "function") {
-          const res = await runtime.daemon.fetchSystemResources(options.forceRefresh);
+        if (typeof daemonClient?.fetchSystemResources === "function") {
+          const res = await daemonClient.fetchSystemResources(options.forceRefresh);
           setLiveResources(res);
-          telemetry?.setSystemResourcesSnapshot(res);
+          setSystemResourcesSnapshot?.(res);
           setLiveResourcesError(null);
         } else {
-          await (telemetry?.refreshSystemResources() ?? runtime.refreshSystemResources());
+          await refreshSystemResourcesAction?.();
           setLiveResourcesError(null);
         }
       } catch (err) {
@@ -663,7 +670,7 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
         }
       }
     },
-    [runtime, telemetry],
+    [daemonClient, daemonReady, refreshSystemResourcesAction, setSystemResourcesSnapshot],
   );
 
   // Silent live resource polling: ONLY runs when `visibility.resources` is enabled OR Resources popover is open
@@ -703,11 +710,11 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
 
   // Gate Ports polling in PrismuxTelemetryProvider strictly on Ports popover open.
   useEffect(() => {
-    telemetry?.setPortsPopoverOpen(portsOpen);
+    setPortsPopoverOpen?.(portsOpen);
     return () => {
-      telemetry?.setPortsPopoverOpen(false);
+      setPortsPopoverOpen?.(false);
     };
-  }, [portsOpen, telemetry]);
+  }, [portsOpen, setPortsPopoverOpen]);
 
   // Respond to external requests from left sidebar port badges to open the Ports Popover.
   const lastPortsRequestIdRef = useRef<number>(0);
@@ -719,8 +726,8 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
     lastPortsRequestIdRef.current = portsPopoverRequest.id;
     setOverridePortsWorkspace(portsPopoverRequest.workspace ?? null);
     setPortsOpen(true);
-    void (telemetry ?? runtime)?.refreshSystemPorts(portsPopoverRequest.workspace ?? undefined);
-  }, [portsPopoverRequest, runtime, telemetry]);
+    void refreshSystemPortsAction?.(portsPopoverRequest.workspace ?? undefined);
+  }, [portsPopoverRequest, refreshSystemPortsAction]);
 
   // Dismiss custom right-click menu on outside pointerdown or Escape.
   useEffect(() => {
@@ -1074,12 +1081,12 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
       if (open) {
         setUsageOpen(false);
         setQuotaOpen(false);
-        void (telemetry ?? runtime)?.refreshSystemPorts(activeWorkspaceRoot ?? undefined);
+        void refreshSystemPortsAction?.(activeWorkspaceRoot ?? undefined);
       } else {
         setOverridePortsWorkspace(null);
       }
     },
-    [activeWorkspaceRoot, runtime, telemetry],
+    [activeWorkspaceRoot, refreshSystemPortsAction],
   );
 
   const handleResourcesOpenChange = useCallback(

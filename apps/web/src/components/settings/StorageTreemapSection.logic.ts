@@ -301,16 +301,8 @@ export function buildManagedCleanRequest(
       selectedIds.has(category.id),
   );
   if (selected.length === 0) return null;
-  const targetIds = selected.map((category) => category.id);
-  const actionSet = new Set<DaemonStorageCleanAction>();
-  for (const category of selected) {
-    if (category.cleanAction) {
-      actionSet.add(category.cleanAction);
-    }
-  }
-  return actionSet.size > 0
-    ? { targetIds, actions: Array.from(actionSet) }
-    : { targetIds };
+  // Send targetIds only so shared cleanAction values never wipe unselected managed directories.
+  return { targetIds: selected.map((category) => category.id) };
 }
 
 export function buildCompactDatabaseCleanRequest(): DaemonStorageCleanRequest {
