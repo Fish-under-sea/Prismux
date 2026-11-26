@@ -306,7 +306,18 @@ export function resolveDelegatedChildProviderPresentation(input: {
     input;
   const trimmedInstanceId = modelInstanceId.trim();
   const trimmedRuntimeName = runtimeProviderName?.trim() || "";
-  const modelForInference = modelSlug?.trim() || selectedModelName?.trim() || undefined;
+  const trimmedModelSlug = modelSlug?.trim() || "";
+  const trimmedSelectedModelName = selectedModelName?.trim() || "";
+  const slugBrand = inferAgentBrandFromModel(trimmedModelSlug);
+  const selectedNameBrand =
+    slugBrand !== null ? null : inferAgentBrandFromModel(trimmedSelectedModelName);
+  const inferredModelBrand = slugBrand ?? selectedNameBrand;
+  const modelForInference =
+    (slugBrand !== null
+      ? trimmedModelSlug
+      : selectedNameBrand !== null
+        ? trimmedSelectedModelName
+        : trimmedModelSlug || trimmedSelectedModelName) || undefined;
 
   const driverKind =
     providerEntry?.driverKind ??
@@ -329,8 +340,6 @@ export function resolveDelegatedChildProviderPresentation(input: {
     displayName: providerEntry?.displayName ?? trimmedRuntimeName,
   });
   const directInstanceBrand = resolveAgentBrandId(trimmedInstanceId);
-  const inferredModelBrand =
-    inferAgentBrandFromModel(modelSlug) ?? inferAgentBrandFromModel(selectedModelName);
 
   let brandId: AgentBrandId;
   if (directDriverBrand !== "acp" && directDriverBrand !== "custom") {

@@ -634,6 +634,71 @@ describe("DelegatedSubthreadTree & SidebarThreadRow SSR rendering", () => {
     expect(html).not.toContain('data-acp-brand-monogram="AR"');
   });
 
+  it("forwards recognizable selectedModel.name when modelSlug is opaque so ProviderInstanceIcon renders DeepSeek whale SVG", () => {
+    const parentId = ThreadId.make("parent-opaque-slug");
+    const parentKey = scopedThreadKey(scopeThreadRef(ENV_LOCAL, parentId));
+    const opaqueDshId = ProviderInstanceId.make("acpRegistry_opaque_paid_slug");
+    const entry: SidebarProviderEntry = {
+      instanceId: opaqueDshId,
+      driverKind: ProviderDriverKind.make("acpRegistry"),
+      enabled: true,
+      displayName: "DS 付费组",
+      models: [
+        {
+          slug: "paid-group",
+          name: "DeepSeek V4.1 Flash",
+          isCustom: false,
+          capabilities: null,
+        },
+      ],
+    };
+
+    const pres = resolveDelegatedChildProviderPresentation({
+      providerEntry: entry,
+      modelInstanceId: opaqueDshId,
+      modelSlug: "paid-group",
+      selectedModelName: "DeepSeek V4.1 Flash",
+    });
+    expect(pres.brandId).toBe("dsh");
+    expect(pres.model).toBe("DeepSeek V4.1 Flash");
+
+    const opaqueChild = makeShell({
+      id: ThreadId.make("child-opaque-slug"),
+      title: "不透明 slug 子代理",
+      creationSource: "mcp",
+      providerInstanceId: opaqueDshId,
+      modelSelection: { instanceId: opaqueDshId, model: "paid-group" },
+      latestRunId: RunId.make("run-opaque-1"),
+      status: "completed",
+      lineage: {
+        rootThreadId: parentId,
+        parentThreadId: parentId,
+        relationshipToParent: "subagent",
+      },
+    });
+
+    const html = wrap(
+      <DelegatedSubthreadTree
+        parentKey={parentKey}
+        childThreads={[opaqueChild]}
+        activeThreadKey={null}
+        inWorkspaceCard
+        providerEntryByInstanceId={new Map([[opaqueDshId, entry]])}
+        onSelectChild={vi.fn()}
+        onActivateChild={vi.fn()}
+        onContextMenuChild={vi.fn()}
+      />,
+      "zh",
+    );
+
+    expect(html).toContain('data-agent-brand="dsh"');
+    expect(html).toContain('data-dsh-brand-icon="true"');
+    expect(html).toContain(`viewBox="${DSH_FISH_LOGO_VIEWBOX}"`);
+    expect(html).toContain(`fill="${DSH_BRAND_COLOR}"`);
+    expect(html).not.toContain('data-slot="acp-icon-monogram"');
+    expect(html).not.toContain(">AR<");
+  });
+
   it("renders crisp brand icons for Codex, Claude, Antigravity, Gemini, Qwen, GLM, Kimi, OpenCode, Pi, and custom fallback without [AR]", () => {
     const parentId = ThreadId.make("parent-multi");
     const parentKey = scopedThreadKey(scopeThreadRef(ENV_LOCAL, parentId));
