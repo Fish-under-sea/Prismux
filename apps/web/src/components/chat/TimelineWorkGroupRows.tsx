@@ -42,6 +42,7 @@ import {
 } from "./timelineRowContext";
 import { ActivityShimmerOverlay } from "./TimelineRowParts";
 import {
+  isWideToolActivityIcon,
   toolIconAcceptsTint,
   type WorkEntryIconName,
   ToolActivityIconView,
@@ -643,6 +644,7 @@ function LiveActivityContent({
       role={announceFailure ? "img" : undefined}
       ariaLabel={announceFailure ? gt("Tool call failed") : undefined}
       liveDot={liveAccent && !highlighted}
+      wideIcon={isWideToolActivityIcon(toolIcon, iconName)}
     />
   ) : null;
 
@@ -684,8 +686,7 @@ export function LiveWorkEntryTimelineRow({
   const legacyLabel = liveWorkEntryLabel(row.entry, ctx.workspaceRoot, row.active, m);
   const threadLabel = threadReadLabel(legacyLabel, row.entry, threadTarget, m);
   const useDshHeader = row.dshMode !== undefined;
-  const liveProcessDetail =
-    row.liveProcessDetail ?? ctx.workStepsPolicy?.liveProcessDetail ?? true;
+  const liveProcessDetail = row.liveProcessDetail ?? ctx.workStepsPolicy?.liveProcessDetail ?? true;
   const dshLive = useDshHeader
     ? formatDshLiveActivityLabel(row.entry, {
         liveProcessDetail,
@@ -862,6 +863,7 @@ function WorkGroupHeader(props: {
         expanded={props.expanded}
         groupScope="timeline-row"
         iconClassName={props.failed ? "text-destructive" : "text-primary"}
+        wideIcon={isWideToolActivityIcon(props.toolIcon, props.iconName)}
       />
       <span
         data-work-group-label="true"

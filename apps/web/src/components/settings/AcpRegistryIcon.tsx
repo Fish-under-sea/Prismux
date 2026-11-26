@@ -119,7 +119,7 @@ function resolveCustomAcpMonogram(input: {
     const cleaned = stripUuidNoise(
       candidate.trim().replace(/^(?:acp[-_]?registry|local)[:/_-]+/i, ""),
     ).trim();
-    if (!cleaned) continue;
+    if (!cleaned || /^(?:acp[-_]?registry|acp)$/i.test(cleaned)) continue;
     const initials = providerInstanceInitials(cleaned).trim();
     if (initials.length > 0) {
       return initials;
@@ -140,20 +140,12 @@ export function BundledAcpBrandIcon({
 
   if (brandKey === "claude") {
     return (
-      <ClaudeAI
-        className={cn("size-full", className)}
-        data-acp-brand-icon="claude"
-        aria-hidden
-      />
+      <ClaudeAI className={cn("size-full", className)} data-acp-brand-icon="claude" aria-hidden />
     );
   }
   if (brandKey === "codex") {
     return (
-      <OpenAI
-        className={cn("size-full", className)}
-        data-acp-brand-icon="codex"
-        aria-hidden
-      />
+      <OpenAI className={cn("size-full", className)} data-acp-brand-icon="codex" aria-hidden />
     );
   }
   if (brandKey === "antigravity") {
@@ -264,10 +256,7 @@ export function AcpRegistryAgentIcon({
       </svg>
       {status !== "loaded" ? (
         brandKey !== null ? (
-          <BundledAcpBrandIcon
-            brandKey={brandKey}
-            className={cn("size-4", fallbackClassName)}
-          />
+          <BundledAcpBrandIcon brandKey={brandKey} className={cn("size-4", fallbackClassName)} />
         ) : (
           <span
             data-slot="acp-icon-monogram"

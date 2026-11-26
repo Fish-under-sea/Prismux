@@ -13,6 +13,7 @@ import {
   MISTRAL_BRAND_COLOR,
   OPENHANDS_BRAND_COLOR,
   QWEN_BRAND_COLOR,
+  inferAgentBrandFromModel,
   resolveAcpAgentBrandKey,
   type AcpAgentBrandKey,
 } from "../../prismux/agentBrand";
@@ -379,5 +380,45 @@ describe("ProviderInstanceIcon official ACP brand icons", () => {
     expect(sidebarHtml).toContain('data-acp-brand-monogram="AB"');
     expect(sidebarHtml).not.toContain(GENERIC_ACP_HEXAGON_VIEWBOX);
     expect(sidebarHtml).not.toContain('data-slot="acp-icon-fallback"');
+  });
+
+  it("infers vendor brand icons from model slugs for unresolved acpRegistry instances without overriding authoritative providers", () => {
+    expect(inferAgentBrandFromModel("DeepSeek-V4.1-Flash")).toBe("dsh");
+    expect(inferAgentBrandFromModel("gpt-6.2-astra")).toBe("codex");
+    expect(inferAgentBrandFromModel("o3-mini")).toBe("codex");
+    expect(inferAgentBrandFromModel("claude-opus-4-6")).toBe("claude-code");
+    expect(inferAgentBrandFromModel("gemini-2.5-pro")).toBe("gemini");
+    expect(inferAgentBrandFromModel("qwen3-coder")).toBe("qwen");
+    expect(inferAgentBrandFromModel("glm-5")).toBe("glm");
+    expect(inferAgentBrandFromModel("kimi-k2")).toBe("kimi");
+    expect(inferAgentBrandFromModel("internal-custom-v1")).toBeNull();
+
+    const dshModelFallbackHtml = renderToStaticMarkup(
+      <ProviderInstanceIcon
+        driverKind={acpDriver}
+        displayName="DS 付费组"
+        instanceId="acpRegistry_048c43c3-0798-480e-bc42-1a2b3c4d5e6f"
+        model="DeepSeek-V4.1-Flash"
+      />,
+    );
+    expect(dshModelFallbackHtml).toContain('data-dsh-brand-icon="true"');
+    expect(dshModelFallbackHtml).toContain(`fill="${DSH_BRAND_COLOR}"`);
+    expect(dshModelFallbackHtml).not.toContain(">AR<");
+
+    const antigravityWithClaudeModelHtml = renderToStaticMarkup(
+      <ProviderInstanceIcon
+        driverKind={ProviderDriverKind.make("antigravity")}
+        displayName="Antigravity"
+        model="claude-opus-4-6"
+      />,
+    );
+    expect(antigravityWithClaudeModelHtml).toContain("#4285F4");
+    expect(antigravityWithClaudeModelHtml).not.toContain("#d97757");
+
+    const bareAcpRegistryFallbackHtml = renderToStaticMarkup(
+      <ProviderInstanceIcon driverKind={acpDriver} displayName="" instanceId="acpRegistry" />,
+    );
+    expect(bareAcpRegistryFallbackHtml).not.toContain(">AR<");
+    expect(bareAcpRegistryFallbackHtml).toContain('data-acp-brand-monogram="AC"');
   });
 });

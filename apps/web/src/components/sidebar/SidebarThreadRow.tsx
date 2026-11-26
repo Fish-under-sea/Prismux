@@ -142,7 +142,11 @@ import { useThreadHasUnsentDraft } from "../../composerDraftStore";
 import { ThreadDetailsIssueRows } from "../chat/ThreadDetailsIssueRows";
 import { IssueGlyph, issueStatePresentation } from "../issue/issuePresentation";
 import { ensureLocalApi } from "../../localApi";
-import { AgentBrandLogo } from "../../prismux/agentBrand";
+import {
+  AgentBrandLogo,
+  inferAgentBrandFromModel,
+  resolveAgentBrandId,
+} from "../../prismux/agentBrand";
 import type { DaemonSystemPortEntryDto } from "../../prismux/daemonClient";
 import { useOptionalPrismuxRuntime } from "../../prismux/PrismuxRuntimeProvider";
 import {
@@ -173,6 +177,7 @@ export type SidebarProviderEntry = Pick<
   | "accentColor"
   | "acpRegistryAgentId"
   | "acpRegistryIconUrl"
+  | "acpCommandPath"
   | "models"
 >;
 function compactSidebarTimeLabel(timestamp: string, nowMs: number, resolve: MessageResolver) {
@@ -253,6 +258,8 @@ function SidebarProviderStack(props: {
       accentColor={currentEntry.accentColor}
       acpRegistryAgentId={currentEntry.acpRegistryAgentId}
       acpRegistryIconUrl={currentEntry.acpRegistryIconUrl}
+      acpCommandPath={currentEntry.acpCommandPath}
+      model={props.thread.modelSelection.model}
       showBadge={showInstanceBadge}
       size="compact"
       iconClassName="opacity-92 text-sidebar-foreground/90"
@@ -261,10 +268,7 @@ function SidebarProviderStack(props: {
   const breathingAttr = props.activeBreathing ? "1" : "0";
   if (stack.length === 1) {
     return (
-      <span
-        data-agent-logo-breathing={breathingAttr}
-        className="inline-flex shrink-0 items-center"
-      >
+      <span data-agent-logo-breathing={breathingAttr} className="inline-flex shrink-0 items-center">
         {current}
       </span>
     );
@@ -282,6 +286,7 @@ function SidebarProviderStack(props: {
             instanceId={entry.instanceId}
             acpRegistryAgentId={entry.acpRegistryAgentId}
             acpRegistryIconUrl={entry.acpRegistryIconUrl}
+            acpCommandPath={entry.acpCommandPath}
             iconClassName="size-3 opacity-65"
           />
         );
@@ -398,6 +403,8 @@ function SidebarThreadTooltip({
               accentColor={providerEntry?.accentColor}
               acpRegistryAgentId={providerEntry?.acpRegistryAgentId}
               acpRegistryIconUrl={providerEntry?.acpRegistryIconUrl}
+              acpCommandPath={providerEntry?.acpCommandPath}
+              model={thread.modelSelection.model}
               showBadge={showInstanceBadge && providerEntry?.accentColor !== undefined}
               badgeContent="none"
               badgeClassName="h-2 min-w-2 px-0"
@@ -442,7 +449,10 @@ function SidebarThreadTooltip({
         </div>
         {workspacePorts.length > 0 ? (
           <div className="flex min-w-0 items-center gap-2">
-            <NetworkIcon aria-hidden className="size-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            <NetworkIcon
+              aria-hidden
+              className="size-3 shrink-0 text-emerald-600 dark:text-emerald-400"
+            />
             <div className="min-w-0 truncate font-mono text-foreground/80 tabular-nums">
               {gt("Listening ports: {ports}", {
                 ports: workspacePorts
@@ -734,11 +744,7 @@ function OrcaCompactStatusIcon(props: {
       data-orca-status={isUnread ? "unread" : hasRun ? "done" : "idle"}
       className={cn(
         "size-3 shrink-0",
-        isUnread
-          ? "text-success"
-          : hasRun
-            ? "text-success/80"
-            : "text-sidebar-muted-foreground/45",
+        isUnread ? "text-success" : hasRun ? "text-success/80" : "text-sidebar-muted-foreground/45",
       )}
     />
   );
@@ -928,9 +934,11 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     event.stopPropagation();
     if (workspacePorts.length === 1 && primaryPortUrl && !event.shiftKey) {
       try {
-        void ensureLocalApi().shell.openExternal(primaryPortUrl).catch(() => {
-          window.open(primaryPortUrl, "_blank", "noopener,noreferrer");
-        });
+        void ensureLocalApi()
+          .shell.openExternal(primaryPortUrl)
+          .catch(() => {
+            window.open(primaryPortUrl, "_blank", "noopener,noreferrer");
+          });
       } catch {
         window.open(primaryPortUrl, "_blank", "noopener,noreferrer");
       }
@@ -1737,7 +1745,8 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
         {...(fileDropHandlers ?? {})}
         className={cn(
           "list-none",
-          delegatedTreeNode === null && "[content-visibility:auto] [contain-intrinsic-size:auto_25px]",
+          delegatedTreeNode === null &&
+            "[content-visibility:auto] [contain-intrinsic-size:auto_25px]",
           sortable?.isDragging && "relative z-20",
         )}
       >
@@ -1795,7 +1804,11 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                 />
               ) : (
                 <AgentBrandLogo
-                  provider={modelInstanceId}
+                  provider={(() => {
+                    const direct = resolveAgentBrandId(modelInstanceId);
+                    if (direct !== "acp" && direct !== "custom") return modelInstanceId;
+                    return inferAgentBrandFromModel(thread.modelSelection.model) ?? modelInstanceId;
+                  })()}
                   online={isAgentActive}
                   breathing={false}
                   size={14}
@@ -1826,7 +1839,9 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               >
                 {thread.title}
                 {isRegeneratingTitle ? (
-                  <ActivityShimmerOverlay className="truncate">{thread.title}</ActivityShimmerOverlay>
+                  <ActivityShimmerOverlay className="truncate">
+                    {thread.title}
+                  </ActivityShimmerOverlay>
                 ) : null}
               </span>
             )}
@@ -1957,8 +1972,12 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
         {...(fileDropHandlers ?? {})}
         className={cn(
           "list-none",
-          delegatedTreeNode === null && "[content-visibility:auto] [contain-intrinsic-size:auto_--spacing(9)]",
-          delegatedTreeNode === null && metaLine !== null && multiline && "[contain-intrinsic-size:auto_--spacing(13.5)]",
+          delegatedTreeNode === null &&
+            "[content-visibility:auto] [contain-intrinsic-size:auto_--spacing(9)]",
+          delegatedTreeNode === null &&
+            metaLine !== null &&
+            multiline &&
+            "[contain-intrinsic-size:auto_--spacing(13.5)]",
           sortable?.isDragging && "relative z-20",
         )}
       >
@@ -2179,7 +2198,8 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
       // that have not rendered yet, so a hint off by a pixel lands it a pixel short per row above.
       className={cn(
         "list-none py-1",
-        delegatedTreeNode === null && "[content-visibility:auto] [contain-intrinsic-size:auto_82px]",
+        delegatedTreeNode === null &&
+          "[content-visibility:auto] [contain-intrinsic-size:auto_82px]",
         delegatedTreeNode === null && metaLineEmpty && "[contain-intrinsic-size:auto_64px]",
         sortable?.isDragging && "relative z-20",
       )}

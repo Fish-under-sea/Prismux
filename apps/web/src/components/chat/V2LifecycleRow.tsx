@@ -71,7 +71,7 @@ import { cn } from "~/lib/utils";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 import { subagentResumedSince } from "./V2LifecycleRow.logic";
 import { Button, InlineButton } from "../ui/button";
-import { T3Wordmark } from "../T3Wordmark";
+import { PrismuxWordmark } from "../PrismuxWordmark";
 
 export type { HandoffTimelineRun } from "@prismux/client-runtime/handoff";
 
@@ -151,7 +151,8 @@ export function V2LifecycleRow(props: {
     return (
       <WorkLogRow
         data-v2-item-type={item.type}
-        icon={<T3Wordmark className="size-4 text-icon-muted" aria-hidden />}
+        wideIcon
+        icon={<PrismuxWordmark className="text-icon-muted" aria-hidden />}
         label={
           item.title ? (
             <T>
@@ -247,6 +248,7 @@ function SubagentAvatar({
   instanceId,
   acpRegistryAgentId,
   iconUrl,
+  acpCommandPath,
   accentColor,
   showBadge,
   anyInstanceBadge,
@@ -258,6 +260,7 @@ function SubagentAvatar({
   instanceId?: string | undefined;
   acpRegistryAgentId?: string | undefined;
   iconUrl?: string | undefined;
+  acpCommandPath?: string | undefined;
   accentColor?: string | undefined;
   showBadge: boolean;
   anyInstanceBadge: boolean;
@@ -280,6 +283,7 @@ function SubagentAvatar({
           accentColor={accentColor}
           acpRegistryAgentId={acpRegistryAgentId}
           acpRegistryIconUrl={iconUrl}
+          acpCommandPath={acpCommandPath}
           showBadge={showBadge}
           size="compact"
           className="z-auto"
@@ -332,7 +336,9 @@ export function EnvironmentSubagentAvatar({
       providers?.find((provider) => provider.instanceId === providerInstanceId)?.driver,
   );
   const displayName = useAtomValue(providersAtom, (providers) => {
-    const entry = entries(providers).find((candidate) => candidate.instanceId === providerInstanceId);
+    const entry = entries(providers).find(
+      (candidate) => candidate.instanceId === providerInstanceId,
+    );
     return entry ? resolveProviderEntryDisplayName(entry) : undefined;
   });
   const accentColor = useAtomValue(
@@ -355,12 +361,19 @@ export function EnvironmentSubagentAvatar({
         ?.acpRegistryAgentId,
   );
   const iconUrl = useAtomValue(providersAtom, (providers) => {
-    const entry = entries(providers).find((candidate) => candidate.instanceId === providerInstanceId);
+    const entry = entries(providers).find(
+      (candidate) => candidate.instanceId === providerInstanceId,
+    );
     return (
       entry?.acpRegistryIconUrl ??
       providers?.find((provider) => provider.instanceId === providerInstanceId)?.iconUrl
     );
   });
+  const acpCommandPath = useAtomValue(
+    providersAtom,
+    (providers) =>
+      entries(providers).find((entry) => entry.instanceId === providerInstanceId)?.acpCommandPath,
+  );
   return (
     <SubagentAvatar
       {...props}
@@ -369,6 +382,7 @@ export function EnvironmentSubagentAvatar({
       instanceId={providerInstanceId}
       acpRegistryAgentId={acpRegistryAgentId}
       iconUrl={iconUrl}
+      acpCommandPath={acpCommandPath}
       accentColor={accentColor}
       showBadge={showBadge}
       anyInstanceBadge={anyInstanceBadge}

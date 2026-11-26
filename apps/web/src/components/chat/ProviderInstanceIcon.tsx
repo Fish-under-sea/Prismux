@@ -19,9 +19,11 @@ import {
 
 import { cn } from "~/lib/utils";
 import {
+  agentBrandIdToAcpBrandKey,
   DSH_BRAND_COLOR,
   DSH_FISH_LOGO_PATH,
   DSH_FISH_LOGO_VIEWBOX,
+  inferAgentBrandFromModel,
   resolveAcpAgentBrandKey,
   resolveAgentBrandId,
 } from "../../prismux/agentBrand";
@@ -137,6 +139,7 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   acpRegistryAgentId?: string | undefined;
   acpRegistryIconUrl?: string | undefined;
   acpCommandPath?: string | undefined;
+  model?: string | null | undefined;
   showBadge?: boolean;
   badgeContent?: "initials" | "none";
   size?: "default" | "compact";
@@ -173,7 +176,6 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
         commandPath: props.acpCommandPath,
       })
     : null;
-  const isAntigravityAcpRegistry = isAcpRegistry && acpBrandKey === "antigravity";
   // A custom OpenAI-compatible endpoint has no brand: show its name, marked with the protocol.
   const isCustomEndpoint = props.driverKind === "openaiCompatible";
   const acpRegistryIconUrl = resolveProviderInstanceAcpRegistryIconUrl({
@@ -184,12 +186,28 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   const fallbackBundledBrandKey =
     !isDshInstance && !isAcpRegistry && !isCustomEndpoint && !packageIcon && !Icon
       ? resolveAcpAgentBrandKey({
-          agentId: props.driverKind,
+          agentId: props.acpRegistryAgentId || props.driverKind,
           instanceId: props.instanceId,
           displayName: props.displayName,
           commandPath: props.acpCommandPath,
         })
       : null;
+  const isGenericOrUnresolved =
+    (isAcpRegistry && acpBrandKey === null && acpRegistryIconUrl === null) ||
+    (!isAcpRegistry &&
+      !isCustomEndpoint &&
+      !packageIcon &&
+      !Icon &&
+      fallbackBundledBrandKey === null);
+  const inferredModelBrandKey =
+    !isDshInstance && isGenericOrUnresolved
+      ? agentBrandIdToAcpBrandKey(inferAgentBrandFromModel(props.model))
+      : null;
+  const renderDshIcon = isDshInstance || inferredModelBrandKey === "dsh";
+  const renderAntigravityIcon =
+    (isAcpRegistry && acpBrandKey === "antigravity") ||
+    fallbackBundledBrandKey === "antigravity" ||
+    inferredModelBrandKey === "antigravity";
 
   return (
     <span
@@ -200,10 +218,15 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
       style={accentStyle}
       data-provider-accent-color={accentColor}
     >
-      {isDshInstance ? (
+      {renderDshIcon ? (
         <DshFishIcon className={cn("size-5 shrink-0", iconClassName)} />
-      ) : isAntigravityAcpRegistry ? (
+      ) : renderAntigravityIcon ? (
         <AntigravityIcon className={cn("size-5 shrink-0", iconClassName)} aria-hidden />
+      ) : inferredModelBrandKey !== null ? (
+        <BundledAcpBrandIcon
+          brandKey={inferredModelBrandKey}
+          className={cn("size-5 shrink-0", iconClassName)}
+        />
       ) : isAcpRegistry ? (
         <AcpRegistryAgentIcon
           className={cn("size-5 rounded-none bg-transparent text-foreground", iconClassName)}
@@ -255,7 +278,7 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
           {providerInstanceInitials(props.displayName)}
         </span>
       )}
-      {isCustomEndpoint || isDshInstance ? null : props.showBadge ? (
+      {isCustomEndpoint || renderDshIcon ? null : props.showBadge ? (
         <span
           className={cn(
             "pointer-events-none absolute right-0 bottom-0 z-10 flex h-3.5 min-w-3.5 items-center justify-center rounded-full border px-0.5 text-4xs font-semibold leading-none shadow-sm",

@@ -22,8 +22,17 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { makeThreadFixture } from "../../test-fixtures";
+import {
+  DSH_BRAND_COLOR,
+  DSH_FISH_LOGO_VIEWBOX,
+  GLM_BRAND_COLOR,
+  QWEN_BRAND_COLOR,
+} from "../../prismux/agentBrand";
 import { TooltipProvider } from "../ui/tooltip";
-import { DelegatedSubthreadTree } from "./DelegatedSubthreadTree";
+import {
+  DelegatedSubthreadTree,
+  resolveDelegatedChildProviderPresentation,
+} from "./DelegatedSubthreadTree";
 import { SidebarThreadRow, type SidebarProviderEntry } from "./SidebarThreadRow";
 import {
   collectDelegatedChildThreadRefs,
@@ -522,5 +531,284 @@ describe("DelegatedSubthreadTree & SidebarThreadRow SSR rendering", () => {
     expect(expandedHtml).toContain('aria-expanded="true"');
     expect(expandedHtml).toContain('data-testid="delegated-subthread-tree"');
     expect(expandedHtml).toContain("Fix unit test");
+  });
+
+  it("renders DeepSeek whale SVG (never [AR]) for local acpRegistry DSH subagents with custom display names, command paths, or opaque UUID instance IDs", () => {
+    const parentId = ThreadId.make("parent-dsh");
+    const parentKey = scopedThreadKey(scopeThreadRef(ENV_LOCAL, parentId));
+    const localDshByModelId = ProviderInstanceId.make(
+      "acpRegistry_048c43c3-0798-480e-bc42-1a2b3c4d5e6f",
+    );
+    const localDshByCmdId = ProviderInstanceId.make("acpRegistry_local_paid_group");
+    const missingMapDshId = ProviderInstanceId.make(
+      "acpRegistry_99887766-5544-3322-1100-aabbccddeeff",
+    );
+
+    const localProviderMap = new Map<string, SidebarProviderEntry>([
+      [
+        localDshByModelId,
+        {
+          instanceId: localDshByModelId,
+          driverKind: ProviderDriverKind.make("acpRegistry"),
+          enabled: true,
+          displayName: "DS 付费组",
+          models: [],
+        },
+      ],
+      [
+        localDshByCmdId,
+        {
+          instanceId: localDshByCmdId,
+          driverKind: ProviderDriverKind.make("acpRegistry"),
+          acpCommandPath: "C:\\Users\\Fish\\bin\\dsh.exe",
+          enabled: true,
+          displayName: "主力子代理",
+          models: [],
+        },
+      ],
+    ]);
+
+    const childRenamedDsh = makeShell({
+      id: ThreadId.make("child-dsh-renamed"),
+      title: "DS 付费组子 agent",
+      creationSource: "mcp",
+      providerInstanceId: localDshByModelId,
+      modelSelection: { instanceId: localDshByModelId, model: "DeepSeek-V4.1-Flash" },
+      latestRunId: RunId.make("run-dsh-1"),
+      status: "completed",
+      lineage: {
+        rootThreadId: parentId,
+        parentThreadId: parentId,
+        relationshipToParent: "subagent",
+      },
+    });
+    const childCmdDsh = makeShell({
+      id: ThreadId.make("child-dsh-cmd"),
+      title: "本地 DSH 命令行代理",
+      creationSource: "mcp",
+      providerInstanceId: localDshByCmdId,
+      modelSelection: { instanceId: localDshByCmdId, model: "custom-model" },
+      latestRunId: RunId.make("run-dsh-2"),
+      status: "completed",
+      lineage: {
+        rootThreadId: parentId,
+        parentThreadId: parentId,
+        relationshipToParent: "subagent",
+      },
+    });
+    const childMissingEntryDsh = makeShell({
+      id: ThreadId.make("child-dsh-missing"),
+      title: "未命中 Provider 表时的 DSH 子线程",
+      creationSource: "mcp",
+      providerInstanceId: missingMapDshId,
+      modelSelection: { instanceId: missingMapDshId, model: "DeepSeek-V4.1-Flash" },
+      latestRunId: RunId.make("run-dsh-3"),
+      status: "completed",
+      lineage: {
+        rootThreadId: parentId,
+        parentThreadId: parentId,
+        relationshipToParent: "subagent",
+      },
+    });
+
+    const html = wrap(
+      <DelegatedSubthreadTree
+        parentKey={parentKey}
+        childThreads={[childRenamedDsh, childCmdDsh, childMissingEntryDsh]}
+        activeThreadKey={null}
+        inWorkspaceCard
+        providerEntryByInstanceId={localProviderMap}
+        onSelectChild={vi.fn()}
+        onActivateChild={vi.fn()}
+        onContextMenuChild={vi.fn()}
+      />,
+      "zh",
+    );
+
+    expect((html.match(/data-dsh-brand-icon="true"/g) ?? []).length).toBe(3);
+    expect((html.match(/data-agent-brand="dsh"/g) ?? []).length).toBe(3);
+    expect(html).toContain(`viewBox="${DSH_FISH_LOGO_VIEWBOX}"`);
+    expect(html).toContain(`fill="${DSH_BRAND_COLOR}"`);
+    expect(html).not.toContain(">AR<");
+    expect(html).not.toContain('data-agent-brand-monogram="AR"');
+    expect(html).not.toContain('data-acp-brand-monogram="AR"');
+  });
+
+  it("renders crisp brand icons for Codex, Claude, Antigravity, Gemini, Qwen, GLM, Kimi, OpenCode, Pi, and custom fallback without [AR]", () => {
+    const parentId = ThreadId.make("parent-multi");
+    const parentKey = scopedThreadKey(scopeThreadRef(ENV_LOCAL, parentId));
+
+    const claudeId = ProviderInstanceId.make("claudeAgent");
+    const antigravityId = ProviderInstanceId.make("antigravity");
+    const opencodeId = ProviderInstanceId.make("opencode");
+    const piId = ProviderInstanceId.make("pi");
+    const qwenId = ProviderInstanceId.make("acpRegistry_qwen-code");
+    const glmId = ProviderInstanceId.make("acpRegistry_glm_local");
+    const kimiId = ProviderInstanceId.make("acpRegistry_kimi-code");
+    const customId = ProviderInstanceId.make("acpRegistry_acme");
+    const missingGeminiId = ProviderInstanceId.make(
+      "acpRegistry_11112222-3333-4444-5555-666677778888",
+    );
+    const missingCodexId = ProviderInstanceId.make(
+      "acpRegistry_aaaa1111-2222-3333-4444-555566667777",
+    );
+    const missingClaudeId = ProviderInstanceId.make(
+      "acpRegistry_bbbb1111-2222-3333-4444-555566667777",
+    );
+
+    const multiMap = new Map<string, SidebarProviderEntry>([
+      [
+        claudeId,
+        {
+          instanceId: claudeId,
+          driverKind: ProviderDriverKind.make("claudeAgent"),
+          enabled: true,
+          displayName: "Claude Code",
+          models: [],
+        },
+      ],
+      [
+        antigravityId,
+        {
+          instanceId: antigravityId,
+          driverKind: ProviderDriverKind.make("antigravity"),
+          enabled: true,
+          displayName: "Antigravity",
+          models: [],
+        },
+      ],
+      [
+        opencodeId,
+        {
+          instanceId: opencodeId,
+          driverKind: ProviderDriverKind.make("opencode"),
+          enabled: true,
+          displayName: "OpenCode",
+          models: [],
+        },
+      ],
+      [
+        piId,
+        {
+          instanceId: piId,
+          driverKind: ProviderDriverKind.make("pi"),
+          enabled: true,
+          displayName: "Pi",
+          models: [],
+        },
+      ],
+      [
+        qwenId,
+        {
+          instanceId: qwenId,
+          driverKind: ProviderDriverKind.make("acpRegistry"),
+          acpRegistryAgentId: "qwen-code",
+          enabled: true,
+          displayName: "Qwen Code",
+          models: [],
+        },
+      ],
+      [
+        glmId,
+        {
+          instanceId: glmId,
+          driverKind: ProviderDriverKind.make("acpRegistry"),
+          acpCommandPath: "glm-acp-agent.cmd",
+          enabled: true,
+          displayName: "主力智谱",
+          models: [],
+        },
+      ],
+      [
+        kimiId,
+        {
+          instanceId: kimiId,
+          driverKind: ProviderDriverKind.make("acpRegistry"),
+          acpRegistryAgentId: "kimi-code",
+          enabled: true,
+          displayName: "Kimi Code",
+          models: [],
+        },
+      ],
+      [
+        customId,
+        {
+          instanceId: customId,
+          driverKind: ProviderDriverKind.make("acpRegistry"),
+          enabled: true,
+          displayName: "Acme Bot",
+          models: [],
+        },
+      ],
+    ]);
+
+    const makeChild = (id: string, title: string, instanceId: ProviderInstanceId, model: string) =>
+      makeShell({
+        id: ThreadId.make(id),
+        title,
+        creationSource: "mcp",
+        providerInstanceId: instanceId,
+        modelSelection: { instanceId, model },
+        latestRunId: RunId.make(`run-${id}`),
+        status: "completed",
+        lineage: {
+          rootThreadId: parentId,
+          parentThreadId: parentId,
+          relationshipToParent: "subagent",
+        },
+      });
+
+    // Antigravity running a Claude model must keep Antigravity brand (model fallback must never override authoritative driver).
+    const agyPres = resolveDelegatedChildProviderPresentation({
+      providerEntry: multiMap.get(antigravityId) ?? null,
+      modelInstanceId: antigravityId,
+      modelSlug: "claude-opus-4-6",
+    });
+    expect(agyPres.brandId).toBe("antigravity");
+
+    const html = wrap(
+      <DelegatedSubthreadTree
+        parentKey={parentKey}
+        childThreads={[
+          makeChild("c-claude", "Claude child", claudeId, "claude-sonnet-4-5"),
+          makeChild("c-agy", "AGY child", antigravityId, "claude-opus-4-6"),
+          makeChild("c-oc", "OpenCode child", opencodeId, "deepseek-v4.1"),
+          makeChild("c-pi", "Pi child", piId, "gpt-5.4"),
+          makeChild("c-qwen", "Qwen child", qwenId, "qwen3-coder"),
+          makeChild("c-glm", "GLM child", glmId, "glm-5"),
+          makeChild("c-kimi", "Kimi child", kimiId, "kimi-k2"),
+          makeChild("c-gemini-fallback", "Gemini fallback", missingGeminiId, "gemini-2.5-pro"),
+          makeChild("c-codex-fallback", "Codex fallback", missingCodexId, "gpt-6.2-astra"),
+          makeChild("c-claude-fallback", "Claude fallback", missingClaudeId, "claude-opus-4-6"),
+          makeChild("c-custom", "Acme custom", customId, "internal-model-v1"),
+        ]}
+        activeThreadKey={null}
+        inWorkspaceCard
+        providerEntryByInstanceId={multiMap}
+        onSelectChild={vi.fn()}
+        onActivateChild={vi.fn()}
+        onContextMenuChild={vi.fn()}
+      />,
+      "zh",
+    );
+
+    expect(html).toContain('data-agent-brand="claude-code"');
+    expect(html).toContain('data-agent-brand="antigravity"');
+    expect(html).toContain("#4285F4");
+    expect(html).toContain('data-agent-brand="opencode"');
+    expect(html).toContain('data-agent-brand="pi"');
+    expect(html).toContain('data-agent-brand="qwen"');
+    expect(html).toContain(QWEN_BRAND_COLOR);
+    expect(html).toContain('data-agent-brand="glm"');
+    expect(html).toContain(GLM_BRAND_COLOR);
+    expect(html).toContain('data-agent-brand="kimi"');
+    expect(html).toContain('data-agent-brand="gemini"');
+    expect(html).toContain('data-acp-brand-icon="gemini"');
+    expect(html).toContain('data-agent-brand="codex"');
+    expect(html).toContain('data-acp-brand-icon="codex"');
+    expect(html).toContain('data-acp-brand-icon="claude"');
+    expect(html).toContain('data-acp-brand-monogram="AB"');
+    expect(html).not.toContain(">AR<");
+    expect(html).not.toContain('data-acp-brand-monogram="AR"');
   });
 });
