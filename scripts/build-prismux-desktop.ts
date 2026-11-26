@@ -21,6 +21,10 @@ import {
   verifyArchiveWithSevenZip,
   writeConsolidatedSha256File,
 } from "./build-release-packages.ts";
+import {
+  verifyPinnedRepoBinaries,
+  verifySqliteVecBinaryIntegrity,
+} from "./lib/binary-integrity.ts";
 
 export const ROOT_DESKTOP_BUILD_FILTERS = [
   "@prismux/protocol",
@@ -60,6 +64,10 @@ export interface BuildPrismuxDesktopOptions {
   dryRun?: boolean;
   runner?: DesktopCommandRunner;
   verifySevenZip?: (sevenZipPath: string, archivePath: string) => void;
+  /** Test-only override for expected sqlite-vec SHA-256 digests when staging synthetic fixtures. */
+  sqliteVecExpectedSha256?: readonly string[];
+  /** Set false only for minimal synthetic repo unit tests that omit apps/web vendor binaries. */
+  verifyPinnedAssets?: boolean;
 }
 
 export interface BuildPrismuxDesktopResult {
@@ -78,6 +86,7 @@ export interface StagedSqliteVecBinary {
   sourcePath: string;
   stagedPath: string;
   bytes: number;
+  sha256: string;
 }
 
 export interface ParsedBuildDesktopCliArgs {
@@ -352,15 +361,22 @@ export function stageSqliteVecBinaryForDesktop(options: {
   platform?: NodeJS.Platform;
   arch?: string;
   env?: Readonly<Record<string, string | undefined>>;
+  expectedSha256?: readonly string[];
 }): StagedSqliteVecBinary {
   const platform = options.platform ?? process.platform;
   const arch = options.arch ?? process.arch;
   const libName = resolveSqliteVecLibraryFilename(platform);
+  const pkgName = resolveSqliteVecPackageName(platform, arch);
   const sourcePath = resolveSqliteVecBinaryPath({
     repoRoot: options.repoRoot,
     platform,
     arch,
     env: options.env,
+  });
+
+  // Fail closed if the native sqlite-vec library does not match its pinned SHA-256 digest.
+  const verifiedSource = verifySqliteVecBinaryIntegrity(sourcePath, pkgName, libName, {
+    ...(options.expectedSha256 !== undefined ? { expectedSha256: options.expectedSha256 } : {}),
   });
 
   const stagedPath = resolve(
@@ -388,11 +404,15 @@ export function stageSqliteVecBinaryForDesktop(options: {
       `[desktop:build] Staged sqlite-vec binary at ${stagedPath} is empty or not a regular file (${stagedStat.size} bytes).`,
     );
   }
+  const verifiedStaged = verifySqliteVecBinaryIntegrity(stagedPath, pkgName, libName, {
+    expectedSha256: [verifiedSource.sha256],
+  });
 
   return {
     sourcePath,
     stagedPath,
     bytes: stagedStat.size,
+    sha256: verifiedStaged.sha256,
   };
 }
 
@@ -462,6 +482,12 @@ export function buildPrismuxDesktop(
 
   const baseEnv = sanitizeDesktopBuildEnv(process.env);
 
+  // Step 0.5: Verify pinned vendored repo binaries (ghostty-*.wasm, pierre-words-*.tgz) fail-closed
+  if (options.verifyPinnedAssets !== false) {
+    verifyPinnedRepoBinaries(repoRoot);
+    executedSteps.push("verify-pinned-binaries");
+  }
+
   // Step 1: Build root workspace core packages + daemon
   if (!options.skipRootBuild) {
     const filterArgs = ROOT_DESKTOP_BUILD_FILTERS.flatMap((pkg) => ["--filter", pkg]);
@@ -479,6 +505,9 @@ export function buildPrismuxDesktop(
   const sqliteVecStaged = stageSqliteVecBinaryForDesktop({
     repoRoot,
     env: baseEnv,
+    ...(options.sqliteVecExpectedSha256 !== undefined
+      ? { expectedSha256: options.sqliteVecExpectedSha256 }
+      : {}),
   });
   executedSteps.push("sqlite-vec-stage");
 

@@ -18,7 +18,6 @@ import {
 
 import { fromYaml } from "@prismux/core-shared/schemaYaml";
 import * as HostProcess from "@prismux/core-shared/HostProcess";
-import { clerkFrontendApiHostnameFromPublishableKey } from "@prismux/core-shared/relayAuth";
 import { resolveSpawnCommand } from "@prismux/core-shared/shell";
 import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
@@ -31,6 +30,13 @@ import {
   updateReleasePackageVersions,
 } from "./update-release-package-versions.ts";
 import { applyWebBrandAssets } from "./apply-web-brand-assets.ts";
+import {
+  BINARY_SHA256_MANIFEST,
+  BinaryIntegrityError,
+  verifyPinnedRepoBinaries,
+  verifySevenZipBinaryIntegrity,
+  verifySqliteVecBinaryIntegrity,
+} from "./lib/binary-integrity.ts";
 import {
   BRAND_ASSET_PATHS,
   resolveWebAssetBrandForChannel,
@@ -468,15 +474,6 @@ const desktopIconPlatformNames = {
   win: "Windows",
 } satisfies Record<typeof BuildPlatform.Type, string>;
 
-export class LinuxBrowserSecretHostError extends Schema.TaggedError<LinuxBrowserSecretHostError>()(
-  "LinuxBrowserSecretHostError",
-  { hostPlatform: Schema.String },
-) {
-  override get message(): string {
-    return `Linux desktop builds must run on a Linux host: the browser secret helper links against libsecret and cannot be built on '${this.hostPlatform}'.`;
-  }
-}
-
 export class DesktopIconSourceMissingError extends Schema.TaggedError<DesktopIconSourceMissingError>()(
   "DesktopIconSourceMissingError",
   {
@@ -840,12 +837,20 @@ export class WindowsPackagedPayloadValidationError extends Schema.TaggedError<Wi
 export class WindowsSevenZipToolError extends Schema.TaggedError<WindowsSevenZipToolError>()(
   "WindowsSevenZipToolError",
   {
-    reason: Schema.Literals(["missing", "invalid-size"]),
+    reason: Schema.Literals(["missing", "invalid-size", "sha256-mismatch", "license-missing"]),
     searchedPaths: Schema.Array(Schema.String),
     sizeBytes: Schema.optionalKey(Schema.Number),
+    actualSha256: Schema.optionalKey(Schema.String),
+    expectedSha256: Schema.optionalKey(Schema.Array(Schema.String)),
   },
 ) {
   override get message(): string {
+    if (this.reason === "sha256-mismatch") {
+      return `Refusing unverified or tampered 7-Zip binary (${this.searchedPaths.join(", ")}): actual SHA-256 ${this.actualSha256 ?? "unknown"} does not match pinned manifest (${(this.expectedSha256 ?? []).join(" | ")}).`;
+    }
+    if (this.reason === "license-missing") {
+      return `Required 7-Zip LGPL-2.1 license notice is missing at ${this.searchedPaths.join(", ")}.`;
+    }
     if (this.reason === "invalid-size") {
       return `Staged 7za.exe has unexpected size (${String(this.sizeBytes ?? 0)} bytes); expected between ${String(WINDOWS_SEVEN_ZIP_MIN_BYTES)} and ${String(WINDOWS_SEVEN_ZIP_MAX_BYTES)} bytes.`;
     }
@@ -856,12 +861,17 @@ export class WindowsSevenZipToolError extends Schema.TaggedError<WindowsSevenZip
 export class SqliteVecNativeToolError extends Schema.TaggedError<SqliteVecNativeToolError>()(
   "SqliteVecNativeToolError",
   {
-    reason: Schema.Literals(["missing", "invalid-size"]),
+    reason: Schema.Literals(["missing", "invalid-size", "sha256-mismatch"]),
     searchedPaths: Schema.Array(Schema.String),
     sizeBytes: Schema.optionalKey(Schema.Number),
+    actualSha256: Schema.optionalKey(Schema.String),
+    expectedSha256: Schema.optionalKey(Schema.Array(Schema.String)),
   },
 ) {
   override get message(): string {
+    if (this.reason === "sha256-mismatch") {
+      return `Refusing tampered sqlite-vec native binary (${this.searchedPaths.join(", ")}): actual SHA-256 ${this.actualSha256 ?? "unknown"} does not match pinned manifest (${(this.expectedSha256 ?? []).join(" | ")}).`;
+    }
     if (this.reason === "invalid-size") {
       return `Staged sqlite-vec native binary has unexpected size (${String(this.sizeBytes ?? 0)} bytes); expected between ${String(WINDOWS_SQLITE_VEC_MIN_BYTES)} and ${String(WINDOWS_SQLITE_VEC_MAX_BYTES)} bytes.`;
     }
@@ -1066,10 +1076,6 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
   "!**/*.map",
   "!**/*.d.cts",
-  "!apps/desktop/resources/browser-secret",
-  "!apps/desktop/resources/browser-secret/**/*",
-  "!apps/desktop/prod-resources/browser-secret",
-  "!apps/desktop/prod-resources/browser-secret/**/*",
   "!apps/desktop/prod-resources/apple-speech",
   "!apps/desktop/prod-resources/apple-speech/**/*",
   "!apps/desktop/prod-resources/windows-server",
@@ -1220,9 +1226,6 @@ export const LINUX_CAPTURE_EXTRA_RESOURCES = [
     filter: gnomeCaptureBundle.files,
   },
 ] as const;
-export const LINUX_BROWSER_SECRET_EXTRA_RESOURCES = [
-  { from: "apps/desktop/prod-resources/browser-secret", to: "browser-secret" },
-] as const;
 export const MAC_APPLE_SPEECH_EXTRA_RESOURCES = [
   { from: "apps/desktop/prod-resources/apple-speech", to: "apple-speech" },
 ] as const;
@@ -1285,18 +1288,7 @@ export class MissingMacPasskeyDomainConfigurationError extends Schema.TaggedErro
   {},
 ) {
   override get message(): string {
-    return "PRISMUX_CLERK_PUBLISHABLE_KEY or PRISMUX_CLERK_PASSKEY_RP_DOMAINS is required for signed macOS passkey builds.";
-  }
-}
-
-export class InvalidMacPasskeyPublishableKeyError extends Schema.TaggedError<InvalidMacPasskeyPublishableKeyError>()(
-  "InvalidMacPasskeyPublishableKeyError",
-  {
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return "PRISMUX_CLERK_PUBLISHABLE_KEY is invalid.";
+    return "PRISMUX_MACOS_PASSKEY_RP_DOMAINS is required for signed macOS passkey builds.";
   }
 }
 
@@ -1305,7 +1297,7 @@ export class MissingMacPasskeyRpDomainError extends Schema.TaggedError<MissingMa
   {},
 ) {
   override get message(): string {
-    return "At least one Clerk passkey RP domain is required.";
+    return "At least one passkey RP domain is required.";
   }
 }
 
@@ -1314,7 +1306,6 @@ export const MacPasskeySigningConfigurationError = Schema.Union([
   InvalidAppleTeamIdError,
   MissingMacPasskeyProvisioningProfileError,
   MissingMacPasskeyDomainConfigurationError,
-  InvalidMacPasskeyPublishableKeyError,
   MissingMacPasskeyRpDomainError,
 ]);
 export type MacPasskeySigningConfigurationError = typeof MacPasskeySigningConfigurationError.Type;
@@ -1374,23 +1365,11 @@ export function resolveMacPasskeySigningConfiguration(
     throw new MissingMacPasskeyProvisioningProfileError();
   }
 
-  const configuredRpDomains = env.PRISMUX_CLERK_PASSKEY_RP_DOMAINS?.trim();
-  let rpDomains: readonly string[];
-  if (configuredRpDomains) {
-    rpDomains = configuredRpDomains.split(",").map(normalizePasskeyRpDomain);
-  } else {
-    const publishableKey = env.PRISMUX_CLERK_PUBLISHABLE_KEY?.trim();
-    if (!publishableKey) {
-      throw new MissingMacPasskeyDomainConfigurationError();
-    }
-    let hostname: string;
-    try {
-      hostname = clerkFrontendApiHostnameFromPublishableKey(publishableKey);
-    } catch (cause) {
-      throw new InvalidMacPasskeyPublishableKeyError({ cause });
-    }
-    rpDomains = [normalizePasskeyRpDomain(hostname)];
+  const configuredRpDomains = env.PRISMUX_MACOS_PASSKEY_RP_DOMAINS?.trim();
+  if (!configuredRpDomains) {
+    throw new MissingMacPasskeyDomainConfigurationError();
   }
+  const rpDomains = configuredRpDomains.split(",").map(normalizePasskeyRpDomain);
 
   const uniqueRpDomains = [...new Set(rpDomains)];
   if (uniqueRpDomains.length === 0) {
@@ -1497,12 +1476,8 @@ ${associatedDomains}
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
-    <!-- The hardened runtime denies camera and microphone to the app and every
-         child process, with no prompt, unless the app claims these. Terminals
-         and coding agents inherit the app's TCC identity, so without these a
-         command like ffmpeg or imagesnap gets silent access-denied. -->
-    <key>com.apple.security.device.camera</key>
-    <true/>
+    <!-- The hardened runtime denies microphone to the app and every child
+         process, with no prompt, unless the app claims audio-input for voice input. -->
     <key>com.apple.security.device.audio-input</key>
     <true/>
   </dict>
@@ -1546,7 +1521,7 @@ export function resolveMergedStageDependencies(input: {
 }) {
   return {
     ...selectCliRuntimeExternalDependencies(input.serverDependencies),
-    ...input.desktopDependencies,
+    ...selectDesktopRuntimeExternalDependencies(input.desktopDependencies),
     ...resolveFffNativeDependencies(input.platform, input.arch, input.fffNodeVersion),
   };
 }
@@ -1582,7 +1557,7 @@ export function resolveKeyringNativeArtifacts(
   }));
 }
 
-/** electron-builder omits pnpm-nested platform packages; stage keyring's binary beside its loader, which checks there first. */
+/** electron-builder omits pnpm-nested platform packages; stage keyring's binary beside its loader when present (server runtime). */
 const stageKeyringNativeBinaries = Effect.fn("stageKeyringNativeBinaries")(function* (
   stageAppDir: string,
   platform: typeof BuildPlatform.Type,
@@ -1590,9 +1565,11 @@ const stageKeyringNativeBinaries = Effect.fn("stageKeyringNativeBinaries")(funct
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const packageEntryPath = yield* fs.realPath(
-    path.join(stageAppDir, "node_modules", "@napi-rs", "keyring", "index.js"),
-  );
+  const keyringEntryCandidate = path.join(stageAppDir, "node_modules", "@napi-rs", "keyring", "index.js");
+  if (!(yield* fs.exists(keyringEntryCandidate).pipe(Effect.orElseSucceed(() => false)))) {
+    return;
+  }
+  const packageEntryPath = yield* fs.realPath(keyringEntryCandidate);
   const packageDir = path.dirname(packageEntryPath);
   const packageRequire = NodeModule.createRequire(packageEntryPath);
 
@@ -2476,36 +2453,6 @@ export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* 
   }
 });
 
-export const stageBrowserSecret = Effect.fn("stageBrowserSecret")(function* (input: {
-  readonly repoRoot: string;
-  readonly stageResourcesDir: string;
-  readonly platform: typeof BuildPlatform.Type;
-  readonly arch: typeof BuildArch.Type;
-  readonly verbose: boolean;
-}) {
-  if (input.platform !== "linux") return;
-  // The helper links host libsecret and only builds on Linux; reject cross-host packaging that would silently omit it.
-  const hostPlatform = yield* HostProcess.Platform;
-  if (hostPlatform !== "linux") {
-    return yield* new LinuxBrowserSecretHostError({ hostPlatform });
-  }
-  const path = yield* Path.Path;
-  yield* runCommand(
-    ChildProcess.make(
-      "node",
-      [
-        path.join(input.repoRoot, "apps/desktop/scripts/build-browser-secret.mjs"),
-        "--arch",
-        input.arch === "arm64" ? "arm64" : "x64",
-        "--output",
-        path.join(input.stageResourcesDir, "browser-secret", "prismux-browser-secret"),
-      ],
-      { cwd: input.repoRoot },
-    ),
-    { label: "build Linux browser secret helper", verbose: input.verbose },
-  );
-});
-
 export const stageAppleSpeech = Effect.fn("stageAppleSpeech")(function* (input: {
   readonly repoRoot: string;
   readonly stageResourcesDir: string;
@@ -2984,6 +2931,9 @@ export const stageWindowsSevenZipTool = Effect.fn("desktopArtifact.stageWindowsS
     readonly targetDir: string;
     readonly candidates?: ReadonlyArray<string>;
     readonly env?: Readonly<Record<string, string | undefined>>;
+    readonly expectedSha256?: ReadonlyArray<string>;
+    readonly expectedDllSha256?: ReadonlyArray<string>;
+    readonly licenseSourcePath?: string;
   }) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -3024,20 +2974,68 @@ export const stageWindowsSevenZipTool = Effect.fn("desktopArtifact.stageWindowsS
       });
     }
 
+    let siblingDllPath: string | undefined;
+    if (path.basename(matchedPath).toLowerCase() === "7z.exe") {
+      const candidateDll = path.join(path.dirname(matchedPath), "7z.dll");
+      const dllStat = yield* fs.stat(candidateDll).pipe(Effect.orElseSucceed(() => null));
+      if (dllStat?.type === "File") {
+        siblingDllPath = candidateDll;
+      }
+    }
+
+    // Fail closed: disallow copying any unverified host or tampered 7za.exe / 7z.exe / 7z.dll.
+    const verifiedSevenZip = yield* Effect.try({
+      try: () =>
+        verifySevenZipBinaryIntegrity(matchedPath, {
+          ...(siblingDllPath !== undefined ? { dllPath: siblingDllPath } : {}),
+          ...(input.expectedSha256 !== undefined ? { expectedExeSha256: input.expectedSha256 } : {}),
+          ...(input.expectedDllSha256 !== undefined
+            ? { expectedDllSha256: input.expectedDllSha256 }
+            : {}),
+        }),
+      catch: (error) =>
+        error instanceof BinaryIntegrityError
+          ? new WindowsSevenZipToolError({
+              reason: "sha256-mismatch",
+              searchedPaths: [error.filePath],
+              ...(error.actualSha256 !== undefined ? { actualSha256: error.actualSha256 } : {}),
+              ...(error.expectedSha256.length > 0
+                ? { expectedSha256: [...error.expectedSha256] }
+                : {}),
+            })
+          : new WindowsSevenZipToolError({
+              reason: "sha256-mismatch",
+              searchedPaths: [matchedPath],
+            }),
+    });
+
+    // LGPL-2.1 compliance: stage 7-Zip's full LGPL-2.1 + unRAR license notice alongside 7za.exe.
+    const licenseSourcePath =
+      input.licenseSourcePath ??
+      path.join(input.repoRoot, BINARY_SHA256_MANIFEST.sevenZip.licenseRepoPath);
+    const licenseStat = yield* fs.stat(licenseSourcePath).pipe(Effect.orElseSucceed(() => null));
+    if (licenseStat?.type !== "File" || Number(licenseStat.size) <= 0) {
+      return yield* new WindowsSevenZipToolError({
+        reason: "license-missing",
+        searchedPaths: [licenseSourcePath],
+      });
+    }
+
     yield* fs.makeDirectory(input.targetDir, { recursive: true });
     const targetExePath = path.join(input.targetDir, "7za.exe");
     yield* fs.copyFile(matchedPath, targetExePath);
 
     let bundledSiblingDll = false;
-    // Standard 7-Zip's 7z.exe depends on sibling 7z.dll to extract archives; copy it beside 7za.exe.
-    if (path.basename(matchedPath).toLowerCase() === "7z.exe") {
-      const siblingDll = path.join(path.dirname(matchedPath), "7z.dll");
-      const dllStat = yield* fs.stat(siblingDll).pipe(Effect.orElseSucceed(() => null));
-      if (dllStat?.type === "File") {
-        yield* fs.copyFile(siblingDll, path.join(input.targetDir, "7z.dll"));
-        bundledSiblingDll = true;
-      }
+    if (siblingDllPath !== undefined) {
+      yield* fs.copyFile(siblingDllPath, path.join(input.targetDir, "7z.dll"));
+      bundledSiblingDll = true;
     }
+
+    const stagedLicensePath = path.join(
+      input.targetDir,
+      BINARY_SHA256_MANIFEST.sevenZip.stagedLicenseFileName,
+    );
+    yield* fs.copyFile(licenseSourcePath, stagedLicensePath);
 
     const copiedStat = yield* fs.stat(targetExePath);
     const copiedBytes = Number(copiedStat.size);
@@ -3050,12 +3048,14 @@ export const stageWindowsSevenZipTool = Effect.fn("desktopArtifact.stageWindowsS
     }
 
     yield* Effect.log(
-      `[desktop-artifact] Staged 7za.exe from ${matchedPath} (${String(copiedBytes)} bytes${bundledSiblingDll ? " + 7z.dll" : ""}).`,
+      `[desktop-artifact] Staged verified 7za.exe from ${matchedPath} (${String(copiedBytes)} bytes, sha256=${verifiedSevenZip.exeSha256}${bundledSiblingDll ? " + 7z.dll" : ""} + ${BINARY_SHA256_MANIFEST.sevenZip.stagedLicenseFileName}).`,
     );
     return {
       sourcePath: matchedPath,
       targetExePath,
+      stagedLicensePath,
       sizeBytes: copiedBytes,
+      sha256: verifiedSevenZip.exeSha256,
       bundledSiblingDll,
     } as const;
   },
@@ -3230,6 +3230,7 @@ export const stageSqliteVecNative = Effect.fn("desktopArtifact.stageSqliteVecNat
     readonly daemonDepsTargetDir?: string;
     readonly candidates?: ReadonlyArray<string>;
     readonly env?: Readonly<Record<string, string | undefined>>;
+    readonly expectedSha256?: ReadonlyArray<string>;
   }) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -3299,6 +3300,31 @@ export const stageSqliteVecNative = Effect.fn("desktopArtifact.stageSqliteVecNat
       });
     }
 
+    // Fail closed if sqlite-vec native binary fails pinned SHA-256 verification.
+    const verifiedSqliteVec = yield* Effect.try({
+      try: () =>
+        verifySqliteVecBinaryIntegrity(
+          matchedPath,
+          pkgName,
+          libName,
+          input.expectedSha256 !== undefined ? { expectedSha256: input.expectedSha256 } : undefined,
+        ),
+      catch: (error) =>
+        error instanceof BinaryIntegrityError
+          ? new SqliteVecNativeToolError({
+              reason: "sha256-mismatch",
+              searchedPaths: [error.filePath],
+              ...(error.actualSha256 !== undefined ? { actualSha256: error.actualSha256 } : {}),
+              ...(error.expectedSha256.length > 0
+                ? { expectedSha256: [...error.expectedSha256] }
+                : {}),
+            })
+          : new SqliteVecNativeToolError({
+              reason: "sha256-mismatch",
+              searchedPaths: [matchedPath],
+            }),
+    });
+
     yield* fs.makeDirectory(input.targetDir, { recursive: true });
     const targetLibraryPath = path.join(input.targetDir, libName);
     yield* fs.copyFile(matchedPath, targetLibraryPath);
@@ -3350,12 +3376,13 @@ export const stageSqliteVecNative = Effect.fn("desktopArtifact.stageSqliteVecNat
     }
 
     yield* Effect.log(
-      `[desktop-artifact] Staged ${libName} from ${matchedPath} (${String(copiedBytes)} bytes) -> ${targetLibraryPath}.`,
+      `[desktop-artifact] Staged verified ${libName} from ${matchedPath} (${String(copiedBytes)} bytes, sha256=${verifiedSqliteVec.sha256}) -> ${targetLibraryPath}.`,
     );
     return {
       sourcePath: matchedPath,
       targetLibraryPath,
       sizeBytes: copiedBytes,
+      sha256: verifiedSqliteVec.sha256,
     } as const;
   },
 );
@@ -3415,7 +3442,6 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ...(sqliteVecBundled ? PRISMUX_SQLITE_VEC_EXTRA_RESOURCES : []),
       ...(platform === "win" && windowsToolsBundled ? WINDOWS_TOOLS_EXTRA_RESOURCES : []),
       ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : []),
-      ...(platform === "linux" ? LINUX_BROWSER_SECRET_EXTRA_RESOURCES : []),
       ...(platform === "mac" ? MAC_APPLE_SPEECH_EXTRA_RESOURCES : []),
       ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
       ...(platform === "win" && wslRuntimeBundled ? WSL_RUNTIME_EXTRA_RESOURCES : []),
@@ -3450,16 +3476,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac: true,
         NSLocalNetworkUsageDescription:
           "Prismux connects to devices on your local network for remote environments and commands run by terminals and coding agents.",
-        NSCalendarsUsageDescription:
-          "Commands you run in Prismux may need access to your calendars.",
-        NSCalendarsFullAccessUsageDescription:
-          "Commands you run in Prismux may need to read and write your calendar events.",
-        NSCalendarsWriteOnlyAccessUsageDescription:
-          "Commands you run in Prismux may need to add events to your calendars.",
         NSScreenCaptureUsageDescription:
           "Prismux captures the active window when you use the window capture shortcut.",
-        NSCameraUsageDescription:
-          "Prismux lets commands run by terminals and coding agents use the camera.",
         NSMicrophoneUsageDescription:
           "Prismux lets commands run by terminals and coding agents use the microphone.",
         NSSpeechRecognitionUsageDescription:
@@ -4596,6 +4614,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     arch: options.arch,
     verbose: options.verbose,
   });
+  yield* Effect.sync(() => verifyPinnedRepoBinaries(repoRoot));
   if (options.platform === "linux") {
     for (const backend of ["kde", "hyprland"] as const)
       yield* stageLinuxCaptureHelper({
@@ -4606,13 +4625,6 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
         verbose: options.verbose,
       });
   }
-  yield* stageBrowserSecret({
-    repoRoot,
-    stageResourcesDir,
-    platform: options.platform,
-    arch: options.arch,
-    verbose: options.verbose,
-  });
   yield* stageAppleSpeech({
     repoRoot,
     stageResourcesDir,

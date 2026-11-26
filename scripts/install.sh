@@ -2,7 +2,9 @@
 # Installs the Prismux CLI from a GitHub Release archive. Needs only sh, tar,
 # sha256sum or shasum, and curl or wget; no Node, npm, or compiler.
 #
-#   curl -fsSL https://prismux.app/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/Fish-under-sea/Prismux/main/scripts/install.sh | sh
+#
+# Releases: https://github.com/Fish-under-sea/Prismux/releases
 #
 # Environment:
 #   PRISMUX_CHANNEL           release train to follow: stable, nightly, or preview
@@ -10,15 +12,25 @@
 #   PRISMUX_VERSION           exact version to install (overrides PRISMUX_CHANNEL)
 #   PRISMUX_HOME              Prismux home directory (default: ~/.prismux)
 #   PRISMUX_INSTALL_BIN_DIR   where the `prismux` command goes (default: ~/.local/bin)
-#   PRISMUX_RELEASE_BASE_URL  mirror for releases/download (default: GitHub)
+#   PRISMUX_RELEASE_BASE_URL  HTTPS mirror for releases/download (default: GitHub)
 #
 # The archive is unpacked into $PRISMUX_HOME/runtime/versions/<version>, the
 # same layout `prismux service install` uses, so the service reuses this download
 # instead of fetching the release again.
 set -eu
 
+fail() {
+  printf '\nprismux install: %s\n' "$1" >&2
+  exit 1
+}
+
 repo="Fish-under-sea/Prismux"
 base_url="${PRISMUX_RELEASE_BASE_URL:-https://github.com/${repo}/releases/download}"
+base_url="${base_url%/}"
+case "$base_url" in
+  https://*) ;;
+  *) fail "PRISMUX_RELEASE_BASE_URL must use https:// (refusing insecure URL: ${base_url})" ;;
+esac
 prismux_home="${PRISMUX_HOME:-$HOME/.prismux}"
 case "$prismux_home" in
   /*) ;;
@@ -34,11 +46,6 @@ while [ "${prismux_home%/}" != "$prismux_home" ] && [ "$prismux_home" != / ]; do
 while [ "${bin_dir%/}" != "$bin_dir" ] && [ "$bin_dir" != / ]; do bin_dir="${bin_dir%/}"; done
 # Absolute, so the PATH hint never adds a folder that changes with the working directory.
 case "$bin_dir" in /*) ;; *) bin_dir="$PWD/$bin_dir" ;; esac
-
-fail() {
-  printf '\nprismux install: %s\n' "$1" >&2
-  exit 1
-}
 
 # ANSI stays on stderr, so `curl ... | sh` still gets progress.
 interactive=false
@@ -72,10 +79,14 @@ backoff() {
 
 # Exit 44 on a 404 so callers can tell "no such asset" from a network failure.
 fetch() {
+  case "$1" in
+    https://*) ;;
+    *) fail "refusing non-HTTPS download URL: $1" ;;
+  esac
   if command -v curl >/dev/null 2>&1; then
     attempt=1
     while :; do
-      code=0; status="$(curl -sSL -H "Accept: ${3:-*/*}" -w '%{http_code}' "$1" -o "$2")" || code=$?
+      code=0; status="$(curl --proto '=https' --tlsv1.2 -sSL -H "Accept: ${3:-*/*}" -w '%{http_code}' "$1" -o "$2")" || code=$?
       case "$code:$status" in 0:2??) break ;; esac
       backoff "$status" "$attempt" || break
       attempt=$((attempt + 1))
@@ -87,7 +98,7 @@ fetch() {
       *) printf 'GET %s returned HTTP %s\n' "$1" "$status" >&2; return 1 ;;
     esac
   elif command -v wget >/dev/null 2>&1; then
-    wget -q --server-response --header="Accept: ${3:-*/*}" "$1" -O "$2" 2>"$2.headers" && rm -f "$2.headers" && return 0
+    wget --https-only --secure-protocol=TLSv1_2 -q --server-response --header="Accept: ${3:-*/*}" "$1" -O "$2" 2>"$2.headers" && rm -f "$2.headers" && return 0
     if grep -q ' 404 ' "$2.headers" 2>/dev/null; then rm -f "$2.headers"; return 44; fi
     cat "$2.headers" >&2; rm -f "$2.headers"; return 1
   else
@@ -100,10 +111,14 @@ mb() {
   printf '%s.%s' "$((tenths / 10))" "$((tenths % 10))"
 }
 download_start() {
+  case "$1" in
+    https://*) ;;
+    *) fail "refusing non-HTTPS download URL: $1" ;;
+  esac
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL -w '%{http_code}' -D "$2.headers" "$1" -o "$2" >"$2.status" 2>"$2.errors" &
+    curl --proto '=https' --tlsv1.2 -fsSL -w '%{http_code}' -D "$2.headers" "$1" -o "$2" >"$2.status" 2>"$2.errors" &
   else
-    wget -q --server-response "$1" -O "$2" 2>"$2.headers" &
+    wget --https-only --secure-protocol=TLSv1_2 -q --server-response "$1" -O "$2" 2>"$2.headers" &
   fi
   download_pid=$!
 }
@@ -171,7 +186,7 @@ case "$(uname -m)" in
   *) fail "unsupported architecture $(uname -m)" ;;
 esac
 if [ "${platform}-${arch}" = darwin-x64 ]; then
-  fail "there is no prismux CLI for Intel Macs. Install the desktop app from https://prismux.app/download, or run a server from source: https://github.com/${repo}/blob/main/docs/user/install.md#intel-macs"
+  fail "there is no prismux CLI for Intel Macs. Install the desktop app from https://github.com/${repo}/releases, or run a server from source: https://github.com/${repo}"
 fi
 command -v tar >/dev/null 2>&1 || fail "tar is required"
 if command -v sha256sum >/dev/null 2>&1; then
@@ -246,13 +261,20 @@ else
   elif [ "$fetch_status" -ne 0 ]; then
     fail "could not download the release checksums"
   fi
-  expected="$(grep " \*\{0,1\}${archive}\$" "${staging}/SHA256SUMS" | cut -d' ' -f1)"
-  [ -n "$expected" ] || fail "prismux ${version} has no release archive for ${platform}-${arch}"
+  expected="$(grep -E "^[0-9A-Fa-f]{64}[[:space:]]+\*?${archive}\$" "${staging}/SHA256SUMS" | head -n 1 | awk '{print tolower($1)}')"
+  [ -n "$expected" ] || fail "prismux ${version} has no valid SHA256SUMS entry for ${archive}"
   download "${base_url}/v${version}/${archive}" "${staging}/${archive}" || fail "could not download ${archive}"
 
   step "Verifying the download..."
-  actual="$(checksum "${staging}/${archive}")"
-  [ "$actual" = "$expected" ] || fail "checksum mismatch for ${archive}"
+  actual="$(checksum "${staging}/${archive}" | tr '[:upper:]' '[:lower:]')"
+  case "$actual" in
+    *[!0-9a-f]*) fail "invalid computed checksum for ${archive}" ;;
+  esac
+  [ "${#actual}" -eq 64 ] && [ "$actual" = "$expected" ] || fail "checksum mismatch for ${archive}"
+
+  if tar -tzf "${staging}/${archive}" | grep -Eq '(^/|^\.\./|/\.\./|/\.\.$)'; then
+    fail "refusing unsafe path traversal entry inside ${archive}"
+  fi
 
   step "Extracting Prismux..."
   tar -xzf "${staging}/${archive}" -C "$staging" --strip-components=1

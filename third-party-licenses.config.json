@@ -1,4 +1,16 @@
 {
+  "proprietaryCarveOuts": [
+    {
+      "name": "@anthropic-ai/claude-agent-sdk",
+      "version": "0.3.321",
+      "license": "LicenseRef-Anthropic-Proprietary",
+      "copyright": "© Anthropic PBC. All rights reserved.",
+      "legalTermsUrl": "https://code.claude.com/docs/en/legal-and-compliance",
+      "sourceUrl": "https://github.com/anthropics/claude-agent-sdk-typescript",
+      "noticeFile": "scripts/licenses/anthropic-claude-agent-sdk.NOTICE",
+      "scope": "Root MIT LICENSE applies solely to first-party Prismux source code; @anthropic-ai/claude-agent-sdk is proprietary software owned by Anthropic PBC and governed by Anthropic's legal terms."
+    }
+  ],
   "customNotices": [
     {
       "bundles": ["desktop", "mobile"],
@@ -219,6 +231,90 @@
           ],
           "preamble": [
             "Unmodified KaTeX_* mathematical fonts. Reserved Font Names include KaTeX_Main, KaTeX_Math, KaTeX_AMS, and KaTeX_Caligraphic."
+          ]
+        }
+      ]
+    },
+    {
+      "bundles": ["desktop", "web"],
+      "license": "MIT",
+      "name": "T3 Code (pingdotgg/t3code)",
+      "sourceUrl": "https://github.com/pingdotgg/t3code",
+      "generatedNotices": [
+        {
+          "licenseId": "MIT",
+          "copyrights": ["Copyright (c) Ping Labs / t3code contributors"],
+          "preamble": [
+            "Historical upstream foundation for Prismux desktop, server, web workbench, and native helpers (baseline commit b23f1e8af9b13af2c4aa1ba8e0d6987550688645)."
+          ]
+        }
+      ]
+    },
+    {
+      "bundles": ["desktop", "web"],
+      "license": "MIT",
+      "name": "Cordis (shigma/cordis)",
+      "sourceUrl": "https://github.com/shigma/cordis",
+      "generatedNotices": [
+        {
+          "licenseId": "MIT",
+          "copyrights": ["Copyright (c) Shigma and Cordis contributors"],
+          "preamble": [
+            "Architectural inspiration for @prismux/cordis-kernel reversible dual-realm plugin contexts and ctx.effect() zero-residue teardown."
+          ]
+        }
+      ]
+    },
+    {
+      "bundles": ["desktop"],
+      "license": "LGPL-2.1-or-later AND BSD-3-Clause AND BSD-2-Clause",
+      "name": "7-Zip (7za.exe / 7z.dll)",
+      "version": "24.09",
+      "sourceUrl": "https://www.7-zip.org/",
+      "noticeFile": "scripts/licenses/7zip-LGPL-2.1.LICENSE"
+    },
+    {
+      "bundles": ["desktop"],
+      "license": "MIT OR Apache-2.0",
+      "name": "sqlite-vec (vec0 native extension)",
+      "version": "0.1.9",
+      "sourceUrl": "https://github.com/asg017/sqlite-vec",
+      "generatedNotices": [
+        {
+          "licenseId": "MIT",
+          "copyrights": ["Copyright (c) 2024 Alex Garcia"],
+          "preamble": [
+            "sqlite-vec (vec0.dll / vec0.so / vec0.dylib) is dual-licensed under MIT OR Apache-2.0."
+          ]
+        },
+        {
+          "licenseId": "Apache-2.0",
+          "copyrights": ["Copyright 2024 Alex Garcia"]
+        }
+      ]
+    },
+    {
+      "bundles": ["desktop"],
+      "license": "MIT AND (MIT OR Apache-2.0)",
+      "name": "Prismux Native Rust Helper Crates",
+      "sourceUrl": "https://github.com/Fish-under-sea/Prismux",
+      "generatedNotices": [
+        {
+          "licenseId": "MIT",
+          "copyrights": [
+            "sysinfo — Copyright (c) 2015 Guillaume Gomez (MIT)",
+            "zbus — Copyright (c) 2019 Zeeshan Ali Khan and zbus contributors (MIT)",
+            "wayland-client / wayland-backend / wayland-scanner / wayland-protocols / wayland-protocols-wlr / smithay-client-toolkit — Copyright (c) Smithay contributors (MIT)",
+            "png / serde / serde_json / bitflags / async-channel / rustix — Respective Rust crate authors (MIT OR Apache-2.0)"
+          ],
+          "preamble": [
+            "Direct Rust crate dependencies used by native/resource-monitor, native/hyprland-snap-shot, and native/kde-snap-shot (Cargo.toml): sysinfo, zbus, wayland-client, wayland-backend, wayland-scanner, wayland-protocols, wayland-protocols-wlr, smithay-client-toolkit, png, serde, serde_json, bitflags, async-channel, and rustix."
+          ]
+        },
+        {
+          "licenseId": "Apache-2.0",
+          "preamble": [
+            "Applicable to dual-licensed (MIT OR Apache-2.0) Rust crates: png, serde, serde_json, bitflags, async-channel, and rustix."
           ]
         }
       ]
@@ -837,6 +933,213 @@
       "name": "iobuffer",
       "license": "MIT",
       "sourceUrl": "https://github.com/image-js/iobuffer"
+    },
+    {
+      "name": "@anthropic-ai/claude-agent-sdk",
+      "license": "LicenseRef-Anthropic-Proprietary",
+      "sourceUrl": "https://code.claude.com/docs/en/legal-and-compliance",
+      "noticeFile": "scripts/licenses/anthropic-claude-agent-sdk.NOTICE"
+    },
+    {
+      "name": "@pierre/diffs",
+      "license": "Apache-2.0",
+      "sourceUrl": "https://github.com/pierrecomputer/pierre"
+    },
+    {
+      "name": "@pierre/words",
+      "license": "Apache-2.0",
+      "sourceUrl": "https://github.com/pierrecomputer/pierre",
+      "generatedNotices": [
+        {
+          "licenseId": "Apache-2.0",
+          "copyrights": ["Copyright 2025 Pierre Computer Company"],
+          "preamble": [
+            "Vendored archive: apps/web/deps/pierre-words-0.2.2-t3.4-7c04b7f1.tgz (upstream pierrecomputer/pierre@b049b9e, source 7c04b7f185a34ab3fd80aec53e7e6b9fb780619d).",
+            "Upstream NOTICE.md data attributions preserved under Apache-2.0 Section 4(d):\n- HTML named character references (tables/entities.txt, dist/words.wasm): WHATWG HTML entities.json (https://html.spec.whatwg.org/entities.json) — CC BY 4.0.\n- East Asian Width ranges (scripts/build.ts, dist/words.wasm): Unicode EastAsianWidth.txt (https://www.unicode.org/Public/UCD/latest/ucd/) — Unicode License v3.\n- Math glyph metrics and constants (tables/math-metrics.txt, src/math.wat, dist/words.wasm): STIX Two Math (https://github.com/stipub/stixfonts) — SIL Open Font License 1.1."
+          ]
+        }
+      ]
+    },
+    {
+      "name": "@pierre/trees",
+      "license": "Apache-2.0",
+      "sourceUrl": "https://github.com/pierrecomputer/pierre",
+      "generatedNotices": [
+        {
+          "licenseId": "Apache-2.0",
+          "copyrights": ["Copyright 2025 Pierre Computer Company"],
+          "preamble": [
+            "Upstream NOTICE.md attribution preserved under Apache-2.0 Section 4(d): This project includes code derived from @headless-tree/core (https://github.com/lukasbach/headless-tree)."
+          ]
+        },
+        {
+          "licenseId": "MIT",
+          "copyrights": ["Copyright (c) 2023 Lukas Bach"],
+          "preamble": ["Original license for @headless-tree/core:"]
+        }
+      ]
+    },
+    {
+      "name": "@pierre/highlights",
+      "license": "Apache-2.0",
+      "sourceUrl": "https://github.com/pierrecomputer/pierre",
+      "generatedNotices": [
+        {
+          "licenseId": "Apache-2.0",
+          "copyrights": ["Copyright 2025 Pierre Computer Company", "Copyright 2017 Mattia Astorino"],
+          "preamble": [
+            "Upstream NOTICE.md attribution preserved under Apache-2.0 Section 4(d): Community themes are pruned copies of pinned Zed theme files (zed-industries/extensions@ab756766c27fca3de3d275149f6937105f464dec, Zed defaults ce48461, VS Code terminalColorRegistry 3623f17) or conversions of pinned Shiki TextMate themes (tm-themes@1.12.10). Includes Apache-2.0 Material and github-dark-default themes and MIT-licensed community themes (Andromeda, Aurora, Ayu, Catppuccin, Dracula, Everforest, GitHub Classic/Theme, Gruvbox, Horizon, Houston, Kanagawa, LaserWave, Min, Night Owl, Nord, One Dark Pro, One Light, Plastic, Poimandres, Rosé Pine, Slack, Snazzy Light, Synthwave84, Tokyo Night, Vesper, Vitesse, VS Code Classics)."
+          ]
+        },
+        {
+          "licenseId": "MIT",
+          "copyrights": [
+            "Copyright (c) 2015-present Microsoft Corporation",
+            "Copyright (c) 2020 Primer",
+            "Copyright (c) 2021 Pine Wu; Copyright (c) 2023 Anthony Fu",
+            "Copyright (c) Respective Zed and Shiki theme authors (see THIRD_PARTY_NOTICES.md Section 4)"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "@pierre/patches",
+      "license": "Apache-2.0",
+      "sourceUrl": "https://github.com/pierrecomputer/pierre",
+      "generatedNotices": [
+        {
+          "licenseId": "Apache-2.0",
+          "copyrights": ["Copyright 2025 Pierre Computer Company"],
+          "preamble": [
+            "Upstream NOTICE.md attribution preserved under Apache-2.0 Section 4(d): This project includes code ported from jsdiff (https://github.com/kpdecker/jsdiff)."
+          ]
+        },
+        {
+          "licenseId": "BSD-3-Clause",
+          "copyrights": ["Copyright (c) 2009-2015, Kevin Decker <kpdecker@gmail.com>"],
+          "preamble": ["Original license for jsdiff:"]
+        }
+      ]
+    },
+    {
+      "name": "@pierre/theme",
+      "license": "Apache-2.0",
+      "sourceUrl": "https://github.com/pierrecomputer/pierre",
+      "generatedNotices": [
+        {
+          "licenseId": "Apache-2.0",
+          "copyrights": ["Copyright 2025 Pierre Computer Company"],
+          "preamble": [
+            "Upstream NOTICE.md attribution preserved under Apache-2.0 Section 4(d): Built on top of primer/github-vscode-theme (https://github.com/primer/github-vscode-theme)."
+          ]
+        },
+        {
+          "licenseId": "MIT",
+          "copyrights": ["Copyright (c) 2020 Primer"],
+          "preamble": ["Original license for primer/github-vscode-theme:"]
+        }
+      ]
+    },
+    {
+      "name": "sqlite-vec",
+      "license": "MIT OR Apache-2.0",
+      "sourceUrl": "https://github.com/asg017/sqlite-vec",
+      "generatedNotices": [
+        {
+          "licenseId": "MIT",
+          "copyrights": ["Copyright (c) 2024 Alex Garcia"]
+        },
+        {
+          "licenseId": "Apache-2.0",
+          "copyrights": ["Copyright 2024 Alex Garcia"]
+        }
+      ]
+    },
+    {
+      "name": "sqlite-vec-windows-x64",
+      "license": "MIT OR Apache-2.0",
+      "sourceUrl": "https://github.com/asg017/sqlite-vec",
+      "generatedNotices": [
+        {
+          "licenseId": "MIT",
+          "copyrights": ["Copyright (c) 2024 Alex Garcia"]
+        },
+        {
+          "licenseId": "Apache-2.0",
+          "copyrights": ["Copyright 2024 Alex Garcia"]
+        }
+      ]
+    },
+    {
+      "name": "sqlite-vec-linux-x64",
+      "license": "MIT OR Apache-2.0",
+      "sourceUrl": "https://github.com/asg017/sqlite-vec",
+      "generatedNotices": [
+        {
+          "licenseId": "MIT",
+          "copyrights": ["Copyright (c) 2024 Alex Garcia"]
+        },
+        {
+          "licenseId": "Apache-2.0",
+          "copyrights": ["Copyright 2024 Alex Garcia"]
+        }
+      ]
+    },
+    {
+      "name": "sqlite-vec-darwin-arm64",
+      "license": "MIT OR Apache-2.0",
+      "sourceUrl": "https://github.com/asg017/sqlite-vec",
+      "generatedNotices": [
+        {
+          "licenseId": "MIT",
+          "copyrights": ["Copyright (c) 2024 Alex Garcia"]
+        },
+        {
+          "licenseId": "Apache-2.0",
+          "copyrights": ["Copyright 2024 Alex Garcia"]
+        }
+      ]
+    },
+    {
+      "name": "sqlite-vec-darwin-x64",
+      "license": "MIT OR Apache-2.0",
+      "sourceUrl": "https://github.com/asg017/sqlite-vec",
+      "generatedNotices": [
+        {
+          "licenseId": "MIT",
+          "copyrights": ["Copyright (c) 2024 Alex Garcia"]
+        },
+        {
+          "licenseId": "Apache-2.0",
+          "copyrights": ["Copyright 2024 Alex Garcia"]
+        }
+      ]
+    },
+    {
+      "name": "jszip",
+      "license": "MIT",
+      "sourceUrl": "https://github.com/Stuk/jszip",
+      "generatedNotice": {
+        "licenseId": "MIT",
+        "copyrights": [
+          "Copyright (c) 2009-2016 Stuart Knightley, David Duponchel, Franz Buchinger, António Afonso"
+        ],
+        "preamble": [
+          "JSZip is dual-licensed under MIT OR GPL-3.0-or-later. Prismux explicitly elects the MIT License."
+        ]
+      }
+    },
+    {
+      "name": "dompurify",
+      "license": "Apache-2.0",
+      "sourceUrl": "https://github.com/cure53/DOMPurify",
+      "generatedNotice": {
+        "licenseId": "Apache-2.0",
+        "copyrights": ["Copyright (c) Cure53 and DOMPurify contributors"],
+        "preamble": [
+          "DOMPurify is dual-licensed under MPL-2.0 OR Apache-2.0. Prismux explicitly elects the Apache License 2.0."
+        ]
+      }
     }
   ]
 }

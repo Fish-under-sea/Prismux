@@ -15,72 +15,46 @@ afterEach(() => {
 });
 
 describe("loadRepoEnv", () => {
-  it("applies process, root local, and root precedence in that order", () => {
+  it("applies process, root local, and root precedence for local dev env keys", () => {
     const repoRoot = makeTemporaryDirectory();
     NodeFS.writeFileSync(
       NodePath.join(repoRoot, ".env"),
-      "PRISMUX_CLERK_PUBLISHABLE_KEY=pk_root\nPRISMUX_CLERK_JWT_TEMPLATE=template_root\nPRISMUX_CLERK_CLI_OAUTH_CLIENT_ID=oauth_root\nPRISMUX_RELAY_URL=https://root.example.test\n",
+      "PRISMUX_PORT=4001\nPRISMUX_CUSTOM_FLAG=root\n",
     );
     NodeFS.writeFileSync(
       NodePath.join(repoRoot, ".env.local"),
-      "PRISMUX_CLERK_PUBLISHABLE_KEY=pk_local\nPRISMUX_CLERK_JWT_TEMPLATE=template_local\nPRISMUX_CLERK_CLI_OAUTH_CLIENT_ID=oauth_local\nPRISMUX_RELAY_URL=https://local.example.test\n",
+      "PRISMUX_PORT=4002\nPRISMUX_CUSTOM_FLAG=local\n",
     );
 
-    expect(loadRepoEnv({ baseEnv: {}, repoRoot }).PRISMUX_RELAY_URL).toBe(
-      "https://local.example.test",
-    );
+    expect(loadRepoEnv({ baseEnv: {}, repoRoot })).toMatchObject({
+      PRISMUX_PORT: "4002",
+      PRISMUX_CUSTOM_FLAG: "local",
+    });
     expect(
       loadRepoEnv({
         baseEnv: {
-          PRISMUX_CLERK_PUBLISHABLE_KEY: "pk_ci",
-          PRISMUX_CLERK_JWT_TEMPLATE: "template_ci",
-          PRISMUX_CLERK_CLI_OAUTH_CLIENT_ID: "oauth_ci",
-          PRISMUX_RELAY_URL: "https://ci.example.test",
+          PRISMUX_PORT: "4003",
         },
         repoRoot,
       }),
     ).toMatchObject({
-      PRISMUX_CLERK_PUBLISHABLE_KEY: "pk_ci",
-      PRISMUX_CLERK_CLI_OAUTH_CLIENT_ID: "oauth_ci",
-      VITE_CLERK_PUBLISHABLE_KEY: "pk_ci",
-      EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: "pk_ci",
-      PRISMUX_CLERK_JWT_TEMPLATE: "template_ci",
-      VITE_CLERK_JWT_TEMPLATE: "template_ci",
-      EXPO_PUBLIC_CLERK_JWT_TEMPLATE: "template_ci",
-      PRISMUX_RELAY_URL: "https://ci.example.test",
-      VITE_PRISMUX_RELAY_URL: "https://ci.example.test",
+      PRISMUX_PORT: "4003",
+      PRISMUX_CUSTOM_FLAG: "local",
     });
   });
 
-  it("leaves cloud/relay defaults empty when .env is absent and strips them under PRISMUX_DISABLE_CLOUD=1", () => {
+  it("unconditionally strips legacy Clerk OAuth, relay, and Axiom/OTLP env vars from all sources", () => {
     const repoRoot = makeTemporaryDirectory();
     expect(DEFAULT_PRISMUX_PUBLIC_CONFIG).toEqual({});
 
-    const resolved = loadRepoEnv({ baseEnv: {}, repoRoot });
-    expect(resolved.PRISMUX_RELAY_URL).toBeUndefined();
-    expect(resolved.VITE_PRISMUX_RELAY_URL).toBeUndefined();
-    expect(resolved.PRISMUX_CLERK_PUBLISHABLE_KEY).toBeUndefined();
-    expect(resolved.VITE_CLERK_PUBLISHABLE_KEY).toBeUndefined();
-
-    const disabled = loadRepoEnv({
-      baseEnv: {
-        PRISMUX_DISABLE_CLOUD: "1",
-        PRISMUX_RELAY_URL: "https://ci.example.test",
-        PRISMUX_CLERK_PUBLISHABLE_KEY: "pk_ci",
-      },
-      repoRoot,
-    });
-    expect(disabled.PRISMUX_RELAY_URL).toBeUndefined();
-    expect(disabled.VITE_PRISMUX_RELAY_URL).toBeUndefined();
-    expect(disabled.PRISMUX_CLERK_PUBLISHABLE_KEY).toBeUndefined();
-    expect(disabled.VITE_CLERK_PUBLISHABLE_KEY).toBeUndefined();
-  });
-
-  it("strips built-in upstream Axiom/OTLP relay and mobile trace env vars from all sources", () => {
-    const repoRoot = makeTemporaryDirectory();
     NodeFS.writeFileSync(
       NodePath.join(repoRoot, ".env"),
       [
+        "PRISMUX_CLERK_PUBLISHABLE_KEY=pk_root",
+        "PRISMUX_CLERK_PASSKEY_RP_DOMAINS=root.clerk.accounts.dev",
+        "PRISMUX_CLERK_JWT_TEMPLATE=template_root",
+        "PRISMUX_CLERK_CLI_OAUTH_CLIENT_ID=oauth_root",
+        "PRISMUX_RELAY_URL=https://root.example.test",
         "PRISMUX_RELAY_CLIENT_OTLP_TRACES_URL=https://api.axiom.co/v1/traces",
         "PRISMUX_RELAY_CLIENT_OTLP_TRACES_DATASET=relay-ds",
         "PRISMUX_RELAY_CLIENT_OTLP_TRACES_TOKEN=xaat-root-token",
@@ -89,9 +63,24 @@ describe("loadRepoEnv", () => {
         "PRISMUX_MOBILE_OTLP_TRACES_TOKEN=xaat-mobile-token",
       ].join("\n"),
     );
+    NodeFS.writeFileSync(
+      NodePath.join(repoRoot, ".env.local"),
+      "PRISMUX_CLERK_PUBLISHABLE_KEY=pk_local\nPRISMUX_RELAY_URL=https://local.example.test\n",
+    );
 
     const resolved = loadRepoEnv({
       baseEnv: {
+        PRISMUX_CLERK_PUBLISHABLE_KEY: "pk_ci",
+        VITE_CLERK_PUBLISHABLE_KEY: "pk_ci",
+        EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: "pk_ci",
+        PRISMUX_CLERK_PASSKEY_RP_DOMAINS: "ci.clerk.accounts.dev",
+        PRISMUX_CLERK_JWT_TEMPLATE: "template_ci",
+        VITE_CLERK_JWT_TEMPLATE: "template_ci",
+        EXPO_PUBLIC_CLERK_JWT_TEMPLATE: "template_ci",
+        PRISMUX_CLERK_CLI_OAUTH_CLIENT_ID: "oauth_ci",
+        VITE_CLERK_CLI_OAUTH_CLIENT_ID: "oauth_ci",
+        PRISMUX_RELAY_URL: "https://ci.example.test",
+        VITE_PRISMUX_RELAY_URL: "https://ci.example.test",
         VITE_RELAY_OTLP_TRACES_URL: "https://api.axiom.co/v1/traces",
         VITE_RELAY_OTLP_TRACES_DATASET: "vite-ds",
         VITE_RELAY_OTLP_TRACES_TOKEN: "xaat-vite-token",
@@ -101,6 +90,17 @@ describe("loadRepoEnv", () => {
     });
 
     for (const blockedKey of [
+      "PRISMUX_CLERK_PUBLISHABLE_KEY",
+      "VITE_CLERK_PUBLISHABLE_KEY",
+      "EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY",
+      "PRISMUX_CLERK_PASSKEY_RP_DOMAINS",
+      "PRISMUX_CLERK_JWT_TEMPLATE",
+      "VITE_CLERK_JWT_TEMPLATE",
+      "EXPO_PUBLIC_CLERK_JWT_TEMPLATE",
+      "PRISMUX_CLERK_CLI_OAUTH_CLIENT_ID",
+      "VITE_CLERK_CLI_OAUTH_CLIENT_ID",
+      "PRISMUX_RELAY_URL",
+      "VITE_PRISMUX_RELAY_URL",
       "PRISMUX_RELAY_CLIENT_OTLP_TRACES_URL",
       "PRISMUX_RELAY_CLIENT_OTLP_TRACES_DATASET",
       "PRISMUX_RELAY_CLIENT_OTLP_TRACES_TOKEN",

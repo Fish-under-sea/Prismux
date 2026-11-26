@@ -1,7 +1,9 @@
 # Installs the Prismux CLI from a GitHub Release archive on Windows. Needs
 # only PowerShell 5.1+; no Node, npm, or compiler.
 #
-#   irm https://prismux.app/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/Fish-under-sea/Prismux/main/scripts/install.ps1 | iex
+#
+# Releases: https://github.com/Fish-under-sea/Prismux/releases
 #
 # Environment:
 #   PRISMUX_CHANNEL           release train to follow: stable, nightly, or preview
@@ -9,24 +11,31 @@
 #   PRISMUX_VERSION           exact version to install (overrides PRISMUX_CHANNEL)
 #   PRISMUX_HOME              Prismux home directory (default: ~\.prismux)
 #   PRISMUX_INSTALL_BIN_DIR   where prismux.exe is linked (default: ~\.local\bin)
-#   PRISMUX_RELEASE_BASE_URL  mirror for releases/download (default: GitHub)
+#   PRISMUX_RELEASE_BASE_URL  HTTPS mirror for releases/download (default: GitHub)
 #
 # The archive is unpacked into $PRISMUX_HOME\runtime\versions\<version>, the
 # same layout `prismux service install` uses, so the service reuses this download.
 $ErrorActionPreference = "Stop"
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-
-$repo = "Fish-under-sea/Prismux"
-$baseUrl = if ($env:PRISMUX_RELEASE_BASE_URL) { $env:PRISMUX_RELEASE_BASE_URL.TrimEnd("/") } else { "https://github.com/$repo/releases/download" }
-$prismuxHome = if ($env:PRISMUX_HOME) { $env:PRISMUX_HOME } else { Join-Path $HOME ".prismux" }
-$binDir = if ($env:PRISMUX_INSTALL_BIN_DIR) { $env:PRISMUX_INSTALL_BIN_DIR } else { Join-Path $HOME ".local\bin" }
-# Absolute, so PATH never gets a folder that changes with the working directory.
-$binDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($binDir)
+$tlsProtocols = [Net.SecurityProtocolType]::Tls12
+if ([Enum]::GetNames([Net.SecurityProtocolType]) -contains "Tls13") {
+  $tlsProtocols = $tlsProtocols -bor [Net.SecurityProtocolType]::Tls13
+}
+[Net.ServicePointManager]::SecurityProtocol = $tlsProtocols
 
 function Fail([string] $message) {
   Write-Error "prismux install: $message"
   exit 1
 }
+
+$repo = "Fish-under-sea/Prismux"
+$baseUrl = if ($env:PRISMUX_RELEASE_BASE_URL) { $env:PRISMUX_RELEASE_BASE_URL.TrimEnd("/") } else { "https://github.com/$repo/releases/download" }
+if ($baseUrl -notmatch '^https://[^\s/]+') {
+  Fail "PRISMUX_RELEASE_BASE_URL must use https:// (refusing insecure URL: $baseUrl)"
+}
+$prismuxHome = if ($env:PRISMUX_HOME) { $env:PRISMUX_HOME } else { Join-Path $HOME ".prismux" }
+$binDir = if ($env:PRISMUX_INSTALL_BIN_DIR) { $env:PRISMUX_INSTALL_BIN_DIR } else { Join-Path $HOME ".local\bin" }
+# Absolute, so PATH never gets a folder that changes with the working directory.
+$binDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($binDir)
 
 $terminal = -not [Console]::IsErrorRedirected -and $env:TERM -ne "dumb"
 $interactive = $terminal -and $Host.UI.SupportsVirtualTerminal
@@ -78,6 +87,9 @@ function Invoke-Retrying([scriptblock] $request) {
   }
 }
 function Fetch([string] $uri, [string] $destination, [switch] $progress) {
+  if ($uri -notmatch '^https://') {
+    Fail "refusing non-HTTPS download URL: $uri"
+  }
   if (-not $progress -or -not $interactive) {
     $ProgressPreference = if ($progress -and $terminal) { "Continue" } else { "SilentlyContinue" }
     Invoke-Retrying { Invoke-WebRequest -Uri $uri -OutFile $destination -UseBasicParsing }
@@ -205,19 +217,48 @@ if ((Test-Path $marker) -and ((Get-Content $marker -Raw).Trim() -eq $version)) {
 
     Step "Verifying the download..."
 
-    $expected = (Get-Content (Join-Path $staging "SHA256SUMS") | Where-Object { $_ -match "\s\*?$([regex]::Escape($archive))$" } | Select-Object -First 1)
-    if (-not $expected) { Fail "$archive is not listed in SHA256SUMS" }
-    $expected = ($expected -split "\s+")[0].ToLowerInvariant()
+    $expectedLine = (Get-Content (Join-Path $staging "SHA256SUMS") | Where-Object { $_ -match "^[0-9A-Fa-f]{64}\s+\*?$([regex]::Escape($archive))$" } | Select-Object -First 1)
+    if (-not $expectedLine) { Fail "$archive does not have a valid SHA-256 entry in SHA256SUMS" }
+    $expected = ($expectedLine -split "\s+")[0].ToLowerInvariant()
+    if ($expected -notmatch '^[0-9a-f]{64}$') { Fail "invalid SHA-256 digest for $archive in SHA256SUMS" }
     $actual = (Get-FileHash -Algorithm SHA256 (Join-Path $staging $archive)).Hash.ToLowerInvariant()
     if ($actual -ne $expected) { Fail "checksum mismatch for $archive" }
 
     Step "Extracting Prismux..."
-    # The archive module reads the global preference, not the caller's local scope.
-    $savedProgress = $global:ProgressPreference
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $stagingFull = [System.IO.Path]::GetFullPath($staging)
+    if (-not $stagingFull.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+      $stagingFull += [System.IO.Path]::DirectorySeparatorChar
+    }
+    $zipArchive = [System.IO.Compression.ZipFile]::OpenRead((Join-Path $staging $archive))
     try {
-      $global:ProgressPreference = "SilentlyContinue"
-      Expand-Archive -Path (Join-Path $staging $archive) -DestinationPath $staging -Force
-    } finally { $global:ProgressPreference = $savedProgress }
+      foreach ($entry in $zipArchive.Entries) {
+        $entryName = $entry.FullName
+        if ([string]::IsNullOrEmpty($entryName)) { continue }
+        if ($entryName.Contains([char]0) -or $entryName -match '^(?:[\\/]|[A-Za-z]:)') {
+          Fail "refusing unsafe zip entry path: $entryName"
+        }
+        $normalizedRel = $entryName -replace '/', '\'
+        if (($normalizedRel.Split('\')) -contains '..') {
+          Fail "refusing zip-slip traversal entry: $entryName"
+        }
+        $destinationPath = [System.IO.Path]::GetFullPath((Join-Path $stagingFull $normalizedRel))
+        if (-not $destinationPath.StartsWith($stagingFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+          Fail "refusing zip-slip entry outside staging directory: $entryName"
+        }
+        if ($entryName.EndsWith("/") -or $entryName.EndsWith("\")) {
+          New-Item -ItemType Directory -Force -Path $destinationPath | Out-Null
+          continue
+        }
+        $parentDir = [System.IO.Path]::GetDirectoryName($destinationPath)
+        if ($parentDir) {
+          New-Item -ItemType Directory -Force -Path $parentDir | Out-Null
+        }
+        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $destinationPath, $true)
+      }
+    } finally {
+      $zipArchive.Dispose()
+    }
     Get-ChildItem (Join-Path $staging $stem) | Move-Item -Destination $staging
     Remove-Item (Join-Path $staging $stem), (Join-Path $staging $archive), (Join-Path $staging "SHA256SUMS") -Recurse -Force
 

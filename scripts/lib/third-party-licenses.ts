@@ -86,9 +86,21 @@ interface PackageNoticeOverrideConfigEntry {
   readonly version?: string;
 }
 
+interface ProprietaryCarveOutConfigEntry {
+  readonly copyright: string;
+  readonly legalTermsUrl: string;
+  readonly license: string;
+  readonly name: string;
+  readonly noticeFile: string;
+  readonly scope: string;
+  readonly sourceUrl?: string;
+  readonly version?: string;
+}
+
 interface ThirdPartyLicensesConfig {
   readonly customNotices: ReadonlyArray<CustomNoticeConfigEntry>;
   readonly packageOverrides: ReadonlyArray<PackageNoticeOverrideConfigEntry>;
+  readonly proprietaryCarveOuts: ReadonlyArray<ProprietaryCarveOutConfigEntry>;
 }
 
 interface SpdxLicenseDetails {
@@ -109,6 +121,7 @@ interface PackageCollection {
 const EMPTY_CONFIG: ThirdPartyLicensesConfig = {
   customNotices: [],
   packageOverrides: [],
+  proprietaryCarveOuts: [],
 };
 
 const NOTICE_FILE_PATTERN = /^(?:licen[cs]e|copying|notice)(?:[._-].*)?$/i;
@@ -292,6 +305,31 @@ function decodePackageOverrides(value: unknown): ReadonlyArray<PackageNoticeOver
   });
 }
 
+function decodeProprietaryCarveOuts(
+  value: unknown,
+): ReadonlyArray<ProprietaryCarveOutConfigEntry> {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error('Third-party license config field "proprietaryCarveOuts" must be an array.');
+  }
+  return value.map((entry, index) => {
+    const context = `Third-party proprietary carve-out at index ${String(index)}`;
+    if (!isRecord(entry)) throw new Error(`${context} must be an object.`);
+    const version = readOptionalString(entry, "version", context);
+    const sourceUrl = readOptionalString(entry, "sourceUrl", context);
+    return {
+      name: readRequiredString(entry, "name", context),
+      license: readRequiredString(entry, "license", context),
+      copyright: readRequiredString(entry, "copyright", context),
+      legalTermsUrl: readRequiredString(entry, "legalTermsUrl", context),
+      noticeFile: readRequiredString(entry, "noticeFile", context),
+      scope: readRequiredString(entry, "scope", context),
+      ...(version !== undefined ? { version } : {}),
+      ...(sourceUrl !== undefined ? { sourceUrl } : {}),
+    };
+  });
+}
+
 async function readConfig(configFile: string | URL | undefined): Promise<{
   readonly config: ThirdPartyLicensesConfig;
   readonly directory: string;
@@ -307,6 +345,7 @@ async function readConfig(configFile: string | URL | undefined): Promise<{
     config: {
       customNotices: decodeCustomNotices(decoded.customNotices),
       packageOverrides: decodePackageOverrides(decoded.packageOverrides),
+      proprietaryCarveOuts: decodeProprietaryCarveOuts(decoded.proprietaryCarveOuts),
     },
     directory: NodePath.dirname(configPath),
   };
@@ -423,8 +462,38 @@ async function syncConfiguredGeneratedNotices(
   );
 }
 
+async function verifyConfiguredNoticeFilesExist(
+  config: ThirdPartyLicensesConfig,
+  directory: string,
+): Promise<void> {
+  const referencedFiles = new Set<string>();
+  for (const notice of config.customNotices) {
+    for (const file of notice.noticeFiles ?? []) referencedFiles.add(file);
+  }
+  for (const override of config.packageOverrides) {
+    if (override.noticeFile !== undefined) referencedFiles.add(override.noticeFile);
+  }
+  for (const carveOut of config.proprietaryCarveOuts) {
+    referencedFiles.add(carveOut.noticeFile);
+  }
+
+  const missing: string[] = [];
+  for (const relPath of [...referencedFiles].sort((left, right) => left.localeCompare(right))) {
+    const resolved = NodePath.resolve(directory, relPath);
+    if (!(await fileExists(resolved))) {
+      missing.push(relPath);
+    }
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `Third-party license config references missing notice files:\n${missing.map((item) => `- ${item}`).join("\n")}`,
+    );
+  }
+}
+
 export async function syncThirdPartyLicenseNotices(configFile: string | URL): Promise<void> {
   const { config, directory } = await readConfig(configFile);
+  await verifyConfiguredNoticeFilesExist(config, directory);
   await syncConfiguredGeneratedNotices(config, directory);
 }
 
@@ -771,7 +840,8 @@ async function readPackageNoticeText(packageRoot: string): Promise<string | null
   for (const fileName of noticeFiles) {
     const contents = (await NodeFSP.readFile(NodePath.join(packageRoot, fileName), "utf8")).trim();
     if (contents.length === 0) continue;
-    sections.push(noticeFiles.length === 1 ? contents : `${fileName}\n\n${contents}`);
+    const displayFileName = fileName.replaceAll("\\", "/");
+    sections.push(noticeFiles.length === 1 ? contents : `${displayFileName}\n\n${contents}`);
   }
   return sections.length > 0 ? sections.join("\n\n---\n\n") : null;
 }
