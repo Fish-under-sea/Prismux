@@ -1,5 +1,6 @@
 import {
   DEFAULT_CLIENT_SETTINGS,
+  DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   MessageId,
   NodeId,
@@ -655,9 +656,10 @@ describe("1:1 DSH NEXT Thinking & Command/Tool hierarchy & disclosure guarantees
     const rawDetail =
       "**Inspecting settings schema**\nChecking how client settings decode defaults.";
     const translatedDetail = "检查设置模式\n正在核对客户端设置如何解码默认值。";
+    const defaultTextModelKey = `${DEFAULT_SERVER_SETTINGS.textGenerationModelSelection.instanceId}:${DEFAULT_SERVER_SETTINGS.textGenerationModelSelection.model}`;
     const cacheKey = makeReasoningTranslationCacheKey({
-      provider: "bing",
-      modelKey: "",
+      provider: "text_model",
+      modelKey: defaultTextModelKey,
       targetLanguage: DEFAULT_REASONING_TRANSLATION_TARGET_LANGUAGE,
       fragmentText: rawDetail,
     });
@@ -689,7 +691,7 @@ describe("1:1 DSH NEXT Thinking & Command/Tool hierarchy & disclosure guarantees
     };
     const shared = makeSharedState();
 
-    mockReasoningTranslationState.provider = "bing";
+    mockReasoningTranslationState.provider = "text_model";
     try {
       const collapsedHtml = renderToStaticMarkup(
         <TimelineRowCtx value={shared}>
