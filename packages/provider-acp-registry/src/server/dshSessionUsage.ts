@@ -1,7 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off
 import * as NodeFS from "node:fs";
+import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeUtil from "node:util";
 import * as NodeZlib from "node:zlib";
 
 import type { TurnTokenUsage } from "@prismux/core-contracts";
@@ -12,8 +14,11 @@ import { resolveDshDesktopHome } from "./dshLocal.ts";
 
 const ZSTD_MAGIC = 0xfd2fb528;
 const MAX_SESSION_FILE_CACHE_ENTRIES = 512;
+const DEFAULT_DSH_USAGE_FILE_CACHE_MAX_ENTRIES = 500;
+const DSH_SCAN_CONCURRENCY = 4;
 const DEFAULT_FINAL_SETTLE_WAIT_MS = 260;
 const FINAL_SETTLE_POLL_INTERVAL_MS = 40;
+const zstdDecompressAsync = NodeUtil.promisify(NodeZlib.zstdDecompress);
 
 /** Byte range occupied by one structurally complete RFC 8878 Zstandard frame. */
 export interface ZstdFrameRange {
@@ -127,9 +132,47 @@ function decompressZstdFrameSafe(buffer: Buffer, start: number, end: number): Bu
   }
 }
 
+async function decompressZstdFrameSafeAsync(
+  buffer: Buffer,
+  start: number,
+  end: number,
+): Promise<Buffer | undefined> {
+  const view = buffer.subarray(start, end);
+  try {
+    return await zstdDecompressAsync(view);
+  } catch {
+    try {
+      return await zstdDecompressAsync(Buffer.from(view));
+    } catch {
+      return undefined;
+    }
+  }
+}
+
 export interface DecodedDshSessionJsonl {
   readonly records: ReadonlyArray<Record<string, unknown>>;
   readonly tornFrame: boolean;
+}
+
+function parseJsonlText(text: string, initialTornFrame: boolean): DecodedDshSessionJsonl {
+  let tornFrame = initialTornFrame;
+  const records: Array<Record<string, unknown>> = [];
+  const lines = text.split(/\r?\n/u);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]?.trim();
+    if (!line) continue;
+    try {
+      const parsed = JSON.parse(line) as unknown;
+      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+        records.push(parsed as Record<string, unknown>);
+      }
+    } catch {
+      if (index === lines.length - 1) {
+        tornFrame = true;
+      }
+    }
+  }
+  return { records, tornFrame };
 }
 
 function decodeDshSessionJsonlInternal(buf: Buffer): DecodedDshSessionJsonl {
@@ -162,23 +205,40 @@ function decodeDshSessionJsonlInternal(buf: Buffer): DecodedDshSessionJsonl {
     text = buf.toString("utf8");
   }
 
-  const records: Array<Record<string, unknown>> = [];
-  const lines = text.split(/\r?\n/u);
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index]?.trim();
-    if (!line) continue;
-    try {
-      const parsed = JSON.parse(line) as unknown;
-      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
-        records.push(parsed as Record<string, unknown>);
-      }
-    } catch {
-      if (index === lines.length - 1) {
-        tornFrame = true;
-      }
-    }
+  return parseJsonlText(text, tornFrame);
+}
+
+async function decodeDshSessionJsonlInternalAsync(buf: Buffer): Promise<DecodedDshSessionJsonl> {
+  if (buf.length === 0) {
+    return { records: [], tornFrame: false };
   }
-  return { records, tornFrame };
+
+  let text = "";
+  let tornFrame = false;
+
+  if (buf.length >= 4 && buf.readUInt32LE(0) === ZSTD_MAGIC) {
+    let scan: ZstdFrameScan;
+    try {
+      scan = scanZstdFrames(buf);
+    } catch {
+      return { records: [], tornFrame: true };
+    }
+    tornFrame = scan.tornStart !== undefined;
+    const chunks: Array<string> = [];
+    for (const frame of scan.frames) {
+      const decoded = await decompressZstdFrameSafeAsync(buf, frame.start, frame.end);
+      if (decoded === undefined) {
+        tornFrame = true;
+        break;
+      }
+      chunks.push(decoded.toString("utf8"));
+    }
+    text = chunks.join("");
+  } else {
+    text = buf.toString("utf8");
+  }
+
+  return parseJsonlText(text, tornFrame);
 }
 
 /**
@@ -248,20 +308,25 @@ export function resolveDshHomeDir(
       ? homeDir.trim()
       : envHome ?? NodeOS.homedir();
 
+  const resolvePathPreservingDrive = (value: string) =>
+    platform !== "win32" && /^[A-Za-z]:[\\/]/u.test(value) ? value : pathApi.resolve(value);
+
   const explicit = readEnvValue(env, "DSH_HOME", platform);
   if (explicit !== undefined) {
-    return pathApi.resolve(expandTildePath(explicit, resolvedHome, pathApi));
+    return resolvePathPreservingDrive(expandTildePath(explicit, resolvedHome, pathApi));
   }
 
   const normalizeForCompare = (value: string) =>
-    platform === "win32" ? pathApi.resolve(value).toLowerCase() : pathApi.resolve(value);
+    platform === "win32"
+      ? pathApi.resolve(value).toLowerCase()
+      : resolvePathPreservingDrive(value);
   const homeMatchesEnv =
     homeDir === undefined ||
     (envHome !== undefined && normalizeForCompare(resolvedHome) === normalizeForCompare(envHome));
   if (homeMatchesEnv) {
     const desktopHome = resolveDshDesktopHome(env, platform);
     if (desktopHome !== undefined) {
-      return pathApi.resolve(desktopHome);
+      return resolvePathPreservingDrive(desktopHome);
     }
   }
 
@@ -361,6 +426,43 @@ function findBestSessionFileInDir(sessionDirPath: string): string | undefined {
     if (candidate === undefined) continue;
     try {
       if (!NodeFS.statSync(candidate.filePath).isFile()) continue;
+    } catch {
+      continue;
+    }
+    if (
+      best === undefined ||
+      candidate.version > best.version ||
+      (candidate.version === best.version && candidate.compressed && !best.compressed)
+    ) {
+      best = candidate;
+    }
+  }
+  return best?.filePath;
+}
+
+async function findBestSessionFileInDirAsync(sessionDirPath: string): Promise<string | undefined> {
+  for (const preferred of ["session.v4.jsonl.zstd", "session.v4.jsonl"] as const) {
+    const candidate = NodePath.join(sessionDirPath, preferred);
+    try {
+      if ((await NodeFSP.stat(candidate)).isFile()) {
+        return candidate;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  let entries: ReadonlyArray<string>;
+  try {
+    entries = await NodeFSP.readdir(sessionDirPath);
+  } catch {
+    return undefined;
+  }
+  let best: SessionLogCandidate | undefined;
+  for (const name of entries) {
+    const candidate = parseSessionLogCandidate(sessionDirPath, name);
+    if (candidate === undefined) continue;
+    try {
+      if (!(await NodeFSP.stat(candidate.filePath)).isFile()) continue;
     } catch {
       continue;
     }
@@ -874,6 +976,17 @@ function readDshSessionFileSync(filePath: string): DecodedDshSessionJsonl | unde
   }
 }
 
+async function readDshSessionFileAsync(
+  filePath: string,
+): Promise<DecodedDshSessionJsonl | undefined> {
+  try {
+    const buffer = await NodeFSP.readFile(filePath);
+    return await decodeDshSessionJsonlInternalAsync(buffer);
+  } catch {
+    return undefined;
+  }
+}
+
 function sleepRealMs(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -890,6 +1003,18 @@ export function makeDshTurnUsageWatcher(input: MakeDshTurnUsageWatcherInput): Ds
   const settleWaitMs = input.settleWaitMs ?? DEFAULT_FINAL_SETTLE_WAIT_MS;
 
   const initialFile = findDshSessionFile(dshHome, sessionId, cwd);
+  let lastStat: { readonly filePath: string; readonly mtimeMs: number; readonly size: number } | undefined;
+  let lastDelta: DshTurnUsageDelta | undefined;
+  if (initialFile !== undefined) {
+    try {
+      const st = NodeFS.statSync(initialFile);
+      if (st.isFile()) {
+        lastStat = { filePath: initialFile, mtimeMs: st.mtimeMs, size: st.size };
+      }
+    } catch {
+      // ignore
+    }
+  }
   const initialDecoded =
     initialFile === undefined ? undefined : readDshSessionFileSync(initialFile);
   const baselineSeq =
@@ -898,12 +1023,31 @@ export function makeDshTurnUsageWatcher(input: MakeDshTurnUsageWatcherInput): Ds
   const readTurnDelta = (): DshTurnUsageDelta | undefined => {
     const filePath = findDshSessionFile(dshHome, sessionId, cwd);
     if (filePath === undefined) return undefined;
+    let stat: NodeFS.Stats | undefined;
+    try {
+      stat = NodeFS.statSync(filePath);
+    } catch {
+      return undefined;
+    }
+    if (
+      lastStat !== undefined &&
+      lastStat.filePath === filePath &&
+      lastStat.mtimeMs === stat.mtimeMs &&
+      lastStat.size === stat.size
+    ) {
+      return lastDelta;
+    }
+
     const decoded = readDshSessionFileSync(filePath);
     if (decoded === undefined) return undefined;
 
     const parsed = parseDshSessionRecords(decoded.records);
     const turnSteps = parsed.steps.filter((step) => step.seq > baselineSeq);
-    if (turnSteps.length === 0) return undefined;
+    if (turnSteps.length === 0) {
+      lastStat = { filePath, mtimeMs: stat.mtimeMs, size: stat.size };
+      lastDelta = undefined;
+      return undefined;
+    }
 
     let uncachedInput = 0;
     let cachedInput = 0;
@@ -981,7 +1125,7 @@ export function makeDshTurnUsageWatcher(input: MakeDshTurnUsageWatcherInput): Ds
       ...(modelDurationMs !== undefined ? { durationMs: modelDurationMs } : {}),
     };
 
-    return {
+    const result: DshTurnUsageDelta = {
       usage,
       liveTokenUsage,
       models,
@@ -989,6 +1133,9 @@ export function makeDshTurnUsageWatcher(input: MakeDshTurnUsageWatcherInput): Ds
       hasTurnEnd,
       tornFrame: decoded.tornFrame,
     };
+    lastStat = { filePath, mtimeMs: stat.mtimeMs, size: stat.size };
+    lastDelta = result;
+    return result;
   };
 
   const collectFinal = async (): Promise<DshTurnUsageDelta | undefined> => {
@@ -1029,8 +1176,40 @@ export interface CachedDshUsageFile {
 
 export type DshUsageFileCache = Map<string, CachedDshUsageFile>;
 
-export function makeDshUsageFileCache(): DshUsageFileCache {
-  return new Map();
+class BoundedLruDshUsageFileCache extends Map<string, CachedDshUsageFile> {
+  private readonly maxEntries: number;
+
+  constructor(maxEntries: number) {
+    super();
+    this.maxEntries = Math.max(1, Math.trunc(maxEntries));
+  }
+
+  override get(key: string): CachedDshUsageFile | undefined {
+    const value = super.get(key);
+    if (value !== undefined) {
+      super.delete(key);
+      super.set(key, value);
+    }
+    return value;
+  }
+
+  override set(key: string, value: CachedDshUsageFile): this {
+    if (super.has(key)) {
+      super.delete(key);
+    } else if (this.size >= this.maxEntries) {
+      const oldestKey = this.keys().next().value;
+      if (oldestKey !== undefined) {
+        super.delete(oldestKey);
+      }
+    }
+    return super.set(key, value);
+  }
+}
+
+export function makeDshUsageFileCache(
+  maxEntries = DEFAULT_DSH_USAGE_FILE_CACHE_MAX_ENTRIES,
+): DshUsageFileCache {
+  return new BoundedLruDshUsageFileCache(maxEntries);
 }
 
 export interface ScanDshUsageInput {
@@ -1078,8 +1257,11 @@ export function dshRateModel(model: string): string {
   return bare.length > 0 ? bare : trimmed;
 }
 
-function parseDshUsageFileRecords(filePath: string, fallbackSessionId: string): ReadonlyArray<UsageRecord> {
-  const decoded = readDshSessionFileSync(filePath);
+async function parseDshUsageFileRecordsAsync(
+  filePath: string,
+  fallbackSessionId: string,
+): Promise<ReadonlyArray<UsageRecord>> {
+  const decoded = await readDshSessionFileAsync(filePath);
   if (decoded === undefined) return [];
   const parsed = parseDshSessionRecords(decoded.records, { skipSeededPrefix: true });
   const sessionId = parsed.sessionId ?? fallbackSessionId;
@@ -1118,11 +1300,11 @@ function parseDshUsageFileRecords(filePath: string, fallbackSessionId: string): 
 }
 
 /**
- * Scans `<dshHome>/sessions/*\/*\/session*.jsonl(.zstd)?` for historical DSH usage, returning
- * per-file `UsageRecord` batches suitable for `UsageService` (`kind: "scan"`).
- * Skips files whose `mtimeMs < sinceMs` and reuses cached parses for unchanged `(mtimeMs, size)`.
+ * Asynchronously scans `<dshHome>/sessions/*\/*\/session*.jsonl(.zstd)?` for historical DSH usage,
+ * returning per-file `UsageRecord` batches suitable for `UsageService` (`kind: "scan"`).
+ * Skips files whose `mtimeMs < sinceMs` and reuses bounded-LRU cached parses for unchanged `(mtimeMs, size)`.
  */
-export function scanDshUsageFiles(input: ScanDshUsageInput): DshUsageScanFilesResult {
+export async function scanDshUsageFiles(input: ScanDshUsageInput): Promise<DshUsageScanFilesResult> {
   const sessionsDir = NodePath.join(input.dshHome, "sessions");
   const sinceMs = input.sinceMs;
   const untilMs = input.untilMs;
@@ -1130,14 +1312,14 @@ export function scanDshUsageFiles(input: ScanDshUsageInput): DshUsageScanFilesRe
 
   let projectEntries: ReadonlyArray<NodeFS.Dirent>;
   try {
-    projectEntries = NodeFS.readdirSync(sessionsDir, { withFileTypes: true });
+    projectEntries = await NodeFSP.readdir(sessionsDir, { withFileTypes: true });
   } catch (cause) {
     const code = (cause as NodeJS.ErrnoException | undefined)?.code;
     const missing = code === "ENOENT" || code === "ENOTDIR";
     return { sessionsDir, missing, error: !missing, files: [] };
   }
 
-  const files: Array<DshUsageScannedFile> = [];
+  const sessionTargets: Array<{ readonly sessionDirPath: string; readonly fallbackSessionId: string }> = [];
   let error = false;
 
   for (const projectEntry of projectEntries) {
@@ -1145,7 +1327,7 @@ export function scanDshUsageFiles(input: ScanDshUsageInput): DshUsageScanFilesRe
     const projectPath = NodePath.join(sessionsDir, projectEntry.name);
     let sessionEntries: ReadonlyArray<NodeFS.Dirent>;
     try {
-      sessionEntries = NodeFS.readdirSync(projectPath, { withFileTypes: true });
+      sessionEntries = await NodeFSP.readdir(projectPath, { withFileTypes: true });
     } catch {
       error = true;
       continue;
@@ -1153,13 +1335,23 @@ export function scanDshUsageFiles(input: ScanDshUsageInput): DshUsageScanFilesRe
 
     for (const sessionEntry of sessionEntries) {
       if (!sessionEntry.isDirectory()) continue;
-      const sessionDirPath = NodePath.join(projectPath, sessionEntry.name);
-      const bestFile = findBestSessionFileInDir(sessionDirPath);
+      sessionTargets.push({
+        sessionDirPath: NodePath.join(projectPath, sessionEntry.name),
+        fallbackSessionId: sessionEntry.name,
+      });
+    }
+  }
+
+  const results: Array<DshUsageScannedFile | undefined> = Array.from({ length: sessionTargets.length });
+  const queue = sessionTargets.entries();
+  const worker = async (): Promise<void> => {
+    for (const [index, target] of queue) {
+      const bestFile = await findBestSessionFileInDirAsync(target.sessionDirPath);
       if (bestFile === undefined) continue;
 
       let stat: NodeFS.Stats;
       try {
-        stat = NodeFS.statSync(bestFile);
+        stat = await NodeFSP.stat(bestFile);
       } catch {
         error = true;
         continue;
@@ -1174,7 +1366,7 @@ export function scanDshUsageFiles(input: ScanDshUsageInput): DshUsageScanFilesRe
       if (cached !== undefined && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
         allFileRecords = cached.records;
       } else {
-        allFileRecords = parseDshUsageFileRecords(bestFile, sessionEntry.name);
+        allFileRecords = await parseDshUsageFileRecordsAsync(bestFile, target.fallbackSessionId);
         cache?.set(bestFile, {
           mtimeMs: stat.mtimeMs,
           size: stat.size,
@@ -1191,17 +1383,28 @@ export function scanDshUsageFiles(input: ScanDshUsageInput): DshUsageScanFilesRe
                 (untilMs === undefined || record.timestampMs <= untilMs),
             );
 
-      files.push({ path: bestFile, records: filtered });
+      results[index] = { path: bestFile, records: filtered };
     }
-  }
+  };
 
-  return { sessionsDir, missing: false, error, files };
+  await Promise.all(
+    Array.from({ length: Math.min(DSH_SCAN_CONCURRENCY, sessionTargets.length) }, worker),
+  );
+
+  return {
+    sessionsDir,
+    missing: false,
+    error,
+    files: results.filter((entry): entry is DshUsageScannedFile => entry !== undefined),
+  };
 }
 
 /**
- * Scans all `<dshHome>/sessions/**\/session*.jsonl(.zstd)?` logs and returns flattened
- * `UsageRecord[]` entries with `provider: "dsh"`.
+ * Asynchronously scans all `<dshHome>/sessions/**\/session*.jsonl(.zstd)?` logs and returns
+ * flattened `UsageRecord[]` entries with `provider: "dsh"`.
  */
-export function scanDshUsageRecords(input: ScanDshUsageInput): ReadonlyArray<UsageRecord> {
-  return scanDshUsageFiles(input).files.flatMap((file) => file.records);
+export async function scanDshUsageRecords(
+  input: ScanDshUsageInput,
+): Promise<ReadonlyArray<UsageRecord>> {
+  return (await scanDshUsageFiles(input)).files.flatMap((file) => file.records);
 }

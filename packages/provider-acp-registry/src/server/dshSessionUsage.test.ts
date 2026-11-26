@@ -297,6 +297,8 @@ describe("dshSessionUsage", () => {
         { seq: 11, type: "turn/end", time: 1_700_000_018_020, data: { turn: 2 } },
       ]);
       NodeFS.appendFileSync(filePath, turn2Step2);
+      // Pin integer-second mtime so NTFS sub-ms precision does not skew utimes restoration below.
+      NodeFS.utimesSync(filePath, 1_700_000_020, 1_700_000_020);
 
       const final = await watcher.collectFinal();
       expect(final).toBeDefined();
@@ -324,11 +326,30 @@ describe("dshSessionUsage", () => {
         decodeMs: 4000,
         durationMs: 7000,
       });
+
+      // Calling readTurnDelta() again while (mtimeMs, size) are unchanged reuses the cached
+      // result without re-reading or re-decompressing the zstd log.
+      const repeated = watcher.readTurnDelta();
+      expect(repeated).toBe(final);
+      const stat = NodeFS.statSync(filePath);
+      NodeFS.writeFileSync(filePath, Buffer.alloc(stat.size, 0));
+      NodeFS.utimesSync(filePath, 1_700_000_020, 1_700_000_020);
+      expect(watcher.readTurnDelta()).toBe(final);
     });
   });
 
   describe("scanDshUsageRecords & scanDshUsageFiles", () => {
-    it("scans DSH sessions with uncached input semantics, skips seeded prefixes and stale mtime files, and caches unchanged files", () => {
+    it("enforces bounded LRU eviction on makeDshUsageFileCache", () => {
+      const cache = makeDshUsageFileCache(2);
+      cache.set("a", { mtimeMs: 1, size: 1, records: [] });
+      cache.set("b", { mtimeMs: 2, size: 2, records: [] });
+      // Touch "a" so "b" becomes least recently used.
+      expect(cache.get("a")?.size).toBe(1);
+      cache.set("c", { mtimeMs: 3, size: 3, records: [] });
+      expect([...cache.keys()]).toEqual(["a", "c"]);
+    });
+
+    it("scans DSH sessions with uncached input semantics, skips seeded prefixes and stale mtime files, and caches unchanged files", async () => {
       const root = createTempDir("prismux-dsh-scan-");
       const freshDir = NodePath.join(root, "sessions", "--D-Proj--", "sess-fresh");
       const staleDir = NodePath.join(root, "sessions", "--D-Proj--", "sess-stale");
@@ -422,7 +443,7 @@ describe("dshSessionUsage", () => {
 
       const cache = makeDshUsageFileCache();
       const sinceMs = Date.parse("2026-07-31T00:00:00Z");
-      const records = scanDshUsageRecords({ dshHome: root, sinceMs, cache });
+      const records = await scanDshUsageRecords({ dshHome: root, sinceMs, cache });
       expect(records).toHaveLength(2);
 
       const freshRecord = records.find((r) => r.sessionId === "sess-fresh");
@@ -458,27 +479,27 @@ describe("dshSessionUsage", () => {
       });
 
       // Second scan hits cache and produces identical records
-      const secondScan = scanDshUsageFiles({ dshHome: root, sinceMs, cache });
+      const secondScan = await scanDshUsageFiles({ dshHome: root, sinceMs, cache });
       expect(secondScan.missing).toBe(false);
       expect(secondScan.error).toBe(false);
       expect(secondScan.files.flatMap((f) => f.records)).toEqual(records);
     });
 
-    it("reports missing when <dshHome>/sessions does not exist", () => {
+    it("reports missing when <dshHome>/sessions does not exist", async () => {
       const root = createTempDir("prismux-dsh-missing-");
-      const result = scanDshUsageFiles({ dshHome: root });
+      const result = await scanDshUsageFiles({ dshHome: root });
       expect(result.missing).toBe(true);
       expect(result.error).toBe(false);
       expect(result.files).toEqual([]);
     });
 
-    it("reads live local ~/.dsh/sessions without crashing when present on host", () => {
+    it("reads live local ~/.dsh/sessions without crashing when present on host", async () => {
       const localDshHome = NodePath.join(NodeOS.homedir(), ".dsh");
       const localSessionsDir = NodePath.join(localDshHome, "sessions");
       if (!NodeFS.existsSync(localSessionsDir)) {
         return;
       }
-      const records = scanDshUsageRecords({ dshHome: localDshHome });
+      const records = await scanDshUsageRecords({ dshHome: localDshHome });
       expect(records.length).toBeGreaterThan(0);
       for (const record of records.slice(0, 50)) {
         expect(record.provider).toBe("dsh");

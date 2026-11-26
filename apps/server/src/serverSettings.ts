@@ -160,6 +160,7 @@ export type AutoSeedProviderId = (typeof AUTO_SEED_PROVIDER_IDS)[number];
 export interface AutoSeedProviderMarker {
   readonly seeded: ReadonlyArray<string>;
   readonly dismissed: ReadonlyArray<string>;
+  readonly initialized?: boolean;
 }
 
 const EMPTY_AUTO_SEED_MARKER: AutoSeedProviderMarker = {
@@ -1704,14 +1705,19 @@ const make = Effect.gen(function* () {
   const readAutoSeedMarker = fs.readFileString(autoSeedMarkerPath).pipe(
     Effect.map((raw): AutoSeedProviderMarker => {
       try {
-        const parsed = JSON.parse(raw) as { seeded?: unknown; dismissed?: unknown };
+        const parsed = JSON.parse(raw) as {
+          seeded?: unknown;
+          dismissed?: unknown;
+          initialized?: unknown;
+        };
         const seeded = Array.isArray(parsed.seeded)
           ? parsed.seeded.filter((v): v is string => typeof v === "string" && v.length > 0)
           : [];
         const dismissed = Array.isArray(parsed.dismissed)
           ? parsed.dismissed.filter((v): v is string => typeof v === "string" && v.length > 0)
           : [];
-        return { seeded, dismissed };
+        const initialized = parsed.initialized === true;
+        return initialized ? { seeded, dismissed, initialized } : { seeded, dismissed };
       } catch {
         return EMPTY_AUTO_SEED_MARKER;
       }
@@ -1743,6 +1749,7 @@ const make = Effect.gen(function* () {
       const nextMarker: AutoSeedProviderMarker = {
         seeded: Array.from(seeded),
         dismissed: Array.from(dismissed),
+        ...(marker.initialized ? { initialized: true } : {}),
       };
       if (
         nextMarker.seeded.length !== marker.seeded.length ||
@@ -1761,11 +1768,25 @@ const make = Effect.gen(function* () {
       if (Option.isSome(parseFailure)) {
         return;
       }
-      const discovered = yield* discoverInstalledLocalAgents();
-      if (discovered.length === 0) {
+      // Read the persisted auto-seed marker FIRST so restarts skip expensive local CLI probing.
+      const marker = yield* readAutoSeedMarker;
+      const hidden = new Set<string>(current.hiddenDefaultProviderInstances);
+      const alreadyHandled =
+        marker.initialized === true ||
+        marker.seeded.length > 0 ||
+        marker.dismissed.length > 0 ||
+        AUTO_SEED_PROVIDER_IDS.every(
+          (id) =>
+            Object.hasOwn(current.providerInstances, ProviderInstanceId.make(id)) || hidden.has(id),
+        );
+      if (alreadyHandled) {
         return;
       }
-      const marker = yield* readAutoSeedMarker;
+      const discovered = yield* discoverInstalledLocalAgents();
+      if (discovered.length === 0) {
+        yield* writeAutoSeedMarker({ ...marker, initialized: true });
+        return;
+      }
       const result = applyAutoSeededProviders({
         settings: current,
         discovered,
@@ -1773,11 +1794,12 @@ const make = Effect.gen(function* () {
         isDriverAllowed: managedProviders.isDriverAllowed,
       });
       if (result.seededIds.length === 0) {
+        yield* writeAutoSeedMarker({ ...marker, initialized: true });
         return;
       }
       const next = yield* normalizeServerSettings(result.settings);
       yield* writeSettingsAtomically(next);
-      yield* writeAutoSeedMarker(result.marker);
+      yield* writeAutoSeedMarker({ ...result.marker, initialized: true });
       yield* invalidateMaterialized;
       yield* Cache.set(settingsCache, cacheKey, { settings: next, parseFailure: Option.none() });
       yield* emitChange(next);

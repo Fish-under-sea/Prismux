@@ -95,7 +95,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     traceTimingEnabled: true,
     traceBatchWindowMs: 1_000,
     traceMaxBytes: 10 * 1024 * 1024,
-    traceMaxFiles: 10,
+    traceMaxFiles: 5,
     otlpTracesUrl: undefined,
     otlpMetricsUrl: undefined,
     otlpLogsUrl: undefined,

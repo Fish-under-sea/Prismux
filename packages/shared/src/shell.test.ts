@@ -18,6 +18,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   applyShellEnvironment,
+  clearAgentProbeCachesForTests,
   clearWindowsUninstallRegistryCacheForTests,
   discoverWindowsUninstallInstallDirs,
   findWindowsAntigravityCliDirs,
@@ -1640,4 +1641,128 @@ describe("Windows Uninstall Registry & agent CLI fallback discovery", () => {
       NodeFS.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("does not probe C..F drive roots by default in findWindowsAntigravityCliDirs unless probeDriveRoots: true", () => {
+    const probedPaths: string[] = [];
+    const env = {
+      LOCALAPPDATA: "C:\\Users\\demo\\AppData\\Local",
+      USERPROFILE: "C:\\Users\\demo",
+      ProgramFiles: "C:\\Program Files",
+      "ProgramFiles(x86)": "C:\\Program Files (x86)",
+    };
+    const isFile = (filePath: string) => {
+      probedPaths.push(filePath);
+      return filePath.toLowerCase() === "e:\\antigravity\\bin\\agy.exe";
+    };
+
+    const defaultDirs = findWindowsAntigravityCliDirs({
+      env,
+      isFile,
+      queryRegistry: () => undefined,
+    });
+    expect(defaultDirs).toEqual([]);
+    expect(probedPaths.some((p) => /^[DEF]:\\/i.test(p))).toBe(false);
+
+    const optInDirs = findWindowsAntigravityCliDirs({
+      env,
+      isFile,
+      queryRegistry: () => undefined,
+      probeDriveRoots: true,
+    });
+    expect(optInDirs).toEqual(["E:\\Antigravity\\bin"]);
+  });
+
+  it("caches default-FS positive and negative results in findWindowsAntigravityCliDirs and resolveAgentExecutableWithFallback", () => {
+    clearAgentProbeCachesForTests();
+    const tmpDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "prismux-probe-ttl-cache-"));
+    try {
+      const localAppData = NodePath.join(tmpDir, "Local");
+      const env: NodeJS.ProcessEnv = {
+        PATH: "",
+        LOCALAPPDATA: localAppData,
+        USERPROFILE: tmpDir,
+      };
+
+      // Negative cache hit for missing CLI.
+      expect(
+        resolveAgentExecutableWithFallback({
+          command: "opencode",
+          env,
+          platform: "win32",
+        }),
+      ).toBeUndefined();
+
+      const opencodeBin = NodePath.join(tmpDir, ".opencode", "bin");
+      NodeFS.mkdirSync(opencodeBin, { recursive: true });
+      const opencodeExe = NodePath.join(opencodeBin, "opencode.exe");
+      NodeFS.writeFileSync(opencodeExe, "", "utf8");
+
+      // Still cached negative until cache cleared.
+      expect(
+        resolveAgentExecutableWithFallback({
+          command: "opencode",
+          env,
+          platform: "win32",
+        }),
+      ).toBeUndefined();
+
+      // Custom isFile mock bypasses the process cache.
+      expect(
+        resolveAgentExecutableWithFallback({
+          command: "opencode",
+          env,
+          platform: "win32",
+          isFile: (p) => p === opencodeExe,
+        }),
+      ).toBe(opencodeExe);
+
+      clearAgentProbeCachesForTests();
+      expect(
+        resolveAgentExecutableWithFallback({
+          command: "opencode",
+          env,
+          platform: "win32",
+        }),
+      ).toBe(opencodeExe);
+
+      // Positive cache remains valid even after file removal until cleared.
+      NodeFS.rmSync(opencodeExe, { force: true });
+      expect(
+        resolveAgentExecutableWithFallback({
+          command: "opencode",
+          env,
+          platform: "win32",
+        }),
+      ).toBe(opencodeExe);
+    } finally {
+      clearAgentProbeCachesForTests();
+      NodeFS.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+effectIt.layer(NodeServices.layer)("resolveSpawnCommand negative caching", (it) => {
+  it.effect("caches missing commands for 60s and retries after TTL expires", () =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const cache = new Map();
+      const env = { PATH: "C:\\EmptyBin", PATHEXT: ".EXE" };
+      const run = resolveSpawnCommand("missing-cli-probe", ["--version"], { env }).pipe(
+        Effect.provideService(HostProcess.Platform, "win32"),
+        Effect.provideService(CommandResolutionCache, cache),
+        Effect.provideService(SpawnExecutableResolution, () => {
+          calls += 1;
+          return undefined;
+        }),
+      );
+
+      expect((yield* run).command).toBe("missing-cli-probe");
+      expect((yield* run).command).toBe("missing-cli-probe");
+      expect(calls).toBe(1);
+
+      yield* TestClock.adjust("61 seconds");
+      expect((yield* run).command).toBe("missing-cli-probe");
+      expect(calls).toBe(2);
+    }),
+  );
 });

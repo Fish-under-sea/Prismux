@@ -66,6 +66,9 @@ const make = Effect.gen(function* () {
     instances,
     windowStartMs,
   }) {
+    if (instances.length === 0) {
+      return [];
+    }
     const roots: Array<string> = [];
     for (const instance of instances) roots.push(...(yield* dataRoots(instance.environment)));
     for (const { instanceId } of instances.filter((instance) => instance.configured)) {

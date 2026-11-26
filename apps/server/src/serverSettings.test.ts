@@ -3445,7 +3445,8 @@ it.effect(
         });
       }).pipe(Effect.provide(makeLayer(allSix)));
 
-      // 3. Restarting MUST NOT re-enable opencode or resurrect deleted dsh!
+      // 3. Restarting MUST NOT re-enable opencode, resurrect deleted dsh, OR re-run sync local discovery!
+      let restartDiscoveryCalls = 0;
       yield* Effect.gen(function* () {
         const service = yield* ServerSettingsModule.ServerSettingsService;
         yield* service.start;
@@ -3455,7 +3456,63 @@ it.effect(
           false,
         );
         assert.isUndefined(settings.providerInstances[ProviderInstanceId.make("dsh")]);
-      }).pipe(Effect.provide(makeLayer(allSix)));
+        assert.equal(restartDiscoveryCalls, 0);
+      }).pipe(
+        Effect.provide(
+          ServerSettingsModule.layer.pipe(
+            Layer.provide(ServerSecretStore.layer),
+            Layer.provide(ManagedPolicy.layerTest()),
+            Layer.provide(Layer.fresh(SqlitePersistence.layerMemory)),
+            Layer.provide(sharedConfigLayer),
+            Layer.provide(
+              Layer.succeed(ServerSettingsModule.LocalAgentAutoDiscovery, () =>
+                Effect.sync(() => {
+                  restartDiscoveryCalls += 1;
+                  return allSix;
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      // 3b. Even when first boot discovers 0 local agents, subsequent boots skip discovery via marker.initialized.
+      const emptyBaseConfig = yield* ServerConfig.ServerConfig.pipe(
+        Effect.provide(
+          Layer.fresh(
+            ServerConfig.layerTest(process.cwd(), {
+              prefix: "prismux-autoseed-empty-",
+            }),
+          ),
+        ),
+      );
+      const emptyConfigLayer = Layer.succeed(ServerConfig.ServerConfig, emptyBaseConfig);
+      let emptyBootDiscoveryCalls = 0;
+      const makeEmptyLayer = () =>
+        ServerSettingsModule.layer.pipe(
+          Layer.provide(ServerSecretStore.layer),
+          Layer.provide(ManagedPolicy.layerTest()),
+          Layer.provide(Layer.fresh(SqlitePersistence.layerMemory)),
+          Layer.provide(emptyConfigLayer),
+          Layer.provide(
+            Layer.succeed(ServerSettingsModule.LocalAgentAutoDiscovery, () =>
+              Effect.sync(() => {
+                emptyBootDiscoveryCalls += 1;
+                return [] as ReadonlyArray<ServerSettingsModule.AutoSeedProviderId>;
+              }),
+            ),
+          ),
+        );
+      yield* Effect.gen(function* () {
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        yield* service.start;
+      }).pipe(Effect.provide(makeEmptyLayer()));
+      assert.equal(emptyBootDiscoveryCalls, 1);
+      yield* Effect.gen(function* () {
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        yield* service.start;
+      }).pipe(Effect.provide(makeEmptyLayer()));
+      assert.equal(emptyBootDiscoveryCalls, 1);
 
       // 4. Auto-heals an incomplete local DSH entry while preserving enabled: false.
       const brokenDshSettings = {

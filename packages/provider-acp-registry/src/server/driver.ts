@@ -978,6 +978,9 @@ export const dshUsageReader: ProviderUsageReader<AcpRegistrySettings, AcpRegistr
   provider: "dsh",
   rateModel: dshRateModel,
   scan: Effect.fn("dshUsageReader.scan")(function* ({ instances, windowStartMs }) {
+    if (instances.length === 0) {
+      return [];
+    }
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const hostHomeDirectory = yield* HostProcess.HomeDirectory;
@@ -1005,10 +1008,14 @@ export const dshUsageReader: ProviderUsageReader<AcpRegistrySettings, AcpRegistr
       }
     }
 
+    if (homesBySessionsDir.size === 0) {
+      return [];
+    }
+
     return yield* Effect.forEach(
       [...homesBySessionsDir.entries()],
       ([dir, dshHome]) =>
-        Effect.sync(() =>
+        Effect.promise(() =>
           scanDshUsageFiles({
             dshHome,
             sinceMs: windowStartMs,

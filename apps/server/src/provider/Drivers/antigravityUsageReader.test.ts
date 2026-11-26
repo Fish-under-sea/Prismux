@@ -793,4 +793,33 @@ describe("readAntigravityUsage", () => {
         assert.strictEqual(rec1?.durationMs, 5500);
       }).pipe(Effect.provide(NodeServices.layer)),
   );
+
+  it.effect("skips historical Antigravity databases older than sinceMs before opening SQLite", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dir = yield* tempDir;
+      const staleBroken = path.join(dir, "stale-historical.db");
+      yield* fileSystem.writeFileString(staleBroken, "not a sqlite database");
+      // Set mtime 10 days before sinceMs so the mtime pre-filter skips it without opening SQLite.
+      const sinceMs = Date.parse("2026-08-15T00:00:00Z");
+      const staleSeconds = Date.parse("2026-08-01T00:00:00Z") / 1000;
+      yield* fileSystem.utimes(staleBroken, staleSeconds, staleSeconds);
+
+      const result = yield* readAntigravityUsage(dir, sinceMs);
+      assert.deepStrictEqual(result.errors, []);
+      assert.deepStrictEqual(records(result), []);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("bounds makeAntigravityUsageCache as an LRU map", () =>
+    Effect.sync(() => {
+      const cache = makeAntigravityUsageCache(2);
+      cache.set("a", { fingerprint: "1", data: null });
+      cache.set("b", { fingerprint: "2", data: null });
+      assert.strictEqual(cache.get("a")?.fingerprint, "1");
+      cache.set("c", { fingerprint: "3", data: null });
+      assert.deepStrictEqual([...cache.keys()], ["a", "c"]);
+    }),
+  );
 });

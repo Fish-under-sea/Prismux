@@ -1,8 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
 
 import {
+  boundScanCacheEntries,
   decodeScanCache,
   makeScanCacheWriter,
+  pruneScanCache,
   type CachedFile,
   type ScanCache,
 } from "./usageScanCache.ts";
@@ -387,5 +389,35 @@ describe("scan cache round trip", () => {
     const encoded = parse(makeScanCacheWriter()(timed, {}));
     const restored = decodeScanCache(encoded, TEST_FORMAT_MAP);
     expect(restored).toEqual(timed);
+  });
+
+  it("compacts intern tables after stale entries are pruned", () => {
+    const write = makeScanCacheWriter();
+    const cache = cacheWith([
+      ["/old.jsonl", 100, [record({ model: "retired-model", sessionId: "retired-session" })]],
+      ["/fresh.jsonl", 500, [record({ model: "active-model", sessionId: "active-session" })]],
+    ]);
+
+    const before = parse(write(cache, {}));
+    expect(before.models).toEqual(["retired-model", "active-model"]);
+    expect(before.sessions).toEqual(["retired-session", "active-session"]);
+
+    expect(pruneScanCache(cache, 300)).toBe(1);
+    const after = parse(write(cache, {}));
+    expect(after.models).toEqual(["active-model"]);
+    expect(after.sessions).toEqual(["active-session"]);
+    expect(decodeScanCache(after, TEST_FORMAT_MAP)).toEqual(cache);
+  });
+
+  it("bounds scan cache entry count by evicting oldest-mtime entries first", () => {
+    const cache = cacheWith([
+      ["/c.jsonl", 300, [record()]],
+      ["/a.jsonl", 100, [record()]],
+      ["/d.jsonl", 400, [record()]],
+      ["/b.jsonl", 200, [record()]],
+    ]);
+    const result = boundScanCacheEntries(cache, 2);
+    expect(result).toEqual({ removed: 2, maxEvictedMtimeMs: 200 });
+    expect([...cache.keys()].sort()).toEqual(["/c.jsonl", "/d.jsonl"]);
   });
 });

@@ -10,7 +10,7 @@ import { CLAUDE_SYNTHETIC_MODEL } from "../provider/Drivers/claudeUsage.ts";
 import { mergeUsageCopies } from "./usageAggregation.ts";
 import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptReader.ts";
 
-const USAGE_SCAN_CACHE_VERSION = 17 as const;
+export const USAGE_SCAN_CACHE_VERSION = 17 as const;
 const SPEED_COMPATIBLE_SINCE_VERSION = 4;
 
 /**
@@ -156,18 +156,18 @@ function serializeFile(entry: CachedFile, tables: InternTables): SerializedFile 
   };
 }
 
-/** Yields the document in pieces so large caches never become one string; growing intern tables preserve indexes, retaining unused strings until restart. */
+/** Yields the document in pieces so large caches never become one string; each write builds fresh compacted intern tables so pruned models/sessions do not leak. */
 export function makeScanCacheWriter(): (
   cache: ScanCache,
   extra: Readonly<Record<string, unknown>>,
 ) => Iterable<string> {
-  const tables = makeInternTables();
   function* encode(entries: readonly (readonly [string, CachedFile])[], extra: object) {
+    const tables = makeInternTables();
     yield '{"files":{';
     for (const [index, [path, entry]] of entries.entries()) {
       yield `${index === 0 ? "" : ","}${JSON.stringify(path)}:${JSON.stringify(serializeFile(entry, tables))}`;
     }
-    // Encoded after the files, which may have added to the intern tables.
+    // Encoded after the files, which populated the compacted intern tables for this snapshot.
     const tail = JSON.stringify({
       ...extra,
       version: USAGE_SCAN_CACHE_VERSION,
@@ -394,6 +394,29 @@ export function pruneScanCache(cache: ScanCache, retentionCutoffMs: number): num
     }
   }
   return removed;
+}
+
+/** Bounds in-memory scan cache growth by evicting the oldest-mtime entries once `cache.size > maxEntries`. */
+export function boundScanCacheEntries(
+  cache: ScanCache,
+  maxEntries: number,
+): { readonly removed: number; readonly maxEvictedMtimeMs: number } {
+  const limit = Math.max(1, Math.trunc(maxEntries));
+  if (cache.size <= limit) {
+    return { removed: 0, maxEvictedMtimeMs: 0 };
+  }
+  const excess = cache.size - limit;
+  const oldest = [...cache.entries()]
+    .map(([path, entry]) => ({ path, mtimeMs: entry.mtimeMs }))
+    .sort((a, b) => a.mtimeMs - b.mtimeMs)
+    .slice(0, excess);
+  let maxEvictedMtimeMs = 0;
+  for (const item of oldest) {
+    if (cache.delete(item.path) && item.mtimeMs > maxEvictedMtimeMs) {
+      maxEvictedMtimeMs = item.mtimeMs;
+    }
+  }
+  return { removed: oldest.length, maxEvictedMtimeMs };
 }
 
 /** Pass only newline-terminated records: an unterminated tail can still change, so the aggregator merges it per scan. */
