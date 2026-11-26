@@ -12,7 +12,7 @@ import { parse as parseYamlDocument } from "yaml";
 
 import { expandHomePath } from "@prismux/provider-core/server/pathExpansion";
 
-import { claudeAccountConfigPath, readClaudeOauthAccount } from "../claudeResetCredits.ts";
+import { claudeAccountConfigPath, readClaudeOauthAccount } from "./ClaudeHome.ts";
 
 type ClaudeSkillScope = "user" | "project";
 

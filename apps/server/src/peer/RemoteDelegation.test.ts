@@ -43,6 +43,11 @@ import { McpSchema, McpServer } from "effect/ai";
 import * as ServerConfig from "../config.ts";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
+import {
+  DelegationSubscriptionGuardConfig,
+  SUBSCRIPTION_ORCHESTRATION_BLOCKED_CODE,
+  type SubscriptionWaiverState,
+} from "../mcp/DelegationSubscriptionGuard.ts";
 import { idleThreadProjection, liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
@@ -2784,4 +2789,87 @@ it.effect("a local task runs in this thread's project", () =>
       expect(JSON.stringify(result.content)).toContain("invalid_request");
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect(
+  "P1-3: remote delegation blocks unwaived Antigravity and permanently hard-blocks unattended Antigravity before forwarding",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const thread = yield* makeBoxThread;
+        const b = yield* serveBox(thread);
+        const offers = yield* SubscriptionRef.make<
+          ReadonlyArray<ProviderContinuationRequests.ProviderContinuationRequest>
+        >([]);
+        const database = yield* SqlitePersistence.layerMemory.pipe(Layer.build);
+        const a = yield* makeLaptop(database, offers);
+        yield* linkTo(a.links, b, "full-access");
+        yield* seedParent(a);
+
+        // 1. Unwaived remote delegation targeting antigravity is blocked locally BEFORE touching the box
+        const blockedUnwaived = yield* a
+          .call("delegate_task", {
+            task: "Delegate to Antigravity remotely.",
+            target: {
+              environmentId: box.environmentId,
+              projectId: boxProject,
+              providerInstanceId: "antigravity",
+              model: "gemini-3-pro",
+            },
+          })
+          .pipe(
+            Effect.provideService(DelegationSubscriptionGuardConfig, {
+              env: {},
+              homeDir: "/home/u",
+              platform: "linux",
+              readTextFile: () => null,
+            }),
+          );
+        expect(blockedUnwaived.isError).toBe(true);
+        const unwaivedText = JSON.stringify(blockedUnwaived.content);
+        expect(unwaivedText).toContain(SUBSCRIPTION_ORCHESTRATION_BLOCKED_CODE);
+        expect(unwaivedText).toContain("AGY_CONTROLLED_AGENT_LOCKED");
+        expect(yield* Ref.get(thread.launched)).toBeNull();
+
+        // 2. Unattended caller (overnight-factory namespace) is permanently hard-blocked even WITH signed AGY waiver
+        const signedAgyWaiver: SubscriptionWaiverState = {
+          signed: true,
+          waiverVersion: "2026-04-20-v1",
+          signedAt: "2026-11-26T00:00:00.000Z",
+          allowAntigravityAsControlledAgent: true,
+          allowExternalSubscriptionAgentsInSwarm: false,
+        };
+        const blockedUnattended = yield* a
+          .call(
+            "delegate_task",
+            {
+              task: "Unattended overnight remote AGY delegation.",
+              target: {
+                environmentId: box.environmentId,
+                projectId: boxProject,
+                providerInstanceId: "antigravity",
+                model: "gemini-3-pro",
+              },
+            },
+            {
+              ...parentScope,
+              requestNamespace: "overnight-factory:remote-worker",
+            },
+          )
+          .pipe(
+            Effect.provideService(DelegationSubscriptionGuardConfig, {
+              env: {},
+              homeDir: "/home/u",
+              platform: "linux",
+              readTextFile: () => null,
+              waiverOverride: signedAgyWaiver,
+            }),
+          );
+        expect(blockedUnattended.isError).toBe(true);
+        const unattendedText = JSON.stringify(blockedUnattended.content);
+        expect(unattendedText).toContain(SUBSCRIPTION_ORCHESTRATION_BLOCKED_CODE);
+        expect(unattendedText).toContain("AGY_UNATTENDED_FORBIDDEN");
+        expect(yield* Ref.get(thread.launched)).toBeNull();
+      }),
+    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );

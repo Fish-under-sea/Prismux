@@ -11,7 +11,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http";
 
-export type RelayQuotaKind = Exclude<UsageLimitSourceKind, "cliproxy">;
+export type RelayQuotaKind = UsageLimitSourceKind;
 
 /** A relay source with its credential already resolved from secret storage. */
 export interface RelayQuotaTarget {

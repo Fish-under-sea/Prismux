@@ -45,6 +45,12 @@ import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../../../vcs/VcsProcess.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import {
+  DelegationSubscriptionGuardConfig,
+  SUBSCRIPTION_ORCHESTRATION_BLOCKED_CODE,
+  type DelegationSubscriptionGuardConfigShape,
+  type SubscriptionWaiverState,
+} from "../../DelegationSubscriptionGuard.ts";
 import * as ProjectHandlers from "./handlers.ts";
 import { ProjectToolkit } from "./tools.ts";
 
@@ -1286,4 +1292,148 @@ it.effect("a project update or create that is refused tells the agent why", () =
       .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
     expect(dropped.at(-1)?.result).toMatchObject({ code: "invalid_request" });
   }),
+);
+
+it.effect(
+  "P1-3: prismux_thread_launch enforces AGY waiver, permanent AGY_UNATTENDED_FORBIDDEN, and subscription_oauth guard",
+  () =>
+    Effect.gen(function* () {
+      const agyProvider: ServerProvider = {
+        instanceId: ProviderInstanceId.make("antigravity"),
+        driver: ProviderDriverKind.make("antigravity"),
+        displayName: "Antigravity",
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready",
+        auth: { status: "authenticated" },
+        checkedAt: "2026-11-26T00:00:00.000Z",
+        models: [
+          { slug: "gemini-3-pro", name: "Gemini 3 Pro", isCustom: false, capabilities: null },
+        ],
+        slashCommands: [],
+        skills: [],
+      };
+      const codexOauthProvider: ServerProvider = {
+        instanceId: ProviderInstanceId.make("codex"),
+        driver: ProviderDriverKind.make("codex"),
+        displayName: "Codex",
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready",
+        auth: { status: "authenticated", type: "chatgpt", subscriptionType: "pro" },
+        checkedAt: "2026-11-26T00:00:00.000Z",
+        models: [{ slug: "gpt-5.4", name: "GPT 5.4", isCustom: false, capabilities: null }],
+        slashCommands: [],
+        skills: [],
+      };
+      const signedAgyWaiver: SubscriptionWaiverState = {
+        signed: true,
+        waiverVersion: "2026-04-20-v1",
+        signedAt: "2026-11-26T00:00:00.000Z",
+        allowAntigravityAsControlledAgent: true,
+        allowExternalSubscriptionAgentsInSwarm: false,
+      };
+      const noFiles = () => null;
+      const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
+      const harness = clientLaunchHarness({
+        runtimeModeCeiling: "full-access",
+        providers: [agyProvider, codexOauthProvider],
+        launched,
+      });
+
+      const runLaunch = (
+        modelSelection: ModelSelection,
+        guardConfig: DelegationSubscriptionGuardConfigShape,
+        overrideScope?: McpInvocationContext.McpInvocationScope,
+      ) =>
+        Effect.gen(function* () {
+          const deps = Layer.mergeAll(
+            harness.dependencies,
+            Layer.succeed(DelegationSubscriptionGuardConfig, guardConfig),
+            ...(overrideScope === undefined
+              ? []
+              : [Layer.succeed(McpInvocationContext.McpInvocationContext, overrideScope)]),
+          );
+          const toolkit = yield* ProjectToolkit.pipe(
+            Effect.provide(
+              McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(Layer.provide(deps)),
+            ),
+          );
+          const events = yield* toolkit
+            .handle("prismux_thread_launch", {
+              projectId: harness.projectId,
+              title: "P1-3 Guard Test",
+              modelSelection,
+            })
+            .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(deps));
+          return events.at(-1)?.result;
+        });
+
+      // 1. Unwaived personal Antigravity must be blocked with AGY_CONTROLLED_AGENT_LOCKED
+      const blockedAgy = yield* runLaunch(
+        { instanceId: agyProvider.instanceId, model: "gemini-3-pro" },
+        { env: {}, homeDir: "/home/u", platform: "linux", readTextFile: noFiles },
+      );
+      expect(blockedAgy).toMatchObject({
+        code: SUBSCRIPTION_ORCHESTRATION_BLOCKED_CODE,
+        reasonCode: "AGY_CONTROLLED_AGENT_LOCKED",
+      });
+      expect(launched).toHaveLength(0);
+
+      // 2. Unwaived personal OAuth Codex must be blocked with EXTERNAL_SUBSCRIPTION_SWARM_LOCKED
+      const blockedCodex = yield* runLaunch(
+        { instanceId: codexOauthProvider.instanceId, model: "gpt-5.4" },
+        { env: {}, homeDir: "/home/u", platform: "linux", readTextFile: noFiles },
+      );
+      expect(blockedCodex).toMatchObject({
+        code: SUBSCRIPTION_ORCHESTRATION_BLOCKED_CODE,
+        reasonCode: "EXTERNAL_SUBSCRIPTION_SWARM_LOCKED",
+      });
+      expect(launched).toHaveLength(0);
+
+      // 3. Unattended / overnight_factory caller MUST be permanently hard-blocked on AGY even WITH signed waiver
+      const unattendedBlocked = yield* runLaunch(
+        { instanceId: agyProvider.instanceId, model: "gemini-3-pro" },
+        {
+          env: {},
+          homeDir: "/home/u",
+          platform: "linux",
+          readTextFile: noFiles,
+          waiverOverride: signedAgyWaiver,
+        },
+        {
+          environmentId: EnvironmentId.make("environment"),
+          requestNamespace: "overnight-factory:worker-1",
+          thread: undefined,
+          client: {
+            sessionId: "overnight-1",
+            label: "overnight_factory",
+            access: "full-access",
+          },
+          issuedAt: 0,
+          capabilities: new Set(["orchestration" as const]),
+        },
+      );
+      expect(unattendedBlocked).toMatchObject({
+        code: SUBSCRIPTION_ORCHESTRATION_BLOCKED_CODE,
+        reasonCode: "AGY_UNATTENDED_FORBIDDEN",
+      });
+      expect(launched).toHaveLength(0);
+
+      // 4. Interactive caller WITH signed AGY waiver is allowed to launch
+      const allowedAgy = yield* runLaunch(
+        { instanceId: agyProvider.instanceId, model: "gemini-3-pro" },
+        {
+          env: {},
+          homeDir: "/home/u",
+          platform: "linux",
+          readTextFile: noFiles,
+          waiverOverride: signedAgyWaiver,
+        },
+      );
+      expect(allowedAgy).not.toMatchObject({ code: SUBSCRIPTION_ORCHESTRATION_BLOCKED_CODE });
+      expect(launched).toHaveLength(1);
+    }),
 );

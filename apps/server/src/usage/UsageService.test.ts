@@ -169,7 +169,25 @@ const layerService = (input: {
       }),
     ),
     Layer.provideMerge(
-      ServerConfig.layerTest(process.cwd(), NodePath.join(input.home, input.prefix)),
+      ServerConfig.layerTest(process.cwd(), NodePath.join(input.home, input.prefix)).pipe(
+        Layer.tap((ctx) =>
+          input.ratesDocument !== undefined && !input.onRatesFetch && !input.ratesResponse
+            ? Effect.gen(function* () {
+                const nowMs = yield* Clock.currentTimeMillis;
+                const stateDir = ctx.mapUnsafe.get(ServerConfig.ServerConfig.key)?.stateDir;
+                if (typeof stateDir !== "string") return;
+                yield* Effect.promise(async () => {
+                  await NodeFSP.mkdir(stateDir, { recursive: true });
+                  await NodeFSP.writeFile(
+                    NodePath.join(stateDir, "usage-model-rates.json"),
+                    JSON.stringify({ fetchedAtMs: nowMs, document: input.ratesDocument }),
+                    "utf8",
+                  );
+                });
+              })
+            : Effect.void,
+        ),
+      ),
     ),
     Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     Layer.provideMerge(Layer.succeed(HostProcess.Platform, input.platform ?? "linux")),
@@ -2695,7 +2713,7 @@ describe("UsageService", () => {
         const fileSystem = yield* FileSystem.FileSystem;
         const firstScanStarted = yield* Deferred.make<void>();
         const secondScanStarted = yield* Deferred.make<void>();
-        const releaseRates = yield* Deferred.make<void>();
+        const releaseFirstScan = yield* Deferred.make<void>();
         let homeProbes = 0;
         const service = yield* UsageService.make.pipe(
           Effect.provideService(FileSystem.FileSystem, {
@@ -2705,28 +2723,18 @@ describe("UsageService", () => {
                 Effect.tap(() => {
                   if (path !== transcriptDir) return Effect.void;
                   homeProbes += 1;
+                  const probe = homeProbes;
                   return Deferred.succeed(
-                    homeProbes === 1 ? firstScanStarted : secondScanStarted,
+                    probe === 1 ? firstScanStarted : secondScanStarted,
                     undefined,
+                  ).pipe(
+                    Effect.andThen(
+                      probe === 1 ? Deferred.await(releaseFirstScan) : Effect.void,
+                    ),
                   );
                 }),
               ),
           }),
-          Effect.provideService(
-            HttpClient.HttpClient,
-            HttpClient.make((request) =>
-              Deferred.await(releaseRates).pipe(
-                Effect.as(
-                  HttpClientResponse.fromWeb(
-                    request,
-                    Response.json({
-                      "example-model": { input_cost_per_token: 1e-6, output_cost_per_token: 1e-5 },
-                    }),
-                  ),
-                ),
-              ),
-            ),
-          ),
         );
 
         const first = yield* service.readSummary(WINDOW).pipe(Effect.forkChild);
@@ -2738,21 +2746,30 @@ describe("UsageService", () => {
         });
         const second = yield* service.readSummary(WINDOW).pipe(Effect.forkChild);
         yield* Deferred.await(secondScanStarted);
-        yield* Deferred.succeed(releaseRates, undefined);
+        yield* Deferred.succeed(releaseFirstScan, undefined);
 
         const original = yield* Fiber.join(first);
         const updated = yield* Fiber.join(second);
-        // Fetched rates price the first read, so scans must start while the fetch is pending.
+        // Cached/bundled rates price the first read offline; the second scan observes updated overrides.
         assert.isAbove(original.buckets[0]?.costUsd ?? 0, 0);
         assert.closeTo(updated.buckets[0]?.costUsd ?? -1, 0.00006, 1e-12);
       }).pipe(
-        Effect.provide(layerService({ prefix: "usage-service-price-race-test", home, settings })),
+        Effect.provide(
+          layerService({
+            prefix: "usage-service-price-race-test",
+            home,
+            settings,
+            ratesDocument: {
+              "example-model": { input_cost_per_token: 1e-6, output_cost_per_token: 1e-5 },
+            },
+          }),
+        ),
       );
     }),
   );
 
   it.effect.each(["network", "http", "invalidJson", "empty"] as const)(
-    "recovers pricing through the GitHub API after a %s failure",
+    "stays offline on default readSummary and recovers explicit refreshRates through the GitHub API after a %s failure",
     (failure) =>
       Effect.gen(function* () {
         const { transcript, settings, home } = yield* setup;
@@ -2789,6 +2806,16 @@ describe("UsageService", () => {
         });
         const service = yield* UsageService.make.pipe(Effect.provide(serviceLayer));
 
+        // P1-5: Default cold-start readSummary makes strictly 0 outbound HTTP calls (uses bundled offline snapshot).
+        const offlineSummary = yield* service.readSummary(WINDOW);
+        assert.strictEqual(requests.length, 0);
+        assert.strictEqual(offlineSummary.pricing.status, "cached");
+        assert.isAbove(offlineSummary.pricing.knownModels, 0);
+
+        // Explicit user-triggered refreshRates fetches live LiteLLM rates and falls back to GitHub API.
+        const refreshedPricing = yield* service.refreshRates;
+        assert.strictEqual(refreshedPricing.status, "fresh");
+        assert.strictEqual(refreshedPricing.knownModels, 1);
         const summary = yield* service.readSummary(WINDOW);
         assert.strictEqual(summary.pricing.status, "fresh");
         assert.strictEqual(summary.pricing.knownModels, 1);
@@ -2810,7 +2837,7 @@ describe("UsageService", () => {
       }),
   );
 
-  it.effect("refetches cached rates early for a model they do not list", () =>
+  it.effect("stays offline on readSummary even for unlisted models until explicit refreshRates is invoked", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(Date.parse("2026-08-02T00:00:00Z"));
       const { transcript, settings, home } = yield* setup;
@@ -2834,26 +2861,35 @@ describe("UsageService", () => {
       const newModelCost = (summary: UsageSummary) =>
         summary.buckets.find((bucket) => bucket.model === "claude-new-model")?.costUsd;
 
-      // Rates fetched for this scan are fresh: no second request for the models they lack.
-      const first = yield* (yield* UsageService.make.pipe(
-        Effect.provide(serviceLayer),
-      )).readSummary(WINDOW);
+      // Default readSummary makes strictly 0 outbound requests even when models are unlisted.
+      const firstService = yield* UsageService.make.pipe(Effect.provide(serviceLayer));
+      const first = yield* firstService.readSummary(WINDOW);
       assert.strictEqual(newModelCost(first), 0);
+      assert.strictEqual(requests.length, 0);
+
+      // Explicit manual refresh fetches live rates once.
+      yield* firstService.refreshRates;
       assert.strictEqual(requests.length, 1);
 
-      // An hour later LiteLLM lists the new model; a restarted server starts from the cached table.
+      // An hour later LiteLLM lists the new model; a restarted server STILL makes 0 silent requests on readSummary.
       ratesDocument = {
         ...ratesDocument,
         "claude-new-model": { input_cost_per_token: 2e-5, output_cost_per_token: 1e-4 },
       };
       yield* TestClock.adjust(Duration.hours(1));
       const service = yield* UsageService.make.pipe(Effect.provide(serviceLayer));
+      const beforeManualRefresh = yield* service.readSummary(WINDOW);
+      assert.strictEqual(newModelCost(beforeManualRefresh), 0);
+      assert.strictEqual(requests.length, 1);
+
+      // Explicit refreshRates picks up the newly listed model and persists it cleanly.
+      yield* service.refreshRates;
       const refreshed = yield* service.readSummary(WINDOW);
       assert.strictEqual(refreshed.pricing.status, "fresh");
       assert.closeTo(newModelCost(refreshed) ?? -1, 10 * 2e-5 + 5 * 1e-4, 1e-12);
       assert.strictEqual(requests.length, 2);
 
-      // A model the fresh table still lacks does not refetch again before the TTL.
+      // Subsequent readSummary remains offline with zero additional requests.
       yield* TestClock.adjust(Duration.hours(1));
       yield* service.readSummary(WINDOW);
       assert.strictEqual(requests.length, 2);

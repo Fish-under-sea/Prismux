@@ -177,6 +177,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
     Layer.provideMerge(
       Layer.mock(CodexManagedTokenBroker.CodexManagedTokenBroker)({
         endpoint: Effect.succeed("unused-private-pipe"),
+        authSecret: Effect.succeed("0".repeat(64)),
       }),
     ),
     Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),

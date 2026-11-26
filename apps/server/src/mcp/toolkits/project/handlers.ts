@@ -5,6 +5,7 @@ import {
   OrchestratorMcpFailure,
   type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   ProjectId,
+  ProviderDriverKind,
   type TaskFolderError,
   type Project as ProjectRecord,
   type ServerProvider,
@@ -39,6 +40,14 @@ import {
 import { resolveProjectScripts } from "@prismux/core-shared/projectScripts";
 import { parsePrismuxProjectFile } from "@prismux/core-shared/prismuxProjectFile";
 import { resolveRuntimeMode } from "../../delegatedTaskModes.ts";
+import {
+  canonicalizeProviderAlias,
+  DelegationSubscriptionGuardConfig,
+  evaluateDelegationSubscriptionGuard,
+  isAntigravityTargetProvider,
+  type DelegationGuardTargetProvider,
+} from "../../DelegationSubscriptionGuard.ts";
+import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as OrchestrationMcp from "../../OrchestratorMcpService.ts";
@@ -436,11 +445,84 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             : runtimeMode;
         if (!replaying) {
           const providers = yield* (yield* ProviderRegistry.ProviderRegistry).getProviders;
+          const matchedProvider = providers.find(
+            (provider) => provider.instanceId === modelSelection.instanceId,
+          );
+          if (scope.thread !== undefined || scope.client !== undefined) {
+            const guardConfig = yield* DelegationSubscriptionGuardConfig;
+            const rawSettings = yield* ServerSettings.ServerSettingsService.pipe(
+              Effect.flatMap((service) => service.getSettings),
+              Effect.orElseSucceed(() => undefined),
+            );
+            const instanceConfig = rawSettings?.providerInstances?.[modelSelection.instanceId];
+            const targetProvider: DelegationGuardTargetProvider = matchedProvider ?? {
+              instanceId: modelSelection.instanceId,
+              driver: ProviderDriverKind.make(
+                canonicalizeProviderAlias(modelSelection.instanceId) === "antigravity"
+                  ? "acpRegistry"
+                  : String(modelSelection.instanceId),
+              ),
+              displayName: String(modelSelection.instanceId),
+              auth: { status: "authenticated" },
+            };
+            const launchCwd =
+              strategy?.type === "existing_worktree"
+                ? strategy.worktreePath
+                : project?.workspaceRoot;
+            let userMessageId: MessageId | undefined;
+            let scheduledTaskId: string | undefined;
+            if (caller !== undefined && isAntigravityTargetProvider(targetProvider, instanceConfig)) {
+              const callerRuns = yield* context.threads
+                .getThreadRecords(caller.id, ["runs"])
+                .pipe(Effect.orElseSucceed(() => undefined));
+              const activeRun =
+                callerRuns === undefined
+                  ? undefined
+                  : ThreadManagement.latestActiveRun(callerRuns);
+              userMessageId = activeRun?.userMessageId;
+              if (
+                userMessageId !== undefined &&
+                !String(userMessageId).startsWith("scheduled-task-message:")
+              ) {
+                const msgRecords = yield* context.threads
+                  .getThreadRecords(caller.id, ["messages"], { messageIds: [userMessageId] })
+                  .pipe(Effect.orElseSucceed(() => ({ messages: [] })));
+                const originMsg = msgRecords.messages.find(
+                  (candidate) => candidate.id === userMessageId,
+                );
+                if (originMsg?.scheduledTaskId !== undefined) {
+                  scheduledTaskId = originMsg.scheduledTaskId;
+                }
+              }
+            }
+            const decision = evaluateDelegationSubscriptionGuard({
+              provider: targetProvider,
+              instanceConfig,
+              workspacePath: launchCwd,
+              caller: {
+                createdBy: caller?.createdBy,
+                creationSource: caller?.creationSource,
+                threadTags: caller?.tags,
+                userMessageId,
+                scheduledTaskId,
+                requestNamespace: scope.requestNamespace,
+                clientLabel: scope.client?.label,
+              },
+              config: guardConfig,
+            });
+            if (!decision.allowed) {
+              return yield* new OrchestratorMcpFailure({
+                code: decision.code,
+                message: decision.message,
+                reasonCode: decision.reasonCode,
+                settingsRoute: decision.settingsRoute,
+                providerId: decision.providerId,
+              });
+            }
+          }
           startedRuntimeMode = yield* resolveRuntimeMode(startedRuntimeMode, input.runtimeMode, {
             modelSelection,
-            supportedRuntimeModes: providers.find(
-              (provider) => provider.instanceId === modelSelection.instanceId,
-            )?.supportedRuntimeModes,
+            supportedRuntimeModes: matchedProvider?.supportedRuntimeModes,
           });
         }
         const result = yield* ThreadMessageIntake.launchThread({

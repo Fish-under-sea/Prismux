@@ -13,13 +13,11 @@ export type RelayQuotaLocale = "zh" | "en";
 export const RELAY_PROTOCOL_ORDER: ReadonlyArray<UsageLimitSourceKind> = [
   "newapi",
   "openaiBilling",
-  "cliproxy",
 ];
 
 const SOURCE_ID_PREFIX: Readonly<Record<UsageLimitSourceKind, string>> = {
   newapi: "newapi",
   openaiBilling: "relay",
-  cliproxy: "cliproxy",
 };
 
 export function resolveRelayQuotaLocale(locale?: string | null): RelayQuotaLocale {
@@ -102,20 +100,6 @@ export function getRelayProtocolMeta(
         userIdLabel: "",
         userIdPlaceholder: "",
       };
-    case "cliproxy":
-      return {
-        kind,
-        title: "CLIProxyAPI",
-        subtitle: isZh ? "兼容协议 · 多账号配额" : "Legacy protocol · multi-account",
-        badgeLabel: isZh ? "CLIProxyAPI（兼容）" : "CLIProxyAPI (Legacy)",
-        urlLabel: isZh ? "服务地址" : "Proxy URL",
-        urlPlaceholder: "https://proxy.example.com:8318",
-        keyLabel: isZh ? "管理密钥" : "Management key",
-        labelPlaceholder: isZh ? "默认使用服务域名" : "Defaults to the proxy host name",
-        showUserId: false,
-        userIdLabel: "",
-        userIdPlaceholder: "",
-      };
   }
 }
 
@@ -144,7 +128,7 @@ export function getUsageProviderSettingsCopy(
       addRelay: "添加中转站",
       emptyTitle: "尚未配置 API 中转站",
       emptyDescription:
-        "接入 New API、One API 或通用 OpenAI 兼容中转站，实时追踪余额与配额消耗（同时兼容 CLIProxyAPI）。",
+        "接入 New API、One API 或通用 OpenAI 兼容中转站，实时追踪余额与配额消耗。",
       configuredCount: (count) => `已配置 ${count} 个中转站`,
       disabledBadge: "已停用",
       edit: "编辑",
@@ -162,7 +146,7 @@ export function getUsageProviderSettingsCopy(
     addRelay: "Add relay",
     emptyTitle: "No API relays configured",
     emptyDescription:
-      "Connect New API, One API, or any OpenAI-compatible relay to track live balances and quota usage (CLIProxyAPI also supported).",
+      "Connect New API, One API, or any OpenAI-compatible relay to track live balances and quota usage.",
     configuredCount: (count) => `${count} ${count === 1 ? "relay" : "relays"} configured`,
     disabledBadge: "Disabled",
     edit: "Edit",

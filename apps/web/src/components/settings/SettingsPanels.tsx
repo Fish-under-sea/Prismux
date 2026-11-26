@@ -110,10 +110,8 @@ const EFFORT_DISPLAY_LABELS: Record<EffortDisplay, string> = {
 };
 
 const REASONING_TRANSLATION_PROVIDER_LABELS: Record<ReasoningTranslationProvider, string> = {
-  off: msg("Off (keep original)", { $context: "reasoning translation provider" }),
-  bing: msg("Bing Translate (no key)", { $context: "reasoning translation provider" }),
-  google: msg("Google Translate (no key)", { $context: "reasoning translation provider" }),
-  text_model: msg("Designated text generation model", {
+  off: msg("Off (default)", { $context: "reasoning translation provider" }),
+  text_model: msg("Use configured text model", {
     $context: "reasoning translation provider",
   }),
 };
@@ -1405,12 +1403,12 @@ export function ChatSettingsPanel() {
               description={
                 settings.reasoningTranslationProvider === "off" ? (
                   gt(
-                    "Enable real-time Chinese translation of model reasoning. Click 'View original' anytime to switch back.",
+                    "Off by default so reasoning stays strictly local with zero outbound translation requests. Opt in with your own configured text generation model whenever needed.",
                   )
-                ) : settings.reasoningTranslationProvider === "text_model" ? (
+                ) : (
                   <>
                     {gt(
-                      "Reuses your configured Text generation model for high-quality translation (follows the subscription risk waiver guard),",
+                      "Reasoning text is sent only to your own configured text generation model endpoint (follows the subscription risk waiver guard).",
                     )}{" "}
                     <Link
                       to="/settings/providers"
@@ -1420,10 +1418,6 @@ export function ChatSettingsPanel() {
                       {gt("Configure text generation model →")}
                     </Link>
                   </>
-                ) : (
-                  gt(
-                    "No sign-in or API key required. When enabled, reasoning text is sent to the selected online translation service and may contain code or conversation details.",
-                  )
                 )
               }
               resetAction={

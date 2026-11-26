@@ -71,6 +71,11 @@ export interface DelegationCallerContext {
   readonly clientLabel?: string | null | undefined;
 }
 
+export type DelegationGuardTargetProvider = Pick<
+  ServerProvider,
+  "instanceId" | "driver" | "displayName" | "auth"
+>;
+
 export interface DelegationAuthClassification {
   readonly authMode: DelegationAuthMode;
   readonly canonicalProviderId: string;
@@ -931,7 +936,7 @@ function isCodexExplicitChatGptSubscription(auth: ServerProvider["auth"]): boole
  * false positives on API keys, custom endpoints, CCS/Magpie, Cloud IAM, DSH, or `unknown`.
  */
 export function classifyDelegationTargetAuth(input: {
-  readonly provider: ServerProvider;
+  readonly provider: DelegationGuardTargetProvider;
   readonly instanceConfig?: ProviderInstanceConfig | undefined;
   readonly workspacePath?: string | undefined;
   readonly config?: DelegationSubscriptionGuardConfigShape | undefined;
@@ -1219,7 +1224,7 @@ export function isUnattendedDelegationCaller(caller: DelegationCallerContext): b
  * signed waiver + controlled toggle interactively; external personal OAuth requires signed waiver.
  */
 export function evaluateDelegationSubscriptionGuard(input: {
-  readonly provider: ServerProvider;
+  readonly provider: DelegationGuardTargetProvider;
   readonly instanceConfig?: ProviderInstanceConfig | undefined;
   readonly workspacePath?: string | undefined;
   readonly caller: DelegationCallerContext;

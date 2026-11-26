@@ -3,6 +3,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
+import * as NodeHttp from "node:http";
 import * as NodePath from "node:path";
 
 import {
@@ -29,7 +30,6 @@ import * as DesktopBackendManager from "../../backend/DesktopBackendManager.ts";
 import * as DesktopBackendPool from "../../backend/DesktopBackendPool.ts";
 import * as ElectronApp from "../../electron/ElectronApp.ts";
 import * as ElectronDialog from "../../electron/ElectronDialog.ts";
-import * as ElectronUpdater from "../../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as PrismuxDaemonService from "../../prismux/PrismuxDaemonService.ts";
 import {
@@ -88,6 +88,7 @@ export const PrismuxInstallDownloadedUpdateErrorReason = Schema.Literals([
   "file_not_found",
   "invalid_sha256",
   "sha256_mismatch",
+  "unverified_download",
   "spawn_failed",
 ]);
 export type PrismuxInstallDownloadedUpdateErrorReason =
@@ -217,16 +218,111 @@ export function resolvePrismuxUpdateCachePolicy(input: {
   };
 }
 
+export interface PrismuxAuthoritativeDownloadedUpdate {
+  readonly downloadedFilePath: string | null;
+  readonly downloadedSha256: string | null;
+}
+
 export interface PrismuxInstallDownloadedUpdateDeps {
   readonly platform: NodeJS.Platform;
   readonly portableMode: boolean;
   readonly allowedUpdatesDirs: ReadonlyArray<string>;
+  readonly resolveAuthoritativeDownload: () => Effect.Effect<PrismuxAuthoritativeDownloadedUpdate | null>;
   readonly showItemInFolder: (filePath: string) => void;
   readonly stopManagedProcesses: () => Effect.Effect<void>;
   readonly spawnInstaller: (filePath: string, args: readonly string[]) => void;
   readonly scheduleQuit: (delayMs: number) => Effect.Effect<void>;
   readonly markQuitting: (quitting: boolean) => Effect.Effect<void>;
 }
+
+function fetchAuthoritativeDaemonDownload(
+  statusUrl: URL,
+  token: string,
+): Promise<PrismuxAuthoritativeDownloadedUpdate | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value: PrismuxAuthoritativeDownloadedUpdate | null): void => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const req = NodeHttp.request(
+      statusUrl,
+      {
+        method: "GET",
+        timeout: 3_000,
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      },
+      (res) => {
+        if ((res.statusCode ?? 0) < 200 || (res.statusCode ?? 0) >= 300) {
+          res.resume();
+          finish(null);
+          return;
+        }
+        const chunks: Buffer[] = [];
+        let totalBytes = 0;
+        res.on("data", (chunk: Buffer) => {
+          totalBytes += chunk.length;
+          if (totalBytes > 64 * 1024) {
+            req.destroy();
+            finish(null);
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.on("end", () => {
+          try {
+            const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+              readonly downloadedFilePath?: unknown;
+              readonly downloadedSha256?: unknown;
+            };
+            finish({
+              downloadedFilePath:
+                typeof body?.downloadedFilePath === "string" ? body.downloadedFilePath : null,
+              downloadedSha256:
+                typeof body?.downloadedSha256 === "string" ? body.downloadedSha256 : null,
+            });
+          } catch {
+            finish(null);
+          }
+        });
+        res.on("error", () => finish(null));
+      },
+    );
+    req.on("timeout", () => {
+      req.destroy();
+      finish(null);
+    });
+    req.on("error", () => finish(null));
+    req.end();
+  });
+}
+
+const queryAuthoritativeDaemonDownload = Effect.fn(
+  "desktop.ipc.prismux.queryAuthoritativeDaemonDownload",
+)(function* (
+  daemonService: PrismuxDaemonService.PrismuxDaemonService["Service"],
+): Effect.fn.Return<PrismuxAuthoritativeDownloadedUpdate | null> {
+  const info = yield* daemonService.getInfo.pipe(Effect.orElseSucceed(() => null));
+  if (!info || !info.ready || !info.baseUrl.trim() || !info.token.trim()) {
+    return null;
+  }
+  const statusUrl = URL.parse("/v1/updater/status", info.baseUrl);
+  if (
+    statusUrl === null ||
+    statusUrl.protocol !== "http:" ||
+    !LOOPBACK_HOSTS.has(statusUrl.hostname.toLowerCase())
+  ) {
+    return null;
+  }
+  return yield* Effect.tryPromise({
+    try: () => fetchAuthoritativeDaemonDownload(statusUrl, info.token),
+    catch: () => null,
+  }).pipe(Effect.orElseSucceed(() => null));
+});
 
 export const executePrismuxInstallDownloadedUpdate = Effect.fn(
   "desktop.ipc.prismux.executeInstallDownloadedUpdate",
@@ -250,7 +346,31 @@ export const executePrismuxInstallDownloadedUpdate = Effect.fn(
     });
   }
 
-  const normalizedCandidate = NodePath.resolve(rawFilePath);
+  const authoritative = yield* deps.resolveAuthoritativeDownload();
+  const authoritativeFilePath = authoritative?.downloadedFilePath?.trim() ?? "";
+  const authoritativeSha256 = authoritative?.downloadedSha256?.trim().toLowerCase() ?? "";
+  if (
+    authoritativeFilePath.length === 0 ||
+    authoritativeFilePath.includes("\0") ||
+    !SHA256_HEX_PATTERN.test(authoritativeSha256)
+  ) {
+    return yield* new PrismuxInstallDownloadedUpdateError({
+      reason: "unverified_download",
+      detail:
+        "Local Prismux daemon has no verified downloaded update on record; installation aborted.",
+    });
+  }
+
+  if (!verifySha256ConstantTime(normalizedExpectedSha, authoritativeSha256)) {
+    return yield* new PrismuxInstallDownloadedUpdateError({
+      reason: "sha256_mismatch",
+      detail:
+        "Requested SHA-256 digest does not match the local daemon's authoritative verified download.",
+    });
+  }
+
+  const normalizedCandidate = NodePath.resolve(authoritativeFilePath);
+  const normalizedRequested = NodePath.resolve(rawFilePath);
   const insideLexicalRoot = deps.allowedUpdatesDirs.some((rootDir) =>
     isPathStrictlyWithinDirectory(normalizedCandidate, rootDir, deps.platform),
   );
@@ -285,6 +405,20 @@ export const executePrismuxInstallDownloadedUpdate = Effect.fn(
         detail: `Could not resolve update installer path: ${normalizedCandidate}`,
       }),
   });
+  const realRequestedPath = yield* Effect.tryPromise({
+    try: () => NodeFSP.realpath(normalizedRequested),
+    catch: () => normalizedRequested,
+  }).pipe(Effect.orElseSucceed(() => normalizedRequested));
+
+  if (
+    normalizePathForComparison(realRequestedPath, deps.platform) !==
+    normalizePathForComparison(realFilePath, deps.platform)
+  ) {
+    return yield* new PrismuxInstallDownloadedUpdateError({
+      reason: "unverified_download",
+      detail: "Requested update path does not match the local daemon's verified download path.",
+    });
+  }
 
   const realAllowedRoots: string[] = [];
   for (const rootDir of deps.allowedUpdatesDirs) {
@@ -326,7 +460,7 @@ export const executePrismuxInstallDownloadedUpdate = Effect.fn(
       }),
   });
 
-  if (!verifySha256ConstantTime(actualSha256, normalizedExpectedSha)) {
+  if (!verifySha256ConstantTime(actualSha256, authoritativeSha256)) {
     return yield* new PrismuxInstallDownloadedUpdateError({
       reason: "sha256_mismatch",
       detail: "Update installer SHA-256 verification failed; installation aborted.",
@@ -450,11 +584,7 @@ export const setPrismuxUpdateFeedUrl = DesktopIpc.makeIpcMethod({
     if (parsed === null) {
       return yield* new PrismuxInvalidUpdateFeedUrlError({ url: rawUrl });
     }
-    const updater = yield* ElectronUpdater.ElectronUpdater;
-    yield* updater.setFeedURL({
-      provider: "generic",
-      url: parsed.href,
-    });
+    // Updates are owned exclusively by the local Prismux Daemon AppUpdater (zero electron-updater).
   }),
 });
 
@@ -483,6 +613,7 @@ export const installPrismuxDownloadedUpdate = DesktopIpc.makeIpcMethod({
       platform: environment.platform,
       portableMode: cachePolicy.portableMode,
       allowedUpdatesDirs: cachePolicy.allowedUpdatesDirs,
+      resolveAuthoritativeDownload: () => queryAuthoritativeDaemonDownload(daemonService),
       showItemInFolder: (filePath) => {
         Electron.shell.showItemInFolder(filePath);
       },

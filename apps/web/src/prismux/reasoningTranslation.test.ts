@@ -66,7 +66,7 @@ describe("Smart Chinese reasoning detection", () => {
     // Pure English -> translate
     expect(
       isAlreadyChineseReasoning(
-        "Let's inspect the settings schema and verify how Bing translation handles HTTP 401 errors.",
+        "Let's inspect the settings schema and verify how text model translation handles HTTP 401 errors.",
       ),
     ).toBe(false);
     expect(
@@ -83,9 +83,9 @@ describe("Smart Chinese reasoning detection", () => {
     const chineseWithCode = [
       "先读取 `packages/contracts/src/settings.ts` 和 D:\\Fish-code\\AGY\\Prismux\\apps\\server\\src\\http.ts，",
       "核对 reasoningTranslationProvider 与 ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED 逻辑，",
-      "参考 https://edge.microsoft.com/translate/translatetext ：",
+      "参考 https://localhost:3773/api/reasoning/translate ：",
       "```ts",
-      "export const DEFAULT_REASONING_TRANSLATION_PROVIDER = 'bing';",
+      "export const DEFAULT_REASONING_TRANSLATION_PROVIDER = 'off';",
       "```",
     ].join("\n");
     expect(isAlreadyChineseReasoning(chineseWithCode)).toBe(true);
@@ -117,7 +117,7 @@ describe("Smart Chinese reasoning detection", () => {
     controller.update({
       text: chineseReasoning,
       running: false,
-      provider: "bing",
+      provider: "text_model",
     });
     await flushMicrotasks();
 
@@ -132,7 +132,7 @@ describe("Smart Chinese reasoning detection", () => {
     const html = renderToStaticMarkup(
       createElement(ReasoningTranslationBody, {
         text: chineseReasoning,
-        provider: "bing",
+        provider: "text_model",
       }),
     );
     expect(html).toContain("中的默认值");
@@ -181,7 +181,7 @@ describe("ReasoningTranslationController", () => {
     controller.update({
       text: "Paragraph one.\n\nParagraph two is still stream",
       running: true,
-      provider: "bing",
+      provider: "text_model",
     });
     await flushMicrotasks();
 
@@ -197,7 +197,7 @@ describe("ReasoningTranslationController", () => {
     controller.update({
       text: "Paragraph one.\n\nParagraph two is complete.",
       running: false,
-      provider: "bing",
+      provider: "text_model",
     });
     await flushMicrotasks();
 
@@ -228,7 +228,7 @@ describe("ReasoningTranslationController", () => {
     reExpanded.update({
       text: "Paragraph one.\n\nParagraph two is complete.",
       running: false,
-      provider: "bing",
+      provider: "text_model",
     });
     await flushMicrotasks();
     expect(calls).toHaveLength(2);
@@ -273,7 +273,7 @@ describe("ReasoningTranslationController", () => {
     controller.update({
       text: "Retry test fragment",
       running: false,
-      provider: "google",
+      provider: "text_model",
     });
     await flushMicrotasks();
 
@@ -302,7 +302,7 @@ describe("requestReasoningTranslation", () => {
       return new Response(
         JSON.stringify({
           translatedText: "正在分析错误日志",
-          provider: "bing",
+          provider: "text_model",
           cached: false,
         }),
         { status: 200, headers: { "content-type": "application/json" } },
@@ -310,7 +310,7 @@ describe("requestReasoningTranslation", () => {
     };
 
     const res = await requestReasoningTranslation(
-      { provider: "bing", text: "Analyzing error logs" },
+      { provider: "text_model", text: "Analyzing error logs" },
       {
         baseUrl: "http://127.0.0.1:3773",
         fetchImpl,
@@ -319,7 +319,7 @@ describe("requestReasoningTranslation", () => {
     );
     expect(res).toEqual({
       translatedText: "正在分析错误日志",
-      provider: "bing",
+      provider: "text_model",
       cached: false,
     });
     expect(seen[0]?.url).toBe("http://127.0.0.1:3773/api/reasoning/translate");
@@ -368,8 +368,8 @@ describe("ReasoningTranslationBody SSR rendering", () => {
     const cache = new ReasoningTranslationMemoryCache();
     cache.set(
       makeReasoningTranslationCacheKey({
-        provider: "bing",
-        modelKey: "",
+        provider: "text_model",
+        modelKey: "dsh:deepseek-v4-flash",
         targetLanguage: "zh-Hans",
         fragmentText: "Inspecting layout",
       }),
@@ -378,7 +378,8 @@ describe("ReasoningTranslationBody SSR rendering", () => {
     const enabledHtml = renderToStaticMarkup(
       createElement(ReasoningTranslationBody, {
         text: "Inspecting layout",
-        provider: "bing",
+        provider: "text_model",
+        modelKey: "dsh:deepseek-v4-flash",
         cache,
       }),
     );
@@ -388,7 +389,6 @@ describe("ReasoningTranslationBody SSR rendering", () => {
     expect(enabledHtml).toContain('data-slot="reasoning-translation-toggle"');
     expect(enabledHtml).toContain('data-slot="reasoning-translation-copy"');
     expect(enabledHtml).toContain("motion-reduce:transition-none");
-    expect(enabledHtml).toContain("Bing");
     expect(enabledHtml).toContain("正在检查布局结构");
   });
 });

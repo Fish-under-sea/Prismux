@@ -5,11 +5,6 @@ import { desktopDir, resolveElectronLaunchCommand } from "./electron-launcher.mj
 
 NodeChildProcess.execFileSync(
   process.execPath,
-  [NodePath.join(desktopDir, "scripts/build-browser-secret.mjs")],
-  { stdio: "inherit" },
-);
-NodeChildProcess.execFileSync(
-  process.execPath,
   [NodePath.join(desktopDir, "scripts/build-apple-speech.mjs")],
   { stdio: "inherit" },
 );

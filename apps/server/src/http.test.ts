@@ -147,7 +147,7 @@ describe("browser API CORS", () => {
         new Request("https://backend.example/api/environment", {
           method: "OPTIONS",
           headers: {
-            origin: "https://prismux.app",
+            origin: "prismux://app",
             "access-control-request-method": "GET",
             "access-control-request-headers": [
               ORCHESTRATION_PROTOCOL_HEADER,
@@ -159,7 +159,7 @@ describe("browser API CORS", () => {
       );
 
       expect(response.status).toBe(204);
-      expect(response.headers.get("access-control-allow-origin")).toBe("*");
+      expect(response.headers.get("access-control-allow-origin")).toBe("prismux://app");
       const allowedHeaders = new Set(
         (response.headers.get("access-control-allow-headers") ?? "")
           .split(",")
@@ -168,6 +168,20 @@ describe("browser API CORS", () => {
       expect(allowedHeaders.has(ORCHESTRATION_PROTOCOL_HEADER)).toBe(true);
       expect(allowedHeaders.has("authorization")).toBe(true);
       expect(allowedHeaders.has("dpop")).toBe(true);
+
+      // Untrusted external origins and opaque `null` origins must NEVER receive wildcard `*` or echoed ACAO.
+      for (const untrustedOrigin of ["https://evil.example", "null"]) {
+        const rejected = await handler(
+          new Request("https://backend.example/api/environment", {
+            method: "OPTIONS",
+            headers: {
+              origin: untrustedOrigin,
+              "access-control-request-method": "GET",
+            },
+          }),
+        );
+        expect(rejected.headers.get("access-control-allow-origin")).toBeNull();
+      }
     } finally {
       await dispose();
     }

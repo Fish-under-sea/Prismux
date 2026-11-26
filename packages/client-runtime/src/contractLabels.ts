@@ -3,7 +3,6 @@
  * English; apps call these instead of the contracts helpers so the text follows the UI language.
  */
 import {
-  type BrowserImportFailureReason,
   isRuntimeModeAbove,
   managedCapabilityDenial as contractsManagedCapabilityDenial,
   managedUpdatesDenial as contractsManagedUpdatesDenial,
@@ -193,40 +192,6 @@ export function idleCompactionModeLabel(
   resolve: MFunctionType = mFallback,
 ): string {
   return resolve(IDLE_COMPACTION_MODE_LABELS[mode]);
-}
-
-const BROWSER_IMPORT_FAILURE_MESSAGES: Record<BrowserImportFailureReason, string> = {
-  notInstalled: msg("Not installed on this machine."),
-  needsKeychainApproval: msg("Needs Keychain access to read its cookies."),
-  keychainItemMissing: msg(
-    "No encryption key in your Keychain. Sign in to that browser once, then retry.",
-  ),
-  needsFullDiskAccess: msg(
-    "Give Prismux Full Disk Access in System Settings → Privacy & Security, then retry.",
-  ),
-  browserRunning: msg("Quit the browser first so its cookie database can be read."),
-  unsupportedPlatform: msg("Importing from this browser isn't possible on this platform."),
-  keychainUnavailable: msg(
-    "The system keyring could not be accessed. Make sure your desktop keyring is running and unlocked, then retry.",
-  ),
-  unknownSource: msg("That browser is no longer available to import from."),
-  unknownSourceProfile: msg("That browser profile no longer exists."),
-  sessionUnavailable: msg("The target profile could not be opened."),
-  profileNotSaved: msg(
-    "The cookies were imported, but the new profile couldn't be saved. Try again.",
-  ),
-  profileLimitReached: msg(
-    "You've reached the profile limit. Delete a profile or import into an existing one.",
-  ),
-  readFailed: msg("The browser's cookie database could not be read."),
-};
-
-/** @public `BROWSER_IMPORT_FAILURE_COPY[reason]`, translated. */
-export function browserImportFailureMessage(
-  reason: BrowserImportFailureReason,
-  resolve: MFunctionType = mFallback,
-): string {
-  return resolve(BROWSER_IMPORT_FAILURE_MESSAGES[reason]);
 }
 
 // The server's source-control discovery hints, in the same English; commands and URLs stay as is.

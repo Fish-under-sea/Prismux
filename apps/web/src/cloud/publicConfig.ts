@@ -1,5 +1,3 @@
-import { normalizeSecureRelayUrl } from "@prismux/core-shared/relayUrl";
-
 export interface CloudPublicConfig {
   readonly relayUrl: string | null;
   readonly relayTracing: {
@@ -15,14 +13,11 @@ export function trimNonEmpty(value: string | undefined): string | null {
 
 /**
  * Prismux runs in pure local-first / LAN / Tailscale QR pairing mode with zero third-party
- * hosted cloud account or telemetry dependencies.
+ * hosted cloud account, cloud relay, or telemetry dependencies.
  */
 export function resolveCloudPublicConfig(): CloudPublicConfig {
   return {
-    relayUrl: normalizeSecureRelayUrl(
-      (import.meta.env.VITE_PRISMUX_RELAY_URL as string | undefined) ?? "",
-    ),
-    // Prismux hard-disables built-in upstream Axiom/OTLP relay trace export.
+    relayUrl: null,
     relayTracing: {
       tracesUrl: null,
       tracesDataset: null,

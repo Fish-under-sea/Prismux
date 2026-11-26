@@ -23,7 +23,6 @@ describe("adding usage limit sources", () => {
     const sources = [
       [firstUrl, "First relay", "first-key", "newapi"],
       [secondUrl, "Second relay", "second-key", "openaiBilling"],
-      [`${secondUrl}/extra`, "Third relay", "third-key", "cliproxy"],
     ] as const;
     for (const [url, label, managementKey, kind] of sources) {
       const id = sourceIdFromUrl(url, settings.usageLimitSources, kind);
@@ -44,7 +43,7 @@ describe("adding usage limit sources", () => {
     );
   });
 
-  it("uses kind-specific prefixes (newapi-, relay-, cliproxy-) and falls back to relay slug", () => {
+  it("uses kind-specific prefixes (newapi-, relay-) and falls back to relay slug", () => {
     expect(sourceIdFromUrl("https://api.example.com", {}, "newapi")).toBe(
       "newapi-api.example.com",
     );
@@ -52,12 +51,8 @@ describe("adding usage limit sources", () => {
     expect(sourceIdFromUrl("https://api.example.com/v1", {}, "openaiBilling")).toBe(
       "relay-api.example.com",
     );
-    expect(sourceIdFromUrl("https://proxy.example.com:8318", {}, "cliproxy")).toBe(
-      "cliproxy-proxy.example.com-8318",
-    );
     expect(sourceIdFromUrl("///", {}, "newapi")).toBe("newapi-relay");
     expect(sourceIdFromUrl("///", {}, "openaiBilling")).toBe("relay-relay");
-    expect(sourceIdFromUrl("///", {}, "cliproxy")).toBe("cliproxy-relay");
   });
 
   it("updates a saved source when its URL is added again", () => {
@@ -90,15 +85,11 @@ describe("adding usage limit sources", () => {
   it("exposes distinct localized placeholders and optional userId visibility per protocol", () => {
     const newapiZh = getRelayProtocolMeta("newapi", "zh");
     const billingEn = getRelayProtocolMeta("openaiBilling", "en");
-    const cliproxyZh = getRelayProtocolMeta("cliproxy", "zh");
 
     expect(newapiZh.urlPlaceholder).toBe("https://api.example.com");
     expect(newapiZh.showUserId).toBe(true);
     expect(billingEn.urlPlaceholder).toBe("https://api.example.com/v1");
     expect(billingEn.showUserId).toBe(false);
-    expect(cliproxyZh.urlPlaceholder).toBe("https://proxy.example.com:8318");
-    expect(cliproxyZh.urlPlaceholder).not.toContain("hub.example.ts.net");
-    expect(cliproxyZh.showUserId).toBe(false);
   });
 
   it("summarizes live relay balance and error snapshots", () => {

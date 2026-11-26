@@ -116,7 +116,7 @@ describe("UsageProviderSettings", () => {
   it("renders configured relays with in-card toolbar, protocol badges, live balance/error pills, and Switch/Edit/Remove controls", () => {
     const newapiId = UsageLimitSourceId.make("newapi-api.example.com");
     const billingId = UsageLimitSourceId.make("relay-openai.example.com");
-    const cliproxyId = UsageLimitSourceId.make("cliproxy-proxy.example.com-8318");
+    const disabledId = UsageLimitSourceId.make("newapi-backup.example.com");
 
     const sources: UnifiedSettings["usageLimitSources"] = {
       [newapiId]: {
@@ -134,11 +134,12 @@ describe("UsageProviderSettings", () => {
         managementKey: "••••••",
         enabled: true,
       },
-      [cliproxyId]: {
-        kind: "cliproxy",
-        label: "旧版代理",
-        url: "https://proxy.example.com:8318",
+      [disabledId]: {
+        kind: "newapi",
+        label: "已暂停中转",
+        url: "https://paused.example.com",
         managementKey: "••••••",
+        userId: "99",
         enabled: false,
       },
     };
@@ -197,7 +198,6 @@ describe("UsageProviderSettings", () => {
     expect(html).toContain("OpenAI 兼容");
     expect(html).toContain('data-relay-status="error"');
     expect(html).toContain("The relay answered with HTTP 401.");
-    expect(html).toContain("CLIProxyAPI（兼容）");
     expect(html).toContain("已停用");
     expect(html).toContain("编辑");
     expect(html).toContain("移除");

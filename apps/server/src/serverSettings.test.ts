@@ -712,7 +712,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
         const sourceId = UsageLimitSourceId.make("hub");
         const usageLimitSources = {
           [sourceId]: {
-            kind: "cliproxy" as const,
+            kind: "newapi" as const,
             url: "https://hub.example.test",
             managementKey: "",
             enabled: true,
@@ -1537,7 +1537,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
           },
           usageLimitSources: {
             [UsageLimitSourceId.make("hub")]: {
-              kind: "cliproxy",
+              kind: "newapi",
               url: "https://hub.example.test",
               managementKey: "quota-secret",
               enabled: true,
@@ -1848,7 +1848,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
           },
           usageLimitSources: {
             [hub]: {
-              kind: "cliproxy",
+              kind: "newapi",
               url: "https://hub.test",
               managementKey: usageReference,
               enabled: true,
@@ -1980,7 +1980,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
         cloudSpeechCredentials: { openai: personal("Voice/key"), xai: work },
         usageLimitSources: {
           [hub]: {
-            kind: "cliproxy",
+            kind: "newapi",
             url: "https://hub.test",
             managementKey: personal("Hub/key"),
             enabled: true,
@@ -2004,7 +2004,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
         secretProviders: { [SecretProviderId.make("personal")]: null },
         usageLimitSources: {
           [hub]: {
-            kind: "cliproxy",
+            kind: "newapi",
             url: "https://hub.test",
             managementKey: SECRET_REDACTED,
             enabled: true,

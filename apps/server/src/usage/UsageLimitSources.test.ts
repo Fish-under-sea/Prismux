@@ -53,9 +53,7 @@ it.effect("keeps malformed source URLs encodable for config subscribers", () =>
         payload: { sources: snapshots },
       }),
     ).not.toThrow();
-    expect(snapshots.every((source) => source.error === "No management key configured.")).toBe(
-      true,
-    );
+    expect(snapshots.every((source) => source.error === "No API key configured.")).toBe(true);
   }).pipe(
     Effect.provide([
       Layer.succeed(SecretResolver.SecretResolver, {
@@ -66,32 +64,32 @@ it.effect("keeps malformed source URLs encodable for config subscribers", () =>
       ServerSettings.layerTest({
         usageLimitSources: {
           [UsageLimitSourceId.make("local-hub")]: {
-            kind: "cliproxy",
+            kind: "newapi",
             url: "localhost:8317",
             managementKey: "",
             enabled: true,
           },
           [UsageLimitSourceId.make("opaque-hub")]: {
-            kind: "cliproxy",
+            kind: "newapi",
             url: "file:///tmp/hub",
             managementKey: "",
             enabled: true,
           },
           [UsageLimitSourceId.make("named-hub")]: {
-            kind: "cliproxy",
+            kind: "newapi",
             url: "localhost:8317",
             label: "Named hub",
             managementKey: "",
             enabled: true,
           },
           [UsageLimitSourceId.make("valid-hub")]: {
-            kind: "cliproxy",
-            url: "https://hub.test:8317/team-a/management.html",
+            kind: "newapi",
+            url: "https://hub.test:8317/team-a",
             managementKey: "",
             enabled: true,
           },
           [UsageLimitSourceId.make(" ")]: {
-            kind: "cliproxy",
+            kind: "newapi",
             url: "localhost:8317",
             managementKey: "",
             enabled: true,
@@ -127,7 +125,7 @@ it.effect("reads a management key from its secret provider", () => {
       { id: "resolved-hub", error: undefined },
       {
         id: "unresolved-hub",
-        error: "Could not read the management key from its secret provider.",
+        error: "Could not read the API key from its secret provider.",
       },
     ]);
     expect(authorizations).toEqual(["Bearer resolved-key"]);
@@ -136,13 +134,13 @@ it.effect("reads a management key from its secret provider", () => {
       ServerSettings.layerTest({
         usageLimitSources: {
           [UsageLimitSourceId.make("resolved-hub")]: {
-            kind: "cliproxy",
+            kind: "newapi",
             url: "https://resolved.test",
-            managementKey: keySource("cliproxy#key"),
+            managementKey: keySource("relay#key"),
             enabled: true,
           },
           [UsageLimitSourceId.make("unresolved-hub")]: {
-            kind: "cliproxy",
+            kind: "newapi",
             url: "https://unresolved.test",
             managementKey: keySource("missing#key"),
             enabled: true,
@@ -157,7 +155,7 @@ it.effect("reads a management key from its secret provider", () => {
         read: (references) =>
           Effect.succeed(
             references.map((reference) =>
-              reference.reference === "cliproxy#key" ? "resolved-key" : undefined,
+              reference.reference === "relay#key" ? "resolved-key" : undefined,
             ),
           ),
         invalidate: () => Effect.void,
@@ -167,7 +165,13 @@ it.effect("reads a management key from its secret provider", () => {
         HttpClient.make((request) =>
           Effect.sync(() => {
             authorizations.push(request.headers.authorization);
-            return HttpClientResponse.fromWeb(request, Response.json({ files: [] }));
+            return HttpClientResponse.fromWeb(
+              request,
+              Response.json({
+                success: true,
+                data: { id: 1, username: "alice", quota: 500_000, used_quota: 0 },
+              }),
+            );
           }),
         ),
       ),
@@ -176,10 +180,9 @@ it.effect("reads a management key from its secret provider", () => {
   );
 });
 
-it.effect("keeps an account's last good reading when the hub's next read of it is refused", () => {
+it.effect("keeps an account's last good reading when the relay's next read of it is refused", () => {
   let refused = true;
-  let workspace = "account-a";
-  let listsIdentity = true;
+  let userId = "user-a";
   const readAccount = Effect.gen(function* () {
     const sources = yield* UsageLimitSources.make;
     return Effect.gen(function* () {
@@ -190,29 +193,24 @@ it.effect("keeps an account's last good reading when the hub's next read of it i
   });
   return Effect.gen(function* () {
     const read = yield* readAccount;
-    // Nothing to keep yet: the account stays listed as unreadable.
-    expect(yield* read).toMatchObject({ windows: [], unavailable: { reason: "probeFailed" } });
+    expect(yield* read).toBeUndefined();
     refused = false;
     const good = yield* read;
-    expect(good?.windows.map((window) => window.usedPercent)).toEqual([78]);
+    expect(good?.windows[0]?.usedPercent).toBeCloseTo(78, 1);
     expect(good?.unavailable).toBeUndefined();
     refused = true;
-    expect(yield* read).toEqual(good);
-    // The same auth file now holds another login, whose reading is unknown.
-    workspace = "account-b";
-    expect(yield* read).toMatchObject({ windows: [], unavailable: { reason: "probeFailed" } });
-    // A file that lists no login cannot show whether the next one is the same.
-    listsIdentity = false;
+    const afterRefusal = yield* read;
+    expect(afterRefusal?.windows[0]?.usedPercent).toBeCloseTo(78, 1);
+    userId = "user-b";
     refused = false;
-    yield* read;
-    refused = true;
-    expect(yield* read).toMatchObject({ windows: [], unavailable: { reason: "probeFailed" } });
+    const changed = yield* read;
+    expect(changed?.windows[0]?.usedPercent).toBeCloseTo(78, 1);
   }).pipe(
     Effect.provide([
       ServerSettings.layerTest({
         usageLimitSources: {
           [UsageLimitSourceId.make("hub")]: {
-            kind: "cliproxy",
+            kind: "newapi",
             url: "http://hub.test:8317",
             managementKey: "management-secret",
             enabled: true,
@@ -231,43 +229,20 @@ it.effect("keeps an account's last good reading when the hub's next read of it i
         HttpClient.HttpClient,
         HttpClient.make((request) =>
           Effect.sync(() => {
-            if (new URL(request.url).pathname.endsWith("/auth-files")) {
-              return HttpClientResponse.fromWeb(
-                request,
-                Response.json({
-                  files: [
-                    {
-                      id: "first.json",
-                      auth_index: "a",
-                      provider: "codex",
-                      ...(listsIdentity
-                        ? {
-                            email: "first@example.com",
-                            id_token: { chatgpt_account_id: workspace },
-                          }
-                        : {}),
-                    },
-                  ],
-                }),
-              );
+            if (refused) {
+              return HttpClientResponse.fromWeb(request, Response.json({}, { status: 429 }));
             }
-            const usage = {
-              plan_type: "pro",
-              rate_limit: {
-                secondary_window: {
-                  used_percent: 78,
-                  reset_at: 4070908800,
-                  limit_window_seconds: 604800,
-                },
-              },
-            };
             return HttpClientResponse.fromWeb(
               request,
-              Response.json(
-                refused
-                  ? { status_code: 429, body: "{}" }
-                  : { status_code: 200, body: JSON.stringify(usage) },
-              ),
+              Response.json({
+                success: true,
+                data: {
+                  id: userId,
+                  username: userId,
+                  quota: 220_000,
+                  used_quota: 780_000,
+                },
+              }),
             );
           }),
         ),
@@ -557,7 +532,7 @@ it.effect(
           creditId: "credit-1",
         }),
       );
-      expect(consumeError.detail).toContain("CLIProxyAPI");
+      expect(consumeError.detail).toContain("relay quota usage sources");
     }).pipe(
       Effect.provide([
         ServerSettings.layerTest({

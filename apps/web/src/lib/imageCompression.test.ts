@@ -15,14 +15,6 @@ import type { SnapShotSource } from "@prismux/core-contracts";
 import { hydrateImagesFromPersisted } from "../composerDraftStore";
 import { resizeSnapShotSource } from "./snapShotSource";
 
-const mocks = vi.hoisted(() => ({
-  heicTo: vi.fn(),
-}));
-
-vi.mock("heic-to/csp", () => ({
-  heicTo: mocks.heicTo,
-}));
-
 const originalCreateImageBitmap = globalThis.createImageBitmap;
 const originalOffscreenCanvas = globalThis.OffscreenCanvas;
 
@@ -138,7 +130,6 @@ function stubCanvasPipeline(
 }
 
 afterEach(() => {
-  mocks.heicTo.mockReset();
   vi.unstubAllGlobals();
   globalThis.createImageBitmap = originalCreateImageBitmap;
   globalThis.OffscreenCanvas = originalOffscreenCanvas;
@@ -290,7 +281,6 @@ describe("HEIC attachment preparation", () => {
     try {
       const thumbnail = await createComposerImageThumbnail(original);
       expect(thumbnail).toMatch(/^data:image\/png;base64,/);
-      expect(mocks.heicTo).not.toHaveBeenCalled();
       expect(createImageBitmap).toHaveBeenCalledTimes(1);
       expect(close).not.toHaveBeenCalled();
     } finally {
@@ -304,37 +294,26 @@ describe("HEIC attachment preparation", () => {
     expect(close).toHaveBeenCalledTimes(2);
   });
 
-  it("converts a HEIC photo with a missing MIME type into a named JPEG", async () => {
+  it("returns unreadable gracefully when the platform cannot decode HEIC natively (zero LGPL WASM fallback)", async () => {
     const original = makeHeicFile({
       name: "IMG_1234.HEIC",
       type: "",
       lastModified: 123,
     });
-    const { close } = stubCanvasPipeline(() => 4);
+    stubCanvasPipeline(() => 4);
     vi.mocked(createImageBitmap).mockRejectedValue(new Error("HEIC is not supported natively"));
-    mocks.heicTo.mockResolvedValueOnce({ width: 4000, height: 3000, close });
 
     const result = await prepareImageForAttachment(original, 1024);
 
-    expect(mocks.heicTo).toHaveBeenCalledWith({
-      blob: original,
-      type: "bitmap",
-    });
-    expect(result.ok && result.file.name).toBe("IMG_1234.jpg");
-    expect(result.ok && result.file.type).toBe("image/jpeg");
-    expect(result.ok && result.file.size).toBe(4);
-    expect(result.ok && result.file.lastModified).toBe(123);
-    expect(result.ok && result.recompressed).toBe(true);
+    expect(result).toEqual({ ok: false, reason: "unreadable" });
   });
 
-  it("resizes decoded HEIC pixels before encoding the JPEG", async () => {
+  it("resizes natively decoded HEIC pixels before encoding the JPEG", async () => {
     const original = makeHeicFile({
       name: "large.heic",
       type: "image/heic",
     });
     const { close, canvasSizes } = stubCanvasPipeline(() => 200_000);
-    vi.mocked(createImageBitmap).mockRejectedValue(new Error("HEIC is not supported natively"));
-    mocks.heicTo.mockResolvedValueOnce({ width: 4000, height: 3000, close });
 
     const result = await prepareImageForAttachment(original, 1_000_000);
 
@@ -356,7 +335,6 @@ describe("HEIC attachment preparation", () => {
       ok: false,
       reason: "too-large",
     });
-    expect(mocks.heicTo).not.toHaveBeenCalled();
   });
 
   it("rejects unsafe HEIC sources before loading the decoder", async () => {
@@ -367,7 +345,6 @@ describe("HEIC attachment preparation", () => {
       ok: false,
       reason: "too-large",
     });
-    expect(mocks.heicTo).not.toHaveBeenCalled();
   });
 });
 

@@ -72,6 +72,18 @@ export const makeCodexManagedRuntime = Effect.fn("makeCodexManagedRuntime")(func
           }),
       ),
     );
+    const authSecret = yield* broker.authSecret.pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderSetupError({
+            instanceId: options.instanceId,
+            operation: "runtime",
+            detail:
+              "Could not prepare the private managed Codex token secret. Restart Prismux and retry.",
+            cause,
+          }),
+      ),
+    );
     const executable = yield* installation.acquire().pipe(
       Effect.mapError(
         () =>
@@ -113,10 +125,11 @@ export const makeCodexManagedRuntime = Effect.fn("makeCodexManagedRuntime")(func
           }),
       ),
     );
-    // Ambient CLI overrides cannot redirect a T3-owned token to a different provider.
+    // Ambient CLI overrides cannot redirect a Prismux-owned token to a different provider.
     const environment: NodeJS.ProcessEnv = {
       ...options.environment,
       CODEX_HOME: homePath,
+      PRISMUX_MANAGED_TOKEN_SECRET: authSecret,
     };
     delete environment.ACCESS_TOKEN;
     delete environment.PRISMUX_CODEX_LAUNCH_ARGS;

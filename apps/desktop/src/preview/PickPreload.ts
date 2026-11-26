@@ -1,5 +1,5 @@
 // @effect-diagnostics globalDate:off globalTimers:off - This isolated Electron preload does not run inside an Effect runtime.
-import { ipcRenderer } from "electron";
+import { ipcRenderer, webFrame } from "electron";
 import { getElementContext } from "react-grab/primitives";
 import { matchesKeybindingShortcut } from "@prismux/core-shared/keybindingMatching";
 import type {
@@ -457,6 +457,87 @@ function withCaptureTimeout<A>(promise: Promise<A>, millis: number): Promise<A |
 }
 
 const HTML_PREVIEW_MAX_CHARS = 500;
+const MAIN_WORLD_PROBE_ATTR = "data-prismux-pick-probe";
+
+function randomProbeToken(): string {
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Under `contextIsolation: true`, React Fiber expandos live strictly in the page's main world.
+ * Probe only read-only component metadata using a transient random attribute; never expose
+ * ipcRenderer or preload objects to the main world.
+ */
+async function probeMainWorldReactMetadata(element: Element): Promise<{
+  readonly componentName: string | null;
+  readonly stack: readonly PickedElementStackFrame[];
+} | null> {
+  if (typeof webFrame?.executeJavaScript !== "function") return null;
+  const token = randomProbeToken();
+  element.setAttribute(MAIN_WORLD_PROBE_ATTR, token);
+  try {
+    const script = `(() => {
+      const attr = ${JSON.stringify(MAIN_WORLD_PROBE_ATTR)};
+      const token = ${JSON.stringify(token)};
+      const el = document.querySelector("[" + attr + "=\\"" + token + "\\"]");
+      if (!el) return null;
+      const fiberKey = Object.keys(el).find(
+        (key) => key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$"),
+      );
+      if (!fiberKey) return null;
+      let fiber = el[fiberKey];
+      const frames = [];
+      let componentName = null;
+      let steps = 0;
+      while (fiber && steps < 40) {
+        steps += 1;
+        const type = fiber.type;
+        const name =
+          typeof type === "function"
+            ? type.displayName || type.name || null
+            : typeof type === "object" && type !== null
+              ? type.displayName || type.render?.displayName || type.render?.name || null
+              : null;
+        if (name && !componentName) componentName = String(name);
+        const debugSource = fiber._debugSource;
+        if (name || debugSource) {
+          frames.push({
+            functionName: name ? String(name) : null,
+            fileName: typeof debugSource?.fileName === "string" ? debugSource.fileName : null,
+            lineNumber: typeof debugSource?.lineNumber === "number" ? debugSource.lineNumber : null,
+            columnNumber: typeof debugSource?.columnNumber === "number" ? debugSource.columnNumber : null,
+          });
+        }
+        fiber = fiber.return;
+      }
+      return { componentName, stack: frames.slice(0, 12) };
+    })()`;
+    const result = (await webFrame.executeJavaScript(script)) as {
+      readonly componentName?: unknown;
+      readonly stack?: unknown;
+    } | null;
+    if (!result || typeof result !== "object") return null;
+    const componentName =
+      typeof result.componentName === "string" ? result.componentName : null;
+    const stack = Array.isArray(result.stack)
+      ? result.stack
+          .filter((frame): frame is Record<string, unknown> => typeof frame === "object" && frame !== null)
+          .map((frame) => ({
+            functionName: typeof frame.functionName === "string" ? frame.functionName : null,
+            fileName: typeof frame.fileName === "string" ? frame.fileName : null,
+            lineNumber: typeof frame.lineNumber === "number" ? frame.lineNumber : null,
+            columnNumber: typeof frame.columnNumber === "number" ? frame.columnNumber : null,
+          }))
+      : [];
+    return { componentName, stack };
+  } catch {
+    return null;
+  } finally {
+    element.removeAttribute(MAIN_WORLD_PROBE_ATTR);
+  }
+}
 
 /** Preserve the tag, HTML, and crop rect when React context lookup fails or stalls. */
 async function captureElement(element: Element): Promise<PickedElementPayload> {
@@ -472,12 +553,23 @@ async function captureElement(element: Element): Promise<PickedElementPayload> {
       ELEMENT_CONTEXT_TIMEOUT_MS,
     );
     if (context) {
-      const stack = (context.stack ?? []).map(toStackFrame);
+      let stack = (context.stack ?? []).map(toStackFrame);
+      let componentName = context.componentName;
+      if (componentName === null && stack.length === 0) {
+        const probed = await withCaptureTimeout(
+          probeMainWorldReactMetadata(element),
+          ELEMENT_CONTEXT_TIMEOUT_MS,
+        );
+        if (probed) {
+          componentName = probed.componentName;
+          stack = [...probed.stack];
+        }
+      }
       return {
         ...base,
         selector: context.selector,
         htmlPreview: context.htmlPreview ?? "",
-        componentName: context.componentName,
+        componentName,
         source: stack[0] ?? null,
         stack,
         styles: context.styles ?? "",

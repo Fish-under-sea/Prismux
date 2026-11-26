@@ -123,16 +123,16 @@ export function formatVersionBadge(raw: string | null | undefined): string {
 export function readAutoCheckPreference(
   storage: StorageLike | null = getDefaultStorage(),
 ): boolean {
-  if (!storage) return true;
+  if (!storage) return false;
   try {
     const raw = storage.getItem(AUTO_CHECK_UPDATES_STORAGE_KEY);
-    if (raw === null) return true;
+    if (raw === null) return false;
     if (raw === "false" || raw === "0") return false;
     if (raw === "true" || raw === "1") return true;
     const parsed = JSON.parse(raw) as unknown;
-    return typeof parsed === "boolean" ? parsed : true;
+    return typeof parsed === "boolean" ? parsed : false;
   } catch {
-    return true;
+    return false;
   }
 }
 

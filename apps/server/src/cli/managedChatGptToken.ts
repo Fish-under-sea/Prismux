@@ -13,6 +13,7 @@ const decodeArguments = Schema.decodeUnknownEffect(
     Protocol.Request.fields.profileKey,
   ]),
 );
+const decodeSecret = Schema.decodeUnknownEffect(Protocol.Request.fields.authSecret);
 const encodeRequest = Schema.encodeSync(Schema.fromJsonString(Protocol.Request));
 const decodeResponse = Schema.decodeUnknownEffect(Schema.fromJsonString(Protocol.Response), {
   onExcessProperty: "error",
@@ -20,15 +21,19 @@ const decodeResponse = Schema.decodeUnknownEffect(Schema.fromJsonString(Protocol
 
 /** Codex's auth.command protocol is a bare token on stdout, never a CLI diagnostic. */
 export async function runManagedChatGptTokenCli(args: ReadonlyArray<string>): Promise<void> {
+  const rawSecret = process.env.PRISMUX_MANAGED_TOKEN_SECRET;
   const program = Effect.gen(function* () {
     const [endpoint, instanceId, environmentId, profileKey] = yield* decodeArguments(args);
+    const authSecret = yield* decodeSecret(rawSecret);
     const socket = yield* Effect.acquireRelease(
       Effect.sync(() => NodeNet.createConnection(endpoint)),
       (socket) => Effect.sync(() => socket.destroy()),
     );
     socket.on("error", () => {});
     socket.once("connect", () =>
-      socket.write(encodeRequest({ version: 1, instanceId, environmentId, profileKey }) + "\n"),
+      socket.write(
+        encodeRequest({ version: 1, authSecret, instanceId, environmentId, profileKey }) + "\n",
+      ),
     );
     return yield* Protocol.readFrame(
       socket,

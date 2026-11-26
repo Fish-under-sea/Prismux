@@ -358,14 +358,25 @@ export const EffortDisplay = Schema.Literals(["label", "bars"]);
 export type EffortDisplay = typeof EffortDisplay.Type;
 
 /** Real-time Chinese translation provider for model reasoning / chain-of-thought. */
-export const ReasoningTranslationProvider = Schema.Literals([
+export const ReasoningTranslationProvider = Schema.Literals(["off", "text_model"]);
+export type ReasoningTranslationProvider = typeof ReasoningTranslationProvider.Type;
+export const DEFAULT_REASONING_TRANSLATION_PROVIDER: ReasoningTranslationProvider = "off";
+
+/** Migrate legacy saved "bing" / "google" values to "off" so old configs never break or leak data. */
+const LegacyReasoningTranslationProvider = Schema.Literals([
   "off",
   "bing",
   "google",
   "text_model",
-]);
-export type ReasoningTranslationProvider = typeof ReasoningTranslationProvider.Type;
-export const DEFAULT_REASONING_TRANSLATION_PROVIDER: ReasoningTranslationProvider = "bing";
+]).pipe(
+  Schema.decodeTo(
+    ReasoningTranslationProvider,
+    SchemaTransformation.transform<ReasoningTranslationProvider, "off" | "bing" | "google" | "text_model">({
+      decode: (value) => (value === "text_model" ? "text_model" : "off"),
+      encode: (value) => value,
+    }),
+  ),
+);
 
 export const DEFAULT_REASONING_EFFORT_LEVELS = ["low", "medium", "high", "max"] as const;
 export const ReasoningEffortLevel = Schema.Literals(DEFAULT_REASONING_EFFORT_LEVELS);
@@ -447,7 +458,7 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   chatWidth: ChatWidth.pipe(Schema.withDecodingDefault(Effect.succeed("comfortable" as const))),
   effortDisplay: EffortDisplay.pipe(Schema.withDecodingDefault(Effect.succeed("bars" as const))),
-  reasoningTranslationProvider: ReasoningTranslationProvider.pipe(
+  reasoningTranslationProvider: LegacyReasoningTranslationProvider.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_REASONING_TRANSLATION_PROVIDER)),
   ),
   loadBalancingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
@@ -1636,8 +1647,22 @@ export const ServerSettings = Schema.Struct({
   offeredSourceControlProviders: Schema.Record(Schema.String, Schema.Boolean).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
-  // User-chosen ids preserve rows across edits; undecodable entries round-trip untouched.
-  usageLimitSources: Schema.Record(UsageLimitSourceId, UsageLimitSourceConfig).pipe(
+  // User-chosen ids preserve rows across edits; legacy cliproxy entries are gracefully ignored.
+  usageLimitSources: Schema.Record(UsageLimitSourceId, Schema.Unknown).pipe(
+    Schema.decodeTo(
+      Schema.Record(UsageLimitSourceId, Schema.Unknown),
+      SchemaTransformation.transform({
+        decode: (raw) =>
+          Object.fromEntries(
+            Object.entries(raw).filter(([, value]) => {
+              if (typeof value !== "object" || value === null) return true;
+              return (value as { readonly kind?: unknown }).kind !== "cliproxy";
+            }),
+          ) as Record<UsageLimitSourceId, unknown>,
+        encode: (value) => value,
+      }),
+    ),
+    Schema.decodeTo(Schema.Record(UsageLimitSourceId, UsageLimitSourceConfig)),
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   textGenerators: Schema.Record(ProviderInstanceId, TextGeneratorConfig).pipe(
@@ -2121,7 +2146,7 @@ export const ClientSettingsPatch = Schema.Struct({
   diffColorScheme: Schema.optionalKey(DiffColorScheme),
   chatWidth: Schema.optionalKey(ChatWidth),
   effortDisplay: Schema.optionalKey(EffortDisplay),
-  reasoningTranslationProvider: Schema.optionalKey(ReasoningTranslationProvider),
+  reasoningTranslationProvider: Schema.optionalKey(LegacyReasoningTranslationProvider),
   loadBalancingEnabled: Schema.optionalKey(Schema.Boolean),
   loadBalancingWeights: Schema.optionalKey(LoadBalancingWeights),
   appearanceContrast: Schema.optionalKey(AppearanceContrast),

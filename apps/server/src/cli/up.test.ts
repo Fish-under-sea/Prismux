@@ -24,10 +24,10 @@ const none = Option.none<boolean>();
 
 it.each([
   {
-    label: "a new machine starts from Prismux Connect and asks",
+    label: "a new machine asks only for LAN (Prismux Connect cloud relay is excised)",
     setup: { installed: false, connect: false, lan: false },
     flags: { connect: none, lan: none },
-    expected: { routes: { connect: true, lan: false }, ask: ["connect", "lan"] },
+    expected: { routes: { connect: false, lan: false }, ask: ["lan"] },
   },
   {
     label: "a build without Prismux Connect never offers it",
@@ -36,10 +36,10 @@ it.each([
     expected: { routes: { connect: false, lan: false }, ask: ["lan"] },
   },
   {
-    label: "a rerun starts from the current setup",
+    label: "a rerun starts from the current LAN setup without offering Connect",
     setup: { installed: true, connect: false, lan: true },
     flags: { connect: none, lan: none },
-    expected: { routes: { connect: false, lan: true }, ask: ["connect", "lan"] },
+    expected: { routes: { connect: false, lan: true }, ask: ["lan"] },
   },
   {
     label: "a route flag on a new machine turns on only that route",
@@ -48,10 +48,10 @@ it.each([
     expected: { routes: { connect: false, lan: true }, ask: [] },
   },
   {
-    label: "a route flag asks nothing and keeps the other route",
+    label: "a route flag asks nothing and keeps Connect permanently disabled",
     setup: { installed: true, connect: true, lan: true },
     flags: { connect: none, lan: Option.some(false) },
-    expected: { routes: { connect: true, lan: false }, ask: [] },
+    expected: { routes: { connect: false, lan: false }, ask: [] },
   },
 ])("$label", ({ setup, flags, expected }) => {
   expect(planRoutes(setup, flags)).toEqual(expected);
@@ -72,7 +72,7 @@ it.each([
     cliMode: "managed",
     managedTunnel: false,
     revoked: false,
-    on: true,
+    on: false,
   },
   {
     label: "a link the app made",
@@ -80,7 +80,7 @@ it.each([
     cliMode: "managed",
     managedTunnel: true,
     revoked: false,
-    on: true,
+    on: false,
   },
   {
     label: "a publish-only link",
@@ -114,7 +114,7 @@ it.each([
     revoked: false,
     on: false,
   },
-] as const)("Prismux Connect is on for $label: $on", ({ label: _, on, ...link }) => {
+] as const)("Prismux Connect is always off for $label: $on", ({ label: _, on, ...link }) => {
   expect(connectEnabled(link)).toBe(on);
 });
 

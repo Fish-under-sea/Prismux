@@ -1828,14 +1828,16 @@ const makeRenewalBroker = Effect.gen(function* () {
     const context = yield* Layer.buildWithScope(CodexManagedTokenBroker.layer, scope);
     const broker = Context.get(context, CodexManagedTokenBroker.CodexManagedTokenBroker);
     const endpoint = yield* broker.endpoint;
+    const authSecret = yield* broker.authSecret;
     yield* Effect.addFinalizer(() => Deferred.succeed(oauthRelease, undefined));
     return {
       auth,
       store,
       broker,
       endpoint,
+      authSecret,
       refreshTokens,
-      request: { version: 1, instanceId, environmentId, profileKey },
+      request: { version: 1, authSecret, instanceId, environmentId, profileKey },
       oauthEntered,
       oauthRelease,
       pause: () => {
@@ -1917,6 +1919,8 @@ it.live("the private broker refuses another environment, instance, or sign-in pr
           },
           { ...h.request, instanceId: ProviderInstanceId.make("another-instance") },
           { ...h.request, profileKey: "0".repeat(64) },
+          { ...h.request, authSecret: "f".repeat(64) },
+          { version: 1, instanceId: h.request.instanceId, environmentId: h.request.environmentId, profileKey: h.request.profileKey },
         ],
         (request) =>
           Effect.scoped(

@@ -25,8 +25,6 @@ export interface ReasoningTranslationBodyProps {
 
 const PROVIDER_SHORT_LABELS: Readonly<Record<Exclude<ReasoningTranslationProvider, "off">, string>> =
   {
-    bing: "Bing",
-    google: "Google",
     text_model: "AI",
   };
 

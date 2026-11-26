@@ -81,10 +81,9 @@ export function loadCachedAcpRegistryIcon(iconUrl: string): Promise<Blob> {
   return load;
 }
 
-// Falls back to the raw allowlisted CDN URL when the validating fetch fails: the
-// CDN serves no CORS headers, so the fetch is often blocked cross-origin while
-// native <img> loading still works. The object URL is shared per agent and
-// revoked when the last icon unmounts.
+// Never fall back to a raw third-party `<img src>` URL: when the validating fetch
+// cannot load or is blocked by CORS/offline mode, return null so local bundled
+// SVGs or monograms render without leaking client IP/UA to external hosts.
 const acpRegistryIconSourceAtom = Atom.family((iconUrl: string) =>
   Atom.make((get) => {
     let disposed = false;
@@ -95,18 +94,18 @@ const acpRegistryIconSourceAtom = Atom.family((iconUrl: string) =>
     });
     return Effect.promise(() =>
       loadCachedAcpRegistryIcon(iconUrl).then(
-        (blob) => {
-          if (disposed) return iconUrl;
+        (blob): string | null => {
+          if (disposed) return null;
           objectUrl = URL.createObjectURL(blob);
           return objectUrl;
         },
-        () => iconUrl,
+        (): string | null => null,
       ),
     );
   }).pipe(Atom.withLabel(`acp-registry-icon:${iconUrl}`)),
 );
 
-const NO_ICON_SOURCE_ATOM = Atom.make(AsyncResult.initial<string>());
+const NO_ICON_SOURCE_ATOM = Atom.make(AsyncResult.initial<string | null>());
 
 function resolveCustomAcpMonogram(input: {
   readonly displayName?: string | null | undefined;
@@ -219,7 +218,8 @@ export function AcpRegistryAgentIcon({
     commandPath,
   });
   const brandAccentColor = brandKey ? getAcpAgentBrandAccentColor(brandKey) : null;
-  const iconUrl = resolveOfficialAcpRegistryIconUrl(icon);
+  // Bundled local brand SVGs render strictly offline without querying external CDNs.
+  const iconUrl = brandKey === null ? resolveOfficialAcpRegistryIconUrl(icon) : null;
   // Render only after the load pipeline resolves, so the fallback icon does
   // not flash a broken image.
   const source = AsyncResult.getOrElse(

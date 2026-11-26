@@ -158,9 +158,12 @@ async function decode(bytes: ArrayBuffer, heif: boolean) {
   if (bytes.byteLength > 50 * 1024 * 1024) throw new PreviewError({ code: "file-too-large" });
   if (heif) {
     validateHeif(bytes);
-    // Desktop CSP forbids the JavaScript evaluation used by heic-to/next.
-    const { heicTo } = await import("heic-to/csp");
-    const bitmap = await heicTo({ blob: new Blob([bytes]), type: "bitmap" });
+    let bitmap: ImageBitmap;
+    try {
+      bitmap = await createImageBitmap(new Blob([bytes], { type: "image/heic" }));
+    } catch {
+      throw new PreviewError({ code: "image-decoding-unavailable" });
+    }
     try {
       const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
       const context = canvas.getContext("2d");

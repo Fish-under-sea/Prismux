@@ -46,7 +46,6 @@ import {
 } from "./assets/AttachmentUpload.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import { traceRelayRequest } from "./cloud/traceRelayRequest.ts";
 import {
   annotateEnvironmentRequest,
   failEnvironmentScopeRequired,
@@ -284,18 +283,36 @@ export const layerHttpCompression = HttpRouter.middleware(HttpMiddleware.compres
   global: true,
 });
 
+export function resolveAllowedBrowserApiCorsOrigins(input: {
+  readonly port: number;
+  readonly devOrigin?: string | undefined;
+  readonly devAllowedOrigins: ReadonlyArray<string>;
+}): ReadonlyArray<string> {
+  const origins = new Set<string>([...DESKTOP_RENDERER_ORIGINS, ...input.devAllowedOrigins]);
+  if (input.devOrigin) {
+    origins.add(input.devOrigin);
+  }
+  if (Number.isInteger(input.port) && input.port > 0) {
+    origins.add(`http://127.0.0.1:${input.port}`);
+    origins.add(`http://localhost:${input.port}`);
+    origins.add(`http://[::1]:${input.port}`);
+  }
+  return [...origins];
+}
+
 export const layerBrowserApiCors = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
     const devOrigin = config.devUrl?.origin;
-    // Credentialed dev requests need explicit Vite/Electron origins; packaged desktop uses the default wildcard.
+    // Never emit wildcard `*` CORS headers: explicitly allow only desktop renderer and local loopback origins.
+    const allowedOrigins = resolveAllowedBrowserApiCorsOrigins({
+      port: config.port,
+      devOrigin,
+      devAllowedOrigins: config.devAllowedOrigins,
+    });
     const cors = HttpMiddleware.cors({
-      ...(devOrigin
-        ? {
-            allowedOrigins: [devOrigin, ...DESKTOP_RENDERER_ORIGINS, ...config.devAllowedOrigins],
-            credentials: true,
-          }
-        : {}),
+      allowedOrigins,
+      ...(devOrigin ? { credentials: true } : {}),
       allowedMethods: browserApiCorsAllowedMethods,
       allowedHeaders: browserApiCorsAllowedHeaders,
       maxAge: 600,
@@ -362,7 +379,7 @@ export const layerServerEnvironmentHttpApi = HttpApiBuilder.group(
       Effect.fn("environment.metadata.descriptor")(function* (args) {
         yield* annotateEnvironmentRequest(args.endpoint.name);
         return yield* serverEnvironment.getDescriptor;
-      }, traceRelayRequest),
+      }),
     );
   }),
 );
