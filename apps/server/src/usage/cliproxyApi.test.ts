@@ -1,7 +1,9 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as HostProcess from "@prismux/core-shared/HostProcess";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
@@ -654,5 +656,64 @@ describe("CLIProxyAPI built-in management API", () => {
       expect(result._tag).toBe("Failure");
       expect(test.requests).toHaveLength(1);
     }),
+  );
+
+  it.effect(
+    "fetches Codex /usage and /rate-limit-reset-credits in parallel (total time = max, not sum)",
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(1788710400000);
+        const usageStarted = yield* Deferred.make<void>();
+        const creditsStarted = yield* Deferred.make<void>();
+        const http = HttpClient.make((request) =>
+          Effect.gen(function* () {
+            const path = new URL(request.url).pathname;
+            if (path.endsWith("/auth-files")) {
+              return HttpClientResponse.fromWeb(request, Response.json({ files: [accounts[0]!] }));
+            }
+            if (path.endsWith("/auth-files/models")) {
+              return HttpClientResponse.fromWeb(request, Response.json({}, { status: 404 }));
+            }
+            const body =
+              request.body._tag === "Uint8Array"
+                ? decodeRequest(new TextDecoder().decode(request.body.body))
+                : undefined;
+            if (body?.url?.endsWith("/rate-limit-reset-credits")) {
+              yield* Deferred.succeed(creditsStarted, undefined);
+              // Both requests must be in flight concurrently before either completes.
+              yield* Deferred.await(usageStarted);
+              yield* Effect.sleep("1 second");
+              return HttpClientResponse.fromWeb(
+                request,
+                Response.json({ status_code: 200, body: encodeJson({ credits: [credit("c1")] }) }),
+              );
+            }
+            yield* Deferred.succeed(usageStarted, undefined);
+            yield* Deferred.await(creditsStarted);
+            yield* Effect.sleep("1 second");
+            return HttpClientResponse.fromWeb(
+              request,
+              Response.json({
+                status_code: 200,
+                body: encodeJson({
+                  plan_type: "pro",
+                  rate_limit: { primary_window: { used_percent: 42 } },
+                }),
+              }),
+            );
+          }),
+        );
+        const api = yield* makeCliproxyApi.pipe(
+          Effect.provideService(HttpClient.HttpClient, http),
+          Effect.provide(NodeCrypto.layer),
+        );
+        const fiber = yield* Effect.forkChild(api.readAccounts(config));
+        yield* Deferred.await(usageStarted);
+        yield* Deferred.await(creditsStarted);
+        yield* TestClock.adjust("1 second");
+        const [account] = yield* Fiber.join(fiber);
+        expect(account?.usageLimits.windows[0]?.usedPercent).toBe(42);
+        expect(account?.usageLimits.resetCredits?.availableCount).toBe(1);
+      }),
   );
 });

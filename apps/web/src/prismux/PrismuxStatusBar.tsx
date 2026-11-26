@@ -64,6 +64,7 @@ import {
   isUpstreamProviderQuotaEligible,
   loadQuotaPreferences,
   saveQuotaPreferences,
+  scheduleSwrQuotaFollowUp,
   shouldFetchAntigravityCreditsOnPopoverOpen,
   shouldRefreshAntigravityOnManualClick,
   shouldShowStatusBarQuota,
@@ -95,7 +96,9 @@ import {
 import {
   collectStatusBarUsageSummary,
   formatCompactUsageTokens,
+  isSameUsageWindow,
   resolveServerProviderUsageKind,
+  STATUS_BAR_USAGE_AUTO_REFRESH_INTERVAL_MS,
   type PrismuxProviderProbeSnapshot,
 } from "./statusBar/statusBarUsage";
 import {
@@ -111,6 +114,7 @@ import { UsageStatusPopover } from "./statusBar/UsageStatusPopover";
 import { useResetCountdownClock } from "./statusBar/useResetCountdownClock";
 import { usePrismuxTraySync } from "./usePrismuxTraySync";
 
+export { STATUS_BAR_USAGE_AUTO_REFRESH_INTERVAL_MS };
 export const PRISMUX_STATUS_BAR_HEIGHT_PX = 20 as const;
 
 const SEGMENT_LABELS: Readonly<Record<StatusBarSegmentId, string>> = {
@@ -200,6 +204,7 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
   const [manualResourcesLoading, setManualResourcesLoading] = useState(false);
   const [liveResourcesError, setLiveResourcesError] = useState<string | null>(null);
   const [usageRefreshing, setUsageRefreshing] = useState(false);
+  const usageRefreshInflightRef = useRef<Promise<void> | null>(null);
   const [providerProbeSnapshots, setProviderProbeSnapshots] = useState<
     readonly PrismuxProviderProbeSnapshot[]
   >([]);
@@ -213,8 +218,11 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
   const [agyCreditsLoading, setAgyCreditsLoading] = useState(false);
   const [quotaRefreshing, setQuotaRefreshing] = useState(false);
   const [quotaMinuteTick, setQuotaMinuteTick] = useState<number>(() => Date.now());
+  const quotaOpenRef = useRef<boolean>(false);
   const agyQuotaInflightRef = useRef<Promise<void> | null>(null);
   const agyCreditsInflightRef = useRef<Promise<void> | null>(null);
+  const agyQuotaRequestGenRef = useRef<number>(0);
+  const agyCreditsRequestGenRef = useRef<number>(0);
   const agyColdStartFetchedRef = useRef<boolean>(false);
   const agyTurnMemoryRef = useRef<AgyTurnTrackerMemory | null>(null);
   const prevAgyAuthAllowedRef = useRef<boolean | null>(null);
@@ -448,10 +456,12 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
     () => buildQuotaStatusBarDisplay(quotaSummary, quotaPrefs),
     [quotaPrefs, quotaSummary],
   );
-  const showQuotaCapsule = shouldShowStatusBarQuota(quotaSummary, visibility.quota) && quotaDisplay !== null;
+  const showQuotaCapsule =
+    shouldShowStatusBarQuota(quotaSummary, visibility.quota) && quotaDisplay !== null;
 
   // Close the quota popover cleanly if all authenticated providers log out or lose live quota.
   if (!showQuotaCapsule && quotaOpen) {
+    quotaOpenRef.current = false;
     setQuotaOpen(false);
   }
 
@@ -565,7 +575,8 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
       return;
     }
 
-    const nav = typeof navigator !== "undefined" ? (navigator as unknown as NavigatorWithWakeLock) : null;
+    const nav =
+      typeof navigator !== "undefined" ? (navigator as unknown as NavigatorWithWakeLock) : null;
     if (!nav?.wakeLock || typeof nav.wakeLock.request !== "function") {
       setWebWakeLockActive(false);
       return;
@@ -573,10 +584,7 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
 
     let cancelled = false;
     const requestWebLock = async () => {
-      if (
-        cancelled ||
-        (typeof document !== "undefined" && document.visibilityState === "hidden")
-      ) {
+      if (cancelled || (typeof document !== "undefined" && document.visibilityState === "hidden")) {
         return;
       }
       if (webWakeLockRef.current && !webWakeLockRef.current.released) {
@@ -685,10 +693,7 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
     let cancelled = false;
 
     const silentPoll = () => {
-      if (
-        cancelled ||
-        (typeof document !== "undefined" && document.visibilityState === "hidden")
-      ) {
+      if (cancelled || (typeof document !== "undefined" && document.visibilityState === "hidden")) {
         return;
       }
       void fetchLiveResources({ forceRefresh: false, showSpinner: false });
@@ -776,28 +781,50 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
   // AGY-ONLY lazy `/v1/quota/summary` fetcher (never spawns `/credits`, never touches Codex/Claude).
   const fetchAntigravityQuotaSummary = useStableCallback(async (force: boolean = false) => {
     if (!runtime?.daemonInfo.ready) return;
-    if (typeof runtime.daemon?.fetchQuotaSummary !== "function") return;
+    const hasFetchMethod = typeof runtime.daemon?.fetchQuotaSummary === "function";
+    const hasRequestJson = typeof runtime.daemon?.requestJson === "function";
+    if (!hasFetchMethod && !hasRequestJson) return;
     if (agyQuotaInflightRef.current && !force) {
       await agyQuotaInflightRef.current;
       return;
     }
-    const run = runtime.daemon.fetchQuotaSummary(force).then(
+    const requestGen = ++agyQuotaRequestGenRef.current;
+    const applySummarySnapshot = (snapshot: DaemonOfficialQuotaSummaryResponse) => {
+      daemonQuotaRef.current = snapshot;
+      setDaemonQuota(snapshot);
+      setQuotaMinuteTick(Date.now());
+      if (!snapshot.antigravity.available || snapshot.antigravity.status !== "ok") {
+        agyCreditsRef.current = null;
+        setAgyCredits(null);
+      }
+    };
+    // Use SWR fast-return when refreshing a previously populated non-forced snapshot so cached quota renders immediately.
+    const requestPromise =
+      !force && daemonQuotaRef.current !== null && hasRequestJson
+        ? runtime.daemon.requestJson<DaemonOfficialQuotaSummaryResponse>("/v1/quota/summary?swr=1")
+        : hasFetchMethod
+          ? runtime.daemon.fetchQuotaSummary(force)
+          : runtime.daemon.requestJson<DaemonOfficialQuotaSummaryResponse>(
+              force ? "/v1/quota/summary?force=1" : "/v1/quota/summary",
+            );
+    const run = requestPromise.then(
       (snapshot) => {
-        daemonQuotaRef.current = snapshot;
-        setDaemonQuota(snapshot);
-        setQuotaMinuteTick(Date.now());
-        if (!snapshot.antigravity.available || snapshot.antigravity.status !== "ok") {
-          agyCreditsRef.current = null;
-          setAgyCredits(null);
+        if (requestGen !== agyQuotaRequestGenRef.current) return;
+        applySummarySnapshot(snapshot);
+        if (hasRequestJson) {
+          void scheduleSwrQuotaFollowUp({
+            force,
+            payload: snapshot,
+            endpoint: "/v1/quota/summary",
+            requestGen,
+            getCurrentGen: () => agyQuotaRequestGenRef.current,
+            requestJson: (path) => runtime.daemon.requestJson(path),
+            onFresh: applySummarySnapshot,
+          });
         }
       },
       () => {
-        if (force) {
-          daemonQuotaRef.current = null;
-          agyCreditsRef.current = null;
-          setDaemonQuota(null);
-          setAgyCredits(null);
-        }
+        // Keep last-known cached quota visible on transient errors so the open popover never snaps shut.
       },
     );
     agyQuotaInflightRef.current = run;
@@ -810,7 +837,7 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
     }
   });
 
-  // AGY-ONLY on-demand `/v1/quota/credits` fetcher (invoked ONLY when user opens QuotaStatusPopover).
+  // AGY-ONLY on-demand `/v1/quota/credits` fetcher (invoked ONLY when user opens QuotaStatusPopover or manually refreshes while open).
   const fetchAntigravityCredits = useStableCallback(async (force: boolean = false) => {
     if (!runtime?.daemonInfo.ready) return;
     if (typeof runtime.daemon?.requestJson !== "function") return;
@@ -818,29 +845,46 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
       await agyCreditsInflightRef.current;
       return;
     }
+    const requestGen = ++agyCreditsRequestGenRef.current;
+    const applyCreditsSnapshot = (credits: DaemonOfficialQuotaCreditsResponse) => {
+      if (credits.status === "unauthenticated" || credits.status === "not_installed") {
+        agyQuotaRequestGenRef.current += 1;
+        daemonQuotaRef.current = null;
+        agyCreditsRef.current = null;
+        setDaemonQuota(null);
+        setAgyCredits(null);
+        agyColdStartFetchedRef.current = false;
+        return;
+      }
+      agyCreditsRef.current = credits;
+      setAgyCredits(credits);
+    };
     setAgyCreditsLoading(true);
-    const suffix = force ? "?force=1" : "";
+    const suffix = force ? "?force=1" : agyCreditsRef.current !== null ? "?swr=1" : "";
     const run = runtime.daemon
       .requestJson<DaemonOfficialQuotaCreditsResponse>(`/v1/quota/credits${suffix}`)
       .then(
         (credits) => {
-          if (credits.status === "unauthenticated" || credits.status === "not_installed") {
-            daemonQuotaRef.current = null;
-            agyCreditsRef.current = null;
-            setDaemonQuota(null);
-            setAgyCredits(null);
-            agyColdStartFetchedRef.current = false;
-            return;
-          }
-          agyCreditsRef.current = credits;
-          setAgyCredits(credits);
+          if (requestGen !== agyCreditsRequestGenRef.current) return;
+          applyCreditsSnapshot(credits);
+          void scheduleSwrQuotaFollowUp({
+            force,
+            payload: credits,
+            endpoint: "/v1/quota/credits",
+            requestGen,
+            getCurrentGen: () => agyCreditsRequestGenRef.current,
+            requestJson: (path) => runtime.daemon.requestJson(path),
+            onFresh: applyCreditsSnapshot,
+          });
         },
         () => {
           // Credits hydration is best-effort; never disrupt `/usage` display.
         },
       )
       .finally(() => {
-        setAgyCreditsLoading(false);
+        if (requestGen === agyCreditsRequestGenRef.current) {
+          setAgyCreditsLoading(false);
+        }
       });
     agyCreditsInflightRef.current = run;
     try {
@@ -856,10 +900,7 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
   const refreshUpstreamProvidersQuota = useStableCallback(async () => {
     const tasks: Array<Promise<unknown>> = [];
     for (const [environmentId, presentation] of presentations) {
-      if (
-        presentation.connection.phase !== "connected" ||
-        presentation.serverConfig === null
-      ) {
+      if (presentation.connection.phase !== "connected" || presentation.serverConfig === null) {
         continue;
       }
       tasks.push(
@@ -876,15 +917,31 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
   });
 
   // Trigger 3 (Manual user refresh click): refreshes upstream providers + AGY `/v1/quota/summary?force=1`
-  // ONLY if AGY is enabled & authenticated. Never invokes `/v1/quota/credits` concurrently.
+  // in parallel ONLY if AGY is enabled & authenticated. If the popover is open and `/usage` succeeds,
+  // hydrates `/v1/quota/credits?force=1` sequentially afterward (never concurrently with `/usage`).
   const handleRefreshQuota = async (_force = true) => {
     setQuotaRefreshing(true);
     try {
+      const shouldRefreshAgy =
+        Boolean(runtime?.daemonInfo.ready) && shouldRefreshAntigravityOnManualClick(allProviders);
       const tasks: Array<Promise<unknown>> = [refreshUpstreamProvidersQuota()];
-      if (runtime?.daemonInfo.ready && shouldRefreshAntigravityOnManualClick(allProviders)) {
-        tasks.push(fetchAntigravityQuotaSummary(true));
+      if (shouldRefreshAgy) {
+        tasks.push(
+          fetchAntigravityQuotaSummary(true).then(() => {
+            const latest = daemonQuotaRef.current;
+            if (
+              quotaOpenRef.current &&
+              latest?.antigravity.available &&
+              latest.antigravity.status === "ok"
+            ) {
+              return fetchAntigravityCredits(true);
+            }
+            return undefined;
+          }),
+        );
       }
       await Promise.allSettled(tasks);
+      setQuotaMinuteTick(Date.now());
     } finally {
       setQuotaRefreshing(false);
     }
@@ -898,8 +955,9 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
 
     if (!agyAuthAllowed) {
       agyColdStartFetchedRef.current = false;
-      const hasFrontendAgyCache =
-        daemonQuotaRef.current !== null || agyCreditsRef.current !== null;
+      agyQuotaRequestGenRef.current += 1;
+      agyCreditsRequestGenRef.current += 1;
+      const hasFrontendAgyCache = daemonQuotaRef.current !== null || agyCreditsRef.current !== null;
       const clearFrontendAgyCache = () => {
         if (daemonQuotaRef.current !== null) {
           daemonQuotaRef.current = null;
@@ -1009,19 +1067,58 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
     }
   }, [nonAgyProviderAuthSignature, refreshUpstreamProvidersQuota, runtime?.occluded]);
 
-  const handleRefreshUsage = async () => {
-    setUsageRefreshing(true);
-    try {
-      const nextWindow = makeWindow(7, undefined, "day");
-      setUsageWindow(nextWindow);
-      await Promise.allSettled([
-        usageView.refresh(nextWindow),
-        fetchProviderProbeSnapshots(true),
-      ]);
-    } finally {
-      setUsageRefreshing(false);
+  const runUsageRefresh = useStableCallback(async (mode: "manual" | "auto") => {
+    if (usageRefreshInflightRef.current) {
+      if (mode === "auto") return;
+      await usageRefreshInflightRef.current;
+      return;
     }
+    const nextWindow = makeWindow(7, undefined, "day");
+    setUsageWindow((prev) => (isSameUsageWindow(prev, nextWindow) ? prev : nextWindow));
+    if (mode === "manual") {
+      setUsageRefreshing(true);
+    }
+    const run = usageView
+      .refresh(nextWindow, {
+        pricingRefreshMode: mode === "manual" ? "background" : "skip",
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (usageRefreshInflightRef.current === run) {
+          usageRefreshInflightRef.current = null;
+        }
+        if (mode === "manual") {
+          setUsageRefreshing(false);
+        }
+      });
+    usageRefreshInflightRef.current = run;
+    if (mode === "manual") {
+      // Refresh provider auth metadata in background without stalling immediate token hot-reload.
+      void fetchProviderProbeSnapshots(false);
+    }
+    await run;
+  });
+
+  const handleRefreshUsage = async () => {
+    await runUsageRefresh("manual");
   };
+
+  // Periodic local Today/7-day token telemetry auto-refresh every 30 minutes (never touches quota endpoints).
+  const runScheduledUsageRefresh = useStableCallback(() => {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      return;
+    }
+    void runUsageRefresh("auto");
+  });
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- Schedules the 30-minute local usage telemetry auto-refresh timer while the status bar usage segment is visible.
+  useEffect(() => {
+    if (!visibility.usage || runtime?.occluded) return;
+    const timer = setInterval(runScheduledUsageRefresh, STATUS_BAR_USAGE_AUTO_REFRESH_INTERVAL_MS);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [runScheduledUsageRefresh, runtime?.occluded, visibility.usage]);
 
   // Native non-passive wheel listener (modeled after Orca StatusBarSurface.tsx):
   // Chromium treats React `onWheel` as passive, so `preventDefault()` requires `{ passive: false }`.
@@ -1065,27 +1162,37 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
     setUsageOpen(open);
     if (open) {
       setQuotaOpen(false);
+      quotaOpenRef.current = false;
       setKeepAwakeOpen(false);
       setPortsOpen(false);
       setResourcesOpen(false);
       const nextWindow = makeWindow(7, undefined, "day");
-      setUsageWindow(nextWindow);
+      setUsageWindow((prev) => (isSameUsageWindow(prev, nextWindow) ? prev : nextWindow));
       void fetchProviderProbeSnapshots(false);
     }
   };
 
   const handleQuotaOpenChange = (open: boolean) => {
     setQuotaOpen(open);
+    quotaOpenRef.current = open;
     if (open) {
       setQuotaPopoverSession((seq) => seq + 1);
       setUsageOpen(false);
       setKeepAwakeOpen(false);
       setPortsOpen(false);
       setResourcesOpen(false);
-      setQuotaMinuteTick(Date.now());
+      const openedAt = Date.now();
+      setQuotaMinuteTick(openedAt);
       // On-demand `/v1/quota/credits`: hydrate credit balance ONLY when user opens
-      // QuotaStatusPopover and AGY is authenticated (never concurrently with `/usage`).
+      // QuotaStatusPopover and AGY is authenticated; skip redundant re-fetches while fresh.
+      const existingCredits = agyCreditsRef.current;
+      const creditsStillFresh =
+        existingCredits !== null &&
+        existingCredits.available &&
+        existingCredits.cacheTtlMs > 0 &&
+        openedAt - existingCredits.fetchedAt < existingCredits.cacheTtlMs;
       if (
+        !creditsStillFresh &&
         runtime?.daemonInfo.ready &&
         shouldFetchAntigravityCreditsOnPopoverOpen(allProviders, daemonQuota)
       ) {
@@ -1247,9 +1354,7 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
                     />
                   }
                 >
-                  <span className="shrink-0 text-muted-foreground">
-                    {quotaDisplay.modePrefix}
-                  </span>
+                  <span className="shrink-0 text-muted-foreground">{quotaDisplay.modePrefix}</span>
                   <span className="inline-flex min-w-0 items-center gap-1.5 overflow-hidden">
                     {quotaDisplay.segments.map((segment, segIndex) => (
                       <span
@@ -1258,10 +1363,7 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
                         className="inline-flex min-w-0 items-center gap-1 whitespace-nowrap"
                       >
                         {segIndex > 0 ? (
-                          <span
-                            aria-hidden
-                            className="shrink-0 text-muted-foreground/50"
-                          >
+                          <span aria-hidden className="shrink-0 text-muted-foreground/50">
                             |
                           </span>
                         ) : null}
@@ -1465,7 +1567,15 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
                 className={STATUS_POPOVER_POPUP_CLASS}
               >
                 <PortsStatusPopover
-                  state={activePortsState ?? { ports: [], loading: false, error: null, failureStreak: 0, lastScannedAt: null }}
+                  state={
+                    activePortsState ?? {
+                      ports: [],
+                      loading: false,
+                      error: null,
+                      failureStreak: 0,
+                      lastScannedAt: null,
+                    }
+                  }
                   activeWorkspaceRoot={activeWorkspaceRoot}
                   daemonReady={Boolean(runtime?.daemonInfo.ready)}
                   onRefresh={() =>
@@ -1517,9 +1627,7 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
                   loading={effectiveResourcesLoading}
                   error={effectiveResourcesError}
                   daemonReady={Boolean(runtime?.daemonInfo.ready)}
-                  onRefresh={() =>
-                    fetchLiveResources({ forceRefresh: true, showSpinner: true })
-                  }
+                  onRefresh={() => fetchLiveResources({ forceRefresh: true, showSpinner: true })}
                   onKillPty={async (sessionId) => {
                     const target = telemetry ?? runtime;
                     if (!target) {

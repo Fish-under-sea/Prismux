@@ -8,7 +8,7 @@ import {
   decodeWindowsProcessOutput,
   findExecutableOnPath,
   refreshWindowsEnvironmentFromRegistry,
-  type WindowsEnvRefreshResult
+  type WindowsEnvRefreshResult,
 } from "./WindowsEnvRefresh.js";
 import type { PrismuxProviderProbeService } from "./PrismuxProviderProbeService.js";
 
@@ -74,6 +74,8 @@ export interface OfficialQuotaProviderSnapshot {
 export interface OfficialQuotaSummaryResponse {
   ok: true;
   cached: boolean;
+  stale?: boolean;
+  refreshing?: boolean;
   cacheTtlMs: number;
   fetchedAt: number;
   fetchedAtIso: string;
@@ -99,6 +101,8 @@ export interface OfficialQuotaCreditsSnapshot {
 export interface OfficialQuotaCreditsResponse {
   ok: true;
   cached: boolean;
+  stale?: boolean;
+  refreshing?: boolean;
   cacheTtlMs: number;
   fetchedAt: number;
   fetchedAtIso: string;
@@ -107,6 +111,15 @@ export interface OfficialQuotaCreditsResponse {
   available: boolean;
   error: string | null;
   antigravity: OfficialQuotaCreditsSnapshot;
+}
+
+export interface OfficialQuotaReadOptions {
+  /**
+   * When true and a previously valid cached snapshot has expired, return the stale
+   * snapshot immediately (`cached: true, stale: true, refreshing: true`) while
+   * triggering a singleflight background revalidation. Ignored when `force` is true.
+   */
+  readonly allowStale?: boolean;
 }
 
 export interface OfficialCliExecResult {
@@ -143,7 +156,7 @@ export interface OfficialQuotaServiceOptions {
   /** Injectable executable locator for deterministic unit tests. */
   locateExecutable?: (
     env: Record<string, string | undefined>,
-    platform: NodeJS.Platform
+    platform: NodeJS.Platform,
   ) => string | null;
   /** Optional unified provider probe service used as single source of truth for AGY binary location. */
   providerProbeService?: PrismuxProviderProbeService;
@@ -153,7 +166,7 @@ export interface OfficialQuotaServiceOptions {
     args: readonly string[],
     timeoutMs: number,
     env: Record<string, string | undefined>,
-    platform: NodeJS.Platform
+    platform: NodeJS.Platform,
   ) => Promise<OfficialCliExecResult>;
 }
 
@@ -161,7 +174,7 @@ const CANONICAL_WINDOW_ORDER = new Map<string, number>([
   ["gemini:weekly", 0],
   ["gemini:5h", 1],
   ["claude-gpt:weekly", 2],
-  ["claude-gpt:5h", 3]
+  ["claude-gpt:5h", 3],
 ]);
 
 /**
@@ -171,7 +184,7 @@ const CANONICAL_WINDOW_ORDER = new Map<string, number>([
 export function computeJitteredQuotaCacheTtlMs(
   baseTtlMs: number = OFFICIAL_QUOTA_CACHE_TTL_MS,
   jitterMs: number = OFFICIAL_QUOTA_CACHE_JITTER_MS,
-  random: () => number = Math.random
+  random: () => number = Math.random,
 ): number {
   const safeBase = Math.max(1_000, Math.round(baseTtlMs));
   const safeJitter = Math.max(0, Math.round(jitterMs));
@@ -179,9 +192,7 @@ export function computeJitteredQuotaCacheTtlMs(
     return safeBase;
   }
   const rawRandom = random();
-  const clamped = Number.isFinite(rawRandom)
-    ? Math.max(0, Math.min(1, rawRandom))
-    : 0.5;
+  const clamped = Number.isFinite(rawRandom) ? Math.max(0, Math.min(1, rawRandom)) : 0.5;
   const offset = Math.round((clamped * 2 - 1) * safeJitter);
   return Math.max(1_000, safeBase + offset);
 }
@@ -206,12 +217,10 @@ function normalizeGroup(rawGroup: string): { groupId: string; group: string } {
   if (lower.includes("claude") || lower.includes("gpt")) {
     return { groupId: "claude-gpt", group: "Claude/GPT" };
   }
-  const slug = lower
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  const slug = lower.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   return {
     groupId: slug || "other",
-    group: cleaned || "Unknown"
+    group: cleaned || "Unknown",
   };
 }
 
@@ -231,7 +240,7 @@ function normalizeWindowKind(rawWindow: string): {
       window: "weekly",
       shortSuffix: "周",
       detailSuffix: "每周",
-      isUsedSemantics
+      isUsedSemantics,
     };
   }
   if (
@@ -244,7 +253,7 @@ function normalizeWindowKind(rawWindow: string): {
       window: "5h",
       shortSuffix: "5h",
       detailSuffix: "5h",
-      isUsedSemantics
+      isUsedSemantics,
     };
   }
   const compact = cleaned
@@ -256,7 +265,7 @@ function normalizeWindowKind(rawWindow: string): {
     window: "other",
     shortSuffix: fallback,
     detailSuffix: fallback,
-    isUsedSemantics
+    isUsedSemantics,
   };
 }
 
@@ -289,7 +298,7 @@ function parseIsoTimestamp(rawIso: string | undefined): {
   }
   return {
     iso: new Date(parsed).toISOString(),
-    ms: parsed
+    ms: parsed,
   };
 }
 
@@ -313,9 +322,7 @@ export function parseAgyUsageTsv(rawOutput: string): OfficialQuotaWindowEntry[] 
       continue;
     }
 
-    const columns = rawLine
-      .split("\t")
-      .map((col) => col.trim());
+    const columns = rawLine.split("\t").map((col) => col.trim());
     if (columns.length < 3) {
       continue;
     }
@@ -335,18 +342,13 @@ export function parseAgyUsageTsv(rawOutput: string): OfficialQuotaWindowEntry[] 
     }
 
     const { groupId, group } = normalizeGroup(rawGroup);
-    const { window, shortSuffix, detailSuffix, isUsedSemantics } =
-      normalizeWindowKind(rawWindow);
-    const remainingPercent = isUsedSemantics
-      ? clampPercent(100 - parsedPercent)
-      : parsedPercent;
+    const { window, shortSuffix, detailSuffix, isUsedSemantics } = normalizeWindowKind(rawWindow);
+    const remainingPercent = isUsedSemantics ? clampPercent(100 - parsedPercent) : parsedPercent;
     const usedPercent = clampPercent(100 - remainingPercent);
     const reset = parseIsoTimestamp(rawReset);
 
     const baseId =
-      window === "other"
-        ? `${groupId}:other:${extraCounter++}`
-        : `${groupId}:${window}`;
+      window === "other" ? `${groupId}:other:${extraCounter++}` : `${groupId}:${window}`;
 
     byId.set(baseId, {
       id: baseId,
@@ -360,7 +362,7 @@ export function parseAgyUsageTsv(rawOutput: string): OfficialQuotaWindowEntry[] 
       resetAtIso: reset.iso,
       resetAtMs: reset.ms,
       rawGroup,
-      rawWindow
+      rawWindow,
     });
   }
 
@@ -405,14 +407,12 @@ export function parseAgyCreditsTsv(rawOutput: string): number | null {
 export function getDefaultAgyExtraDirs(
   env: Record<string, string | undefined> = process.env,
   platform: NodeJS.Platform = process.platform,
-  homeDir: string = homedir()
+  homeDir: string = homedir(),
 ): string[] {
   const dirs: string[] = [];
   if (platform === "win32") {
-    const localAppData =
-      env["LOCALAPPDATA"]?.trim() || join(homeDir, "AppData", "Local");
-    const appData =
-      env["APPDATA"]?.trim() || join(homeDir, "AppData", "Roaming");
+    const localAppData = env["LOCALAPPDATA"]?.trim() || join(homeDir, "AppData", "Local");
+    const appData = env["APPDATA"]?.trim() || join(homeDir, "AppData", "Roaming");
     const userProfile = env["USERPROFILE"]?.trim() || homeDir;
     const pnpmHome = env["PNPM_HOME"]?.trim();
     if (pnpmHome) dirs.push(pnpmHome);
@@ -422,28 +422,24 @@ export function getDefaultAgyExtraDirs(
       join(appData, "npm"),
       join(localAppData, "pnpm"),
       join(localAppData, "Microsoft", "WinGet", "Links"),
-      join(userProfile, "scoop", "shims")
+      join(userProfile, "scoop", "shims"),
     );
   } else {
     const pnpmHome = env["PNPM_HOME"]?.trim();
     if (pnpmHome) dirs.push(pnpmHome);
-    dirs.push(
-      join(homeDir, ".local", "bin"),
-      "/opt/homebrew/bin",
-      "/usr/local/bin"
-    );
+    dirs.push(join(homeDir, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin");
   }
   return dirs;
 }
 
 export function locateOfficialAgyExecutable(
   env: Record<string, string | undefined> = process.env,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
 ): string | null {
   return findExecutableOnPath(["agy"], {
     env,
     platform,
-    extraDirs: getDefaultAgyExtraDirs(env, platform)
+    extraDirs: getDefaultAgyExtraDirs(env, platform),
   });
 }
 
@@ -452,7 +448,7 @@ async function defaultRunOfficialCli(
   args: readonly string[],
   timeoutMs: number,
   env: Record<string, string | undefined>,
-  platform: NodeJS.Platform
+  platform: NodeJS.Platform,
 ): Promise<OfficialCliExecResult> {
   const spec = buildSafeCliSpawnSpec(executablePath, args, { env, platform });
   try {
@@ -462,12 +458,12 @@ async function defaultRunOfficialCli(
       maxBuffer: 256 * 1024,
       encoding: "buffer",
       env: spec.env,
-      windowsVerbatimArguments: spec.windowsVerbatimArguments
+      windowsVerbatimArguments: spec.windowsVerbatimArguments,
     });
     return {
       stdout: decodeWindowsProcessOutput(result.stdout),
       stderr: decodeWindowsProcessOutput(result.stderr),
-      exitCode: 0
+      exitCode: 0,
     };
   } catch (err) {
     const execErr = err as Error & {
@@ -477,14 +473,8 @@ async function defaultRunOfficialCli(
       killed?: boolean;
       signal?: string | null;
     };
-    const stdout =
-      execErr.stdout !== undefined
-        ? decodeWindowsProcessOutput(execErr.stdout)
-        : "";
-    const stderr =
-      execErr.stderr !== undefined
-        ? decodeWindowsProcessOutput(execErr.stderr)
-        : "";
+    const stdout = execErr.stdout !== undefined ? decodeWindowsProcessOutput(execErr.stdout) : "";
+    const stderr = execErr.stderr !== undefined ? decodeWindowsProcessOutput(execErr.stderr) : "";
     const timedOut =
       Boolean(execErr.killed) ||
       execErr.code === "ETIMEDOUT" ||
@@ -495,41 +485,42 @@ async function defaultRunOfficialCli(
       stderr,
       exitCode,
       timedOut,
-      errorMessage: execErr.message
+      errorMessage: execErr.message,
     };
   }
 }
 
-function classifyFailureStatus(
-  result: OfficialCliExecResult
-): { status: OfficialQuotaProviderStatus; message: string } {
+function classifyFailureStatus(result: OfficialCliExecResult): {
+  status: OfficialQuotaProviderStatus;
+  message: string;
+} {
   const combined = stripAnsi(
-    `${result.stdout}\n${result.stderr}\n${result.errorMessage ?? ""}`
+    `${result.stdout}\n${result.stderr}\n${result.errorMessage ?? ""}`,
   ).trim();
   const lower = combined.toLowerCase();
 
   if (result.timedOut || /timed?\s*out|deadline exceeded/i.test(lower)) {
     return {
       status: "timeout",
-      message: "官方 agy CLI 额度查询超时，请稍后重试"
+      message: "官方 agy CLI 额度查询超时，请稍后重试",
     };
   }
 
   if (
     /not logged in|logged out|please log in|please sign in|sign in|unauthenticated|unauthorized|no active account|login required|need to log in|re-?authenticate|authenticate|session expired|token expired|invalid_grant|credentials? not found/i.test(
-      lower
+      lower,
     )
   ) {
     return {
       status: "unauthenticated",
-      message: "未检测到官方 agy CLI 登录态"
+      message: "未检测到官方 agy CLI 登录态",
     };
   }
 
   if (result.exitCode !== 0 && combined.length === 0) {
     return {
       status: "unauthenticated",
-      message: "未检测到官方 agy CLI 登录态"
+      message: "未检测到官方 agy CLI 登录态",
     };
   }
 
@@ -542,7 +533,7 @@ function classifyFailureStatus(
     status: "error",
     message: firstLine
       ? `官方 agy CLI 返回异常：${firstLine.slice(0, 120)}`
-      : "暂时无法读取官方 agy CLI 额度"
+      : "暂时无法读取官方 agy CLI 额度",
   };
 }
 
@@ -569,14 +560,14 @@ export class OfficialQuotaService {
   private readonly refreshEnv: () => Promise<WindowsEnvRefreshResult | void> | void;
   private readonly locateExecutable: (
     env: Record<string, string | undefined>,
-    platform: NodeJS.Platform
+    platform: NodeJS.Platform,
   ) => string | null;
   private readonly cliRunner: (
     executablePath: string,
     args: readonly string[],
     timeoutMs: number,
     env: Record<string, string | undefined>,
-    platform: NodeJS.Platform
+    platform: NodeJS.Platform,
   ) => Promise<OfficialCliExecResult>;
 
   private cacheGeneration = 0;
@@ -596,10 +587,7 @@ export class OfficialQuotaService {
   private inflightCreditsForce: Promise<OfficialQuotaCreditsSnapshot> | null = null;
 
   constructor(options: OfficialQuotaServiceOptions = {}) {
-    this.cacheTtlMs = Math.max(
-      1_000,
-      options.cacheTtlMs ?? OFFICIAL_QUOTA_CACHE_TTL_MS
-    );
+    this.cacheTtlMs = Math.max(1_000, options.cacheTtlMs ?? OFFICIAL_QUOTA_CACHE_TTL_MS);
     this.cacheJitterMs =
       options.cacheJitterMs !== undefined
         ? Math.max(0, options.cacheJitterMs)
@@ -607,17 +595,11 @@ export class OfficialQuotaService {
           ? OFFICIAL_QUOTA_CACHE_JITTER_MS
           : Math.min(OFFICIAL_QUOTA_CACHE_JITTER_MS, Math.floor(this.cacheTtlMs * 0.1));
     this.random = options.random ?? Math.random;
-    this.negativeCacheTtlMs = Math.max(
-      1_000,
-      options.negativeCacheTtlMs ?? NEGATIVE_CACHE_TTL_MS
-    );
-    this.usageTimeoutMs = Math.max(
-      1_000,
-      options.usageTimeoutMs ?? DEFAULT_USAGE_EXEC_TIMEOUT_MS
-    );
+    this.negativeCacheTtlMs = Math.max(1_000, options.negativeCacheTtlMs ?? NEGATIVE_CACHE_TTL_MS);
+    this.usageTimeoutMs = Math.max(1_000, options.usageTimeoutMs ?? DEFAULT_USAGE_EXEC_TIMEOUT_MS);
     this.creditsTimeoutMs = Math.max(
       1_000,
-      options.creditsTimeoutMs ?? DEFAULT_CREDITS_EXEC_TIMEOUT_MS
+      options.creditsTimeoutMs ?? DEFAULT_CREDITS_EXEC_TIMEOUT_MS,
     );
     this.isAntigravityEnabled = options.isAntigravityEnabled ?? (() => true);
     this.now = options.now ?? (() => Date.now());
@@ -628,17 +610,13 @@ export class OfficialQuotaService {
       (() =>
         refreshWindowsEnvironmentFromRegistry({
           targetEnv: this.env,
-          platform: this.platform
+          platform: this.platform,
         }));
     this.locateExecutable =
       options.locateExecutable ??
       (options.providerProbeService
         ? (env, platform) =>
-            options.providerProbeService!.locateProviderExecutable(
-              "antigravity",
-              env,
-              platform
-            )
+            options.providerProbeService!.locateProviderExecutable("antigravity", env, platform)
         : locateOfficialAgyExecutable);
     this.cliRunner = options.cliRunner ?? defaultRunOfficialCli;
     this.lastUsageCacheTtlMs = this.cacheTtlMs;
@@ -673,17 +651,23 @@ export class OfficialQuotaService {
   }
 
   /**
-   * Convenience alias for `getQuotaSummary(force)` — runs ONLY `agy -p "/usage"`.
+   * Convenience alias for `getQuotaSummary(force, options)` — runs ONLY `agy -p "/usage"`.
    */
-  async getSummary(force = false): Promise<OfficialQuotaSummaryResponse> {
-    return this.getQuotaSummary(force);
+  async getSummary(
+    force = false,
+    options?: OfficialQuotaReadOptions,
+  ): Promise<OfficialQuotaSummaryResponse> {
+    return this.getQuotaSummary(force, options);
   }
 
   /**
    * Returns Antigravity quota windows from `agy -p "/usage"` ONLY.
    * NEVER spawns `/credits` concurrently during summary refresh.
    */
-  async getQuotaSummary(force = false): Promise<OfficialQuotaSummaryResponse> {
+  async getQuotaSummary(
+    force = false,
+    options?: OfficialQuotaReadOptions,
+  ): Promise<OfficialQuotaSummaryResponse> {
     if (!this.isAntigravityEnabled()) {
       return this.buildDisabledSummaryResponse();
     }
@@ -719,6 +703,29 @@ export class OfficialQuotaService {
       return this.wrapSummaryResponse(this.cachedSnapshot, true);
     }
 
+    if (
+      options?.allowStale === true &&
+      this.cachedSnapshot !== null &&
+      this.cachedSnapshot.available
+    ) {
+      if (this.inflightNormal === null) {
+        const cacheGen = this.cacheGeneration;
+        const usageGen = ++this.usageGeneration;
+        const backgroundRun = this.fetchFreshUsageSnapshot(cacheGen, usageGen)
+          .catch(() => this.cachedSnapshot!)
+          .finally(() => {
+            if (this.inflightNormal === backgroundRun) {
+              this.inflightNormal = null;
+            }
+          });
+        this.inflightNormal = backgroundRun;
+      }
+      return this.wrapSummaryResponse(this.cachedSnapshot, true, {
+        stale: true,
+        refreshing: true,
+      });
+    }
+
     if (this.inflightNormal !== null) {
       const snapshot = await this.inflightNormal;
       return this.wrapSummaryResponse(snapshot, false);
@@ -740,7 +747,10 @@ export class OfficialQuotaService {
    * On-demand Antigravity credit balance reader powered by ONLY a single `agy -p "/credits"`
    * command, with its own 15m ± 90s jitter TTL and singleflight in-flight deduplication.
    */
-  async getCredits(force = false): Promise<OfficialQuotaCreditsResponse> {
+  async getCredits(
+    force = false,
+    options?: OfficialQuotaReadOptions,
+  ): Promise<OfficialQuotaCreditsResponse> {
     if (!this.isAntigravityEnabled()) {
       return this.buildDisabledCreditsResponse();
     }
@@ -774,6 +784,29 @@ export class OfficialQuotaService {
       return this.wrapCreditsResponse(this.cachedCreditsSnapshot, true);
     }
 
+    if (
+      options?.allowStale === true &&
+      this.cachedCreditsSnapshot !== null &&
+      this.cachedCreditsSnapshot.available
+    ) {
+      if (this.inflightCreditsNormal === null) {
+        const cacheGen = this.cacheGeneration;
+        const creditsGen = ++this.creditsGeneration;
+        const backgroundRun = this.fetchFreshCreditsSnapshot(cacheGen, creditsGen)
+          .catch(() => this.cachedCreditsSnapshot!)
+          .finally(() => {
+            if (this.inflightCreditsNormal === backgroundRun) {
+              this.inflightCreditsNormal = null;
+            }
+          });
+        this.inflightCreditsNormal = backgroundRun;
+      }
+      return this.wrapCreditsResponse(this.cachedCreditsSnapshot, true, {
+        stale: true,
+        refreshing: true,
+      });
+    }
+
     if (this.inflightCreditsNormal !== null) {
       const snapshot = await this.inflightCreditsNormal;
       return this.wrapCreditsResponse(snapshot, false);
@@ -791,9 +824,12 @@ export class OfficialQuotaService {
     return this.wrapCreditsResponse(snapshot, false);
   }
 
-  /** Alias for `getCredits(force)`. */
-  async getQuotaCredits(force = false): Promise<OfficialQuotaCreditsResponse> {
-    return this.getCredits(force);
+  /** Alias for `getCredits(force, options)`. */
+  async getQuotaCredits(
+    force = false,
+    options?: OfficialQuotaReadOptions,
+  ): Promise<OfficialQuotaCreditsResponse> {
+    return this.getCredits(force, options);
   }
 
   /**
@@ -816,7 +852,7 @@ export class OfficialQuotaService {
       remainingCredits: null,
       fetchedAt: ts,
       fetchedAtIso: new Date(ts).toISOString(),
-      error: "Antigravity 已禁用或未登录"
+      error: "Antigravity 已禁用或未登录",
     };
     return this.wrapSummaryResponse(snapshot, false);
   }
@@ -840,41 +876,43 @@ export class OfficialQuotaService {
       remainingCredits: null,
       fetchedAt: ts,
       fetchedAtIso: new Date(ts).toISOString(),
-      error: "Antigravity 已禁用或未登录"
+      error: "Antigravity 已禁用或未登录",
     };
     return this.wrapCreditsResponse(snapshot, false);
   }
 
   private nextJitteredTtlMs(): number {
-    return computeJitteredQuotaCacheTtlMs(
-      this.cacheTtlMs,
-      this.cacheJitterMs,
-      this.random
-    );
+    return computeJitteredQuotaCacheTtlMs(this.cacheTtlMs, this.cacheJitterMs, this.random);
   }
 
   private wrapSummaryResponse(
     snapshot: OfficialQuotaProviderSnapshot,
-    cached: boolean
+    cached: boolean,
+    swr?: { readonly stale?: boolean; readonly refreshing?: boolean },
   ): OfficialQuotaSummaryResponse {
     return {
       ok: true,
       cached,
+      ...(swr?.stale ? { stale: true } : {}),
+      ...(swr?.refreshing ? { refreshing: true } : {}),
       cacheTtlMs: this.lastUsageCacheTtlMs,
       fetchedAt: snapshot.fetchedAt,
       fetchedAtIso: snapshot.fetchedAtIso,
       providers: [snapshot],
-      antigravity: snapshot
+      antigravity: snapshot,
     };
   }
 
   private wrapCreditsResponse(
     snapshot: OfficialQuotaCreditsSnapshot,
-    cached: boolean
+    cached: boolean,
+    swr?: { readonly stale?: boolean; readonly refreshing?: boolean },
   ): OfficialQuotaCreditsResponse {
     return {
       ok: true,
       cached,
+      ...(swr?.stale ? { stale: true } : {}),
+      ...(swr?.refreshing ? { refreshing: true } : {}),
       cacheTtlMs: this.lastCreditsCacheTtlMs,
       fetchedAt: snapshot.fetchedAt,
       fetchedAtIso: snapshot.fetchedAtIso,
@@ -882,14 +920,27 @@ export class OfficialQuotaService {
       status: snapshot.status,
       available: snapshot.available,
       error: snapshot.error,
-      antigravity: snapshot
+      antigravity: snapshot,
     };
+  }
+
+  private async resolveExecutableFast(): Promise<string | null> {
+    const direct = this.locateExecutable(this.env, this.platform);
+    if (direct) {
+      return direct;
+    }
+    try {
+      await this.refreshEnv();
+    } catch {
+      // Registry refresh failure is strictly non-fatal.
+    }
+    return this.locateExecutable(this.env, this.platform);
   }
 
   private storeUsageCache(
     snapshot: OfficialQuotaProviderSnapshot,
     cacheGen: number,
-    usageGen: number
+    usageGen: number,
   ): void {
     if (cacheGen !== this.cacheGeneration || usageGen !== this.usageGeneration) {
       return;
@@ -903,7 +954,7 @@ export class OfficialQuotaService {
   private storeCreditsCache(
     snapshot: OfficialQuotaCreditsSnapshot,
     cacheGen: number,
-    creditsGen: number
+    creditsGen: number,
   ): void {
     if (cacheGen !== this.cacheGeneration || creditsGen !== this.creditsGeneration) {
       return;
@@ -922,15 +973,9 @@ export class OfficialQuotaService {
 
   private async fetchFreshUsageSnapshot(
     cacheGen: number,
-    usageGen: number
+    usageGen: number,
   ): Promise<OfficialQuotaProviderSnapshot> {
-    try {
-      await this.refreshEnv();
-    } catch {
-      // Registry refresh failure is strictly non-fatal.
-    }
-
-    const executablePath = this.locateExecutable(this.env, this.platform);
+    const executablePath = await this.resolveExecutableFast();
     if (!executablePath) {
       this.invalidateAllCachesForFailure(cacheGen);
       const ts = this.now();
@@ -947,16 +992,13 @@ export class OfficialQuotaService {
         remainingCredits: null,
         fetchedAt: ts,
         fetchedAtIso: new Date(ts).toISOString(),
-        error: "未检测到官方 agy CLI 登录态"
+        error: "未检测到官方 agy CLI 登录态",
       };
     }
 
     const usagePrintTimeoutSec = Math.max(
       1,
-      Math.min(
-        DEFAULT_USAGE_PRINT_TIMEOUT_SEC,
-        Math.ceil(this.usageTimeoutMs / 1000)
-      )
+      Math.min(DEFAULT_USAGE_PRINT_TIMEOUT_SEC, Math.ceil(this.usageTimeoutMs / 1000)),
     );
 
     let usageResult: OfficialCliExecResult;
@@ -966,14 +1008,14 @@ export class OfficialQuotaService {
         ["-p", "/usage", "--print-timeout", `${usagePrintTimeoutSec}s`],
         this.usageTimeoutMs,
         this.env,
-        this.platform
+        this.platform,
       );
     } catch (err) {
       usageResult = {
         stdout: "",
         stderr: "",
         exitCode: null,
-        errorMessage: err instanceof Error ? err.message : String(err)
+        errorMessage: err instanceof Error ? err.message : String(err),
       };
     }
 
@@ -994,7 +1036,7 @@ export class OfficialQuotaService {
         remainingCredits: null,
         fetchedAt: ts,
         fetchedAtIso: new Date(ts).toISOString(),
-        error: null
+        error: null,
       };
       this.storeUsageCache(okSnapshot, cacheGen, usageGen);
       return okSnapshot;
@@ -1017,21 +1059,15 @@ export class OfficialQuotaService {
       remainingCredits: null,
       fetchedAt: ts,
       fetchedAtIso: new Date(ts).toISOString(),
-      error: failure.message
+      error: failure.message,
     };
   }
 
   private async fetchFreshCreditsSnapshot(
     cacheGen: number,
-    creditsGen: number
+    creditsGen: number,
   ): Promise<OfficialQuotaCreditsSnapshot> {
-    try {
-      await this.refreshEnv();
-    } catch {
-      // Registry refresh failure is strictly non-fatal.
-    }
-
-    const executablePath = this.locateExecutable(this.env, this.platform);
+    const executablePath = await this.resolveExecutableFast();
     if (!executablePath) {
       this.invalidateAllCachesForFailure(cacheGen);
       const ts = this.now();
@@ -1047,16 +1083,13 @@ export class OfficialQuotaService {
         remainingCredits: null,
         fetchedAt: ts,
         fetchedAtIso: new Date(ts).toISOString(),
-        error: "未检测到官方 agy CLI 登录态"
+        error: "未检测到官方 agy CLI 登录态",
       };
     }
 
     const creditsPrintTimeoutSec = Math.max(
       1,
-      Math.min(
-        DEFAULT_CREDITS_PRINT_TIMEOUT_SEC,
-        Math.ceil(this.creditsTimeoutMs / 1000)
-      )
+      Math.min(DEFAULT_CREDITS_PRINT_TIMEOUT_SEC, Math.ceil(this.creditsTimeoutMs / 1000)),
     );
 
     let creditsResult: OfficialCliExecResult;
@@ -1066,14 +1099,14 @@ export class OfficialQuotaService {
         ["-p", "/credits", "--print-timeout", `${creditsPrintTimeoutSec}s`],
         this.creditsTimeoutMs,
         this.env,
-        this.platform
+        this.platform,
       );
     } catch (err) {
       creditsResult = {
         stdout: "",
         stderr: "",
         exitCode: null,
-        errorMessage: err instanceof Error ? err.message : String(err)
+        errorMessage: err instanceof Error ? err.message : String(err),
       };
     }
 
@@ -1094,7 +1127,7 @@ export class OfficialQuotaService {
         remainingCredits,
         fetchedAt: ts,
         fetchedAtIso: new Date(ts).toISOString(),
-        error: null
+        error: null,
       };
       this.storeCreditsCache(okSnapshot, cacheGen, creditsGen);
       return okSnapshot;
@@ -1120,7 +1153,7 @@ export class OfficialQuotaService {
       remainingCredits: null,
       fetchedAt: ts,
       fetchedAtIso: new Date(ts).toISOString(),
-      error: failure.message
+      error: failure.message,
     };
   }
 }

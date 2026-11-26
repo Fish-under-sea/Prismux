@@ -14,10 +14,12 @@ import { resolveServerBackgroundActivitySettings } from "@prismux/core-shared/ba
 import { antigravityWindowLimitsModel, hubRoutes } from "@prismux/core-shared/usageLimits";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
@@ -102,6 +104,37 @@ function missingManagementKey(config: UsageLimitSourceConfig): string {
     : "Could not read the API key from its secret provider.";
 }
 
+export const DEFAULT_USAGE_LIMIT_SOURCE_TIMEOUT_MS = 8_000;
+const USAGE_LIMIT_SOURCE_CONCURRENCY = 8;
+
+function buildSourceBase(
+  id: UsageLimitSourceId,
+  config: UsageLimitSourceConfig,
+  checkedAt: string,
+) {
+  const url = URL.parse(config.url);
+  const relayUrl = config.kind === "cliproxy" ? null : normalizeRelayBaseUrl(config.url);
+  return {
+    id,
+    kind: config.kind,
+    label: sourceLabel(id, config),
+    ...(config.kind === "cliproxy"
+      ? url && /^https?:$/.test(url.protocol)
+        ? {
+            origin: url.origin,
+            endpoint: `${url.origin}${url.pathname.replace(/(\/management\.html)?\/*$/i, "")}`,
+          }
+        : {}
+      : relayUrl
+        ? {
+            origin: relayUrl.origin,
+            endpoint: relayUrl.baseUrl,
+          }
+        : {}),
+    checkedAt,
+  } as const;
+}
+
 /** @public */
 export const make = Effect.gen(function* () {
   const cliproxyApi = yield* makeCliproxyApi;
@@ -121,32 +154,12 @@ export const make = Effect.gen(function* () {
     PubSub.shutdown,
   );
 
-  const readSource = Effect.fn("UsageLimitSources.readSource")(function* (
+  const readSourceUncapped = Effect.fn("UsageLimitSources.readSource")(function* (
     id: UsageLimitSourceId,
     config: UsageLimitSourceConfig,
   ) {
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    const url = URL.parse(config.url);
-    const relayUrl = config.kind === "cliproxy" ? null : normalizeRelayBaseUrl(config.url);
-    const base = {
-      id,
-      kind: config.kind,
-      label: sourceLabel(id, config),
-      ...(config.kind === "cliproxy"
-        ? url && /^https?:$/.test(url.protocol)
-          ? {
-              origin: url.origin,
-              endpoint: `${url.origin}${url.pathname.replace(/(\/management\.html)?\/*$/i, "")}`,
-            }
-          : {}
-        : relayUrl
-          ? {
-              origin: relayUrl.origin,
-              endpoint: relayUrl.baseUrl,
-            }
-          : {}),
-      checkedAt,
-    } as const;
+    const base = buildSourceBase(id, config, checkedAt);
     const managementKey = yield* readManagementKey(config);
     if (managementKey.length === 0) {
       return { ...base, accounts: [], error: missingManagementKey(config) };
@@ -168,6 +181,22 @@ export const make = Effect.gen(function* () {
     return { ...base, accounts: accounts.success };
   });
 
+  const readSource = Effect.fn("UsageLimitSources.readSourceBounded")(function* (
+    id: UsageLimitSourceId,
+    config: UsageLimitSourceConfig,
+  ): Effect.fn.Return<UsageLimitSourceSnapshot> {
+    const bounded = yield* readSourceUncapped(id, config).pipe(
+      Effect.timeoutOption(Duration.millis(DEFAULT_USAGE_LIMIT_SOURCE_TIMEOUT_MS)),
+    );
+    if (Option.isSome(bounded)) return bounded.value;
+    const checkedAt = DateTime.formatIso(yield* DateTime.now);
+    return {
+      ...buildSourceBase(id, config, checkedAt),
+      accounts: [],
+      error: `The usage limit source did not answer within ${Math.round(DEFAULT_USAGE_LIMIT_SOURCE_TIMEOUT_MS / 1000)} seconds.`,
+    };
+  });
+
   const publish = Effect.fn("UsageLimitSources.publish")(function* (
     next: ReadonlyArray<UsageLimitSourceSnapshot>,
   ) {
@@ -177,22 +206,101 @@ export const make = Effect.gen(function* () {
     if (changed) yield* PubSub.publish(changes, next);
   });
 
-  // Serialize refreshes so slow old-settings reads cannot resurrect removed sources after newer refreshes.
+  const publishProgressiveSnapshot = Effect.fn("UsageLimitSources.publishProgressiveSnapshot")(
+    function* (snapshot: UsageLimitSourceSnapshot) {
+      const nextToPublish = yield* Ref.modify(
+        stateRef,
+        (
+          previous,
+        ): readonly [
+          ReadonlyArray<UsageLimitSourceSnapshot> | null,
+          ReadonlyArray<UsageLimitSourceSnapshot>,
+        ] => {
+          const merged = previous.map((existing) =>
+            existing.id === snapshot.id ? snapshot : existing,
+          );
+          const reconciled = keepLastGoodReadings(previous, merged);
+          return Equal.equals(previous, reconciled) ? [null, previous] : [reconciled, reconciled];
+        },
+      );
+      if (nextToPublish !== null) {
+        yield* PubSub.publish(changes, nextToPublish);
+      }
+    },
+  );
+
+  const publishReconciled = Effect.fn("UsageLimitSources.publishReconciled")(function* (
+    snapshots: ReadonlyArray<UsageLimitSourceSnapshot>,
+  ) {
+    const nextToPublish = yield* Ref.modify(
+      stateRef,
+      (
+        previous,
+      ): readonly [
+        ReadonlyArray<UsageLimitSourceSnapshot> | null,
+        ReadonlyArray<UsageLimitSourceSnapshot>,
+      ] => {
+        const reconciled = keepLastGoodReadings(previous, snapshots);
+        return Equal.equals(previous, reconciled) ? [null, previous] : [reconciled, reconciled];
+      },
+    );
+    if (nextToPublish !== null) {
+      yield* PubSub.publish(changes, nextToPublish);
+    }
+  });
+
+  // Serialize refreshes against redemptions and deduplicate concurrent refresh callers (singleflight).
   const refreshLock = yield* Semaphore.make(1);
-  const refresh = Effect.gen(function* () {
+  const inflightRefreshRef = yield* Ref.make<Deferred.Deferred<void, never> | null>(null);
+
+  const runRefreshPass = Effect.gen(function* () {
     const settings = yield* settingsService.getSettings.pipe(
       Effect.orElseSucceed((): ServerSettings | null => null),
     );
     const entries = Object.entries(settings?.usageLimitSources ?? {}).filter(
       ([, config]) => config.enabled,
     );
+    const initialPrevious = yield* Ref.get(stateRef);
+    const canPublishProgressively =
+      entries.length > 1 &&
+      initialPrevious.length > 0 &&
+      entries.every(([id]) => initialPrevious.some((source) => source.id === id));
+
     const snapshots = yield* Effect.forEach(
       entries,
-      ([id, config]) => readSource(id as UsageLimitSourceId, config),
-      { concurrency: 4 },
+      ([id, config]) =>
+        readSource(id as UsageLimitSourceId, config).pipe(
+          Effect.tap((snapshot) =>
+            canPublishProgressively ? publishProgressiveSnapshot(snapshot) : Effect.void,
+          ),
+        ),
+      { concurrency: USAGE_LIMIT_SOURCE_CONCURRENCY },
     );
-    yield* publish(keepLastGoodReadings(yield* Ref.get(stateRef), snapshots));
+    yield* publishReconciled(snapshots);
   }).pipe(refreshLock.withPermits(1), Effect.ignoreCause({ log: true }));
+
+  const refresh: Effect.Effect<void> = Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const candidate = yield* Deferred.make<void, never>();
+      const existing = yield* Ref.modify(
+        inflightRefreshRef,
+        (
+          current,
+        ): readonly [Deferred.Deferred<void, never> | null, Deferred.Deferred<void, never>] =>
+          current !== null ? [current, current] : [null, candidate],
+      );
+      if (existing !== null) {
+        return yield* restore(Deferred.await(existing));
+      }
+      return yield* restore(runRefreshPass).pipe(
+        Effect.ensuring(
+          Ref.update(inflightRefreshRef, (current) =>
+            current === candidate ? null : current,
+          ).pipe(Effect.andThen(Deferred.succeed(candidate, undefined))),
+        ),
+      );
+    }),
+  );
 
   // Shares the refresh lock so a stale in-flight read cannot overwrite a redemption.
   const consumeResetCredit = Effect.fn("UsageLimitSources.consumeResetCredit")(function* (
@@ -231,7 +339,7 @@ export const make = Effect.gen(function* () {
   yield* settingsService.streamChanges.pipe(
     Stream.map((settings) => settings.usageLimitSources),
     Stream.changes,
-    Stream.runForEach(() => refresh),
+    Stream.runForEach(() => runRefreshPass),
     Effect.forkScoped,
   );
 

@@ -3,6 +3,7 @@ import type {
   ServerProvider,
   ServerProviderUsageWindow,
   UsageProviderKind,
+  UsageSummaryInput,
 } from "@prismux/core-contracts";
 import type { MergedUsage } from "@prismux/core-shared/usageMerge";
 import {
@@ -101,6 +102,20 @@ export interface StatusBarUsageSummary {
   readonly telemetry: StatusBarUsageTelemetrySummary;
   /** Count of enabled non-Antigravity providers configured in connected environments. */
   readonly enabledProviderCount: number;
+}
+
+/** Bottom-left Today/7-day local token telemetry background auto-refresh interval: 30 minutes. */
+export const STATUS_BAR_USAGE_AUTO_REFRESH_INTERVAL_MS = 30 * 60 * 1_000;
+
+export function isSameUsageWindow(a: UsageSummaryInput, b: UsageSummaryInput): boolean {
+  return (
+    a.sinceDay === b.sinceDay &&
+    a.untilDay === b.untilDay &&
+    a.timeZone === b.timeZone &&
+    (a.resolution ?? "day") === (b.resolution ?? "day") &&
+    a.sinceTime === b.sinceTime &&
+    a.untilTime === b.untilTime
+  );
 }
 
 export const USAGE_WARNING_USED_PERCENT = 80;
@@ -274,7 +289,10 @@ export function extractAntigravityAcpTierLabel(provider: ServerProvider): string
     const trimmed = field.trim();
     if (!trimmed) continue;
     // Strip verbose prefixes while keeping meaningful tier text (e.g. "Local agy CLI · Google AI Ultra").
-    const parts = trimmed.split("·").map((segment) => segment.trim()).filter(Boolean);
+    const parts = trimmed
+      .split("·")
+      .map((segment) => segment.trim())
+      .filter(Boolean);
     const tierPart = parts.find((part) => /google|ultra|pro|free|plus|enterprise|tier/i.test(part));
     if (tierPart) return tierPart;
     if (!/^local-cli$|^authenticated$/i.test(trimmed)) {
@@ -416,8 +434,8 @@ export function buildUsageTelemetrySummary(
 ): StatusBarUsageTelemetrySummary {
   const todayBucket =
     mergedUsage && todayDayKey
-      ? mergedUsage.daily.find((entry) => entry.day === todayDayKey) ?? null
-      : mergedUsage?.daily.at(-1) ?? null;
+      ? (mergedUsage.daily.find((entry) => entry.day === todayDayKey) ?? null)
+      : (mergedUsage?.daily.at(-1) ?? null);
 
   // Per-provider today totals aggregated by normalized usage provider kind
   const todayByNormalizedKind = new Map<string, { totalTokens: number; costUsd: number }>();
@@ -701,7 +719,8 @@ export function collectStatusBarUsageSummary(
       const usedPercent = readWindowUsedPercent(win);
       if (usedPercent === null) continue;
       const remainingPercent = Math.max(0, 100 - usedPercent);
-      const resetsAt = typeof win.resetsAt === "string" && win.resetsAt.trim() ? win.resetsAt : null;
+      const resetsAt =
+        typeof win.resetsAt === "string" && win.resetsAt.trim() ? win.resetsAt : null;
       const parsedReset = resetsAt ? Date.parse(resetsAt) : Number.NaN;
       const resetsAtMs = Number.isFinite(parsedReset) && parsedReset > now ? parsedReset : null;
 

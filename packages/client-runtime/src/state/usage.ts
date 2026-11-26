@@ -9,12 +9,28 @@ import type { createServerEnvironmentAtoms } from "./server.ts";
 
 const isEnvironmentRpcUnavailable = Schema.is(EnvironmentRpcUnavailableError);
 
+export type UsagePricingRefreshMode = "await" | "background" | "skip";
+
+/** Normalize usage summary input keys so query atoms and manual refresh target the exact same key. */
+export function normalizeUsageSummaryInput(input: UsageSummaryInput): UsageSummaryInput {
+  return {
+    sinceDay: input.sinceDay,
+    untilDay: input.untilDay,
+    timeZone: input.timeZone,
+    ...(input.resolution !== undefined ? { resolution: input.resolution } : {}),
+    ...(input.sinceTime !== undefined ? { sinceTime: input.sinceTime } : {}),
+    ...(input.untilTime !== undefined ? { untilTime: input.untilTime } : {}),
+    ...(input.modelFilter !== undefined ? { modelFilter: input.modelFilter } : {}),
+  };
+}
+
 /** The Usage tab asks each environment with that environment's configured model filter. */
 export function usageSummaryInput(
   input: UsageSummaryInput,
   modelFilter: UsageModelFilter | undefined,
 ): UsageSummaryInput {
-  return modelFilter === undefined ? input : { ...input, modelFilter };
+  const normalized = normalizeUsageSummaryInput(input);
+  return modelFilter === undefined ? normalized : { ...normalized, modelFilter };
 }
 
 const limitsRefreshAfter = new Map<EnvironmentId, number>();
@@ -49,6 +65,7 @@ export async function refreshUsage({
   presentations,
   environmentIds,
   input,
+  pricingRefreshMode = "await",
 }: {
   registry: AtomRegistry.AtomRegistry;
   server: Pick<
@@ -58,6 +75,13 @@ export async function refreshUsage({
   presentations: Pick<ReturnType<typeof createEnvironmentPresentationAtoms>, "presentationAtom">;
   environmentIds: readonly EnvironmentId[];
   input: UsageSummaryInput;
+  /**
+   * Controls how pricing-rate refresh interacts with transcript rescanning:
+   * - `"await"` (default): wait for `refreshUsageRates` before rescanning (Usage page).
+   * - `"background"`: fire `refreshUsageRates` non-blockingly and rescan local transcripts immediately.
+   * - `"skip"`: rescan local transcripts immediately without touching external pricing endpoints.
+   */
+  pricingRefreshMode?: UsagePricingRefreshMode;
 }): Promise<void> {
   await Promise.all(
     environmentIds.map(async (environmentId) => {
@@ -73,15 +97,25 @@ export async function refreshUsage({
       const unsubscribe = registry.subscribe(presentation, abortWhenDisconnected);
       abortWhenDisconnected();
       try {
-        const ratesResult = await runAtomCommand(
-          registry,
-          server.refreshUsageRates,
-          { environmentId, input: {} },
-          { reportFailure: false },
-        );
-        const sessionUnavailable =
-          ratesResult._tag === "Failure" &&
-          isEnvironmentRpcUnavailable(squashAtomCommandFailure(ratesResult));
+        let sessionUnavailable = false;
+        if (pricingRefreshMode === "await") {
+          const ratesResult = await runAtomCommand(
+            registry,
+            server.refreshUsageRates,
+            { environmentId, input: {} },
+            { reportFailure: false },
+          );
+          sessionUnavailable =
+            ratesResult._tag === "Failure" &&
+            isEnvironmentRpcUnavailable(squashAtomCommandFailure(ratesResult));
+        } else if (pricingRefreshMode === "background") {
+          void runAtomCommand(
+            registry,
+            server.refreshUsageRates,
+            { environmentId, input: {} },
+            { reportFailure: false },
+          ).catch(() => {});
+        }
         registry.refresh(query);
         if (sessionUnavailable || controller.signal.aborted) return;
         await executeAtomQuery(registry, query, {

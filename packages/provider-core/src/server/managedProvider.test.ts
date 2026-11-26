@@ -1030,4 +1030,60 @@ describe("makeManagedServerProvider", () => {
       }),
     ).pipe(Effect.provide(layerAlwaysRunTest)),
   );
+
+  it.effect(
+    "invalidates cached usage limits on manual provider.refresh so first click reloads fresh quota",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const calls = yield* Ref.make(0);
+          const cache = yield* Cache.makeWith(
+            () =>
+              Ref.updateAndGet(calls, (count) => count + 1).pipe(
+                Effect.map((count): ServerProvider => ({
+                  ...refreshedSnapshot,
+                  usageLimits: {
+                    checkedAt: refreshedSnapshot.checkedAt,
+                    windows: [
+                      {
+                        id: "five_hour",
+                        kind: "session",
+                        label: "Session",
+                        usedPercent: count === 1 ? 15 : 62,
+                      },
+                    ],
+                  },
+                })),
+              ),
+            { capacity: 1, timeToLive: () => "5 minutes" },
+          );
+          const warmed = yield* Cache.get(cache, "claude");
+          const provider = yield* makeManagedServerProvider<TestSettings>({
+            resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+            getSettings: Effect.succeed({ enabled: true }),
+            streamSettings: Stream.empty,
+            haveSettingsChanged: () => false,
+            initialSnapshot: () => Effect.succeed(warmed),
+            checkProvider: Cache.get(cache, "claude"),
+            invalidateUsageCache: Cache.invalidateAll(cache),
+            refreshOnInterval: false,
+          });
+          yield* provider.streamChanges.pipe(Stream.take(1), Stream.runDrain);
+          assert.strictEqual(
+            (yield* provider.getSnapshot).usageLimits?.windows[0]?.usedPercent,
+            15,
+          );
+          assert.strictEqual(yield* Ref.get(calls), 1);
+
+          // Manual refresh must bypass the 5-minute TTL cache and immediately return fresh 62% on the first call.
+          const refreshed = yield* provider.refresh;
+          assert.strictEqual(yield* Ref.get(calls), 2);
+          assert.strictEqual(refreshed.usageLimits?.windows[0]?.usedPercent, 62);
+          assert.strictEqual(
+            (yield* provider.getSnapshot).usageLimits?.windows[0]?.usedPercent,
+            62,
+          );
+        }),
+      ).pipe(Effect.provide(layerAlwaysRunTest)),
+  );
 });

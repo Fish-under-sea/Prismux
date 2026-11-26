@@ -19,14 +19,14 @@ import {
   type OfficialCliExecResult,
   type OfficialQuotaCreditsResponse,
   type OfficialQuotaSummaryResponse,
-  type QuotaInvalidateResponse
+  type QuotaInvalidateResponse,
 } from "../index.js";
 
 const SAMPLE_AGY_USAGE_TSV = [
   "Gemini Models\tWeekly Limit Remaining\t93%\t2026-11-30T20:03:11Z",
   "Gemini Models\tFive Hour Limit Remaining\t92%\t2026-11-24T09:34:15Z",
   "Claude and GPT models\tWeekly Limit Remaining\t100%\t2026-12-01T06:04:49Z",
-  "Claude and GPT models\tFive Hour Limit Remaining\t100%\t2026-11-24T11:04:49Z"
+  "Claude and GPT models\tFive Hour Limit Remaining\t100%\t2026-11-24T11:04:49Z",
 ].join("\n");
 
 describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage + /credits", () => {
@@ -43,7 +43,7 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
         detailLabel: w.detailLabel,
         remainingPercent: w.remainingPercent,
         usedPercent: w.usedPercent,
-        resetAtIso: w.resetAtIso
+        resetAtIso: w.resetAtIso,
       })),
       [
         {
@@ -54,7 +54,7 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
           detailLabel: "Gemini · 每周",
           remainingPercent: 93,
           usedPercent: 7,
-          resetAtIso: "2026-11-30T20:03:11.000Z"
+          resetAtIso: "2026-11-30T20:03:11.000Z",
         },
         {
           id: "gemini:5h",
@@ -64,7 +64,7 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
           detailLabel: "Gemini · 5h",
           remainingPercent: 92,
           usedPercent: 8,
-          resetAtIso: "2026-11-24T09:34:15.000Z"
+          resetAtIso: "2026-11-24T09:34:15.000Z",
         },
         {
           id: "claude-gpt:weekly",
@@ -74,7 +74,7 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
           detailLabel: "Claude/GPT · 每周",
           remainingPercent: 100,
           usedPercent: 0,
-          resetAtIso: "2026-12-01T06:04:49.000Z"
+          resetAtIso: "2026-12-01T06:04:49.000Z",
         },
         {
           id: "claude-gpt:5h",
@@ -84,9 +84,9 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
           detailLabel: "Claude/GPT · 5h",
           remainingPercent: 100,
           usedPercent: 0,
-          resetAtIso: "2026-11-24T11:04:49.000Z"
-        }
-      ]
+          resetAtIso: "2026-11-24T11:04:49.000Z",
+        },
+      ],
     );
 
     // Strips ANSI codes and ignores malformed lines cleanly.
@@ -113,25 +113,25 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
       computeJitteredQuotaCacheTtlMs(
         OFFICIAL_QUOTA_CACHE_TTL_MS,
         OFFICIAL_QUOTA_CACHE_JITTER_MS,
-        () => 0
+        () => 0,
       ),
-      810_000
+      810_000,
     );
     assert.equal(
       computeJitteredQuotaCacheTtlMs(
         OFFICIAL_QUOTA_CACHE_TTL_MS,
         OFFICIAL_QUOTA_CACHE_JITTER_MS,
-        () => 0.5
+        () => 0.5,
       ),
-      900_000
+      900_000,
     );
     assert.equal(
       computeJitteredQuotaCacheTtlMs(
         OFFICIAL_QUOTA_CACHE_TTL_MS,
         OFFICIAL_QUOTA_CACHE_JITTER_MS,
-        () => 1
+        () => 1,
       ),
-      990_000
+      990_000,
     );
 
     // Sweep 200 samples across [0, 1] and verify strict [810_000, 990_000] bounds.
@@ -139,11 +139,11 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
       const ttl = computeJitteredQuotaCacheTtlMs(
         OFFICIAL_QUOTA_CACHE_TTL_MS,
         OFFICIAL_QUOTA_CACHE_JITTER_MS,
-        () => i / 200
+        () => i / 200,
       );
       assert.ok(
         ttl >= 810_000 && ttl <= 990_000,
-        `Expected jittered TTL in [810_000, 990_000], got ${ttl}`
+        `Expected jittered TTL in [810_000, 990_000], got ${ttl}`,
       );
     }
 
@@ -160,9 +160,9 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
         return {
           stdout: "Gemini Models\tWeekly Limit Remaining\t91%\t2026-11-30T20:03:11Z\n",
           stderr: "",
-          exitCode: 0
+          exitCode: 0,
         };
-      }
+      },
     });
 
     const minFirst = await minSvc.getSummary(false);
@@ -193,9 +193,9 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
         return {
           stdout: "Gemini Models\tWeekly Limit Remaining\t89%\t2026-11-30T20:03:11Z\n",
           stderr: "",
-          exitCode: 0
+          exitCode: 0,
         };
-      }
+      },
     });
 
     const maxFirst = await maxSvc.getSummary(false);
@@ -239,16 +239,16 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
           return {
             stdout: `Gemini Models\tWeekly Limit Remaining\t${remaining}\t2026-11-30T20:03:11Z\n`,
             stderr: "",
-            exitCode: 0
+            exitCode: 0,
           };
         }
         creditsCalls += 1;
         return {
           stdout: "Remaining credits\t42\n",
           stderr: "",
-          exitCode: 0
+          exitCode: 0,
         };
-      }
+      },
     });
 
     // Two concurrent getSummary calls share a SINGLE `/usage` execution and ZERO `/credits` spawns.
@@ -301,12 +301,12 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
     // Static check: OfficialQuotaService.ts must never use Promise.all to dual-spawn CLI calls.
     const serviceSourcePath = resolve(
       dirname(fileURLToPath(import.meta.url)),
-      "../../src/system/OfficialQuotaService.ts"
+      "../../src/system/OfficialQuotaService.ts",
     );
     const serviceSource = readFileSync(serviceSourcePath, "utf8");
     assert.ok(
       !serviceSource.includes("Promise.all"),
-      "OfficialQuotaService.ts must not dual-spawn /usage and /credits via Promise.all"
+      "OfficialQuotaService.ts must not dual-spawn /usage and /credits via Promise.all",
     );
   });
 
@@ -327,7 +327,7 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
           return {
             stdout: "Gemini Models\tWeekly Limit Remaining\t93%\t2026-11-30T20:03:11Z\n",
             stderr: "",
-            exitCode: 0
+            exitCode: 0,
           };
         }
         assert.ok(args.includes("/credits"));
@@ -340,9 +340,9 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
         return {
           stdout: creditsCalls === 1 ? "Remaining credits\t42\n" : "Remaining credits\t95\n",
           stderr: "",
-          exitCode: 0
+          exitCode: 0,
         };
-      }
+      },
     });
 
     // Rapid double popover open -> coalesced into a SINGLE `/credits` call and ZERO `/usage` calls.
@@ -390,7 +390,7 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
   it("degrades gracefully on timeout, unauthenticated CLI, or missing executable without throwing", async () => {
     const missingSvc = new OfficialQuotaService({
       refreshEnv: async () => {},
-      locateExecutable: () => null
+      locateExecutable: () => null,
     });
     const missingRes = await missingSvc.getSummary(true);
     assert.equal(missingRes.ok, true);
@@ -412,8 +412,8 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
         stderr: "command timed out",
         exitCode: null,
         timedOut: true,
-        errorMessage: "ETIMEDOUT"
-      })
+        errorMessage: "ETIMEDOUT",
+      }),
     });
     const timeoutRes = await timeoutSvc.getSummary(true);
     assert.equal(timeoutRes.antigravity.status, "timeout");
@@ -426,8 +426,8 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
       cliRunner: async () => ({
         stdout: "",
         stderr: "Error: User is not logged in. Please log in first.",
-        exitCode: 1
-      })
+        exitCode: 1,
+      }),
     });
     const unauthRes = await unauthSvc.getSummary(true);
     assert.equal(unauthRes.antigravity.status, "unauthenticated");
@@ -449,7 +449,8 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
       random: () => 0.5,
       isAntigravityEnabled: () => enabled,
       refreshEnv: async () => {},
-      locateExecutable: () => (installed ? "C:\\Users\\Fish\\AppData\\Local\\agy\\bin\\agy.exe" : null),
+      locateExecutable: () =>
+        installed ? "C:\\Users\\Fish\\AppData\\Local\\agy\\bin\\agy.exe" : null,
       cliRunner: async (_exe, args): Promise<OfficialCliExecResult> => {
         if (args.includes("/usage")) {
           usageCalls += 1;
@@ -457,27 +458,27 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
             return {
               stdout: "Gemini Models\tWeekly Limit Remaining\t93%\t2026-11-30T20:03:11Z\n",
               stderr: "",
-              exitCode: 0
+              exitCode: 0,
             };
           }
           if (mode === "relogin") {
             return {
               stdout: "Gemini Models\tWeekly Limit Remaining\t88%\t2026-11-30T20:03:11Z\n",
               stderr: "",
-              exitCode: 0
+              exitCode: 0,
             };
           }
           if (mode === "unauthenticated") {
             return {
               stdout: "",
               stderr: "Error: User is not logged in. Please sign in first.",
-              exitCode: 1
+              exitCode: 1,
             };
           }
           return {
             stdout: "",
             stderr: "Internal CLI error: service unreachable",
-            exitCode: 2
+            exitCode: 2,
           };
         }
         creditsCalls += 1;
@@ -485,15 +486,20 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
           return {
             stdout: "",
             stderr: "Error: User is not logged in.",
-            exitCode: 1
+            exitCode: 1,
           };
         }
         return {
-          stdout: mode === "ok" ? "Remaining credits\t42\n" : mode === "relogin" ? "Remaining credits\t19\n" : "",
+          stdout:
+            mode === "ok"
+              ? "Remaining credits\t42\n"
+              : mode === "relogin"
+                ? "Remaining credits\t19\n"
+                : "",
           stderr: mode === "error" ? "Internal CLI error" : "",
-          exitCode: mode === "ok" || mode === "relogin" ? 0 : 2
+          exitCode: mode === "ok" || mode === "relogin" ? 0 : 2,
         };
-      }
+      },
     });
 
     // 1. Populate BOTH `/usage` and `/credits` caches independently.
@@ -614,7 +620,7 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
             return {
               stdout: "Gemini Models\tWeekly Limit Remaining\t99%\t2026-11-30T20:03:11Z\n",
               stderr: "",
-              exitCode: 0
+              exitCode: 0,
             };
           }
           return { stdout: "", stderr: "Error: not logged in", exitCode: 1 };
@@ -627,7 +633,7 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
           return { stdout: "Remaining credits\t500\n", stderr: "", exitCode: 0 };
         }
         return { stdout: "", stderr: "Error: not logged in", exitCode: 1 };
-      }
+      },
     });
 
     const slowUsage = raceSvc.getSummary(false);
@@ -661,16 +667,16 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
           return {
             stdout: "Gemini Models\tWeekly Limit Remaining\t85%\t2026-11-30T20:03:11Z\n",
             stderr: "",
-            exitCode: 0
+            exitCode: 0,
           };
         }
         creditsCalls += 1;
         return {
           stdout: `Remaining credits\t${creditsCalls * 10}\n`,
           stderr: "",
-          exitCode: 0
+          exitCode: 0,
         };
-      }
+      },
     });
 
     // GET /v1/quota/summary spawns ONLY /usage
@@ -679,9 +685,9 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
         method: "GET",
         pathname: "/v1/quota/summary",
         searchParams: new URLSearchParams(),
-        callerScope: "owner_chief"
+        callerScope: "owner_chief",
       },
-      svc
+      svc,
     );
     assert.equal(summaryRes?.statusCode, 200);
     const summaryPayload = summaryRes?.payload as OfficialQuotaSummaryResponse;
@@ -696,9 +702,9 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
         method: "GET",
         pathname: "/v1/quota/credits",
         searchParams: new URLSearchParams(),
-        callerScope: "owner_chief"
+        callerScope: "owner_chief",
       },
-      svc
+      svc,
     );
     assert.equal(creditsRes?.statusCode, 200);
     const creditsPayload = creditsRes?.payload as OfficialQuotaCreditsResponse;
@@ -714,9 +720,9 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
         method: "GET",
         pathname: "/v1/quota/credits",
         searchParams: new URLSearchParams(),
-        callerScope: "owner_chief"
+        callerScope: "owner_chief",
       },
-      svc
+      svc,
     );
     assert.equal((creditsCached?.payload as OfficialQuotaCreditsResponse).cached, true);
     assert.equal(creditsCalls, 1);
@@ -727,9 +733,9 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
         method: "GET",
         pathname: "/v1/quota/credits",
         searchParams: new URLSearchParams("force=1"),
-        callerScope: "owner_chief"
+        callerScope: "owner_chief",
       },
-      svc
+      svc,
     );
     assert.equal((creditsForced?.payload as OfficialQuotaCreditsResponse).cached, false);
     assert.equal((creditsForced?.payload as OfficialQuotaCreditsResponse).remainingCredits, 20);
@@ -743,9 +749,9 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
         method: "POST",
         pathname: "/v1/quota/invalidate",
         searchParams: new URLSearchParams(),
-        callerScope: "owner_chief"
+        callerScope: "owner_chief",
       },
-      svc
+      svc,
     );
     assert.equal(invRes?.statusCode, 200);
     const invPayload = invRes?.payload as QuotaInvalidateResponse;
@@ -758,13 +764,13 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
         method: "GET",
         pathname: "/v1/quota/credits",
         searchParams: new URLSearchParams("enabled=0"),
-        callerScope: "owner_chief"
+        callerScope: "owner_chief",
       },
-      svc
+      svc,
     );
     assert.equal(
       (disabledCreditsRes?.payload as OfficialQuotaCreditsResponse).status,
-      "unauthenticated"
+      "unauthenticated",
     );
     assert.equal(creditsCalls, 2);
 
@@ -776,11 +782,11 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
             method: "GET",
             pathname: "/v1/quota/credits",
             searchParams: new URLSearchParams(),
-            callerScope: "qq_group:12345"
+            callerScope: "qq_group:12345",
           },
-          svc
+          svc,
         ),
-      /FORBIDDEN_SCOPE|not permitted/i
+      /FORBIDDEN_SCOPE|not permitted/i,
     );
   });
 
@@ -790,15 +796,11 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
       headless: true,
       dataDir,
       authToken: "owner-quota-token",
-      disableAutoUpdateCheck: true
+      disableAutoUpdateCheck: true,
     });
 
     const groupToken = "qq-group-scoped-token";
-    daemon.pairingManager.registerScopedToken(
-      groupToken,
-      "qq_group:998877",
-      "qq-group-test"
-    );
+    daemon.pairingManager.registerScopedToken(groupToken, "qq_group:998877", "qq-group-test");
 
     try {
       const info = await daemon.start();
@@ -809,33 +811,33 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
       assert.equal(
         (
           await fetch(`${info.httpUrl}/v1/quota/summary`, {
-            headers: { Authorization: `Bearer ${groupToken}` }
+            headers: { Authorization: `Bearer ${groupToken}` },
           })
         ).status,
-        403
+        403,
       );
       assert.equal(
         (
           await fetch(`${info.httpUrl}/v1/quota/credits`, {
-            headers: { Authorization: `Bearer ${groupToken}` }
+            headers: { Authorization: `Bearer ${groupToken}` },
           })
         ).status,
-        403
+        403,
       );
       assert.equal(
         (
           await fetch(`${info.httpUrl}/v1/quota/invalidate`, {
             method: "POST",
-            headers: { Authorization: `Bearer ${groupToken}` }
+            headers: { Authorization: `Bearer ${groupToken}` },
           })
         ).status,
-        403
+        403,
       );
 
       // Owner invalidation route works cleanly with zero CLI spawn
       const invRes = await fetch(`${info.httpUrl}/v1/quota/invalidate`, {
         method: "POST",
-        headers: { Authorization: "Bearer owner-quota-token" }
+        headers: { Authorization: "Bearer owner-quota-token" },
       });
       assert.equal(invRes.status, 200);
       const invBody = (await invRes.json()) as QuotaInvalidateResponse;
@@ -845,7 +847,7 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
 
       // Owner disabled credits route returns unauthenticated with zero CLI spawn
       const disabledCredits = await fetch(`${info.httpUrl}/v1/quota/credits?enabled=0`, {
-        headers: { Authorization: "Bearer owner-quota-token" }
+        headers: { Authorization: "Bearer owner-quota-token" },
       });
       assert.equal(disabledCredits.status, 200);
       const disabledBody = (await disabledCredits.json()) as OfficialQuotaCreditsResponse;
@@ -854,7 +856,7 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
       assert.equal(disabledBody.remainingCredits, null);
 
       const okRes = await fetch(`${info.httpUrl}/v1/quota/summary`, {
-        headers: { Authorization: "Bearer owner-quota-token" }
+        headers: { Authorization: "Bearer owner-quota-token" },
       });
       assert.equal(okRes.status, 200);
       const body = (await okRes.json()) as OfficialQuotaSummaryResponse;
@@ -866,6 +868,168 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
       await daemon.stop();
       rmSync(dataDir, { recursive: true, force: true });
     }
+  });
+
+  it("skips refreshEnv fast-path when agy is already locatable, and falls back to refreshEnv only when missing", async () => {
+    let refreshEnvCalls = 0;
+    let availableOnPath = true;
+
+    const service = new OfficialQuotaService({
+      now: () => 1_760_000_000_000,
+      random: () => 0.5,
+      refreshEnv: async () => {
+        refreshEnvCalls += 1;
+        availableOnPath = true;
+      },
+      locateExecutable: () =>
+        availableOnPath ? "C:\\Users\\Fish\\AppData\\Local\\agy\\bin\\agy.exe" : null,
+      cliRunner: async (_exe, args) => ({
+        stdout: args.includes("/credits") ? "Available\t120\n" : SAMPLE_AGY_USAGE_TSV,
+        stderr: "",
+        exitCode: 0,
+      }),
+    });
+
+    const first = await service.getSummary(true);
+    assert.equal(first.antigravity.available, true);
+    assert.equal(refreshEnvCalls, 0);
+
+    // When executable is not immediately found, refreshEnv runs once as fallback.
+    availableOnPath = false;
+    const second = await service.getSummary(true);
+    assert.equal(second.antigravity.available, true);
+    assert.equal(refreshEnvCalls, 1);
+  });
+
+  it("supports SWR (allowStale / ?swr=1) fast-return on expired cache with singleflight background revalidation while force=true always fetches fresh", async () => {
+    let clock = 1_760_000_000_000;
+    let usageCalls = 0;
+    let releaseBackgroundFetch: (() => void) | null = null;
+    const backgroundStarted = new Promise<void>((resolve) => {
+      // resolved on call #2
+      releaseBackgroundFetch = resolve;
+    });
+    void backgroundStarted;
+
+    let gateResolve: (() => void) | null = null;
+    let gatePromise = Promise.resolve();
+    const openGate = () => {
+      if (gateResolve) {
+        gateResolve();
+        gateResolve = null;
+      }
+    };
+    const closeGate = () => {
+      gatePromise = new Promise<void>((resolve) => {
+        gateResolve = resolve;
+      });
+    };
+
+    const service = new OfficialQuotaService({
+      now: () => clock,
+      random: () => 0.5,
+      refreshEnv: async () => {},
+      locateExecutable: () => "C:\\Users\\Fish\\AppData\\Local\\agy\\bin\\agy.exe",
+      cliRunner: async (_exe, args) => {
+        assert.equal(args.includes("/credits"), false);
+        usageCalls += 1;
+        if (usageCalls === 2 || usageCalls === 3) {
+          await gatePromise;
+        }
+        const pct =
+          usageCalls === 1 ? "90%" : usageCalls === 2 ? "65%" : usageCalls === 3 ? "40%" : "25%";
+        return {
+          stdout: `Gemini\tweekly\t${pct}\t2026-11-30T20:03:11Z\n`,
+          stderr: "",
+          exitCode: 0,
+        };
+      },
+    });
+    void releaseBackgroundFetch;
+
+    // 1. Prime cache
+    const initial = await service.getSummary(false);
+    assert.equal(initial.cached, false);
+    assert.equal(initial.antigravity.windows[0]?.remainingPercent, 90);
+    assert.equal(usageCalls, 1);
+
+    // 2. Expire TTL and call with allowStale: true while call #2 is slow -> returns stale immediately!
+    clock += OFFICIAL_QUOTA_CACHE_TTL_MS + 1;
+    closeGate();
+    const swr1 = await service.getSummary(false, { allowStale: true });
+    assert.equal(swr1.cached, true);
+    assert.equal(swr1.stale, true);
+    assert.equal(swr1.refreshing, true);
+    assert.equal(swr1.antigravity.windows[0]?.remainingPercent, 90);
+
+    // Concurrent SWR call shares the same singleflight background refresh (usageCalls stays 2)
+    const swr2 = await service.getSummary(false, { allowStale: true });
+    assert.equal(swr2.stale, true);
+    assert.equal(usageCalls, 2);
+
+    // Release background refresh and let it settle -> cache now serves fresh 65%
+    openGate();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const afterRevalidate = await service.getSummary(false, { allowStale: true });
+    assert.equal(afterRevalidate.cached, true);
+    assert.equal(afterRevalidate.stale, undefined);
+    assert.equal(afterRevalidate.antigravity.windows[0]?.remainingPercent, 65);
+    assert.equal(usageCalls, 2);
+
+    // 2b. Plain follow-up GET /v1/quota/summary (no ?swr=1) joins the active singleflight refresh
+    //     triggered by ?swr=1 with ZERO duplicate agy spawn and delivers the revalidated snapshot.
+    clock += OFFICIAL_QUOTA_CACHE_TTL_MS + 1;
+    closeGate();
+    const swrRouteRes = await handleQuotaRoute(
+      {
+        method: "GET",
+        pathname: "/v1/quota/summary",
+        searchParams: new URLSearchParams("swr=1"),
+        callerScope: "owner_chief",
+      },
+      service,
+    );
+    assert.ok(swrRouteRes);
+    const swrPayload = swrRouteRes.payload as OfficialQuotaSummaryResponse;
+    assert.equal(swrPayload.stale, true);
+    assert.equal(swrPayload.refreshing, true);
+    assert.equal(swrPayload.antigravity.windows[0]?.remainingPercent, 65);
+    assert.equal(usageCalls, 3);
+
+    const joinFollowUpPromise = handleQuotaRoute(
+      {
+        method: "GET",
+        pathname: "/v1/quota/summary",
+        searchParams: new URLSearchParams(),
+        callerScope: "owner_chief",
+      },
+      service,
+    );
+    // Still only 3 CLI spawns total (plain follow-up joined singleflight inflightNormal!)
+    assert.equal(usageCalls, 3);
+    openGate();
+    const joinedRouteRes = await joinFollowUpPromise;
+    assert.ok(joinedRouteRes);
+    const joinedPayload = joinedRouteRes.payload as OfficialQuotaSummaryResponse;
+    assert.equal(joinedPayload.cached, false);
+    assert.equal(joinedPayload.antigravity.windows[0]?.remainingPercent, 40);
+    assert.equal(usageCalls, 3);
+
+    // 3. QuotaRoutes ?force=1 bypasses cache immediately
+    const routeForced = await handleQuotaRoute(
+      {
+        method: "GET",
+        pathname: "/v1/quota/summary",
+        searchParams: new URLSearchParams("force=1&swr=1"),
+        callerScope: "owner_chief",
+      },
+      service,
+    );
+    assert.ok(routeForced);
+    const forcedPayload = routeForced.payload as OfficialQuotaSummaryResponse;
+    assert.equal(forcedPayload.cached, false);
+    assert.equal(forcedPayload.antigravity.windows[0]?.remainingPercent, 25);
+    assert.equal(usageCalls, 4);
   });
 
   it("live local official probe: reads real agy -p '/usage' TSV on this machine without spawning /credits", async (t) => {
@@ -883,17 +1047,17 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
     assert.equal(
       res.antigravity.available,
       true,
-      `Expected live agy /usage to succeed, got: ${res.antigravity.status} (${res.antigravity.error})`
+      `Expected live agy /usage to succeed, got: ${res.antigravity.status} (${res.antigravity.error})`,
     );
     assert.ok(
       res.cacheTtlMs >= OFFICIAL_QUOTA_CACHE_TTL_MIN_MS &&
         res.cacheTtlMs <= OFFICIAL_QUOTA_CACHE_TTL_MAX_MS,
-      `Expected jittered TTL in [810_000, 990_000], got ${res.cacheTtlMs}`
+      `Expected jittered TTL in [810_000, 990_000], got ${res.cacheTtlMs}`,
     );
     assert.equal(res.antigravity.remainingCredits, null);
     assert.ok(
       res.antigravity.windows.length >= 4,
-      `Expected >=4 quota windows, got ${res.antigravity.windows.length}`
+      `Expected >=4 quota windows, got ${res.antigravity.windows.length}`,
     );
 
     const ids = res.antigravity.windows.map((w) => w.id);

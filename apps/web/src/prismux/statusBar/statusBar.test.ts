@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   ProviderDriverKind,
   ProviderInstanceId,
+  UsageDay,
   type ServerProvider,
 } from "@prismux/core-contracts";
 import { providerInstanceEntriesFor } from "../../providerInstances";
@@ -24,7 +25,8 @@ vi.mock("@tanstack/react-router", () => ({
     to?: string;
     onClick?: () => void;
     className?: string;
-  }) => createElement("a", { href: typeof to === "string" ? to : "#", onClick, className }, children),
+  }) =>
+    createElement("a", { href: typeof to === "string" ? to : "#", onClick, className }, children),
 }));
 
 import { PrismuxDaemonClient, PrismuxDaemonError } from "../daemonClient";
@@ -64,10 +66,7 @@ import {
   PORTS_POLL_INTERVAL_MS,
   resolvePortOpenUrl,
 } from "./portsPolling";
-import {
-  classifyContextGauge,
-  derivePromptCacheSummary,
-} from "./statusBarContext";
+import { classifyContextGauge, derivePromptCacheSummary } from "./statusBarContext";
 import {
   shouldOpenStatusBarContextMenu,
   STATUS_BAR_CONTEXT_MENU_EXEMPT_SELECTOR,
@@ -86,8 +85,10 @@ import {
   formatCompactUsageTokens,
   formatResetCountdown,
   formatUsageWindowValue,
+  isSameUsageWindow,
   normalizeUsageProviderKind,
   resolveServerProviderUsageKind,
+  STATUS_BAR_USAGE_AUTO_REFRESH_INTERVAL_MS,
   type PrismuxProviderProbeSnapshot,
 } from "./statusBarUsage";
 import { getResetCountdownNextTickDelay } from "./useResetCountdownClock";
@@ -342,9 +343,7 @@ describe("statusBarUsage compliance and urgency sorting", () => {
         },
         // Even if stale/injected quota windows existed, collector MUST never display them for Antigravity.
         usageLimits: {
-          windows: [
-            { id: "v1internal-forbidden", label: "Forbidden", usedPercent: 99 },
-          ],
+          windows: [{ id: "v1internal-forbidden", label: "Forbidden", usedPercent: 99 }],
         },
       },
       {
@@ -741,14 +740,14 @@ describe("statusBarUsage compliance and urgency sorting", () => {
       }),
     );
     expect(probeHtml).toContain("736M tok");
-    expect(probeHtml).toMatch(/data-testid="usage-provider-badge-antigravity"[^>]*>本地统计<\/span>/);
+    expect(probeHtml).toMatch(
+      /data-testid="usage-provider-badge-antigravity"[^>]*>本地统计<\/span>/,
+    );
     expect(probeHtml).not.toMatch(
       /data-testid="usage-provider-badge-antigravity"[^>]*>自定义端点<\/span>/,
     );
     expect(probeHtml).toMatch(/data-testid="usage-provider-badge-codex"[^>]*>自定义端点<\/span>/);
-    expect(probeHtml).not.toMatch(
-      /data-testid="usage-provider-badge-codex"[^>]*>本地统计<\/span>/,
-    );
+    expect(probeHtml).not.toMatch(/data-testid="usage-provider-badge-codex"[^>]*>本地统计<\/span>/);
     expect(probeHtml).toMatch(/data-testid="usage-provider-badge-claude"[^>]*>自定义端点<\/span>/);
     expect(probeHtml).toMatch(/data-testid="usage-provider-badge-cursor"[^>]*>本地统计<\/span>/);
 
@@ -782,7 +781,9 @@ describe("statusBarUsage compliance and urgency sorting", () => {
         status: "ready",
         auth: { status: "authenticated" },
         usageLimits: {
-          windows: [{ id: "session", label: "5h", usedPercent: 30, resetsAt: "2026-11-25T18:00:00Z" }],
+          windows: [
+            { id: "session", label: "5h", usedPercent: 30, resetsAt: "2026-11-25T18:00:00Z" },
+          ],
         },
       },
       {
@@ -816,8 +817,7 @@ describe("statusBarUsage compliance and urgency sorting", () => {
         ?.isCustomEndpoint,
     ).toBe(true);
     expect(
-      fallbackSummaryA.telemetry.providers.find((p) => p.providerKind === "claude")
-        ?.hasQuotaWindow,
+      fallbackSummaryA.telemetry.providers.find((p) => p.providerKind === "claude")?.hasQuotaWindow,
     ).toBe(true);
     expect(
       fallbackSummaryA.telemetry.providers.find((p) => p.providerKind === "opencode")
@@ -1097,7 +1097,10 @@ describe("statusBarUsage compliance and urgency sorting", () => {
             driver: ProviderDriverKind.make("acpRegistry"),
             enabled: true,
             displayName: "Antigravity ACP",
-            config: { source: "local", commandPath: "C:\\Users\\Fish\\AppData\\Local\\agy\\bin\\agy.exe" },
+            config: {
+              source: "local",
+              commandPath: "C:\\Users\\Fish\\AppData\\Local\\agy\\bin\\agy.exe",
+            },
           },
         },
         projectSettingsOverrides: {},
@@ -1248,7 +1251,13 @@ describe("quotaStatus.logic & QuotaStatusPopover 3-view parity (Fig 1/3/4/5)", (
         usageLimits: {
           checkedAt: new Date(now - 60_000).toISOString(),
           windows: [
-            { id: "weekly", kind: "weekly", label: "7d", usedPercent: 18, resetsAt: "2026-11-29T06:00:00Z" },
+            {
+              id: "weekly",
+              kind: "weekly",
+              label: "7d",
+              usedPercent: 18,
+              resetsAt: "2026-11-29T06:00:00Z",
+            },
           ],
         },
       },
@@ -1310,7 +1319,9 @@ describe("quotaStatus.logic & QuotaStatusPopover 3-view parity (Fig 1/3/4/5)", (
     expect(compactUsed?.segments[0]?.windows.map((w) => w.text)).toEqual(["Gemini 周 7%"]);
 
     const emptySummary = aggregateQuotaSummary(null, [], now);
-    expect(buildQuotaStatusBarDisplay(emptySummary, { viewMode: "detailed", percentMode: "used" })).toBeNull();
+    expect(
+      buildQuotaStatusBarDisplay(emptySummary, { viewMode: "detailed", percentMode: "used" }),
+    ).toBeNull();
 
     // Detailed View (Fig 3)
     const detailedHtml = renderToStaticMarkup(
@@ -1534,7 +1545,15 @@ describe("quotaStatus.logic & QuotaStatusPopover 3-view parity (Fig 1/3/4/5)", (
       auth: { status: "authenticated" },
       usageLimits: {
         checkedAt: new Date(now - 10_000).toISOString(),
-        windows: [{ id: "weekly", kind: "weekly", label: "7d", usedPercent: 25, resetsAt: "2026-12-01T08:00:00Z" }],
+        windows: [
+          {
+            id: "weekly",
+            kind: "weekly",
+            label: "7d",
+            usedPercent: 25,
+            resetsAt: "2026-12-01T08:00:00Z",
+          },
+        ],
       },
     } as unknown as ServerProvider;
 
@@ -1586,11 +1605,17 @@ describe("quotaStatus.logic & QuotaStatusPopover 3-view parity (Fig 1/3/4/5)", (
     );
     expect(zeroSummary.availableAgents).toEqual([]);
     expect(shouldShowStatusBarQuota(zeroSummary, true)).toBe(false);
-    expect(buildQuotaStatusBarDisplay(zeroSummary, { viewMode: "detailed", percentMode: "remaining" })).toBeNull();
+    expect(
+      buildQuotaStatusBarDisplay(zeroSummary, { viewMode: "detailed", percentMode: "remaining" }),
+    ).toBeNull();
     expect(buildQuotaStatusBarPill(zeroSummary, "remaining")).toBeNull();
 
     // 2. Even if daemon still holds a cached ok snapshot, explicit unauthenticated or disabled Antigravity hides it immediately!
-    const staleDaemonUnauthAgy = aggregateQuotaSummary(okDaemonQuota, [unauthAgy, unauthCodex], now);
+    const staleDaemonUnauthAgy = aggregateQuotaSummary(
+      okDaemonQuota,
+      [unauthAgy, unauthCodex],
+      now,
+    );
     expect(staleDaemonUnauthAgy.availableAgents).toEqual([]);
     expect(staleDaemonUnauthAgy.antigravityStatus).toBe("unauthenticated");
     expect(shouldShowStatusBarQuota(staleDaemonUnauthAgy, true)).toBe(false);
@@ -1617,7 +1642,11 @@ describe("quotaStatus.logic & QuotaStatusPopover 3-view parity (Fig 1/3/4/5)", (
     expect(mixedDisplay?.fullText).not.toContain("未登录");
 
     // 4. Antigravity logs in -> appears cleanly alongside authenticated Codex.
-    const bothSummary = aggregateQuotaSummary(okDaemonQuota, [authedAgy, authedCodex, unauthCodex], now);
+    const bothSummary = aggregateQuotaSummary(
+      okDaemonQuota,
+      [authedAgy, authedCodex, unauthCodex],
+      now,
+    );
     expect(bothSummary.availableAgents.map((a) => a.id)).toEqual(["antigravity", "codex-live"]);
     const bothDisplay = buildQuotaStatusBarDisplay(bothSummary, {
       viewMode: "compact",
@@ -1631,7 +1660,10 @@ describe("quotaStatus.logic & QuotaStatusPopover 3-view parity (Fig 1/3/4/5)", (
       path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")),
       "../..",
     );
-    const statusBarSource = fs.readFileSync(path.join(webSrc, "prismux/PrismuxStatusBar.tsx"), "utf8");
+    const statusBarSource = fs.readFileSync(
+      path.join(webSrc, "prismux/PrismuxStatusBar.tsx"),
+      "utf8",
+    );
     expect(statusBarSource).not.toContain("额度 —");
     expect(statusBarSource).not.toContain("额度查询中…");
     expect(statusBarSource).toContain("shouldShowStatusBarQuota");
@@ -1675,7 +1707,10 @@ describe("statusBarResources and PrismuxDaemonClient unified APIs", () => {
       }
       if (url.includes("/v1/system/ports/kill")) {
         return new Response(
-          JSON.stringify({ ok: false, error: { code: "PROTECTED_PID", message: "禁止终止核心进程" } }),
+          JSON.stringify({
+            ok: false,
+            error: { code: "PROTECTED_PID", message: "禁止终止核心进程" },
+          }),
           { status: 403 },
         );
       }
@@ -1714,10 +1749,9 @@ describe("statusBarResources and PrismuxDaemonClient unified APIs", () => {
       }
       return origImpl!(input, init);
     });
-    const unsubscribe = client.subscribeUpdaterEvents(
-      (evt) => received.push(evt),
-      { maxReconnectAttempts: 0 },
-    );
+    const unsubscribe = client.subscribeUpdaterEvents((evt) => received.push(evt), {
+      maxReconnectAttempts: 0,
+    });
     await new Promise((r) => setTimeout(r, 20));
     unsubscribe();
 
@@ -1886,9 +1920,30 @@ describe("statusBarResources and PrismuxDaemonClient unified APIs", () => {
     // Verify sortProcessResources orders descending by memory / cpu / name keeping nulls last
     const normalizedRes = normalizeResourcesSummary({
       processes: [
-        { pid: 1, name: "beta", role: "child", category: "terminal", cpuPercent: null, memoryBytes: null },
-        { pid: 2, name: "alpha", role: "agent", category: "agent", cpuPercent: 9.2, memoryBytes: 100 },
-        { pid: 3, name: "gamma", role: "t3-server", category: "core", cpuPercent: 2.1, memoryBytes: 500 },
+        {
+          pid: 1,
+          name: "beta",
+          role: "child",
+          category: "terminal",
+          cpuPercent: null,
+          memoryBytes: null,
+        },
+        {
+          pid: 2,
+          name: "alpha",
+          role: "agent",
+          category: "agent",
+          cpuPercent: 9.2,
+          memoryBytes: 100,
+        },
+        {
+          pid: 3,
+          name: "gamma",
+          role: "t3-server",
+          category: "core",
+          cpuPercent: 2.1,
+          memoryBytes: 500,
+        },
       ],
     });
     expect(sortProcessResources(normalizedRes.processes, "memory").map((p) => p.name)).toEqual([
@@ -1922,9 +1977,13 @@ describe("Issue #10 Orca & OMP parity mechanisms", () => {
     const textNodeInsideFooter = { parentElement: blankFooterEl };
 
     expect(shouldOpenStatusBarContextMenu(exemptEl as unknown as EventTarget)).toBe(false);
-    expect(shouldOpenStatusBarContextMenu(textNodeInsideExempt as unknown as EventTarget)).toBe(false);
+    expect(shouldOpenStatusBarContextMenu(textNodeInsideExempt as unknown as EventTarget)).toBe(
+      false,
+    );
     expect(shouldOpenStatusBarContextMenu(blankFooterEl as unknown as EventTarget)).toBe(true);
-    expect(shouldOpenStatusBarContextMenu(textNodeInsideFooter as unknown as EventTarget)).toBe(true);
+    expect(shouldOpenStatusBarContextMenu(textNodeInsideFooter as unknown as EventTarget)).toBe(
+      true,
+    );
     expect(shouldOpenStatusBarContextMenu(null)).toBe(true);
   });
 
@@ -2243,7 +2302,10 @@ describe("statusBarKeepAwake 3-state machine, persistence & Popover UI", () => {
     const indexCss = fs.readFileSync(path.join(webSrc, "index.css"), "utf8");
     expect(indexCss).toContain("--pmx-status-bar-height: 20px;");
 
-    const statusBarSource = fs.readFileSync(path.join(webSrc, "prismux/PrismuxStatusBar.tsx"), "utf8");
+    const statusBarSource = fs.readFileSync(
+      path.join(webSrc, "prismux/PrismuxStatusBar.tsx"),
+      "utf8",
+    );
     expect(statusBarSource).toContain("export const PRISMUX_STATUS_BAR_HEIGHT_PX = 20 as const;");
     expect(statusBarSource).toContain("h-[var(--pmx-status-bar-height,20px)]");
     expect(statusBarSource).toContain("text-[10.5px] leading-none");
@@ -2253,7 +2315,9 @@ describe("statusBarKeepAwake 3-state machine, persistence & Popover UI", () => {
     expect(statusBarSource).not.toContain("text-[11px] leading-none");
 
     const rootSource = fs.readFileSync(path.join(webSrc, "routes/__root.tsx"), "utf8");
-    expect(rootSource).toContain("[&_[data-slot=sidebar-container]]:!bottom-[var(--pmx-status-bar-height,20px)]");
+    expect(rootSource).toContain(
+      "[&_[data-slot=sidebar-container]]:!bottom-[var(--pmx-status-bar-height,20px)]",
+    );
     expect(rootSource).toContain(
       "[&_[data-slot=sidebar-container]]:!h-[calc(100dvh-var(--pmx-status-bar-height,20px))]",
     );
@@ -2271,7 +2335,9 @@ describe("statusBarKeepAwake 3-state machine, persistence & Popover UI", () => {
       path.join(webSrc, "prismux/settings/plugins/PluginDetailDrawer.tsx"),
       "utf8",
     );
-    expect(drawerSource).toContain("top-0 right-0 bottom-[var(--pmx-status-bar-height,20px)] left-0");
+    expect(drawerSource).toContain(
+      "top-0 right-0 bottom-[var(--pmx-status-bar-height,20px)] left-0",
+    );
 
     const auditModalSource = fs.readFileSync(
       path.join(webSrc, "prismux/settings/plugins/PluginTrustAuditModal.tsx"),
@@ -2431,5 +2497,40 @@ describe("statusBarKeepAwake 3-state machine, persistence & Popover UI", () => {
       "我的 AGY",
       "备用 Codex",
     ]);
+  });
+
+  it("exports exact 30-minute auto-refresh interval and stable usage window equality helper", () => {
+    expect(STATUS_BAR_USAGE_AUTO_REFRESH_INTERVAL_MS).toBe(1_800_000);
+    expect(
+      isSameUsageWindow(
+        {
+          sinceDay: UsageDay.make("2026-11-20"),
+          untilDay: UsageDay.make("2026-11-26"),
+          timeZone: "Asia/Shanghai",
+          resolution: "day",
+        },
+        {
+          sinceDay: UsageDay.make("2026-11-20"),
+          untilDay: UsageDay.make("2026-11-26"),
+          timeZone: "Asia/Shanghai",
+        },
+      ),
+    ).toBe(true);
+    expect(
+      isSameUsageWindow(
+        {
+          sinceDay: UsageDay.make("2026-11-20"),
+          untilDay: UsageDay.make("2026-11-26"),
+          timeZone: "Asia/Shanghai",
+          resolution: "day",
+        },
+        {
+          sinceDay: UsageDay.make("2026-11-21"),
+          untilDay: UsageDay.make("2026-11-27"),
+          timeZone: "Asia/Shanghai",
+          resolution: "day",
+        },
+      ),
+    ).toBe(false);
   });
 });

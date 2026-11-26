@@ -1701,7 +1701,8 @@ export const layerWsRpc = (
             if (importedThread !== null) {
               return yield* new AcpRegistryOperationError({
                 reason: "session_delete_failed",
-                message: "Delete the imported Prismux thread before deleting its native ACP session.",
+                message:
+                  "Delete the imported Prismux thread before deleting its native ACP session.",
               });
             }
             yield* manager.deleteSession({
@@ -2517,22 +2518,27 @@ export const layerWsRpc = (
             if (input.reloadSecrets === true && input.instanceId === undefined) {
               yield* invalidateSettingsSecrets(secretResolver, serverSettings.getSettings);
             }
-            // Await refresh; RPC scope closure would interrupt a fork before the hub answered.
-            if (input.instanceId === undefined) {
-              yield* usageLimitSources.refresh;
-            }
-            let providers = yield* input.cwd !== undefined && input.instanceId !== undefined
-              ? providerRegistry.refreshWorkspaceSnapshot({
-                  instanceId: input.instanceId,
-                  cwd: input.cwd,
-                  scanCwd: yield* projectService.workspaceScanDirectory(input.cwd),
-                  fresh: input.fresh === true,
-                })
-              : input.reloadSecrets === true
-                ? providerRegistry.reloadSecretsAndRefresh(input.instanceId)
-                : input.instanceId !== undefined
-                  ? providerRegistry.refreshInstance(input.instanceId)
-                  : providerRegistry.refresh();
+            // Run hub/relay limit refresh and local provider refresh in parallel so a slow relay
+            // never delays Codex/Claude quota checks; RPC scope stays open until both settle.
+            const refreshProvidersEffect =
+              input.cwd !== undefined && input.instanceId !== undefined
+                ? providerRegistry.refreshWorkspaceSnapshot({
+                    instanceId: input.instanceId,
+                    cwd: input.cwd,
+                    scanCwd: yield* projectService.workspaceScanDirectory(input.cwd),
+                    fresh: input.fresh === true,
+                  })
+                : input.reloadSecrets === true
+                  ? providerRegistry.reloadSecretsAndRefresh(input.instanceId)
+                  : input.instanceId !== undefined
+                    ? providerRegistry.refreshInstance(input.instanceId)
+                    : providerRegistry.refresh();
+            let providers =
+              input.instanceId === undefined
+                ? (yield* Effect.all([refreshProvidersEffect, usageLimitSources.refresh], {
+                    concurrency: 2,
+                  }))[0]
+                : yield* refreshProvidersEffect;
             if (input.refreshModels) {
               const instances = yield* providerInstances.listInstances;
               for (const instance of instances) {

@@ -15,7 +15,7 @@ import { page, userEvent } from "vite-plus/test/browser";
 import { act, render } from "../../../test/render";
 import { getRouter } from "../../router";
 import type { DaemonOfficialQuotaSummaryResponse } from "../daemonClient";
-import { PrismuxStatusBar } from "../PrismuxStatusBar";
+import { PrismuxStatusBar, STATUS_BAR_USAGE_AUTO_REFRESH_INTERVAL_MS } from "../PrismuxStatusBar";
 import {
   aggregateQuotaSummary,
   QUOTA_PREFS_STORAGE_KEY,
@@ -23,7 +23,9 @@ import {
 } from "./quotaStatus.logic";
 import { QuotaStatusPopover } from "./QuotaStatusPopover";
 import { ResourcesStatusPopover } from "./ResourcesStatusPopover";
+import type { StatusBarUsageSummary } from "./statusBarUsage";
 import { STATUS_BAR_VISIBILITY_STORAGE_KEY } from "./statusBarVisibility";
+import { UsageStatusPopover } from "./UsageStatusPopover";
 
 function renderStatusBarInRouter(initialDaemonQuota?: DaemonOfficialQuotaSummaryResponse | null) {
   const rootRoute = createRootRoute({
@@ -94,9 +96,7 @@ describe("PrismuxStatusBar (browser)", () => {
 
     // Never performs any unsolicited Antigravity / remote quota fetch.
     const fetchedUrls = fetchSpy.mock.calls.map(([input]) => String(input));
-    expect(
-      fetchedUrls.filter((url) => !url.includes("/.well-known/t3/environment")),
-    ).toEqual([]);
+    expect(fetchedUrls.filter((url) => !url.includes("/.well-known/t3/environment"))).toEqual([]);
   });
 
   it("highlights the active option in ResourcesStatusPopover [内存 | CPU | 名称] segmented switcher across clicks", async () => {
@@ -257,17 +257,25 @@ describe("PrismuxStatusBar (browser)", () => {
 
     // Drill down into Antigravity detail view (Fig 5)
     await userEvent.click(screen.getByTestId("quota-agent-row-antigravity"));
-    expect(screen.getByTestId("prismux-quota-popover").element().getAttribute("data-quota-view")).toBe("detail");
-    expect(screen.getByTestId("quota-detail-updated-at").element().textContent).toContain("更新于 刚刚");
+    expect(
+      screen.getByTestId("prismux-quota-popover").element().getAttribute("data-quota-view"),
+    ).toBe("detail");
+    expect(screen.getByTestId("quota-detail-updated-at").element().textContent).toContain(
+      "更新于 刚刚",
+    );
 
     // Toggle Used -> Remaining
     await userEvent.click(screen.getByTestId("quota-percent-mode-toggle"));
     expect(screen.getByTestId("quota-percent-mode-toggle").element().textContent).toContain("剩余");
-    expect(screen.getByTestId("quota-detail-row-gemini:weekly").element().textContent).toContain("93%");
+    expect(screen.getByTestId("quota-detail-row-gemini:weekly").element().textContent).toContain(
+      "93%",
+    );
 
     // Navigate back to list view
     await userEvent.click(screen.getByTestId("quota-detail-back"));
-    expect(screen.getByTestId("prismux-quota-popover").element().getAttribute("data-quota-view")).toBe("compact");
+    expect(
+      screen.getByTestId("prismux-quota-popover").element().getAttribute("data-quota-view"),
+    ).toBe("compact");
   });
 
   it("syncs bottom status bar quota windows and mini progress bar live with Detailed/Compact and Used/Remaining toggles", async () => {
@@ -351,7 +359,9 @@ describe("PrismuxStatusBar (browser)", () => {
     };
 
     await using screen = await renderStatusBarInRouter(quotaSnapshot);
-    const barEl = screen.getByRole("contentinfo", { name: "Prismux 状态栏" }).element() as HTMLElement;
+    const barEl = screen
+      .getByRole("contentinfo", { name: "Prismux 状态栏" })
+      .element() as HTMLElement;
     expect(Math.round(barEl.getBoundingClientRect().height)).toBe(20);
 
     const trigger = screen.getByTestId("status-bar-quota-trigger").element() as HTMLButtonElement;
@@ -433,7 +443,9 @@ describe("PrismuxStatusBar (browser)", () => {
     };
 
     await using screen = await renderStatusBarInRouter(unauthSnapshot);
-    const barEl = screen.getByRole("contentinfo", { name: "Prismux 状态栏" }).element() as HTMLElement;
+    const barEl = screen
+      .getByRole("contentinfo", { name: "Prismux 状态栏" })
+      .element() as HTMLElement;
     expect(Math.round(barEl.getBoundingClientRect().height)).toBe(20);
     expect(screen.getByTestId("status-bar-quota-capsule").query()).toBeNull();
     expect(screen.getByTestId("status-bar-quota-trigger").query()).toBeNull();
@@ -519,5 +531,174 @@ describe("PrismuxStatusBar (browser)", () => {
     } finally {
       queueMicrotaskSpy.mockRestore();
     }
+  });
+
+  it("schedules a single 30-minute (1_800_000 ms) Today-token auto-refresh interval and clears it cleanly on unmount", async () => {
+    window.localStorage.removeItem(STATUS_BAR_VISIBILITY_STORAGE_KEY);
+    expect(STATUS_BAR_USAGE_AUTO_REFRESH_INTERVAL_MS).toBe(30 * 60 * 1_000);
+
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+
+    try {
+      const screen = await renderStatusBarInRouter();
+      const bar = screen.getByRole("contentinfo", { name: "Prismux 状态栏" });
+      await expect.element(bar).toBeVisible();
+
+      const thirtyMinCalls = setIntervalSpy.mock.calls.filter(
+        ([, delay]) => delay === STATUS_BAR_USAGE_AUTO_REFRESH_INTERVAL_MS,
+      );
+      expect(thirtyMinCalls).toHaveLength(1);
+
+      const timerIndex = setIntervalSpy.mock.calls.findIndex(
+        ([, delay]) => delay === STATUS_BAR_USAGE_AUTO_REFRESH_INTERVAL_MS,
+      );
+      const timerId = setIntervalSpy.mock.results[timerIndex]?.value;
+      expect(timerId).toBeDefined();
+
+      // Unmount must clear the 30-minute timer cleanly (zero leaks / duplicate timers).
+      await screen.unmount();
+      const clearedIds = clearIntervalSpy.mock.calls.map(([id]) => id);
+      expect(clearedIds).toContain(timerId);
+    } finally {
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+    }
+  });
+
+  it("hot-reloads UsageStatusPopover and QuotaStatusPopover data in-place on the very first click of Refresh", async () => {
+    const makeUsageSummary = (todayTokens: number, weekTokens: number): StatusBarUsageSummary => ({
+      windows: [],
+      antigravityEntries: [],
+      primaryWindow: null,
+      enabledProviderCount: 1,
+      telemetry: {
+        todayTokens,
+        todayCostUsd: todayTokens > 20_000 ? 0.88 : 0.21,
+        weekTokens,
+        weekCostUsd: 1.45,
+        weekRecords: 12,
+        weekSessions: 3,
+        cacheHitPercent: 64,
+        cacheSavingsUsd: 0.32,
+        providers: [
+          {
+            key: "codex",
+            providerKind: "codex",
+            providerName: "Codex",
+            todayTokens,
+            todayCostUsd: todayTokens > 20_000 ? 0.88 : 0.21,
+            weekTokens,
+            weekCostUsd: 1.45,
+            weekRecords: 12,
+            weekSessions: 3,
+            cacheHitPercent: 64,
+            hasQuotaWindow: true,
+            isCustomEndpoint: false,
+          },
+        ],
+      },
+    });
+
+    const usageRefreshCalls: number[] = [];
+    function UsageHarness() {
+      const [summary, setSummary] = useState(() => makeUsageSummary(12_000, 90_000));
+      return (
+        <UsageStatusPopover
+          summary={summary}
+          onClose={() => {}}
+          onRefresh={async () => {
+            usageRefreshCalls.push(usageRefreshCalls.length + 1);
+            setSummary(makeUsageSummary(48_500, 126_500));
+          }}
+        />
+      );
+    }
+
+    await using usageScreen = await render(<UsageHarness />);
+    const usagePopover = usageScreen.getByTestId("prismux-usage-popover").element() as HTMLElement;
+    expect(usagePopover.textContent).toContain("12.0K tok");
+
+    // Click Refresh ONCE -> hot-updates in-place immediately without second click or reopening!
+    await userEvent.click(usageScreen.getByTestId("usage-refresh-button"));
+    expect(usageRefreshCalls).toHaveLength(1);
+    expect(usagePopover.textContent).toContain("48.5K tok");
+    expect(usageScreen.getByTestId("usage-refresh-button").element().textContent).toContain(
+      "已刷新",
+    );
+
+    // Same first-click hot-reload guarantee for QuotaStatusPopover (both list & detail views)
+    const now = Date.parse("2026-11-26T12:00:00Z");
+    const makeQuota = (usedPercent: number) =>
+      aggregateQuotaSummary(
+        {
+          ok: true,
+          cached: false,
+          cacheTtlMs: 900_000,
+          fetchedAt: now,
+          fetchedAtIso: new Date(now).toISOString(),
+          providers: [],
+          antigravity: {
+            id: "antigravity",
+            providerId: "antigravity",
+            displayName: "Antigravity",
+            source: "official-cli",
+            command: 'agy -p "/usage"',
+            status: "ok",
+            available: true,
+            executablePath: "C:\\Users\\Fish\\AppData\\Local\\agy\\bin\\agy.exe",
+            remainingCredits: 100,
+            fetchedAt: now,
+            fetchedAtIso: new Date(now).toISOString(),
+            error: null,
+            windows: [
+              {
+                id: "gemini:weekly",
+                group: "Gemini",
+                groupId: "gemini",
+                window: "weekly",
+                shortLabel: "Gemini 周",
+                detailLabel: "Gemini · 每周",
+                remainingPercent: 100 - usedPercent,
+                usedPercent,
+                resetAtIso: "2026-12-01T00:00:00.000Z",
+                resetAtMs: Date.parse("2026-12-01T00:00:00.000Z"),
+              },
+            ],
+          },
+        },
+        [],
+        now,
+      );
+
+    const quotaRefreshCalls: boolean[] = [];
+    function QuotaHarness() {
+      const [summary, setSummary] = useState(() => makeQuota(10));
+      const [prefs, setPrefs] = useState<QuotaPreferences>({
+        viewMode: "detailed",
+        percentMode: "used",
+      });
+      return (
+        <QuotaStatusPopover
+          summary={summary}
+          prefs={prefs}
+          onPrefsChange={setPrefs}
+          now={now}
+          onRefresh={async (force) => {
+            quotaRefreshCalls.push(force);
+            setSummary(makeQuota(37));
+          }}
+        />
+      );
+    }
+
+    await using quotaScreen = await render(<QuotaHarness />);
+    const quotaPopover = quotaScreen.getByTestId("prismux-quota-popover").element() as HTMLElement;
+    expect(quotaPopover.textContent).toContain("10%");
+
+    // Click Refresh ONCE -> forces fresh fetch (force=true) and hot-updates in-place immediately!
+    await userEvent.click(quotaScreen.getByTestId("quota-refresh-button"));
+    expect(quotaRefreshCalls).toEqual([true]);
+    expect(quotaPopover.textContent).toContain("37%");
   });
 });
