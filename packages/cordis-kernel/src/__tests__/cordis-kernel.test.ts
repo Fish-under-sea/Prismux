@@ -678,7 +678,14 @@ test("CordisStreamingInstaller Track 2: 503 npmmirror fallback, scriptless posti
     fallbackHits += 1;
     const urlPath = req.url ?? "/";
 
-    const sendPackument = (pkgName: string, version: string, tarballPath: string) => {
+    const sri512 = (buf: Buffer) =>
+      `sha512-${createHash("sha512").update(buf).digest("base64")}`;
+    const sendPackument = (
+      pkgName: string,
+      version: string,
+      tarballPath: string,
+      tarballBuf: Buffer
+    ) => {
       res.statusCode = 200;
       res.setHeader("content-type", "application/json");
       res.end(
@@ -689,7 +696,8 @@ test("CordisStreamingInstaller Track 2: 503 npmmirror fallback, scriptless posti
             [version]: {
               version,
               dist: {
-                tarball: `${fallback.baseUrl}${tarballPath}`
+                tarball: `${fallback.baseUrl}${tarballPath}`,
+                integrity: sri512(tarballBuf)
               }
             }
           }
@@ -698,7 +706,7 @@ test("CordisStreamingInstaller Track 2: 503 npmmirror fallback, scriptless posti
     };
 
     if (urlPath === "/prismux-plugin-community") {
-      sendPackument("prismux-plugin-community", "1.1.0", "/tar/community.tgz");
+      sendPackument("prismux-plugin-community", "1.1.0", "/tar/community.tgz", safePkgTarball);
       return;
     }
     if (urlPath === "/tar/community.tgz") {
@@ -707,7 +715,7 @@ test("CordisStreamingInstaller Track 2: 503 npmmirror fallback, scriptless posti
       return;
     }
     if (urlPath === "/prismux-plugin-evil") {
-      sendPackument("prismux-plugin-evil", "1.0.0", "/tar/evil.tgz");
+      sendPackument("prismux-plugin-evil", "1.0.0", "/tar/evil.tgz", tarSlipTarball);
       return;
     }
     if (urlPath === "/tar/evil.tgz") {
@@ -716,7 +724,7 @@ test("CordisStreamingInstaller Track 2: 503 npmmirror fallback, scriptless posti
       return;
     }
     if (urlPath === "/prismux-plugin-symlink") {
-      sendPackument("prismux-plugin-symlink", "1.0.0", "/tar/symlink.tgz");
+      sendPackument("prismux-plugin-symlink", "1.0.0", "/tar/symlink.tgz", symlinkTarball);
       return;
     }
     if (urlPath === "/tar/symlink.tgz") {
@@ -725,7 +733,12 @@ test("CordisStreamingInstaller Track 2: 503 npmmirror fallback, scriptless posti
       return;
     }
     if (urlPath === "/@thirdparty%2Fprismux-plugin-tools") {
-      sendPackument("@thirdparty/prismux-plugin-tools", "1.0.0", "/tar/tools.tgz");
+      sendPackument(
+        "@thirdparty/prismux-plugin-tools",
+        "1.0.0",
+        "/tar/tools.tgz",
+        modelVisibleTarball
+      );
       return;
     }
     if (urlPath === "/tar/tools.tgz") {
@@ -734,7 +747,7 @@ test("CordisStreamingInstaller Track 2: 503 npmmirror fallback, scriptless posti
       return;
     }
     if (urlPath === "/prismux-plugin-peer-only") {
-      sendPackument("prismux-plugin-peer-only", "1.0.0", "/tar/peer-only.tgz");
+      sendPackument("prismux-plugin-peer-only", "1.0.0", "/tar/peer-only.tgz", peerOnlyTarball);
       return;
     }
     if (urlPath === "/tar/peer-only.tgz") {
@@ -752,14 +765,27 @@ test("CordisStreamingInstaller Track 2: 503 npmmirror fallback, scriptless posti
       pluginsDir,
       hostVersion: "0.1.0",
       defaultRegistryUrl: primary.baseUrl,
-      defaultFallbackRegistryUrl: fallback.baseUrl
+      defaultFallbackRegistryUrl: fallback.baseUrl,
+      allowInsecureLoopbackForTesting: true
     });
 
     // 1. Primary 503 -> automatic fallback to npmmirror + postinstall NEVER executed
+    // Package declares preinstall/postinstall/prepare -> requires explicit audit confirmation!
+    await assert.rejects(
+      () =>
+        installer.installFromNpm({
+          packageNameOrTarball: "prismux-plugin-community",
+          ignoreScripts: true,
+          distribution: "managed"
+        }),
+      PermissionAuditRequiredError
+    );
+
     const installed = await installer.installFromNpm({
       packageNameOrTarball: "prismux-plugin-community",
       ignoreScripts: true,
-      distribution: "managed"
+      distribution: "managed",
+      confirmedAudit: true
     });
     assert.ok(primaryHits >= 1);
     assert.ok(fallbackHits >= 2);
@@ -971,7 +997,10 @@ test("CordisStreamingInstaller security edge cases: ustar prefix, PAX paths, sma
             versions: {
               "1.0.0": {
                 version: "1.0.0",
-                dist: { tarball: "/tar/pax.tgz" }
+                dist: {
+                  tarball: "/tar/pax.tgz",
+                  integrity: `sha512-${createHash("sha512").update(paxTarball).digest("base64")}`
+                }
               }
             }
           })
@@ -1037,7 +1066,8 @@ test("CordisStreamingInstaller security edge cases: ustar prefix, PAX paths, sma
         hostVersion: "0.1.0",
         defaultRegistryUrl: deadPrimaryUrl,
         defaultFallbackRegistryUrl: fallbackAndGithub.baseUrl,
-        githubApiBaseUrl: fallbackAndGithub.baseUrl
+        githubApiBaseUrl: fallbackAndGithub.baseUrl,
+        allowInsecureLoopbackForTesting: true
       });
 
       const installed = await installer.installFromNpm({
@@ -1056,6 +1086,7 @@ test("CordisStreamingInstaller security edge cases: ustar prefix, PAX paths, sma
         () =>
           installer.installFromNpm({
             packageNameOrTarball: `${fallbackAndGithub.baseUrl}/tar/pkg-escape.tgz`,
+            expectedSha256: createHash("sha256").update(pkgEscapeTarball).digest("hex"),
             ignoreScripts: true,
             distribution: "managed"
           }),
@@ -1066,6 +1097,7 @@ test("CordisStreamingInstaller security edge cases: ustar prefix, PAX paths, sma
         () =>
           installer.installFromNpm({
             packageNameOrTarball: `${fallbackAndGithub.baseUrl}/tar/hardlink.tgz`,
+            expectedSha256: createHash("sha256").update(hardlinkTarball).digest("hex"),
             ignoreScripts: true,
             distribution: "managed"
           }),
@@ -1192,7 +1224,8 @@ test("CordisStreamingInstaller: unwraps official npm .wb-plugin wrappers, blocks
     const pluginsDir = join(workDir, "plugins");
     const installer = new CordisStreamingInstaller({
       pluginsDir,
-      hostVersion: "0.1.2-preview.2"
+      hostVersion: "0.1.2-preview.2",
+      allowInsecureLoopbackForTesting: true
     });
 
     // 1. Deprecated official entry is strictly rejected
@@ -1299,13 +1332,28 @@ test("CordisStreamingInstaller: unwraps official npm .wb-plugin wrappers, blocks
     });
 
     try {
+      // Outer wrapper declares postinstall script -> must require audit confirmation first
+      await assert.rejects(
+        () =>
+          installer.installFromNpm({
+            packageNameOrTarball: "prismux-plugin-qq",
+            registryUrl: registry.baseUrl,
+            fallbackRegistryUrl: registry.baseUrl,
+            expectedPluginId: "qq",
+            ignoreScripts: true,
+            distribution: "managed"
+          }),
+        PermissionAuditRequiredError
+      );
+
       const installedV1 = await installer.installFromNpm({
         packageNameOrTarball: "prismux-plugin-qq",
         registryUrl: registry.baseUrl,
         fallbackRegistryUrl: registry.baseUrl,
         expectedPluginId: "qq",
         ignoreScripts: true,
-        distribution: "managed"
+        distribution: "managed",
+        confirmedAudit: true
       });
       assert.equal(installedV1.manifest.id, "qq");
       assert.equal(installedV1.manifest.version, "0.1.2-preview.1");

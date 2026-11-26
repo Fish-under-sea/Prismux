@@ -72,6 +72,7 @@ export * from "./security/AntigravityPolicyStore.js";
 export * from "./workflows/OvernightFactory.js";
 export * from "./chief/ChiefObsidianCurator.js";
 export * from "./chief/ChiefThreadManager.js";
+export * from "./server/CorsOrigin.js";
 export * from "./server/PairingManager.js";
 export * from "./server/CliUpdateRoutes.js";
 export * from "./server/DaemonBusinessRoutes.js";
@@ -335,6 +336,9 @@ export class PrismuxDaemon {
     this.pluginInstaller = new CordisStreamingInstaller({
       pluginsDir: join(options.dataDir, "plugins"),
       hostVersion: resolvedHostVersion,
+      ...(options.officialPluginSources?.allowInsecureLoopbackForTesting === true
+        ? { allowInsecureLoopbackForTesting: true }
+        : {}),
     });
     this.appUpdater = new AppUpdater({
       currentVersion: resolvedHostVersion,

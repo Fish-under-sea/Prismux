@@ -3,6 +3,7 @@ import { validateTrustedCallerScope } from "@prismux/memory-core";
 import type { CallerScope, DaemonPairingInfo } from "@prismux/protocol";
 
 export const DEFAULT_PAIRING_CODE_TTL_MS = 5 * 60 * 1000;
+export const DEFAULT_MAX_CONSECUTIVE_PAIRING_FAILURES = 5;
 
 interface PairingCodeRecord {
   codeHash: Buffer;
@@ -28,6 +29,7 @@ export interface ExchangePairingResult {
 export interface PairingManagerOptions {
   initialAuthToken?: string;
   defaultPairingTtlMs?: number;
+  maxConsecutiveFailures?: number;
 }
 
 function sha256Digest(value: string): Buffer {
@@ -44,13 +46,21 @@ function constantTimeHashEquals(a: Buffer, b: Buffer): boolean {
  */
 export class PairingManager {
   private readonly defaultPairingTtlMs: number;
+  private readonly maxConsecutiveFailures: number;
   private readonly pairingCodes: PairingCodeRecord[] = [];
   private readonly tokens: DeviceTokenRecord[] = [];
+  private consecutiveFailures = 0;
 
   constructor(options: PairingManagerOptions = {}) {
     this.defaultPairingTtlMs = Math.max(
       1_000,
       options.defaultPairingTtlMs ?? DEFAULT_PAIRING_CODE_TTL_MS
+    );
+    this.maxConsecutiveFailures = Math.max(
+      1,
+      Math.floor(
+        options.maxConsecutiveFailures ?? DEFAULT_MAX_CONSECUTIVE_PAIRING_FAILURES
+      )
     );
 
     if (
@@ -126,11 +136,50 @@ export class PairingManager {
       used: false,
       callerScope: verifiedScope
     });
+    this.consecutiveFailures = 0;
 
     return {
       pairingCode,
       expiresAt,
       daemonUrl
+    };
+  }
+
+  /**
+   * Immediately revokes all active, unused pairing codes (e.g. after repeated failed attempts).
+   */
+  invalidateActivePairingCodes(): number {
+    let invalidated = 0;
+    for (const record of this.pairingCodes) {
+      if (!record.used) {
+        record.used = true;
+        invalidated += 1;
+      }
+    }
+    this.pairingCodes.length = 0;
+    return invalidated;
+  }
+
+  /**
+   * Records a failed pairing attempt and automatically invalidates all active pairing
+   * codes once `maxConsecutiveFailures` consecutive failures are reached.
+   */
+  recordFailedPairingAttempt(): {
+    invalidatedActiveCodes: boolean;
+    consecutiveFailures: number;
+  } {
+    this.consecutiveFailures += 1;
+    if (this.consecutiveFailures >= this.maxConsecutiveFailures) {
+      const revokedCount = this.invalidateActivePairingCodes();
+      this.consecutiveFailures = 0;
+      return {
+        invalidatedActiveCodes: revokedCount > 0,
+        consecutiveFailures: this.maxConsecutiveFailures
+      };
+    }
+    return {
+      invalidatedActiveCodes: false,
+      consecutiveFailures: this.consecutiveFailures
     };
   }
 
@@ -140,6 +189,7 @@ export class PairingManager {
   ): ExchangePairingResult | null {
     const trimmed = code.trim();
     if (trimmed.length === 0) {
+      this.recordFailedPairingAttempt();
       return null;
     }
 
@@ -155,10 +205,12 @@ export class PairingManager {
     }
 
     if (matched === undefined) {
+      this.recordFailedPairingAttempt();
       return null;
     }
 
     matched.used = true;
+    this.consecutiveFailures = 0;
     const token = `pmx_${randomBytes(32).toString("base64url")}`;
     const issuedAt = Date.now();
     const normalizedLabel =

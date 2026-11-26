@@ -256,7 +256,8 @@ test("E2E plugin install: GitHub 404 -> Gitee release fallback, npm wrapper fall
         giteeWebBase: mockGitee.baseUrl,
         npmRegistryUrl: mockNpm.baseUrl,
         npmMirrorRegistryUrl: mockNpm.baseUrl,
-        timeoutMs: 5_000
+        timeoutMs: 5_000,
+        allowInsecureLoopbackForTesting: true
       }
     });
 

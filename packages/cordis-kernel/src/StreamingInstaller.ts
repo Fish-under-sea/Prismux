@@ -24,7 +24,6 @@ import {
 } from "node:path";
 import { Readable, Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { fileURLToPath } from "node:url";
 import { createGunzip } from "node:zlib";
 import {
   BRAND,
@@ -60,6 +59,40 @@ const INSTALL_METADATA_FILENAME = ".prismux-install.json";
 const SNAPSHOTS_DIR_NAME = ".snapshots";
 const MAX_PLUGIN_SNAPSHOTS = 3;
 const SAFE_PLUGIN_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
+const SHA1_HEX_RE = /^[0-9a-f]{40}$/;
+const BASE64_DIGEST_RE = /^[A-Za-z0-9+/]+=*$/;
+const WINDOWS_RESERVED_SEGMENT_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
+const FORBIDDEN_SEGMENT_CHARS_RE = /[:*?"<>|]/;
+const TRAILING_DOT_OR_SPACE_RE = /[. ]$/;
+const SENSITIVE_REDIRECT_HEADERS = new Set<string>([
+  "authorization",
+  "cookie",
+  "proxy-authorization"
+]);
+
+export const DEFAULT_ALLOWED_REGISTRY_HOSTS: ReadonlySet<string> = new Set([
+  "registry.npmjs.org",
+  "registry.npmmirror.com",
+  "cdn.npmmirror.com"
+]);
+
+function isLoopbackHostname(hostname: string): boolean {
+  const lower = hostname.trim().toLowerCase();
+  return lower === "127.0.0.1" || lower === "localhost" || lower === "[::1]" || lower === "::1";
+}
+
+function stripSensitiveRedirectHeaders(
+  headers: Record<string, string>
+): Record<string, string> {
+  const sanitized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (!SENSITIVE_REDIRECT_HEADERS.has(key.toLowerCase())) {
+      sanitized[key] = value;
+    }
+  }
+  return sanitized;
+}
 
 const INSTALL_LIFECYCLE_SCRIPT_NAMES = [
   "preinstall",
@@ -183,6 +216,11 @@ export interface CordisStreamingInstallerOptions {
   requestTimeoutMs?: number;
   maxArchiveBytes?: number;
   maxUncompressedBytes?: number;
+  /**
+   * Test-only opt-in allowing `http://127.0.0.1` / `http://localhost` registry and tarball URLs.
+   * Must NEVER be enabled in production.
+   */
+  allowInsecureLoopbackForTesting?: boolean;
 }
 
 export interface RegistryOrderResolution {
@@ -198,6 +236,11 @@ export interface ProbePluginRegistriesOptions {
   timeoutMs?: number;
   headers?: Record<string, string>;
   probePath?: string;
+  /**
+   * Test-only opt-in allowing `http://127.0.0.1` / `http://localhost` probe targets.
+   * Must NEVER be enabled in production.
+   */
+  allowInsecureLoopbackForTesting?: boolean;
 }
 
 export interface PluginRegistryProbeEntry {
@@ -280,8 +323,18 @@ export class PermissionAuditRequiredError extends Error {
   readonly audit: PermissionAuditCard;
 
   constructor(audit: PermissionAuditCard) {
+    const reasons: string[] = [];
+    if (audit.modelVisible) {
+      reasons.push("modelVisible=true");
+    }
+    if (audit.permissions.some((item) => item.permission === "hooks:intercept")) {
+      reasons.push("hooks:intercept");
+    }
+    if (audit.ignoredInstallScripts.length > 0) {
+      reasons.push(`install scripts (${audit.ignoredInstallScripts.join(", ")})`);
+    }
     super(
-      `Plugin "${audit.pluginId}" declares modelVisible=true and requires explicit audit confirmation (confirmedAudit: true).`
+      `Plugin "${audit.pluginId}" requires explicit audit confirmation (confirmedAudit: true) due to: ${reasons.join(", ") || "elevated permissions"}.`
     );
     this.name = "PermissionAuditRequiredError";
     this.audit = audit;
@@ -529,6 +582,21 @@ export function normalizeAndValidateTarPath(
     if (segment.length === 0 || segment === "." || segment === "..") {
       throw new TarSecurityError(
         `Tar-Slip path traversal or unsafe segment detected: "${rawPath}".`
+      );
+    }
+    if (FORBIDDEN_SEGMENT_CHARS_RE.test(segment)) {
+      throw new TarSecurityError(
+        `Tar entry path contains forbidden character or NTFS ADS colon: "${rawPath}".`
+      );
+    }
+    if (TRAILING_DOT_OR_SPACE_RE.test(segment)) {
+      throw new TarSecurityError(
+        `Tar entry path segment ends with forbidden trailing dot or space: "${rawPath}".`
+      );
+    }
+    if (WINDOWS_RESERVED_SEGMENT_RE.test(segment)) {
+      throw new TarSecurityError(
+        `Tar entry path contains forbidden Windows reserved device name: "${rawPath}".`
       );
     }
   }
@@ -925,28 +993,70 @@ interface HttpResponseStream {
   finalUrl: string;
 }
 
+export interface HttpStreamSecurityOptions {
+  allowedHosts?: ReadonlySet<string>;
+  allowInsecureLoopbackForTesting?: boolean;
+}
+
+function validateRemotePluginHttpUrl(
+  rawUrl: string,
+  security: HttpStreamSecurityOptions,
+  previousProtocol?: string
+): URL {
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(rawUrl);
+  } catch {
+    throw new RegistryNetworkError(rawUrl, "Invalid URL.");
+  }
+
+  if (previousProtocol === "https:" && parsedUrl.protocol !== "https:") {
+    throw new RegistryNetworkError(
+      rawUrl,
+      `HTTPS-to-${parsedUrl.protocol} redirect downgrade is forbidden.`
+    );
+  }
+
+  const allowLoopback = security.allowInsecureLoopbackForTesting === true;
+  const host = parsedUrl.hostname.toLowerCase();
+  const isLoopback = isLoopbackHostname(host);
+
+  if (parsedUrl.protocol !== "https:") {
+    if (!(parsedUrl.protocol === "http:" && allowLoopback && isLoopback)) {
+      throw new RegistryNetworkError(
+        rawUrl,
+        `Insecure or unsupported protocol "${parsedUrl.protocol}" is forbidden (HTTPS required).`
+      );
+    }
+  }
+
+  const allowedHosts = security.allowedHosts ?? DEFAULT_ALLOWED_REGISTRY_HOSTS;
+  const hostAllowed =
+    allowedHosts.has(host) || (allowLoopback && isLoopback);
+  if (!hostAllowed) {
+    throw new RegistryNetworkError(
+      rawUrl,
+      `Host "${host}" is not in the trusted registry/redirect allowlist.`
+    );
+  }
+
+  return parsedUrl;
+}
+
 function openHttpStream(
   rawUrl: string,
   headers: Record<string, string>,
   timeoutMs: number,
-  redirectsRemaining = 5
+  redirectsRemaining = 5,
+  security: HttpStreamSecurityOptions = {},
+  previousProtocol?: string
 ): Promise<HttpResponseStream> {
   return new Promise((resolvePromise, rejectPromise) => {
     let parsedUrl: URL;
     try {
-      parsedUrl = new URL(rawUrl);
-    } catch {
-      rejectPromise(new RegistryNetworkError(rawUrl, "Invalid URL."));
-      return;
-    }
-
-    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-      rejectPromise(
-        new RegistryNetworkError(
-          rawUrl,
-          `Unsupported protocol "${parsedUrl.protocol}".`
-        )
-      );
+      parsedUrl = validateRemotePluginHttpUrl(rawUrl, security, previousProtocol);
+    } catch (err) {
+      rejectPromise(err instanceof Error ? err : new Error(String(err)));
       return;
     }
 
@@ -966,22 +1076,49 @@ function openHttpStream(
         const statusCode = res.statusCode ?? 0;
         const location = res.headers.location;
         if (
-          (statusCode === 301 ||
-            statusCode === 302 ||
-            statusCode === 303 ||
-            statusCode === 307 ||
-            statusCode === 308) &&
-          typeof location === "string" &&
-          location.length > 0 &&
-          redirectsRemaining > 0
+          statusCode === 301 ||
+          statusCode === 302 ||
+          statusCode === 303 ||
+          statusCode === 307 ||
+          statusCode === 308
         ) {
           res.resume();
-          const nextUrl = new URL(location, parsedUrl).toString();
+          if (typeof location !== "string" || location.trim().length === 0) {
+            rejectPromise(
+              new RegistryHttpError(
+                parsedUrl.toString(),
+                statusCode,
+                "Redirect response missing Location header."
+              )
+            );
+            return;
+          }
+          if (redirectsRemaining <= 0) {
+            rejectPromise(
+              new RegistryNetworkError(rawUrl, "Too many redirects.")
+            );
+            return;
+          }
+          let nextParsed: URL;
+          try {
+            nextParsed = new URL(location, parsedUrl);
+          } catch {
+            rejectPromise(
+              new RegistryNetworkError(rawUrl, `Invalid redirect Location "${location}".`)
+            );
+            return;
+          }
+          const nextHeaders =
+            nextParsed.origin === parsedUrl.origin
+              ? headers
+              : stripSensitiveRedirectHeaders(headers);
           openHttpStream(
-            nextUrl,
-            headers,
+            nextParsed.toString(),
+            nextHeaders,
             timeoutMs,
-            redirectsRemaining - 1
+            redirectsRemaining - 1,
+            security,
+            parsedUrl.protocol
           ).then(resolvePromise, rejectPromise);
           return;
         }
@@ -1014,9 +1151,10 @@ function openHttpStream(
 async function fetchJsonViaHttp(
   url: string,
   headers: Record<string, string>,
-  timeoutMs: number
+  timeoutMs: number,
+  security: HttpStreamSecurityOptions = {}
 ): Promise<unknown> {
-  const response = await openHttpStream(url, headers, timeoutMs);
+  const response = await openHttpStream(url, headers, timeoutMs, 5, security);
   if (response.statusCode < 200 || response.statusCode >= 300) {
     response.stream.resume();
     throw new RegistryHttpError(url, response.statusCode);
@@ -1147,40 +1285,124 @@ function resolvePackumentVersion(
   );
 }
 
+interface ParsedSriCheck {
+  algorithm: "sha512" | "sha256";
+  expectedHex: string;
+}
+
+function parseAndValidateIntegrityExpectations(expected: {
+  expectedSha256?: string;
+  integrity?: string;
+  shasum?: string;
+  requireStrongIntegrity?: boolean;
+}): {
+  expectedSha256?: string;
+  sriChecks: ParsedSriCheck[];
+  expectedSha1?: string;
+} {
+  let normalizedSha256: string | undefined;
+  const sriChecks: ParsedSriCheck[] = [];
+  let normalizedSha1: string | undefined;
+
+  if (expected.expectedSha256 !== undefined) {
+    const trimmed = expected.expectedSha256.trim().toLowerCase();
+    if (!SHA256_HEX_RE.test(trimmed)) {
+      throw new Error(
+        `Invalid expectedSha256 checksum: must be a 64-char hex SHA-256 string.`
+      );
+    }
+    normalizedSha256 = trimmed;
+  }
+
+  if (typeof expected.integrity === "string" && expected.integrity.trim().length > 0) {
+    const tokens = expected.integrity.trim().split(/\s+/);
+    for (const token of tokens) {
+      const dashIdx = token.indexOf("-");
+      if (dashIdx <= 0) {
+        throw new Error(`Invalid SRI integrity format: "${token}".`);
+      }
+      const algorithm = token.slice(0, dashIdx).toLowerCase();
+      const rawDigest = token.slice(dashIdx + 1);
+      if (algorithm !== "sha512" && algorithm !== "sha256") {
+        throw new Error(
+          `Unsupported SRI hash algorithm "${algorithm}" in integrity "${token}". Only sha512 and sha256 are allowed.`
+        );
+      }
+      if (rawDigest.length === 0 || !BASE64_DIGEST_RE.test(rawDigest)) {
+        throw new Error(`Malformed ${algorithm} SRI digest in "${token}".`);
+      }
+      const decoded = Buffer.from(rawDigest, "base64");
+      const expectedBytes = algorithm === "sha512" ? 64 : 32;
+      if (decoded.byteLength !== expectedBytes) {
+        throw new Error(
+          `Invalid ${algorithm} SRI digest byte length (${decoded.byteLength}, expected ${expectedBytes}) in "${token}".`
+        );
+      }
+      sriChecks.push({
+        algorithm,
+        expectedHex: decoded.toString("hex")
+      });
+    }
+  } else if (expected.integrity !== undefined && expected.integrity.trim().length === 0) {
+    if (expected.requireStrongIntegrity && normalizedSha256 === undefined) {
+      throw new Error(
+        "Remote plugin tarball is missing valid SRI integrity (sha512/sha256) or explicit expectedSha256."
+      );
+    }
+  }
+
+  if (typeof expected.shasum === "string" && expected.shasum.trim().length > 0) {
+    const trimmedSha1 = expected.shasum.trim().toLowerCase();
+    if (!SHA1_HEX_RE.test(trimmedSha1)) {
+      throw new Error(`Invalid shasum value: expected 40-char hex SHA-1.`);
+    }
+    normalizedSha1 = trimmedSha1;
+  }
+
+  if (
+    expected.requireStrongIntegrity === true &&
+    normalizedSha256 === undefined &&
+    sriChecks.length === 0
+  ) {
+    throw new Error(
+      "Refusing to install remote plugin tarball without valid SRI integrity (sha512/sha256) or explicit expectedSha256."
+    );
+  }
+
+  return {
+    ...(normalizedSha256 !== undefined ? { expectedSha256: normalizedSha256 } : {}),
+    sriChecks,
+    ...(normalizedSha1 !== undefined ? { expectedSha1: normalizedSha1 } : {})
+  };
+}
+
 function verifyExtractedIntegrity(
   actual: StreamExtractResult,
   expected: {
     expectedSha256?: string;
     integrity?: string;
     shasum?: string;
+    requireStrongIntegrity?: boolean;
   }
 ): void {
-  if (expected.expectedSha256 !== undefined) {
-    const normalizedExpected = expected.expectedSha256.trim().toLowerCase();
-    if (actual.sha256.toLowerCase() !== normalizedExpected) {
-      throw new ChecksumMismatchError(normalizedExpected, actual.sha256, "sha256");
+  const parsed = parseAndValidateIntegrityExpectations(expected);
+
+  if (parsed.expectedSha256 !== undefined) {
+    if (actual.sha256.toLowerCase() !== parsed.expectedSha256) {
+      throw new ChecksumMismatchError(parsed.expectedSha256, actual.sha256, "sha256");
     }
   }
 
-  if (typeof expected.integrity === "string" && expected.integrity.trim().length > 0) {
-    const sri = expected.integrity.trim();
-    if (sri.startsWith("sha512-")) {
-      const expectedHex = Buffer.from(sri.slice("sha512-".length), "base64").toString("hex");
-      if (actual.sha512 !== expectedHex) {
-        throw new ChecksumMismatchError(expectedHex, actual.sha512, "sha512");
-      }
-    } else if (sri.startsWith("sha256-")) {
-      const expectedHex = Buffer.from(sri.slice("sha256-".length), "base64").toString("hex");
-      if (actual.sha256 !== expectedHex) {
-        throw new ChecksumMismatchError(expectedHex, actual.sha256, "sha256");
-      }
+  for (const check of parsed.sriChecks) {
+    const actualHex = check.algorithm === "sha512" ? actual.sha512 : actual.sha256;
+    if (actualHex !== check.expectedHex) {
+      throw new ChecksumMismatchError(check.expectedHex, actualHex, check.algorithm);
     }
   }
 
-  if (typeof expected.shasum === "string" && expected.shasum.trim().length > 0) {
-    const expectedSha1 = expected.shasum.trim().toLowerCase();
-    if (actual.sha1.toLowerCase() !== expectedSha1) {
-      throw new ChecksumMismatchError(expectedSha1, actual.sha1, "sha1");
+  if (parsed.expectedSha1 !== undefined) {
+    if (actual.sha1.toLowerCase() !== parsed.expectedSha1) {
+      throw new ChecksumMismatchError(parsed.expectedSha1, actual.sha1, "sha1");
     }
   }
 }
@@ -1317,12 +1539,40 @@ export function resolveRegistryOrder(
   };
 }
 
+function buildRegistryAllowedHosts(
+  urls: readonly (string | undefined)[],
+  allowInsecureLoopbackForTesting: boolean
+): Set<string> {
+  const allowed = new Set<string>(DEFAULT_ALLOWED_REGISTRY_HOSTS);
+  for (const raw of urls) {
+    if (typeof raw !== "string" || raw.trim().length === 0) {
+      continue;
+    }
+    try {
+      const parsed = new URL(raw.trim());
+      const host = parsed.hostname.toLowerCase();
+      if (
+        parsed.protocol === "https:" ||
+        (allowInsecureLoopbackForTesting &&
+          parsed.protocol === "http:" &&
+          isLoopbackHostname(host))
+      ) {
+        allowed.add(host);
+      }
+    } catch {
+      // Invalid URL will be rejected by validateRemotePluginHttpUrl
+    }
+  }
+  return allowed;
+}
+
 async function probeSingleRegistry(
   id: PluginRegistryId,
   baseUrl: string,
   probePath: string,
   timeoutMs: number,
-  headers: Record<string, string>
+  headers: Record<string, string>,
+  security: HttpStreamSecurityOptions = {}
 ): Promise<PluginRegistryProbeEntry> {
   const normalizedBase = normalizeBaseUrl(baseUrl);
   const normalizedPath = probePath.startsWith("/") ? probePath : `/${probePath}`;
@@ -1337,7 +1587,8 @@ async function probeSingleRegistry(
         ...headers
       },
       timeoutMs,
-      3
+      3,
+      security
     );
     response.stream.resume();
     const latencyMs = Math.max(0, Math.round(performance.now() - startedAt));
@@ -1378,15 +1629,24 @@ export async function probePluginRegistries(
   const timeoutMs = options?.timeoutMs ?? 5_000;
   const probePath = options?.probePath ?? "/";
   const headers = options?.headers ?? {};
+  const allowLoopback = options?.allowInsecureLoopbackForTesting === true;
+  const security: HttpStreamSecurityOptions = {
+    allowedHosts: buildRegistryAllowedHosts(
+      [npmRegistryUrl, npmMirrorRegistryUrl],
+      allowLoopback
+    ),
+    allowInsecureLoopbackForTesting: allowLoopback
+  };
 
   const [npmjsProbe, mirrorProbe] = await Promise.all([
-    probeSingleRegistry("npmjs", npmRegistryUrl, probePath, timeoutMs, headers),
+    probeSingleRegistry("npmjs", npmRegistryUrl, probePath, timeoutMs, headers, security),
     probeSingleRegistry(
       "npmmirror",
       npmMirrorRegistryUrl,
       probePath,
       timeoutMs,
-      headers
+      headers,
+      security
     )
   ]);
 
@@ -1425,6 +1685,7 @@ export async function searchCommunityPlugins(
     githubApiBaseUrl?: string;
     perPage?: number;
     timeoutMs?: number;
+    allowInsecureLoopbackForTesting?: boolean;
   }
 ): Promise<CommunityPluginSummary[]> {
   const cleanTopic = topic.trim() || BRAND.githubTopic;
@@ -1446,10 +1707,28 @@ export async function searchCommunityPlugins(
     }
     payload = await res.json();
   } else {
+    const allowLoopback = options?.allowInsecureLoopbackForTesting === true;
+    const allowedHosts = new Set<string>(["api.github.com"]);
+    try {
+      const parsedBase = new URL(baseUrl);
+      const host = parsedBase.hostname.toLowerCase();
+      if (
+        parsedBase.protocol === "https:" ||
+        (allowLoopback && parsedBase.protocol === "http:" && isLoopbackHostname(host))
+      ) {
+        allowedHosts.add(host);
+      }
+    } catch {
+      // Invalid URL rejected by fetchJsonViaHttp
+    }
     payload = await fetchJsonViaHttp(
       url,
       headers,
-      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      {
+        allowedHosts,
+        allowInsecureLoopbackForTesting: allowLoopback
+      }
     );
   }
 
@@ -1496,6 +1775,7 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
   private readonly requestTimeoutMs: number;
   private readonly maxArchiveBytes: number;
   private readonly maxUncompressedBytes: number;
+  private readonly allowInsecureLoopbackForTesting: boolean;
 
   constructor(options: CordisStreamingInstallerOptions) {
     if (typeof options.pluginsDir !== "string" || options.pluginsDir.trim().length === 0) {
@@ -1525,6 +1805,8 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
     this.maxArchiveBytes = options.maxArchiveBytes ?? DEFAULT_MAX_ARCHIVE_BYTES;
     this.maxUncompressedBytes =
       options.maxUncompressedBytes ?? DEFAULT_MAX_UNCOMPRESSED_BYTES;
+    this.allowInsecureLoopbackForTesting =
+      options.allowInsecureLoopbackForTesting === true;
   }
 
   async probeRegistries(
@@ -1536,7 +1818,10 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
         options?.npmMirrorRegistryUrl ?? this.defaultFallbackRegistryUrl,
       timeoutMs: options?.timeoutMs ?? Math.min(this.requestTimeoutMs, 5_000),
       headers: options?.headers,
-      probePath: options?.probePath
+      probePath: options?.probePath,
+      allowInsecureLoopbackForTesting:
+        options?.allowInsecureLoopbackForTesting ??
+        this.allowInsecureLoopbackForTesting
     });
   }
 
@@ -1648,28 +1933,51 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
     const hostVersion = options.hostVersion ?? this.hostVersion;
     const specInput = options.packageNameOrTarball.trim();
 
+    if (
+      /^file:/i.test(specInput) ||
+      isAbsolute(specInput) ||
+      /^[A-Za-z]:[\\/]/.test(specInput) ||
+      specInput.includes("\\") ||
+      specInput === "." ||
+      specInput === ".." ||
+      specInput.startsWith("./") ||
+      specInput.startsWith("../") ||
+      existsSync(specInput)
+    ) {
+      throw new Error(
+        "Local filesystem paths and file:// URLs are forbidden in installFromNpm; use installLocalArchive with archive bytes instead."
+      );
+    }
+
     if (/^https?:\/\//i.test(specInput)) {
+      const allowedHosts = buildRegistryAllowedHosts(
+        [
+          options.registryUrl,
+          options.fallbackRegistryUrl,
+          this.defaultRegistryUrl,
+          this.defaultFallbackRegistryUrl
+        ],
+        this.allowInsecureLoopbackForTesting
+      );
       return this.installFromHttpTarballUrl(specInput, {
         expectedSha256: options.expectedSha256,
         expectedPluginId: options.expectedPluginId,
         confirmedAudit: options.confirmedAudit,
         hostVersion,
         headers: options.headers,
-        packageNameHint: specInput
+        packageNameHint: specInput,
+        security: {
+          allowedHosts,
+          allowInsecureLoopbackForTesting: this.allowInsecureLoopbackForTesting
+        }
       });
     }
 
-    if (specInput.startsWith("file://") || existsSync(specInput)) {
-      const localPath = specInput.startsWith("file://")
-        ? fileURLToPath(specInput)
-        : resolve(specInput);
-      return this.installFromReadable(createReadStream(localPath), {
-        packageNameHint: localPath,
-        expectedSha256: options.expectedSha256,
-        expectedPluginId: options.expectedPluginId,
-        confirmedAudit: options.confirmedAudit,
-        hostVersion
-      });
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(specInput)) {
+      throw new RegistryNetworkError(
+        specInput,
+        `Unsupported or forbidden URI scheme in "${specInput}".`
+      );
     }
 
     const parsedSpec = parseNpmPackageSpec(specInput);
@@ -1706,7 +2014,8 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
         npmRegistryUrl: baseGlobal,
         npmMirrorRegistryUrl: baseDomestic,
         timeoutMs: Math.min(this.requestTimeoutMs, 5_000),
-        headers: options.headers
+        headers: options.headers,
+        allowInsecureLoopbackForTesting: this.allowInsecureLoopbackForTesting
       });
       primaryRegistry = probe.recommendedUrl;
       fallbackRegistry = probe.fallbackUrl;
@@ -1763,7 +2072,8 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
   ): Promise<CommunityPluginSummary[]> {
     return searchCommunityPlugins(topic, fetcher, {
       githubApiBaseUrl: this.githubApiBaseUrl,
-      timeoutMs: this.requestTimeoutMs
+      timeoutMs: this.requestTimeoutMs,
+      allowInsecureLoopbackForTesting: this.allowInsecureLoopbackForTesting
     });
   }
 
@@ -1919,6 +2229,13 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
       headers?: Record<string, string>;
     }
   ): Promise<InstalledPluginDetails> {
+    const security: HttpStreamSecurityOptions = {
+      allowedHosts: buildRegistryAllowedHosts(
+        [registryBaseUrl, this.defaultRegistryUrl, this.defaultFallbackRegistryUrl],
+        this.allowInsecureLoopbackForTesting
+      ),
+      allowInsecureLoopbackForTesting: this.allowInsecureLoopbackForTesting
+    };
     const packumentUrl = `${registryBaseUrl}/${encodeNpmPackageUrlSegment(spec.name)}`;
     const packumentRaw = await fetchJsonViaHttp(
       packumentUrl,
@@ -1926,7 +2243,8 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
         accept: "application/json",
         ...options.headers
       },
-      this.requestTimeoutMs
+      this.requestTimeoutMs,
+      security
     );
 
     if (!isPlainRecord(packumentRaw)) {
@@ -1960,7 +2278,8 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
       confirmedAudit: options.confirmedAudit,
       hostVersion: options.hostVersion,
       headers: options.headers,
-      packageNameHint: spec.name
+      packageNameHint: spec.name,
+      security
     });
   }
 
@@ -1975,12 +2294,31 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
       hostVersion: string;
       headers?: Record<string, string>;
       packageNameHint: string;
+      security?: HttpStreamSecurityOptions;
     }
   ): Promise<InstalledPluginDetails> {
+    // Fail-closed BEFORE opening the network stream if strong integrity (SRI sha512/sha256 or expectedSha256) is missing or invalid.
+    parseAndValidateIntegrityExpectations({
+      expectedSha256: options.expectedSha256,
+      integrity: options.integrity,
+      shasum: options.shasum,
+      requireStrongIntegrity: true
+    });
+
+    const security: HttpStreamSecurityOptions = options.security ?? {
+      allowedHosts: buildRegistryAllowedHosts(
+        [this.defaultRegistryUrl, this.defaultFallbackRegistryUrl],
+        this.allowInsecureLoopbackForTesting
+      ),
+      allowInsecureLoopbackForTesting: this.allowInsecureLoopbackForTesting
+    };
+
     const response = await openHttpStream(
       tarballUrl,
       options.headers ?? {},
-      this.requestTimeoutMs
+      this.requestTimeoutMs,
+      5,
+      security
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
       response.stream.resume();
@@ -1993,6 +2331,7 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
       expectedPluginId: options.expectedPluginId,
       integrity: options.integrity,
       shasum: options.shasum,
+      requireStrongIntegrity: true,
       confirmedAudit: options.confirmedAudit,
       hostVersion: options.hostVersion
     });
@@ -2005,6 +2344,7 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
       expectedSha256?: string;
       integrity?: string;
       shasum?: string;
+      requireStrongIntegrity?: boolean;
       expectedPluginId?: string;
       expectedVersion?: string;
       confirmedAudit?: boolean;
@@ -2024,7 +2364,8 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
       verifyExtractedIntegrity(extracted, {
         expectedSha256: options.expectedSha256,
         integrity: options.integrity,
-        shasum: options.shasum
+        shasum: options.shasum,
+        requireStrongIntegrity: options.requireStrongIntegrity
       });
 
       let pluginRoot = resolvePluginRootInStaging(stagingDir, extracted.files);
@@ -2108,13 +2449,22 @@ export class CordisStreamingInstaller implements StreamingNpmInstaller {
 
       const audit = buildPermissionAuditCard(manifest, packageJson);
       if (outerIgnoredScripts.length > 0) {
+        const addedOuter: string[] = [];
         for (const scriptName of outerIgnoredScripts) {
           if (!audit.ignoredInstallScripts.includes(scriptName)) {
             audit.ignoredInstallScripts.push(scriptName);
+            addedOuter.push(scriptName);
           }
         }
+        if (addedOuter.length > 0) {
+          audit.requiresExplicitConfirmation = true;
+          audit.severity = "warning";
+          audit.warnings.push(
+            `检测到外层包内含安装脚本 (${addedOuter.join(", ")})，已由安全策略强制禁用且绝不会执行。`
+          );
+        }
       }
-      if (manifest.modelVisible === true && options.confirmedAudit !== true) {
+      if (audit.requiresExplicitConfirmation && options.confirmedAudit !== true) {
         throw new PermissionAuditRequiredError(audit);
       }
 
