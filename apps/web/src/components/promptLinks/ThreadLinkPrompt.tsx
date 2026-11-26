@@ -10,7 +10,32 @@ import { isThreadRoutePathname } from "../../threadRoutes";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { placeLinkedPrompt } from "./linkedPrompt";
 
+export const MAX_HANDLED_LINK_KEYS = 200;
+
 const handledLinkKeys = new Set<string>();
+
+export function markHandledLinkKey(key: string): boolean {
+  if (handledLinkKeys.has(key)) {
+    handledLinkKeys.delete(key);
+    handledLinkKeys.add(key);
+    return false;
+  }
+  handledLinkKeys.add(key);
+  while (handledLinkKeys.size > MAX_HANDLED_LINK_KEYS) {
+    const oldestKey = handledLinkKeys.values().next().value;
+    if (oldestKey === undefined) break;
+    handledLinkKeys.delete(oldestKey);
+  }
+  return true;
+}
+
+export const __threadLinkPromptTesting = {
+  getHandledLinkKeyCount: () => handledLinkKeys.size,
+  hasHandledLinkKey: (key: string) => handledLinkKeys.has(key),
+  resetHandledLinkKeysForTests: () => {
+    handledLinkKeys.clear();
+  },
+};
 
 export function ThreadLinkPrompt({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
   const navigate = useNavigate();
@@ -28,8 +53,7 @@ export function ThreadLinkPrompt({ threadRef }: { readonly threadRef: ScopedThre
     // A pending navigation shows the next location while the params still name this thread.
     if (!isThreadRoutePathname(location.pathname, threadRef)) return;
     if (!new URLSearchParams(location.search).has("prompt")) return;
-    if (!handledLinkKeys.has(location.key)) {
-      handledLinkKeys.add(location.key);
+    if (markHandledLinkKey(location.key)) {
       const parsed = parseThreadLinkPrompt(location.search, m);
       if (!parsed.ok) {
         toastManager.add(

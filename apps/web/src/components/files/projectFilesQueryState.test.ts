@@ -23,10 +23,14 @@ import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { projectEnvironment } from "~/state/projects";
 import { FileSaveCoordinator } from "./fileSaveCoordinator";
 import {
+  __projectFilesQueryStateTesting,
   clearProjectFileQueryData,
+  clearProjectFileQueryDataForWorkspace,
   confirmProjectFileQueryData,
   getOptimisticProjectFileQueryData,
   getUnsavedProjectFileQueryData,
+  MAX_UNSAVED_FILE_MOUNTS,
+  optimisticFileAtom,
   resolveProjectFileQueryData,
   setProjectFileQueryData,
 } from "./projectFilesQueryState";
@@ -49,6 +53,7 @@ function drainRegistryTasks(): void {
 describe("project files queries", () => {
   afterEach(() => {
     clearProjectFileQueryData(environmentId, "/repo", "convex.json");
+    __projectFilesQueryStateTesting.clearAllUnsavedFileMountsForTests();
     drainRegistryTasks();
     vi.useRealTimers();
     vi.unstubAllGlobals();
@@ -176,5 +181,47 @@ describe("project files queries", () => {
     expect(
       confirmProjectFileQueryData(environmentId, "/repo", "convex.json", '{"nodeVersion":"22"}'),
     ).toBe(true);
+  });
+
+  it("clears all mounted unsaved files for a deleted workspace without affecting other workspaces", () => {
+    const deletedAtom = optimisticFileAtom(environmentId, "/worktree-a", "a.ts");
+    const siblingAtom = optimisticFileAtom(environmentId, "/worktree-a", "b.ts");
+    const keptAtom = optimisticFileAtom(environmentId, "/worktree-b", "c.ts");
+
+    setProjectFileQueryData(environmentId, "/worktree-a", "a.ts", "dirty a");
+    setProjectFileQueryData(environmentId, "/worktree-a", "b.ts", "dirty b");
+    setProjectFileQueryData(environmentId, "/worktree-b", "c.ts", "dirty c");
+    expect(__projectFilesQueryStateTesting.getUnsavedFileMountCount()).toBe(3);
+
+    clearProjectFileQueryDataForWorkspace(environmentId, "/worktree-a");
+    drainRegistryTasks();
+
+    expect(__projectFilesQueryStateTesting.getUnsavedFileMountCount()).toBe(1);
+    expect(getUnsavedProjectFileQueryData(environmentId, "/worktree-a", "a.ts")).toBeNull();
+    expect(getUnsavedProjectFileQueryData(environmentId, "/worktree-a", "b.ts")).toBeNull();
+    expect(getUnsavedProjectFileQueryData(environmentId, "/worktree-b", "c.ts")?.contents).toBe(
+      "dirty c",
+    );
+    drainRegistryTasks();
+    expect(appAtomRegistry.getNodes().has(deletedAtom)).toBe(false);
+    expect(appAtomRegistry.getNodes().has(siblingAtom)).toBe(false);
+    expect(appAtomRegistry.getNodes().has(keptAtom)).toBe(true);
+  });
+
+  it("bounds unsavedFileMounts by LRU and unmounts evicted files", () => {
+    const oldestAtom = optimisticFileAtom(environmentId, "/repo", "file-0.ts");
+    const total = MAX_UNSAVED_FILE_MOUNTS + 5;
+    for (let i = 0; i < total; i += 1) {
+      setProjectFileQueryData(environmentId, "/repo", `file-${i}.ts`, `contents-${i}`);
+    }
+    expect(__projectFilesQueryStateTesting.getUnsavedFileMountCount()).toBe(
+      MAX_UNSAVED_FILE_MOUNTS,
+    );
+    expect(getUnsavedProjectFileQueryData(environmentId, "/repo", "file-0.ts")).toBeNull();
+    drainRegistryTasks();
+    expect(appAtomRegistry.getNodes().has(oldestAtom)).toBe(false);
+    expect(
+      getUnsavedProjectFileQueryData(environmentId, "/repo", `file-${total - 1}.ts`)?.contents,
+    ).toBe(`contents-${total - 1}`);
   });
 });

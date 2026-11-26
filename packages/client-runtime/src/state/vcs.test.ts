@@ -42,11 +42,14 @@ import {
   commitVcsRefsRefresh,
   createVcsEnvironmentAtoms,
   makeCachedVcsRefsChanges,
+  MAX_SERVER_REFS_REVISION_KEYS,
   resolveQuickAction,
 } from "./vcs.ts";
 import {
   invalidateCachedVcsRefs,
+  invalidateCachedVcsRefsIfChanged,
   invalidateVcsRefs,
+  MAX_VCS_REFS_DIGESTS,
   vcsRefsCacheStateAtom,
 } from "./vcsRefInvalidation.ts";
 
@@ -848,6 +851,134 @@ describe("cached VCS refs", () => {
       ).pipe(Stream.take(2), Stream.runCollect);
 
       expect(refs).toEqual([CACHED_REFS, LIVE_REFS]);
+    }),
+  );
+
+  it.effect("bounds serverRefsRevision entries by LRU without pinning per-cwd atoms", () =>
+    Effect.gen(function* () {
+      const requests: VcsListRefsInput[] = [];
+      const client = {
+        [WS_METHODS.vcsListRefs]: (input: VcsListRefsInput) =>
+          Effect.sync(() => {
+            requests.push(input);
+            return LIVE_REFS;
+          }),
+      } as unknown as WsRpcProtocolClient;
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target: TARGET,
+        state: yield* SubscriptionRef.make(CONNECTED_CONNECTION_STATE),
+        session: yield* SubscriptionRef.make(Option.some(session(client))),
+        prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+        connect: Effect.void,
+        disconnect: Effect.void,
+        retryNow: Effect.void,
+      } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+      const registry = yield* Effect.acquireRelease(Effect.sync(AtomRegistry.make), (value) =>
+        Effect.sync(() => value.dispose()),
+      );
+      const cache = cacheWithRefs(Option.none());
+
+      invalidateVcsRefs(registry, TARGET);
+      const expectedRevision = registry.get(vcsRefsCacheStateAtom(TARGET)).revision;
+      const nodesBefore = registry.getNodes().size;
+
+      const totalCwds = MAX_SERVER_REFS_REVISION_KEYS + 5;
+      for (let i = 0; i < totalCwds; i += 1) {
+        const cwd = `/worktree-${i}`;
+        const result = yield* Stream.unwrap(
+          makeCachedVcsRefsChanges({ cwd, limit: 100 }, expectedRevision, registry, true).pipe(
+            Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+            Effect.provideService(Persistence.EnvironmentCacheStore, cache),
+          ),
+        ).pipe(Stream.runHead);
+        expect(Option.getOrThrow(result)).toEqual(LIVE_REFS);
+      }
+
+      // Single bounded root atom instead of one keepAlive atom per worktree cwd.
+      expect(registry.getNodes().size - nodesBefore).toBeLessThanOrEqual(4);
+
+      requests.length = 0;
+      // Most recent cwd stays cached and skips refresh: true.
+      const recentCwd = `/worktree-${totalCwds - 1}`;
+      yield* Stream.unwrap(
+        makeCachedVcsRefsChanges(
+          { cwd: recentCwd, query: "main", limit: 100 },
+          expectedRevision,
+          registry,
+          true,
+        ).pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          Effect.provideService(Persistence.EnvironmentCacheStore, cache),
+        ),
+      ).pipe(Stream.runHead);
+      expect(requests.at(-1)).toEqual({ cwd: recentCwd, query: "main", limit: 100 });
+
+      // Evicted oldest cwd falls back to refresh: true on revisit.
+      yield* Stream.unwrap(
+        makeCachedVcsRefsChanges(
+          { cwd: "/worktree-0", query: "main", limit: 100 },
+          expectedRevision,
+          registry,
+          true,
+        ).pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          Effect.provideService(Persistence.EnvironmentCacheStore, cache),
+        ),
+      ).pipe(Stream.runHead);
+      expect(requests.at(-1)).toEqual({
+        cwd: "/worktree-0",
+        query: "main",
+        limit: 100,
+        refresh: true,
+      });
+    }),
+  );
+
+  it.effect("bounds refsDigests by 256-entry LRU and keeps active cwds warm", () =>
+    Effect.gen(function* () {
+      const registry = yield* Effect.acquireRelease(Effect.sync(AtomRegistry.make), (value) =>
+        Effect.sync(() => value.dispose()),
+      );
+      const clears = yield* Ref.make(0);
+      const cache = cacheWithRefs(Option.none(), {
+        clearVcsRefs: () => Ref.update(clears, (count) => count + 1),
+      });
+
+      const activeTarget = { environmentId: TARGET.environmentId, cwd: "/repo-active" };
+      const staleTarget = { environmentId: TARGET.environmentId, cwd: "/repo-stale" };
+      yield* invalidateCachedVcsRefsIfChanged(registry, activeTarget, "digest-active").pipe(
+        Effect.provideService(Persistence.EnvironmentCacheStore, cache),
+      );
+      yield* invalidateCachedVcsRefsIfChanged(registry, staleTarget, "digest-stale").pipe(
+        Effect.provideService(Persistence.EnvironmentCacheStore, cache),
+      );
+
+      for (let i = 0; i < MAX_VCS_REFS_DIGESTS - 1; i += 1) {
+        if (i === 10) {
+          // Touch activeTarget with unchanged digest to promote it to MRU.
+          yield* invalidateCachedVcsRefsIfChanged(registry, activeTarget, "digest-active").pipe(
+            Effect.provideService(Persistence.EnvironmentCacheStore, cache),
+          );
+        }
+        yield* invalidateCachedVcsRefsIfChanged(
+          registry,
+          { environmentId: TARGET.environmentId, cwd: `/worktree-${i}` },
+          `digest-${i}`,
+        ).pipe(Effect.provideService(Persistence.EnvironmentCacheStore, cache));
+      }
+
+      const clearsBeforeCheck = yield* Ref.get(clears);
+      // Active cwd was promoted to MRU, so repeating its digest does not re-invalidate.
+      yield* invalidateCachedVcsRefsIfChanged(registry, activeTarget, "digest-active").pipe(
+        Effect.provideService(Persistence.EnvironmentCacheStore, cache),
+      );
+      expect(yield* Ref.get(clears)).toBe(clearsBeforeCheck);
+
+      // Stale cwd was evicted by LRU, so revisiting it triggers invalidation cleanly.
+      yield* invalidateCachedVcsRefsIfChanged(registry, staleTarget, "digest-stale").pipe(
+        Effect.provideService(Persistence.EnvironmentCacheStore, cache),
+      );
+      expect(yield* Ref.get(clears)).toBe(clearsBeforeCheck + 1);
     }),
   );
 });

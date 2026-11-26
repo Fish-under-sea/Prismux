@@ -274,3 +274,91 @@ it.each(["same", "other-environment"] as const)(
     expect(store.getComposerDraft(target)!.threadContexts).toEqual(records);
   },
 );
+
+it("revokes the created blob URL when the composer draft rejects an imported image", async () => {
+  const target = DraftId.make("clipboard-image-rejected");
+  const store = useComposerDraftStore.getState();
+  using _draft = { [Symbol.dispose]: () => store.clearComposerContent(target) };
+  const sourceEnvironmentId = EnvironmentId.make("clipboard-reject-source");
+  const imageFile = new File(["png-bytes"], "dup.png", { type: "image/png" });
+  rememberCopiedComposerAttachments(sourceEnvironmentId, new Map([["img-1", imageFile]]));
+  using _copy = {
+    [Symbol.dispose]: () => rememberCopiedComposerAttachments(sourceEnvironmentId, new Map()),
+  };
+  const existingUrl = URL.createObjectURL(imageFile);
+  using _existingUrl = { [Symbol.dispose]: () => URL.revokeObjectURL(existingUrl) };
+  store.addImages(target, [
+    {
+      type: "image",
+      id: "existing-image",
+      name: "dup.png",
+      mimeType: "image/png",
+      sizeBytes: imageFile.size,
+      previewUrl: existingUrl,
+      file: imageFile,
+    },
+  ]);
+
+  let importer!: Importer;
+  const promptRef = { current: "" };
+  await using _screen = await render(
+    <Harness
+      input={{
+        environmentId: EnvironmentId.make("clipboard-reject-target"),
+        linkedEnvironments: new Map(),
+        activeThread: undefined,
+        activeThreadId: null,
+        composerDraftTarget: target,
+        attachmentDraftTarget: target,
+        attachmentTargetKey: target,
+        attachmentTargetKeyRef: { current: target },
+        questionAttachmentTarget: null,
+        pendingUserInputs: [],
+        composerContextRecords: new Map(),
+        composerImages: [],
+        composerFilesRef: { current: [] },
+        pendingThreadImportsRef: { current: new Map() },
+        promptRef,
+        addComposerFilesToDraft: () => [],
+      }}
+      ready={(value) => {
+        importer = value;
+      }}
+    />,
+  );
+
+  const settled = deferred<void>();
+  const end = pendingDraftWork.end.bind(pendingDraftWork);
+  using _settled = vi.spyOn(pendingDraftWork, "end").mockImplementation((key) => {
+    end(key);
+    settled.resolve();
+  });
+  const createdUrls: string[] = [];
+  const originalCreateObjectURL = URL.createObjectURL.bind(URL);
+  using _createSpy = vi.spyOn(URL, "createObjectURL").mockImplementation((blob) => {
+    const url = originalCreateObjectURL(blob);
+    createdUrls.push(url);
+    return url;
+  });
+  using revokeSpy = vi.spyOn(URL, "revokeObjectURL");
+
+  const duplicateRecord: ComposerContextRecord = {
+    version: 1,
+    kind: "image",
+    contextId: ComposerContextId.make("image_dup"),
+    label: "dup.png",
+    attachmentId: "img-1",
+    name: "dup.png",
+    mimeType: "image/png",
+    sizeBytes: imageFile.size,
+  };
+
+  await act(async () => {
+    importer.importContextRecords([duplicateRecord], sourceEnvironmentId);
+    await settled.promise;
+  });
+
+  expect(createdUrls).toHaveLength(1);
+  expect(revokeSpy).toHaveBeenCalledWith(createdUrls[0]);
+  expect(store.getComposerDraft(target)?.images).toHaveLength(1);
+});

@@ -1,7 +1,10 @@
+import { scopedThreadKey, scopeThreadRef } from "@prismux/client-runtime/environment";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { msg } from "gt-react";
 
+import { clearDraftSendState } from "../components/chat/draftSendState";
+import { disarmFreshSession } from "../components/chat/freshSessionArms";
 import { cancelPreparingComposerImages } from "../components/chat/preparingComposerImages";
 import {
   type ComposerThreadTarget,
@@ -49,6 +52,22 @@ export function discardComposerDraft(target: ComposerThreadTarget): void {
     }
   };
 
+  const finalizeDiscardedDraft = () => {
+    releaseDiscardedDraft();
+    const current = useComposerDraftStore.getState().draftsByThreadKey[key];
+    if (!current || !composerDraftHasUserContent(current)) {
+      clearDraftSendState(key);
+      disarmFreshSession(key);
+      if (session) {
+        const sessionRouteKey = scopedThreadKey(
+          scopeThreadRef(session.environmentId, session.threadId),
+        );
+        clearDraftSendState(sessionRouteKey);
+        disarmFreshSession(sessionRouteKey);
+      }
+    }
+  };
+
   showThreadUndoNotice({
     action: "Discarded",
     claim,
@@ -90,6 +109,6 @@ export function discardComposerDraft(target: ComposerThreadTarget): void {
       });
       return AsyncResult.success(undefined);
     },
-    commit: releaseDiscardedDraft,
+    commit: finalizeDiscardedDraft,
   });
 }

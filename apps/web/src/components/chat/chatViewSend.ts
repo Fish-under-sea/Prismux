@@ -10,7 +10,6 @@ import {
   wasBootstrapThreadDeleted,
   wasBootstrapThreadNotCreated,
 } from "@prismux/client-runtime/errors";
-import { Atom } from "effect/reactivity";
 import { msg } from "gt-react";
 import {
   squashAtomCommandFailure,
@@ -50,26 +49,14 @@ import {
 import { readPreparedConnection } from "../../state/session";
 import { recallComposerMessage } from "./composerPromptHistory";
 
-// Kept per route so a send in flight, and the multiple-model selections, survive
-// ChatView remounting while the user navigates.
-export const draftFanoutSelectionsAtom = Atom.family((_routeKey: string) =>
-  Atom.make<ReadonlyArray<ModelSelection> | null>(null).pipe(Atom.keepAlive),
-);
-const draftSendStateByRouteKey = new Map<
-  string,
-  {
-    readonly sendInFlight: { current: boolean };
-    readonly uncertainSubmissions: { current: Map<string, ThreadId> };
-  }
->();
-export function draftSendState(routeKey: string) {
-  let state = draftSendStateByRouteKey.get(routeKey);
-  if (!state) {
-    state = { sendInFlight: { current: false }, uncertainSubmissions: { current: new Map() } };
-    draftSendStateByRouteKey.set(routeKey, state);
-  }
-  return state;
-}
+export {
+  __chatViewSendTesting,
+  clearDraftSendState,
+  draftFanoutSelectionsAtom,
+  draftSendState,
+  MAX_DRAFT_FANOUT_SELECTIONS,
+  MAX_DRAFT_SEND_STATES,
+} from "./draftSendState";
 
 /**
  * Starts one thread of a multiple-model send. A request that may have
@@ -279,7 +266,14 @@ export async function rewindToMessage(input: {
         restoredFiles.push({ ...attachment, type: "file" });
       }
     });
-    store.addImages(draftTarget, images, { allowDuplicates: true });
+    const acceptedImageIds = new Set(
+      store.addImages(draftTarget, images, { allowDuplicates: true }),
+    );
+    for (const image of images) {
+      if (!acceptedImageIds.has(image.id)) {
+        URL.revokeObjectURL(image.previewUrl);
+      }
+    }
     store.addFiles(draftTarget, restoredFiles, { allowDuplicates: true });
     return { error: null, prompt: nextPrompt };
   } catch (error) {

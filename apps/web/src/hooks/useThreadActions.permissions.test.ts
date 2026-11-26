@@ -11,9 +11,33 @@ import { AsyncResult } from "effect/reactivity";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { scopedThreadKey } from "@prismux/client-runtime/environment";
+import { createModelSelection } from "@prismux/core-shared/model";
+import { ProviderInstanceId } from "@prismux/core-contracts";
+import {
+  __chatViewSendTesting,
+  draftFanoutSelectionsAtom,
+  draftSendState,
+} from "../components/chat/draftSendState";
+import {
+  __freshSessionArmsTesting,
+  armFreshSession,
+  readFreshSessionArm,
+} from "../components/chat/freshSessionArms";
+import {
+  __projectFilesQueryStateTesting,
+  getUnsavedProjectFileQueryData,
+  setProjectFileQueryData,
+} from "../components/files/projectFilesQueryState";
 import { useDiffPanelStore } from "../diffPanelStore";
+import { __terminalFocusTesting } from "../lib/terminalFocus";
 import { browserMiniPlayerSource, usePreviewMiniPlayerStore } from "../previewMiniPlayerStore";
+import {
+  previewThreadRefsAtom,
+  rememberPreviewUrl,
+  resetPreviewStateForTests,
+} from "../previewStateStore";
 import { useRightPanelStore } from "../rightPanelStore";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -290,6 +314,11 @@ beforeEach(() => {
   useRightPanelStore.setState(useRightPanelStore.getInitialState(), true);
   useDiffPanelStore.setState(useDiffPanelStore.getInitialState(), true);
   usePreviewMiniPlayerStore.setState(usePreviewMiniPlayerStore.getInitialState(), true);
+  resetPreviewStateForTests();
+  __chatViewSendTesting.resetForTests();
+  __freshSessionArmsTesting.resetForTests();
+  __terminalFocusTesting.resetLastThreadFocusForTests();
+  __projectFilesQueryStateTesting.clearAllUnsavedFileMountsForTests();
 });
 
 describe("thread action permissions", () => {
@@ -496,5 +525,39 @@ describe("thread action permissions", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+
+  it("clears preview refs, draft send state, terminal focus, fresh-session arm, and orphaned worktree files on delete", async () => {
+    state.scopes.get(secondary)!.add(AuthOrchestrationOperateScope);
+    state.threads[0]!.worktreePath = "/worktrees/thread-cleanup";
+    const threadKey = scopedThreadKey(target);
+
+    rememberPreviewUrl(target, "http://localhost:5173/");
+    draftSendState(threadKey);
+    appAtomRegistry.set(draftFanoutSelectionsAtom(threadKey), [
+      createModelSelection(ProviderInstanceId.make("codex"), "gpt-5"),
+    ]);
+    armFreshSession(threadKey);
+    __terminalFocusTesting.seedLastThreadFocusForTests(target, "composer");
+    setProjectFileQueryData(secondary, "/worktrees/thread-cleanup", "notes.md", "unsaved edits");
+
+    expect(appAtomRegistry.get(previewThreadRefsAtom).has(threadKey)).toBe(true);
+    expect(__chatViewSendTesting.hasDraftSendState(threadKey)).toBe(true);
+    expect(__terminalFocusTesting.hasLastThreadFocus(target)).toBe(true);
+    expect(readFreshSessionArm(threadKey)).toBeDefined();
+    expect(
+      getUnsavedProjectFileQueryData(secondary, "/worktrees/thread-cleanup", "notes.md"),
+    ).not.toBeNull();
+
+    expect((await useThreadActions().deleteThread(target))._tag).toBe("Success");
+
+    expect(appAtomRegistry.get(previewThreadRefsAtom).has(threadKey)).toBe(false);
+    expect(__chatViewSendTesting.hasDraftSendState(threadKey)).toBe(false);
+    expect(appAtomRegistry.get(draftFanoutSelectionsAtom(threadKey))).toBeNull();
+    expect(__terminalFocusTesting.hasLastThreadFocus(target)).toBe(false);
+    expect(readFreshSessionArm(threadKey)).toBeUndefined();
+    expect(
+      getUnsavedProjectFileQueryData(secondary, "/worktrees/thread-cleanup", "notes.md"),
+    ).toBeNull();
   });
 });

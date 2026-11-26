@@ -154,9 +154,11 @@ export function createThreadEnvironmentAtoms<R, E>(
       }),
   });
 
-  // The environment's time of the last sign-in to a server in a thread, until the app reloads.
-  const mcpSignedInAtFamily = Atom.family((_key: string) =>
-    Atom.make<number | null>(null).pipe(Atom.keepAlive),
+  // The environment's time of the last sign-in to a server in a thread, bounded via LRU.
+  const MAX_MCP_SIGN_IN_ENTRIES = 256;
+  const mcpSignedInAtByKeyAtom = Atom.make<ReadonlyMap<string, number>>(new Map()).pipe(
+    Atom.keepAlive,
+    Atom.withLabel("environment-data:thread:mcp-signed-in-at"),
   );
   const mcpSignInKey = (
     environmentId: EnvironmentId,
@@ -167,15 +169,48 @@ export function createThreadEnvironmentAtoms<R, E>(
     environmentId: EnvironmentId,
     input: { readonly threadId: ThreadId; readonly server: string },
     signedInAt: string,
-  ) =>
-    registry.update(mcpSignedInAtFamily(mcpSignInKey(environmentId, input)), (current) =>
-      Math.max(current ?? 0, Date.parse(signedInAt)),
-    );
+  ) => {
+    const key = mcpSignInKey(environmentId, input);
+    const parsed = Date.parse(signedInAt);
+    registry.update(mcpSignedInAtByKeyAtom, (current) => {
+      const existing = current.get(key);
+      const nextTimestamp = Math.max(existing ?? 0, parsed);
+      if (existing === nextTimestamp) return current;
+      const next = new Map(current);
+      next.delete(key);
+      next.set(key, nextTimestamp);
+      while (next.size > MAX_MCP_SIGN_IN_ENTRIES) {
+        const oldestKey = next.keys().next().value;
+        if (oldestKey === undefined) break;
+        next.delete(oldestKey);
+      }
+      return next;
+    });
+  };
+  const clearMcpSignInForThread = (
+    registry: AtomRegistry.AtomRegistry,
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+  ) => {
+    registry.update(mcpSignedInAtByKeyAtom, (current) => {
+      let next: Map<string, number> | null = null;
+      for (const key of current.keys()) {
+        try {
+          const [entryEnvId, entryThreadId] = JSON.parse(key) as [string, string, string];
+          if (entryEnvId === environmentId && entryThreadId === threadId) {
+            next ??= new Map(current);
+            next.delete(key);
+          }
+        } catch {}
+      }
+      return next ?? current;
+    });
+  };
   const mcpNoticeSignedInFamily = Atom.family((key: string) => {
     const [signInKey, noticeAt] = JSON.parse(key) as [string, number];
     // A notice newer than the sign-in means the server needs one again.
     return Atom.make((get) => {
-      const signedInAt = get(mcpSignedInAtFamily(signInKey));
+      const signedInAt = get(mcpSignedInAtByKeyAtom).get(signInKey) ?? null;
       return signedInAt !== null && noticeAt <= signedInAt;
     });
   });
@@ -484,9 +519,22 @@ export function createThreadEnvironmentAtoms<R, E>(
         Effect.sync(() => markMcpSignedIn(registry, environmentId, input, result.signedInAt)),
     }),
   };
+  const deleteWithMcpCleanup: typeof sent.delete = {
+    label: sent.delete.label,
+    run: (registry, target) =>
+      sent.delete
+        .run(registry, target)
+        .pipe(
+          Effect.tap(() =>
+            Effect.sync(() =>
+              clearMcpSignInForThread(registry, target.environmentId, target.input.threadId),
+            ),
+          ),
+        ),
+  };
   const commands = {
     ...sent,
-    delete: rowAction(sent.delete),
+    delete: rowAction(deleteWithMcpCleanup),
     archive: rowAction(sent.archive),
     unarchive: rowAction(sent.unarchive),
     settle: rowAction(sent.settle),

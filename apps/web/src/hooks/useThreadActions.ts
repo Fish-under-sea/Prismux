@@ -49,6 +49,10 @@ import {
   readThreadShell,
   readThreadShells,
 } from "../state/entities";
+import { clearDraftSendState } from "../components/chat/draftSendState";
+import { disarmFreshSession } from "../components/chat/freshSessionArms";
+import { clearProjectFileQueryDataForWorkspace } from "../components/files/projectFilesQueryState";
+import { clearThreadTerminalFocus } from "../lib/terminalFocus";
 import { useUiStateStore } from "../uiStateStore";
 import { useDiffPanelStore } from "../diffPanelStore";
 import { usePreviewMiniPlayerStore } from "../previewMiniPlayerStore";
@@ -267,7 +271,11 @@ function expireThreadUndos(target: ScopedThreadRef, kinds: readonly string[]) {
 }
 
 function clearDeletedThreadPanelState(ref: ScopedThreadRef) {
+  const threadKey = scopedThreadKey(ref);
   clearThreadPreviewState(ref);
+  clearDraftSendState(threadKey);
+  clearThreadTerminalFocus(ref);
+  disarmFreshSession(threadKey);
   useRightPanelStore.getState().removeThread(ref);
   useDiffPanelStore.getState().removeThread(ref);
   usePreviewMiniPlayerStore.getState().removeThread(ref);
@@ -501,6 +509,7 @@ export function useThreadActions() {
         ]) {
           releaseComposerDraftUploads(ref);
           clearComposerDraftForThread(ref);
+          if (ref !== target) clearDeletedThreadPanelState(ref);
         }
         expireThreadUndos(target, [...LIST_PLACEMENT_UNDO_KINDS, "archive"]);
         refreshArchivedThreadsForEnvironment(target.environmentId);
@@ -646,6 +655,7 @@ export function useThreadActions() {
       const sideChatRef = scopeThreadRef(threadRef.environmentId, entry.id);
       releaseComposerDraftUploads(sideChatRef);
       clearComposerDraftForThread(sideChatRef);
+      clearDeletedThreadPanelState(sideChatRef);
     }
     clearProjectDraftThreadById(
       scopeProjectRef(threadRef.environmentId, thread.projectId),
@@ -653,6 +663,9 @@ export function useThreadActions() {
     );
     clearTerminalUiState(threadRef);
     clearDeletedThreadPanelState(threadRef);
+    if (orphanedWorktreePath !== null) {
+      clearProjectFileQueryDataForWorkspace(threadRef.environmentId, orphanedWorktreePath);
+    }
 
     if (shouldNavigateToFallback && !navigatedDuringDelete) {
       const fallbackThread = fallbackThreadId

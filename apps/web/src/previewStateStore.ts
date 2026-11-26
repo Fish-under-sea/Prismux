@@ -55,15 +55,66 @@ const EMPTY_THREAD_PREVIEW_STATE: ThreadPreviewState = Object.freeze({
   serverRevision: 0,
 });
 
+const MAX_INACTIVE_PREVIEW_STATES = 256;
+
 const emptyPreviewStateAtom = Atom.make<ThreadPreviewState>(EMPTY_THREAD_PREVIEW_STATE).pipe(
   Atom.withLabel("preview:empty-thread"),
 );
 
+const previewStatesByThreadAtom = Atom.make<ReadonlyMap<string, ThreadPreviewState>>(
+  new Map(),
+).pipe(Atom.keepAlive, Atom.withLabel("preview:states-by-thread"));
+
+function pruneInactivePreviewStates(
+  states: Map<string, ThreadPreviewState>,
+  keepKey?: string,
+): string[] {
+  const evicted: string[] = [];
+  if (states.size <= MAX_INACTIVE_PREVIEW_STATES) return evicted;
+  for (const [candidateKey, candidateState] of states) {
+    if (states.size <= MAX_INACTIVE_PREVIEW_STATES) break;
+    if (candidateKey === keepKey) continue;
+    if (
+      Object.keys(candidateState.sessions).length === 0 &&
+      candidateState.suppressedTabIds.size === 0
+    ) {
+      states.delete(candidateKey);
+      evicted.push(candidateKey);
+    }
+  }
+  return evicted;
+}
+
 export const previewStateAtom = Atom.family((threadKey: string) =>
-  Atom.make<ThreadPreviewState>(EMPTY_THREAD_PREVIEW_STATE).pipe(
-    Atom.keepAlive,
-    Atom.withLabel(`preview:thread:${threadKey}`),
-  ),
+  Atom.writable(
+    (get) => get(previewStatesByThreadAtom).get(threadKey) ?? EMPTY_THREAD_PREVIEW_STATE,
+    (ctx, nextState: ThreadPreviewState) => {
+      const current = ctx.get(previewStatesByThreadAtom);
+      if (nextState === EMPTY_THREAD_PREVIEW_STATE) {
+        if (!current.has(threadKey)) return;
+        const next = new Map(current);
+        next.delete(threadKey);
+        ctx.set(previewStatesByThreadAtom, next);
+        return;
+      }
+      if (current.get(threadKey) === nextState) return;
+      const next = new Map(current);
+      next.delete(threadKey);
+      next.set(threadKey, nextState);
+      const evicted = pruneInactivePreviewStates(next, threadKey);
+      ctx.set(previewStatesByThreadAtom, next);
+      if (evicted.length > 0) {
+        const refs = ctx.get(previewThreadRefsAtom);
+        let nextRefs: Map<string, ScopedThreadRef> | null = null;
+        for (const key of evicted) {
+          if (!refs.has(key)) continue;
+          nextRefs ??= new Map(refs);
+          nextRefs.delete(key);
+        }
+        if (nextRefs !== null) ctx.set(previewThreadRefsAtom, nextRefs);
+      }
+    },
+  ).pipe(Atom.withLabel(`preview:thread:${threadKey}`)),
 );
 
 // Only Electron needs this cross-thread index; separate it to avoid unrelated preview subscriptions.
@@ -112,17 +163,36 @@ function updateThreadPreviewState(
   update: (current: ThreadPreviewState) => ThreadPreviewState,
 ): void {
   const threadKey = scopedThreadKey(ref);
+  const currentState =
+    appAtomRegistry.get(previewStatesByThreadAtom).get(threadKey) ?? EMPTY_THREAD_PREVIEW_STATE;
+  const nextState = update(currentState);
+  if (nextState === currentState) return;
   // Indexed before the write so a new thread's subscribers see this change.
   appAtomRegistry.update(previewThreadRefsAtom, (refs) =>
     refs.has(threadKey) ? refs : new Map(refs).set(threadKey, ref),
   );
-  const atom = previewStateAtom(threadKey);
-  let nextState = appAtomRegistry.get(atom);
-  const changed = appAtomRegistry.modify(atom, (current) => {
-    nextState = update(current);
-    return [nextState !== current, nextState];
+  const evictedKeys: string[] = [];
+  appAtomRegistry.update(previewStatesByThreadAtom, (states) => {
+    const next = new Map(states);
+    next.delete(threadKey);
+    if (nextState !== EMPTY_THREAD_PREVIEW_STATE) {
+      next.set(threadKey, nextState);
+    }
+    evictedKeys.push(...pruneInactivePreviewStates(next, threadKey));
+    return next;
   });
-  if (changed) syncActivePreviewThread(threadKey, nextState);
+  if (evictedKeys.length > 0) {
+    appAtomRegistry.update(previewThreadRefsAtom, (refs) => {
+      let next: Map<string, ScopedThreadRef> | null = null;
+      for (const key of evictedKeys) {
+        if (!refs.has(key)) continue;
+        next ??= new Map(refs);
+        next.delete(key);
+      }
+      return next ?? refs;
+    });
+  }
+  syncActivePreviewThread(threadKey, nextState);
 }
 
 const dedupeRecentUrls = (existing: string[], url: string): string[] => {
@@ -177,7 +247,10 @@ export function readActivePreviewSessions(): Record<string, ThreadPreviewState> 
 }
 
 export function readThreadPreviewState(ref: ScopedThreadRef): ThreadPreviewState {
-  return appAtomRegistry.get(previewStateAtom(scopedThreadKey(ref)));
+  return (
+    appAtomRegistry.get(previewStatesByThreadAtom).get(scopedThreadKey(ref)) ??
+    EMPTY_THREAD_PREVIEW_STATE
+  );
 }
 
 export function applyPreviewServerEvent(ref: ScopedThreadRef, event: PreviewEvent): void {
@@ -528,20 +601,31 @@ export function isPreviewSupportedInRuntime(): boolean {
 
 /** Releases desktop-host pages as well as local session state. */
 export function clearThreadPreviewState(ref: ScopedThreadRef): void {
-  updateThreadPreviewState(ref, (current) =>
-    Object.keys(current.sessions).length === 0 ? current : EMPTY_THREAD_PREVIEW_STATE,
-  );
+  const threadKey = scopedThreadKey(ref);
+  appAtomRegistry.update(previewStatesByThreadAtom, (states) => {
+    if (!states.has(threadKey)) return states;
+    const next = new Map(states);
+    next.delete(threadKey);
+    return next;
+  });
+  syncActivePreviewThread(threadKey, EMPTY_THREAD_PREVIEW_STATE);
+  appAtomRegistry.update(previewThreadRefsAtom, (refs) => {
+    if (!refs.has(threadKey)) return refs;
+    const next = new Map(refs);
+    next.delete(threadKey);
+    return next;
+  });
 }
 
 export function resetPreviewStateForTests(): void {
-  for (const threadKey of appAtomRegistry.get(previewThreadRefsAtom).keys()) {
-    appAtomRegistry.set(previewStateAtom(threadKey), EMPTY_THREAD_PREVIEW_STATE);
-  }
+  appAtomRegistry.set(previewStatesByThreadAtom, new Map());
   appAtomRegistry.set(previewThreadRefsAtom, new Map());
   appAtomRegistry.set(activePreviewThreadKeysAtom, { keys: new Set<string>() });
 }
 
 export const __testing = {
   EMPTY_THREAD_PREVIEW_STATE,
+  MAX_INACTIVE_PREVIEW_STATES,
   RECENT_URL_LIMIT: PREVIEW_RECENT_URL_LIMIT,
+  getStoredPreviewStateCount: () => appAtomRegistry.get(previewStatesByThreadAtom).size,
 };

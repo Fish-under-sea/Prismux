@@ -5,7 +5,11 @@ import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { AuthOrchestrationOperateScope } from "@prismux/core-contracts";
 import { useEnvironmentsWithScope } from "../../state/session";
 import { mapAtomCommandResult, settlePromise } from "@prismux/client-runtime/state/runtime";
-import { scopeProjectRef, scopeThreadRef } from "@prismux/client-runtime/environment";
+import {
+  scopedThreadKey,
+  scopeProjectRef,
+  scopeThreadRef,
+} from "@prismux/client-runtime/environment";
 import { planProjectRemoval } from "@prismux/client-runtime/state/projects";
 import { type EnvironmentId, type SidebarProjectGroupingMode } from "@prismux/core-contracts";
 import {
@@ -19,6 +23,11 @@ import { InfoIcon, Trash2Icon } from "lucide-react";
 import { lazy, Suspense, useRef, useState, type ReactNode } from "react";
 import { T, useGT, useMessages } from "gt-react";
 
+import { clearDraftSendState } from "../chat/draftSendState";
+import { disarmFreshSession } from "../chat/freshSessionArms";
+import { clearProjectFileQueryDataForWorkspace } from "../files/projectFilesQueryState";
+import { clearThreadTerminalFocus } from "../../lib/terminalFocus";
+import { clearThreadPreviewState } from "../../previewStateStore";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { releaseProjectDraftUploads } from "../../lib/composerDraftUploads";
 import { persistClientSettingsUpdate, useClientSettings } from "../../hooks/useSettings";
@@ -405,10 +414,22 @@ function ProjectDetail({
       }
       const projectRef = scopeProjectRef(member.environmentId, member.id);
       await waitForProjectRemoval(projectRef);
-      releaseProjectDraftUploads(
-        projectRef,
-        memberThreads.map((thread) => scopeThreadRef(thread.environmentId, thread.id)),
+      clearProjectFileQueryDataForWorkspace(member.environmentId, member.workspaceRoot);
+      const memberThreadRefs = memberThreads.map((thread) =>
+        scopeThreadRef(thread.environmentId, thread.id),
       );
+      releaseProjectDraftUploads(projectRef, memberThreadRefs);
+      for (const thread of memberThreads) {
+        const ref = scopeThreadRef(thread.environmentId, thread.id);
+        const threadKey = scopedThreadKey(ref);
+        clearThreadPreviewState(ref);
+        clearDraftSendState(threadKey);
+        clearThreadTerminalFocus(ref);
+        disarmFreshSession(threadKey);
+        if (thread.worktreePath) {
+          clearProjectFileQueryDataForWorkspace(thread.environmentId, thread.worktreePath);
+        }
+      }
       const projectDraftThread = draftStore.getDraftThreadByProjectRef(projectRef);
       if (projectDraftThread && remainingMember) {
         draftStore.setDraftThreadContext(projectDraftThread.draftId, {
@@ -418,6 +439,13 @@ function ProjectDetail({
         });
       } else if (projectDraftThread) {
         draftStore.clearDraftThread(projectDraftThread.draftId);
+        clearDraftSendState(projectDraftThread.draftId);
+        disarmFreshSession(projectDraftThread.draftId);
+        const draftRouteKey = scopedThreadKey(
+          scopeThreadRef(projectDraftThread.environmentId, projectDraftThread.threadId),
+        );
+        clearDraftSendState(draftRouteKey);
+        disarmFreshSession(draftRouteKey);
       }
       draftStore.clearProjectDraftThreadId(projectRef);
     }

@@ -19,11 +19,36 @@ export interface VcsRefsCacheState {
   readonly persistedCacheReadable: boolean;
 }
 
+export const MAX_VCS_REFS_DIGESTS = 256;
+const MAX_VCS_REFS_CACHE_ENVIRONMENTS = 256;
+
+const DEFAULT_VCS_REFS_CACHE_STATE: VcsRefsCacheState = Object.freeze({
+  revision: 0,
+  persistedCacheReadable: true,
+});
+
+const vcsRefsCacheStatesByEnvironmentAtom = Atom.make<
+  ReadonlyMap<EnvironmentId, VcsRefsCacheState>
+>(new Map()).pipe(Atom.keepAlive, Atom.withLabel("environment-data:vcs:list-refs-states"));
+
 const stateByEnvironment = Atom.family((environmentId: EnvironmentId) =>
-  Atom.make<VcsRefsCacheState>({
-    revision: 0,
-    persistedCacheReadable: true,
-  }).pipe(Atom.keepAlive, Atom.withLabel(`environment-data:vcs:list-refs-state:${environmentId}`)),
+  Atom.writable(
+    (get) =>
+      get(vcsRefsCacheStatesByEnvironmentAtom).get(environmentId) ?? DEFAULT_VCS_REFS_CACHE_STATE,
+    (ctx, nextState: VcsRefsCacheState) => {
+      const current = ctx.get(vcsRefsCacheStatesByEnvironmentAtom);
+      if (current.get(environmentId) === nextState) return;
+      const next = new Map(current);
+      next.delete(environmentId);
+      next.set(environmentId, nextState);
+      while (next.size > MAX_VCS_REFS_CACHE_ENVIRONMENTS) {
+        const oldestKey = next.keys().next().value;
+        if (oldestKey === undefined) break;
+        next.delete(oldestKey);
+      }
+      ctx.set(vcsRefsCacheStatesByEnvironmentAtom, next);
+    },
+  ).pipe(Atom.withLabel(`environment-data:vcs:list-refs-state:${environmentId}`)),
 );
 const persistenceLock = PartitionedSemaphore.makeUnsafe<EnvironmentId>({ permits: 1 });
 
@@ -81,12 +106,14 @@ export const invalidateCachedVcsRefs = Effect.fn("VcsRefsState.invalidateCached"
 });
 
 // Ref digests from each cwd's last status refresh; the cached branch list is at least that new.
-const refsDigestsByEnvironment = Atom.family((environmentId: EnvironmentId) =>
-  Atom.make<ReadonlyMap<string, string>>(new Map()).pipe(
-    Atom.keepAlive,
-    Atom.withLabel(`environment-data:vcs:refs-digests:${environmentId}`),
-  ),
+const refsDigestsAtom = Atom.make<ReadonlyMap<string, string>>(new Map()).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("environment-data:vcs:refs-digests"),
 );
+
+function refsDigestKey(target: CachedVcsRefsInvalidationTarget): string {
+  return `${target.environmentId.length}:${target.environmentId}${target.cwd}`;
+}
 
 /** Skips the branch list reload when a status refresh saw the same refs as the last one. */
 export const invalidateCachedVcsRefsIfChanged = Effect.fn("VcsRefsState.invalidateCachedIfChanged")(
@@ -95,14 +122,32 @@ export const invalidateCachedVcsRefsIfChanged = Effect.fn("VcsRefsState.invalida
     target: CachedVcsRefsInvalidationTarget,
     refsDigest: string | undefined,
   ) {
-    const digestsAtom = refsDigestsByEnvironment(target.environmentId);
-    if (refsDigest !== undefined && registry.get(digestsAtom).get(target.cwd) === refsDigest) {
+    const key = refsDigestKey(target);
+    const currentDigests = registry.get(refsDigestsAtom);
+    if (refsDigest !== undefined && currentDigests.get(key) === refsDigest) {
+      // Promote active worktree key to MRU so long-lived repos stay cached across worktree churn.
+      registry.update(refsDigestsAtom, (digests) => {
+        if (digests.get(key) !== refsDigest) return digests;
+        const next = new Map(digests);
+        next.delete(key);
+        next.set(key, refsDigest);
+        return next;
+      });
       return;
     }
-    registry.update(digestsAtom, (digests) => {
+    registry.update(refsDigestsAtom, (digests) => {
       const next = new Map(digests);
-      if (refsDigest === undefined) next.delete(target.cwd);
-      else next.set(target.cwd, refsDigest);
+      if (refsDigest === undefined) {
+        next.delete(key);
+      } else {
+        next.delete(key);
+        next.set(key, refsDigest);
+        while (next.size > MAX_VCS_REFS_DIGESTS) {
+          const oldestKey = next.keys().next().value;
+          if (oldestKey === undefined) break;
+          next.delete(oldestKey);
+        }
+      }
       return next;
     });
     yield* invalidateCachedVcsRefs(registry, target);

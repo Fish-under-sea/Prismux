@@ -5,12 +5,15 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { selectThreadRightPanelState, useRightPanelStore } from "../rightPanelStore";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import {
+  __terminalFocusTesting,
+  clearThreadTerminalFocus,
   consumePendingTerminalFocus,
   focusActiveDrawerTerminal,
   focusActivePanelTerminal,
   focusPanelTerminalAfterClose,
   focusTerminal,
   focusTerminalOnNavigation,
+  MAX_LAST_THREAD_FOCUS_ENTRIES,
   registerTerminalFocusTarget,
   restoreFocusOnThreadEnter,
 } from "./terminalFocus";
@@ -331,5 +334,40 @@ describe("focusTerminal", () => {
     focusPanelTerminalAfterClose(ref, reopenedDiffId);
     expect(focus).toHaveBeenCalledTimes(1);
     unregister();
+  });
+
+  it("bounds lastThreadFocus by 200-entry LRU and deletes entries on clearThreadTerminalFocus", () => {
+    __terminalFocusTesting.resetLastThreadFocusForTests();
+    const recordComposerFocus = (ref: ReturnType<typeof threadRef>) => {
+      const composerNode = {
+        closest: (selector: string) =>
+          selector === '[data-workspace-area="composer"]' ? composerNode : null,
+      };
+      const doc = Object.assign(new EventTarget(), { activeElement: composerNode });
+      const root = {
+        ownerDocument: doc,
+        contains: (candidate: unknown) => candidate === composerNode,
+      } as unknown as HTMLElement;
+      const leave = restoreFocusOnThreadEnter(ref, { root, focusComposer: () => {} });
+      doc.dispatchEvent(new Event("focusin"));
+      leave();
+    };
+
+    const ref0 = threadRef("lru-0");
+    recordComposerFocus(ref0);
+    for (let i = 1; i < MAX_LAST_THREAD_FOCUS_ENTRIES; i += 1) {
+      recordComposerFocus(threadRef(`lru-${i}`));
+    }
+    // Re-enter ref0 to promote it to MRU so ref1 is evicted instead of ref0.
+    enterThread(ref0)();
+    recordComposerFocus(threadRef("lru-overflow"));
+
+    expect(__terminalFocusTesting.getLastThreadFocusSize()).toBe(MAX_LAST_THREAD_FOCUS_ENTRIES);
+    expect(__terminalFocusTesting.hasLastThreadFocus(ref0)).toBe(true);
+    expect(__terminalFocusTesting.hasLastThreadFocus(threadRef("lru-1"))).toBe(false);
+
+    clearThreadTerminalFocus(ref0);
+    expect(__terminalFocusTesting.hasLastThreadFocus(ref0)).toBe(false);
+    __terminalFocusTesting.resetLastThreadFocusForTests();
   });
 });

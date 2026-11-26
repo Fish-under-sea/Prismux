@@ -128,8 +128,17 @@ type ModelsKey = readonly [
   apiKey: TextGeneratorConfig["apiKey"],
 ];
 
+export const MAX_TEXT_GENERATOR_REFRESH_KEYS = 256;
+
+const refreshCountsByKeyAtom = Atom.make<ReadonlyMap<string, number>>(new Map()).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("text-generator-refresh:by-key"),
+);
+
 const refreshCountAtom = Atom.family((key: string) =>
-  Atom.make(0).pipe(Atom.keepAlive, Atom.withLabel(`text-generator-refresh:${key}`)),
+  Atom.map(refreshCountsByKeyAtom, (counts) => counts.get(key) ?? 0).pipe(
+    Atom.withLabel(`text-generator-refresh:${key}`),
+  ),
 );
 
 const textGeneratorModelsAtom = Atom.family((key: string) => {
@@ -157,9 +166,31 @@ const textGeneratorCatalogAtom = Atom.family((keys: string) =>
  * redaction marker, so the cache key does not change with it.
  */
 export function rereadTextGeneratorModels(environmentId: EnvironmentId, id: ProviderInstanceId) {
-  const atom = refreshCountAtom(`${environmentId}:${id}`);
-  appAtomRegistry.set(atom, appAtomRegistry.get(atom) + 1);
+  const key = `${environmentId}:${id}`;
+  appAtomRegistry.update(refreshCountsByKeyAtom, (current) => {
+    const next = new Map(current);
+    const nextCount = (current.get(key) ?? 0) + 1;
+    next.delete(key);
+    next.set(key, nextCount);
+    while (next.size > MAX_TEXT_GENERATOR_REFRESH_KEYS) {
+      const oldestKey = next.keys().next().value;
+      if (oldestKey === undefined) break;
+      next.delete(oldestKey);
+    }
+    return next;
+  });
 }
+
+export const __textGeneratorsTesting = {
+  readRefreshCount: (environmentId: EnvironmentId, id: ProviderInstanceId) =>
+    appAtomRegistry.get(refreshCountsByKeyAtom).get(`${environmentId}:${id}`) ?? 0,
+  getRefreshCountEntryCount: () => appAtomRegistry.get(refreshCountsByKeyAtom).size,
+  refreshCountAtomForTest: (environmentId: EnvironmentId, id: ProviderInstanceId) =>
+    refreshCountAtom(`${environmentId}:${id}`),
+  resetRefreshCountsForTests: () => {
+    appAtomRegistry.set(refreshCountsByKeyAtom, new Map());
+  },
+};
 
 /**
  * Asks the API for its model list again, skipping the server's cache, then has open pickers
