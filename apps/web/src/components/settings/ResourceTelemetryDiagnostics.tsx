@@ -1387,18 +1387,18 @@ function ResourceTelemetryDiagnosticsBody({
             </div>
 
             {/* Summary card 1: Host hardware */}
-            <div className="flex min-h-18 items-start justify-between gap-4 border-t border-border/50 py-3 first:border-t-0">
-              <div className="min-w-0">
-                <div className="text-sm font-medium text-foreground">
+            <div className="flex min-h-18 flex-col justify-center gap-1.5 border-t border-border/50 py-3 first:border-t-0">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-medium text-foreground">
                   <T>Host hardware</T>
-                </div>
-                <div className="mt-1 truncate text-2xs leading-relaxed text-muted-foreground/80">
-                  {cpuHardwareDetail || gt("Hardware telemetry waiting for first native sample.")}
-                </div>
+                </span>
+                <span className="inline-flex shrink-0 items-center rounded-full border border-border/70 bg-muted/45 px-2.5 py-0.5 font-mono text-3xs font-semibold tabular-nums text-foreground/85">
+                  {osSummary || gt("Local host")}
+                </span>
               </div>
-              <span className="inline-flex shrink-0 items-center rounded-full border border-border/70 bg-muted/45 px-2.5 py-1 font-mono text-3xs font-semibold tabular-nums text-foreground/85">
-                {osSummary || gt("Local host")}
-              </span>
+              <div className="truncate text-2xs leading-relaxed text-muted-foreground/80">
+                {cpuHardwareDetail || gt("Hardware telemetry waiting for first native sample.")}
+              </div>
             </div>
 
             {/* Summary card 2: Physical memory & power */}

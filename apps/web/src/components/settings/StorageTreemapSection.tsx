@@ -868,13 +868,13 @@ export function StorageTreemapSection({
                     </div>
 
                     <div className="flex shrink-0 items-center gap-4 font-mono text-2xs tabular-nums">
-                      <span className="w-16 text-right text-muted-foreground">
+                      <span className="min-w-20 whitespace-nowrap text-right text-muted-foreground">
                         {gt("{count} files", { count: node.fileCount })}
                       </span>
-                      <span className="w-20 text-right font-medium text-foreground">
+                      <span className="min-w-18 whitespace-nowrap text-right font-medium text-foreground">
                         {formatBytes(node.bytes)}
                       </span>
-                      <span className="w-12 text-right text-muted-foreground">
+                      <span className="w-12 whitespace-nowrap text-right text-muted-foreground">
                         {share.toFixed(1)}%
                       </span>
                       {hasChildren ? (
