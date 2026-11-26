@@ -383,3 +383,86 @@ it.effect("keeps an anchor that a row appended during the pass borrows from", ()
     }),
   ).pipe(Effect.provide(layerTest)),
 );
+
+it.effect(
+  "prunes expired or revoked auth_sessions, stale pull_request_review_guides, and old v2 command receipts older than 30 days",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      yield* TestClock.setTime(Date.parse("2026-11-26T00:00:00.000Z"));
+      const oldIso = "2026-10-01T00:00:00.000Z";
+      const freshIso = "2026-11-20T00:00:00.000Z";
+      const futureIso = "2026-12-30T00:00:00.000Z";
+
+      // Seed auth_sessions: 1 expired >30d, 1 revoked >30d, 1 active
+      yield* sql`
+        INSERT INTO auth_sessions (
+          session_id, subject, scopes, method, issued_at, expires_at, revoked_at
+        ) VALUES
+          ('sess-expired', 'user', '[]', 'token', ${oldIso}, ${oldIso}, NULL),
+          ('sess-revoked', 'user', '[]', 'token', ${oldIso}, ${futureIso}, ${oldIso}),
+          ('sess-active', 'user', '[]', 'token', ${freshIso}, ${futureIso}, NULL)
+      `;
+
+      // Seed pull_request_review_guides: 1 stale >30d, 1 fresh
+      yield* sql`
+        INSERT INTO pull_request_review_guides (host, repository, number, guide_json) VALUES
+          ('github.com', 'org/repo', 1, ${JSON.stringify({ generatedAt: oldIso })}),
+          ('github.com', 'org/repo', 2, ${JSON.stringify({ generatedAt: freshIso })})
+      `;
+
+      // Seed orchestration_command_receipts (v2 old + fresh) & orchestration_v2_command_receipts (old + fresh)
+      yield* sql`
+        INSERT INTO orchestration_command_receipts (
+          command_id, aggregate_kind, aggregate_id, accepted_at, result_sequence, status, error, command_type
+        ) VALUES
+          ('cmd-old-v2', 'thread', 't-1', ${oldIso}, 1, 'accepted', NULL, 'thread.create'),
+          ('cmd-fresh-v2', 'thread', 't-1', ${freshIso}, 2, 'accepted', NULL, 'thread.create')
+      `;
+      yield* sql`
+        INSERT INTO orchestration_v2_command_receipts (
+          command_id, thread_id, command_type, accepted_at, result_sequence, status, error
+        ) VALUES
+          ('v2-cmd-old', 't-1', 'thread.create', ${oldIso}, 1, 'accepted', NULL),
+          ('v2-cmd-fresh', 't-1', 'thread.create', ${freshIso}, 2, 'accepted', NULL)
+      `;
+
+      const result = yield* maintenance.pruneEventStore();
+      assert.equal(result.deletedAuthSessionCount, 2);
+      assert.equal(result.deletedReviewGuideCount, 1);
+      assert.equal(result.deletedReceiptCount, 2);
+
+      const remainingSessions = yield* sql<{ readonly session_id: string }>`
+        SELECT session_id FROM auth_sessions
+      `;
+      assert.deepEqual(
+        remainingSessions.map((r) => r.session_id),
+        ["sess-active"],
+      );
+
+      const remainingGuides = yield* sql<{ readonly number: number }>`
+        SELECT number FROM pull_request_review_guides
+      `;
+      assert.deepEqual(
+        remainingGuides.map((r) => r.number),
+        [2],
+      );
+
+      const remainingReceipts = yield* sql<{ readonly command_id: string }>`
+        SELECT command_id FROM orchestration_command_receipts
+      `;
+      assert.deepEqual(
+        remainingReceipts.map((r) => r.command_id),
+        ["cmd-fresh-v2"],
+      );
+
+      const remainingV2Receipts = yield* sql<{ readonly command_id: string }>`
+        SELECT command_id FROM orchestration_v2_command_receipts
+      `;
+      assert.deepEqual(
+        remainingV2Receipts.map((r) => r.command_id),
+        ["v2-cmd-fresh"],
+      );
+    }).pipe(Effect.provide(layerTest)),
+);

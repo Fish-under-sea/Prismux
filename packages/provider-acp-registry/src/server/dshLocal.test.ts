@@ -18,6 +18,7 @@ import { AcpRegistrySettings } from "../settings.ts";
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
 import { probeAcpRegistryConfiguration } from "./probe.ts";
 import {
+  clearPackagedDshDesktopCacheForTests,
   findDeepSeekCliArgStart,
   hasAsarEntrySync,
   isDeepSeekHarnessSpawn,
@@ -809,6 +810,124 @@ rl.on("line", (line) => {
       ELECTRON_RUN_AS_NODE: "1",
       DSH_HOME: persistedHome,
     });
+  });
+
+  it("does not probe Windows drive roots C..F by default unless probeDriveRoots: true is explicitly requested", () => {
+    const exePath = "E:\\DSH NEXT\\DSH NEXT.exe";
+    const asarPath = "E:\\DSH NEXT\\resources\\app.asar";
+    const probedPaths: string[] = [];
+    const baseFs = makeMemoryFs({
+      files: { [exePath]: "" },
+      directories: ["E:\\DSH NEXT"],
+      asarEntries: { [asarPath]: ["lib/desktop-cli.js"] },
+    });
+    const spyingFs: LocalAcpResolutionFs = {
+      ...baseFs,
+      isFile: (filePath) => {
+        probedPaths.push(filePath);
+        return baseFs.isFile(filePath);
+      },
+    };
+    const env = {
+      LOCALAPPDATA: "C:\\Users\\dev\\AppData\\Local",
+      ProgramFiles: "C:\\Program Files",
+      "ProgramFiles(x86)": "C:\\Program Files (x86)",
+    };
+
+    expect(
+      resolvePackagedDshDesktopSpawn({
+        commandArgs: ["acp"],
+        env,
+        platform: "win32",
+        fs: spyingFs,
+      }),
+    ).toBeUndefined();
+    expect(probedPaths.some((p) => /^[DEF]:\\/i.test(p))).toBe(false);
+
+    const optIn = resolvePackagedDshDesktopSpawn({
+      commandArgs: ["acp"],
+      env,
+      platform: "win32",
+      fs: spyingFs,
+      probeDriveRoots: true,
+    });
+    expect(optIn?.command).toBe(exePath);
+  });
+
+  it("caches default-FS positive and negative packaged DSH probes until cleared while bypassing cache when custom fs is provided", () => {
+    clearPackagedDshDesktopCacheForTests();
+    const tmpDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "dsh-probe-cache-"));
+    try {
+      // Use darwin layout under an isolated HOME so host Windows Uninstall Registry does not interfere.
+      const posixHome = tmpDir.replaceAll("\\", "/");
+      const env: NodeJS.ProcessEnv = {
+        HOME: posixHome,
+      };
+
+      // Negative result is cached for default host FS.
+      expect(
+        resolvePackagedDshDesktopSpawn({
+          commandArgs: ["acp"],
+          env,
+          platform: "darwin",
+        }),
+      ).toBeUndefined();
+
+      // Create packaged DSH bundle after the negative cache entry was recorded.
+      const macOsDir = NodePath.join(tmpDir, "Applications", "DSH NEXT.app", "Contents", "MacOS");
+      const resourcesDir = NodePath.join(
+        tmpDir,
+        "Applications",
+        "DSH NEXT.app",
+        "Contents",
+        "Resources",
+      );
+      NodeFS.mkdirSync(macOsDir, { recursive: true });
+      NodeFS.mkdirSync(resourcesDir, { recursive: true });
+      const exePath = NodePath.join(macOsDir, "DSH NEXT");
+      const posixExePath = NodePath.posix.join(
+        posixHome,
+        "Applications",
+        "DSH NEXT.app",
+        "Contents",
+        "MacOS",
+        "DSH NEXT",
+      );
+      NodeFS.writeFileSync(exePath, "");
+      writeMinimalAsar(NodePath.join(resourcesDir, "app.asar"), {
+        files: { lib: { files: { "desktop-cli.js": { size: 4, offset: "0" } } } },
+      });
+
+      // Still returns cached negative hit until cache is cleared.
+      expect(
+        resolvePackagedDshDesktopSpawn({
+          commandArgs: ["acp"],
+          env,
+          platform: "darwin",
+        }),
+      ).toBeUndefined();
+
+      // Clearing cache allows fresh positive discovery, which is also cached.
+      clearPackagedDshDesktopCacheForTests();
+      const firstHit = resolvePackagedDshDesktopSpawn({
+        commandArgs: ["acp"],
+        env,
+        platform: "darwin",
+      });
+      expect(firstHit?.command).toBe(posixExePath);
+
+      NodeFS.rmSync(exePath, { force: true });
+      const cachedHit = resolvePackagedDshDesktopSpawn({
+        commandArgs: ["acp", "--extra"],
+        env,
+        platform: "darwin",
+      });
+      expect(cachedHit?.command).toBe(posixExePath);
+      expect(cachedHit?.args.slice(-2)).toEqual(["acp", "--extra"]);
+    } finally {
+      clearPackagedDshDesktopCacheForTests();
+      NodeFS.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it.live.runIf(process.env.PRISMUX_LIVE_DSH_PROBE === "1")(

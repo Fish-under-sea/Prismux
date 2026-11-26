@@ -97,7 +97,7 @@ export {
 };
 
 const DEFAULT_HISTORY_LINE_LIMIT = 5_000;
-const DEFAULT_HISTORY_BYTE_LIMIT = 8 * 1024 * 1024;
+const DEFAULT_HISTORY_BYTE_LIMIT = 2 * 1024 * 1024;
 // eCryptfs permits 143-byte names.
 const MAX_HISTORY_FILENAME_BYTES = 143;
 const MAX_HISTORY_CHUNK_LENGTH = 16 * 1024;
@@ -113,7 +113,7 @@ const CLOSE_IDLE_QUERY_TIMEOUT = { posix: "1 second", win32: "1500 millis" } as 
 // Discover children started without terminal input or output.
 const QUIET_SUBPROCESS_SNAPSHOT_EVERY_TICKS = 30;
 const DEFAULT_PROCESS_KILL_GRACE_MS = 1_000;
-const DEFAULT_MAX_RETAINED_INACTIVE_SESSIONS = 128;
+const DEFAULT_MAX_RETAINED_INACTIVE_SESSIONS = 24;
 const DEFAULT_OPEN_COLS = 120;
 const DEFAULT_OPEN_ROWS = 30;
 // The tmux/screen/Zellij keys name the multiplexer pane that launched the server,

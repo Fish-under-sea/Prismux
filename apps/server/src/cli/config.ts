@@ -99,7 +99,7 @@ export const traceFileConfig = Config.String("PRISMUX_TRACE_FILE").pipe(
   Config.map(Option.getOrUndefined),
 );
 export const traceMaxFilesConfig = Config.Int("PRISMUX_TRACE_MAX_FILES").pipe(
-  Config.withDefault(10),
+  Config.withDefault(5),
 );
 
 const EnvServerConfig = Config.all({

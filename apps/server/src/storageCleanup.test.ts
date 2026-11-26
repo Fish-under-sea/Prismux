@@ -330,9 +330,18 @@ const allocatedBytes = (fs: FileSystem.FileSystem, file: string) =>
     ),
   );
 
+// Isolated baseline for worktree policy tests that predate safe default retention timers.
+const TEST_STORAGE_CLEANUP_DEFAULTS: StorageCleanupSettings = {
+  ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+  worktreeSettledAfterDays: null,
+  worktreeOnMerge: false,
+  browserArtifactsAfterDays: null,
+  logsAfterDays: null,
+};
+
 const cleanupFixture = (
   storageCleanup: StorageCleanupSettings = {
-    ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+    ...TEST_STORAGE_CLEANUP_DEFAULTS,
     worktreeAfterDays: 8,
     worktreeOnDelete: true,
   },
@@ -582,6 +591,8 @@ const cleanupFixture = (
           storageCleanup: {
             ...settings.storageCleanup,
             worktreeAfterDays: null,
+            worktreeSettledAfterDays: null,
+            worktreeOnMerge: false,
             worktreeOnDelete: false,
           },
         };
@@ -695,7 +706,7 @@ const legacyCheckpointRef = (threadId: string, turn: number) =>
 const checkpointCleanupFixture = Effect.fn("test.checkpointCleanupFixture")(function* () {
   const sql = yield* SqlClient.SqlClient;
   const git = yield* GitVcsDriver.GitVcsDriver;
-  const fixture = yield* cleanupFixture(DEFAULT_SERVER_SETTINGS.storageCleanup, sql);
+  const fixture = yield* cleanupFixture(TEST_STORAGE_CLEANUP_DEFAULTS, sql);
   const { repo, worktree, command } = fixture;
   const timestamp = DateTime.formatIso(at(0));
   yield* sql`INSERT INTO projection_projects ${sql.insert({
@@ -1329,7 +1340,7 @@ describe("subagent worktree ownership", () => {
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW_MS);
       const fixture = yield* cleanupFixture({
-        ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        ...TEST_STORAGE_CLEANUP_DEFAULTS,
         worktreeSettledAfterDays: scenario === "immediate" ? 0 : 8,
       });
       const root = shell({
@@ -1413,7 +1424,7 @@ describe("subagent worktree ownership", () => {
       Effect.gen(function* () {
         yield* TestClock.setTime(NOW_MS);
         const fixture = yield* pausedMeasurementFixture({
-          ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          ...TEST_STORAGE_CLEANUP_DEFAULTS,
           worktreeSettledAfterDays: 0,
         });
         const root = shell({ settledAt: at(-20 * DAY_MS), settledOverride: "settled" });
@@ -1495,7 +1506,7 @@ describe("subagent worktree ownership", () => {
       const fixture = yield* cleanupFixture();
       fixture.setSettings({
         storageCleanup: {
-          ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          ...TEST_STORAGE_CLEANUP_DEFAULTS,
           worktreeSettledAfterDays: scenario === "recent-inactive" ? null : 8,
           worktreeAfterDays: scenario === "recent-inactive" ? 8 : null,
         },
@@ -1615,7 +1626,7 @@ describe("subagent worktree ownership", () => {
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW_MS);
       const fixture = yield* cleanupFixture({
-        ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        ...TEST_STORAGE_CLEANUP_DEFAULTS,
         worktreeSettledAfterDays: 8,
       });
       const linkedParent = `${yield* fixture.fs.makeTempDirectoryScoped({ prefix: "cleanup-link-" })}/worktrees`;
@@ -1637,7 +1648,7 @@ describe("subagent worktree ownership", () => {
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW_MS);
       const fixture = yield* cleanupFixture({
-        ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        ...TEST_STORAGE_CLEANUP_DEFAULTS,
         worktreeSettledAfterDays: 8,
       }).pipe(Effect.provideService(HostProcess.Platform, "win32"));
       const settled = { branch: "feature", settledAt: at(-20 * DAY_MS) };
@@ -1745,7 +1756,7 @@ describe("deleted thread worktrees", () => {
       Effect.gen(function* () {
         yield* TestClock.setTime(NOW_MS);
         const fixture = yield* cleanupFixture({
-          ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          ...TEST_STORAGE_CLEANUP_DEFAULTS,
           worktreeAfterDays: null,
           worktreeOnDelete: true,
         });
@@ -1766,7 +1777,7 @@ describe("deleted thread worktrees", () => {
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW_MS);
       const fixture = yield* cleanupFixture({
-        ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        ...TEST_STORAGE_CLEANUP_DEFAULTS,
         worktreeAfterDays: null,
         worktreeOnDelete: true,
       });
@@ -1788,7 +1799,7 @@ describe("deleted thread worktrees", () => {
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW_MS);
       const fixture = yield* cleanupFixture({
-        ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        ...TEST_STORAGE_CLEANUP_DEFAULTS,
         worktreeAfterDays: 8,
         worktreeOnDelete: false,
       });
@@ -1869,7 +1880,7 @@ describe("deleted thread worktrees", () => {
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW_MS);
       const fixture = yield* cleanupFixture({
-        ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        ...TEST_STORAGE_CLEANUP_DEFAULTS,
         worktreeAfterDays: null,
         worktreeOnDelete: true,
       });
@@ -1891,7 +1902,7 @@ describe("deleted thread worktrees", () => {
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW_MS);
       const fixture = yield* cleanupFixture({
-        ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        ...TEST_STORAGE_CLEANUP_DEFAULTS,
         worktreeAfterDays: null,
         worktreeOnDelete: true,
       });
@@ -1923,7 +1934,7 @@ describe("deleted thread worktrees", () => {
       Effect.gen(function* () {
         yield* TestClock.setTime(NOW_MS);
         const fixture = yield* cleanupFixture({
-          ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          ...TEST_STORAGE_CLEANUP_DEFAULTS,
           worktreeAfterDays: null,
           worktreeOnDelete: true,
         });
@@ -1969,7 +1980,7 @@ describe("deleted thread worktrees", () => {
       Effect.gen(function* () {
         yield* TestClock.setTime(NOW_MS);
         const fixture = yield* cleanupFixture({
-          ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          ...TEST_STORAGE_CLEANUP_DEFAULTS,
           worktreeAfterDays: null,
           worktreeOnDelete: true,
         });
@@ -2000,7 +2011,7 @@ describe("deleted thread worktrees", () => {
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW_MS);
       const fixture = yield* cleanupFixture({
-        ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        ...TEST_STORAGE_CLEANUP_DEFAULTS,
         worktreeAfterDays: null,
         worktreeOnDelete: true,
       });
@@ -2024,7 +2035,7 @@ describe("deleted thread worktrees", () => {
       Effect.gen(function* () {
         yield* TestClock.setTime(NOW_MS);
         const fixture = yield* cleanupFixture({
-          ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          ...TEST_STORAGE_CLEANUP_DEFAULTS,
           worktreeAfterDays: null,
           worktreeOnDelete: true,
         });
@@ -2054,7 +2065,7 @@ describe("deleted thread worktrees", () => {
       Effect.gen(function* () {
         yield* TestClock.setTime(NOW_MS);
         const fixture = yield* cleanupFixture({
-          ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          ...TEST_STORAGE_CLEANUP_DEFAULTS,
           worktreeAfterDays: null,
           worktreeOnDelete: true,
         });
@@ -2126,7 +2137,7 @@ describe("deleted thread worktrees", () => {
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW_MS);
       const fixture = yield* cleanupFixture({
-        ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        ...TEST_STORAGE_CLEANUP_DEFAULTS,
         worktreeAfterDays: null,
         worktreeOnDelete: true,
       });
@@ -2722,7 +2733,7 @@ describe("storage cleanup reports and local file policies", () => {
       runCleanupTest(
         Effect.gen(function* () {
           const fixture = yield* cleanupFixture({
-            ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+            ...TEST_STORAGE_CLEANUP_DEFAULTS,
             worktreeAfterDays: 8,
             worktreeOnDelete,
           });
@@ -3140,7 +3151,7 @@ describe("storage cleanup reports and local file policies", () => {
       Effect.gen(function* () {
         yield* TestClock.setTime(NOW_MS);
         const fixture = yield* cleanupFixture({
-          ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          ...TEST_STORAGE_CLEANUP_DEFAULTS,
           worktreeAfterDays: days,
           worktreeOnDelete: true,
         });
@@ -3494,7 +3505,7 @@ describe("storage cleanup reports and local file policies", () => {
         yield* TestClock.setTime(NOW_MS);
         const { service, fs, repo, worktree, command, setThreads, statusCommands } =
           yield* cleanupFixture({
-            ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+            ...TEST_STORAGE_CLEANUP_DEFAULTS,
             worktreeUnchanged: state !== "merged-only",
             worktreeOnMerge: true,
           });
@@ -3521,7 +3532,7 @@ describe("storage cleanup reports and local file policies", () => {
     runCleanupTest(
       Effect.gen(function* () {
         const { service, fs, worktree, setThreads } = yield* cleanupFixture({
-          ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          ...TEST_STORAGE_CLEANUP_DEFAULTS,
           worktreeSettledAfterDays: 11,
           worktreeOnMerge: true,
           worktreeUnchanged: true,
@@ -3560,7 +3571,7 @@ describe("storage cleanup reports and local file policies", () => {
       runCleanupTest(
         Effect.gen(function* () {
           const { service, fs, repo, worktree, command, setThreads } = yield* cleanupFixture({
-            ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+            ...TEST_STORAGE_CLEANUP_DEFAULTS,
             worktreeUnchanged: true,
           });
           setThreads([
@@ -3588,7 +3599,7 @@ describe("storage cleanup reports and local file policies", () => {
       runCleanupTest(
         Effect.gen(function* () {
           const { service, fs, repo, worktree, command, setThreads } = yield* cleanupFixture({
-            ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+            ...TEST_STORAGE_CLEANUP_DEFAULTS,
             worktreeUnchanged: true,
           });
           setThreads([
@@ -3619,7 +3630,7 @@ describe("storage cleanup reports and local file policies", () => {
     runCleanupTest(
       Effect.gen(function* () {
         const { service, fs, repo, worktree, command, setThreads } = yield* cleanupFixture({
-          ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          ...TEST_STORAGE_CLEANUP_DEFAULTS,
           worktreeUnchanged: true,
         });
         setThreads([shell({ branch: "feature", worktreePath: worktree, archivedAt: at(-DAY_MS) })]);
@@ -3643,7 +3654,7 @@ describe("storage cleanup reports and local file policies", () => {
       Effect.gen(function* () {
         const { service, fs, repo, worktree, command, setThreads, setStoredWorktreePaths } =
           yield* cleanupFixture({
-            ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+            ...TEST_STORAGE_CLEANUP_DEFAULTS,
             worktreeUnchanged: true,
           });
         const second = `${worktree}-2`;
@@ -4086,7 +4097,7 @@ describe("settled worktree rechecks", () => {
         fixture.setSettings({
           autoResumeLimitedThreads: false,
           storageCleanup: {
-            ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+            ...TEST_STORAGE_CLEANUP_DEFAULTS,
             worktreeSettledAfterDays: 0,
           },
         });
@@ -4131,7 +4142,7 @@ describe("settled worktree rechecks", () => {
         fixture.setSettings({
           autoResumeLimitedThreads: false,
           storageCleanup: {
-            ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+            ...TEST_STORAGE_CLEANUP_DEFAULTS,
             worktreeSettledAfterDays: 0,
           },
         });
@@ -4188,7 +4199,7 @@ describe("settled worktree rechecks", () => {
           });
           fixture.setSettings({
             storageCleanup: {
-              ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+              ...TEST_STORAGE_CLEANUP_DEFAULTS,
               worktreeSettledAfterDays: 0,
             },
           });
@@ -4213,7 +4224,7 @@ it.effect("keeps saved usage data when removing a settled checkout", () =>
       yield* TestClock.setTime(NOW_MS);
       const fixture = yield* cleanupFixture();
       fixture.setSettings({
-        storageCleanup: { ...DEFAULT_SERVER_SETTINGS.storageCleanup, worktreeSettledAfterDays: 0 },
+        storageCleanup: { ...TEST_STORAGE_CLEANUP_DEFAULTS, worktreeSettledAfterDays: 0 },
       });
       fixture.setThreads([
         shell({ branch: "feature", worktreePath: fixture.worktree, settledAt: at(0) }),
@@ -4226,4 +4237,142 @@ it.effect("keeps saved usage data when removing a settled checkout", () =>
       expect(yield* fixture.fs.readFileString(cachePath)).toBe(savedUsage);
     }),
   ),
+);
+
+it.live(
+  "enforces browser-artifacts LRU cap, terminal log TTL/LRU cap, heapsnapshot pruning, orphan attachments, and triage cleanup",
+  () =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        expect(DEFAULT_SERVER_SETTINGS.storageCleanup).toMatchObject({
+          worktreeSettledAfterDays: 7,
+          worktreeOnMerge: true,
+          browserArtifactsAfterDays: 14,
+          logsAfterDays: 14,
+        });
+        const { service, fs, config, worktree, disable, setSettings, setThreads } =
+          yield* cleanupFixture().pipe(
+            Effect.provideService(StorageCleanup.StorageCleanupCaps, {
+              ...StorageCleanup.DEFAULT_STORAGE_CLEANUP_CAPS,
+              browserArtifactsMaxBytes: 12,
+              terminalLogsMaxBytes: 12,
+            }),
+          );
+        disable();
+        setThreads([
+          shell({ branch: "feature", worktreePath: worktree }),
+          shell({ id: ThreadId.make("archived-thread"), archivedAt: at(-3 * DAY_MS) }),
+        ]);
+        setSettings({
+          storageCleanup: {
+            ...TEST_STORAGE_CLEANUP_DEFAULTS,
+            worktreeAfterDays: null,
+            worktreeSettledAfterDays: null,
+            worktreeOnMerge: false,
+            worktreeOnDelete: false,
+            worktreeUnchanged: false,
+            browserArtifactsAfterDays: 14,
+            logsAfterDays: 14,
+          },
+        });
+
+        const nowSec = Math.floor((yield* Clock.currentTimeMillis) / 1000);
+        const daySec = 24 * 60 * 60;
+
+        // 1. Browser artifacts: 3 fresh 8-byte files exceed 12-byte LRU cap -> oldest 2 evicted, newest kept.
+        yield* fs.makeDirectory(config.browserArtifactsDir, { recursive: true });
+        for (const [index, name] of ["a.png", "b.png", "c.png"].entries()) {
+          const file = `${config.browserArtifactsDir}/${name}`;
+          yield* fs.writeFileString(file, "12345678");
+          yield* fs.utimes(file, nowSec - (3 - index) * 60, nowSec - (3 - index) * 60);
+        }
+
+        // 2. Terminal logs: 1 expired (>14d), plus 2 fresh 8-byte logs exceeding 12-byte cap -> expired + oldest fresh removed, newest kept; active server.log kept.
+        yield* fs.makeDirectory(config.terminalLogsDir, { recursive: true });
+        const activeServerLog = `${config.logsDir}/server.log`;
+        yield* fs.writeFileString(activeServerLog, "active-server-log");
+        yield* fs.utimes(activeServerLog, nowSec - 30 * daySec, nowSec - 30 * daySec);
+
+        const expiredTerm = `${config.terminalLogsDir}/term-old.log`;
+        const midTerm = `${config.terminalLogsDir}/term-mid.log`;
+        const freshTerm = `${config.terminalLogsDir}/term-fresh.log`;
+        yield* fs.writeFileString(expiredTerm, "old-log!");
+        yield* fs.utimes(expiredTerm, nowSec - 20 * daySec, nowSec - 20 * daySec);
+        yield* fs.writeFileString(midTerm, "12345678");
+        yield* fs.utimes(midTerm, nowSec - 120, nowSec - 120);
+        yield* fs.writeFileString(freshTerm, "87654321");
+        yield* fs.utimes(freshTerm, nowSec - 60, nowSec - 60);
+
+        // 3. Heapsnapshots: 1 expired (>7d) + 3 fresh -> expired + oldest fresh removed, 2 newest kept.
+        const oldHeap = `${config.logsDir}/server-1.heapsnapshot`;
+        const freshHeaps = [
+          `${config.logsDir}/server-2.heapsnapshot`,
+          `${config.logsDir}/server-3.heapsnapshot`,
+          `${config.logsDir}/server-4.heapsnapshot`,
+        ] as const;
+        yield* fs.writeFileString(oldHeap, "heap");
+        yield* fs.utimes(oldHeap, nowSec - 10 * daySec, nowSec - 10 * daySec);
+        for (const [index, file] of freshHeaps.entries()) {
+          yield* fs.writeFileString(file, "heap");
+          yield* fs.utimes(file, nowSec - (3 - index) * 60, nowSec - (3 - index) * 60);
+        }
+
+        // 4. Attachments: live thread-1 and archived-thread kept, recent orphan (<1h) kept, pending kept, old orphan (>1h) removed.
+        yield* fs.makeDirectory(config.attachmentsDir, { recursive: true });
+        const liveAttachment = `${config.attachmentsDir}/thread-1-11111111-1111-4111-8111-111111111111-png.png`;
+        const archivedAttachment = `${config.attachmentsDir}/archived-thread-55555555-5555-4555-8555-555555555555-png.png`;
+        const recentOrphan = `${config.attachmentsDir}/deleted-thread-22222222-2222-4222-8222-222222222222-png.png`;
+        const staleOrphan = `${config.attachmentsDir}/deleted-thread-33333333-3333-4333-8333-333333333333-png.png`;
+        const pendingAttachment = `${config.attachmentsDir}/pending-44444444-4444-4444-8444-444444444444-png.png`;
+        for (const file of [
+          liveAttachment,
+          archivedAttachment,
+          recentOrphan,
+          staleOrphan,
+          pendingAttachment,
+        ]) {
+          yield* fs.writeFileString(file, "img");
+        }
+        yield* fs.utimes(liveAttachment, nowSec - 3 * daySec, nowSec - 3 * daySec);
+        yield* fs.utimes(archivedAttachment, nowSec - 3 * daySec, nowSec - 3 * daySec);
+        yield* fs.utimes(staleOrphan, nowSec - 3 * 60 * 60, nowSec - 3 * 60 * 60);
+        yield* fs.utimes(pendingAttachment, nowSec - 3 * 60 * 60, nowSec - 3 * 60 * 60);
+
+        // 5. Triage sessions: >14d directory removed, fresh directory kept.
+        const oldTriageDir = `${config.stateDir}/triage/2026-01-01`;
+        const freshTriageDir = `${config.stateDir}/triage/2026-11-25`;
+        yield* fs.makeDirectory(oldTriageDir, { recursive: true });
+        yield* fs.makeDirectory(freshTriageDir, { recursive: true });
+        yield* fs.writeFileString(`${oldTriageDir}/context.md`, "old triage");
+        yield* fs.utimes(`${oldTriageDir}/context.md`, nowSec - 20 * daySec, nowSec - 20 * daySec);
+        yield* fs.utimes(oldTriageDir, nowSec - 20 * daySec, nowSec - 20 * daySec);
+        yield* fs.writeFileString(`${freshTriageDir}/context.md`, "fresh triage");
+
+        const report = yield* service.runNow;
+        const browserEntry = report.entries.find((e) => e.kind === "browser-artifacts");
+        expect(browserEntry).toMatchObject({ outcome: "removed", files: 2, bytes: 16 });
+        expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual(["c.png"]);
+
+        const logsEntry = report.entries.find((e) => e.kind === "logs");
+        // 2 terminal logs (expired + mid) + 2 heapsnapshots (expired + oldest fresh) = 4 files
+        expect(logsEntry).toMatchObject({ outcome: "removed", files: 4 });
+        expect(yield* fs.exists(activeServerLog)).toBe(true);
+        expect(yield* fs.exists(expiredTerm)).toBe(false);
+        expect(yield* fs.exists(midTerm)).toBe(false);
+        expect(yield* fs.exists(freshTerm)).toBe(true);
+        expect(yield* fs.exists(oldHeap)).toBe(false);
+        expect(yield* fs.exists(freshHeaps[0])).toBe(false);
+        expect(yield* fs.exists(freshHeaps[1])).toBe(true);
+        expect(yield* fs.exists(freshHeaps[2])).toBe(true);
+
+        expect(yield* fs.exists(liveAttachment)).toBe(true);
+        expect(yield* fs.exists(archivedAttachment)).toBe(true);
+        expect(yield* fs.exists(recentOrphan)).toBe(true);
+        expect(yield* fs.exists(pendingAttachment)).toBe(true);
+        expect(yield* fs.exists(staleOrphan)).toBe(false);
+
+        expect(yield* fs.exists(oldTriageDir)).toBe(false);
+        expect(yield* fs.exists(freshTriageDir)).toBe(true);
+      }),
+    ),
 );

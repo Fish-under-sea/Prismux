@@ -42,6 +42,11 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { parse as parseYaml } from "yaml";
 
 import * as ServerConfig from "./config.ts";
+import {
+  PENDING_ATTACHMENT_THREAD_SEGMENT,
+  parseThreadSegmentFromAttachmentId,
+  toSafeThreadAttachmentSegment,
+} from "./attachmentStore.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
@@ -65,6 +70,34 @@ import { withWorkspaceLease } from "./workspace/workspaceLease.ts";
 import * as HostProcess from "@prismux/core-shared/HostProcess";
 import * as NodeSqliteClient from "@prismux/core-shared/nodeSqliteClient";
 import { isNetworkPath } from "@prismux/core-shared/path";
+
+const MEBIBYTE = 1024 * 1024;
+const HOUR_MS = 60 * 60 * 1000;
+
+export interface StorageCleanupCapsValue {
+  readonly browserArtifactsMaxBytes: number;
+  readonly terminalLogsMaxBytes: number;
+  readonly terminalLogsDefaultDays: number;
+  readonly heapSnapshotMaxAgeDays: number;
+  readonly heapSnapshotMaxKeep: number;
+  readonly orphanAttachmentGraceMs: number;
+  readonly triageMaxAgeDays: number;
+}
+
+export const DEFAULT_STORAGE_CLEANUP_CAPS: StorageCleanupCapsValue = {
+  browserArtifactsMaxBytes: 512 * MEBIBYTE,
+  terminalLogsMaxBytes: 256 * MEBIBYTE,
+  terminalLogsDefaultDays: 14,
+  heapSnapshotMaxAgeDays: 7,
+  heapSnapshotMaxKeep: 2,
+  orphanAttachmentGraceMs: HOUR_MS,
+  triageMaxAgeDays: 14,
+};
+
+export const StorageCleanupCaps = Context.Reference<StorageCleanupCapsValue>(
+  "@prismux/server/storageCleanup/StorageCleanupCaps",
+  { defaultValue: () => DEFAULT_STORAGE_CLEANUP_CAPS },
+);
 
 const decodeCleanupThread = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2AppThreadJson),
@@ -1793,6 +1826,17 @@ const make = Effect.gen(function* () {
     return { waiting, kept };
   });
 
+  const caps = yield* StorageCleanupCaps;
+
+  const resolveSafeRoot = Effect.fn("StorageCleanup.resolveSafeRoot")(function* (root: string) {
+    if (!(yield* fs.exists(root))) return null;
+    // A symlinked parent (a linked Prismux home) is fine; a symlinked folder is not.
+    const realRoot = yield* fs.realPath(root);
+    const realParent = yield* fs.realPath(path.dirname(root));
+    if (realRoot !== path.join(realParent, path.basename(root))) return null;
+    return realRoot;
+  });
+
   const cleanFiles = Effect.fn("StorageCleanup.cleanFiles")(function* (
     root: string,
     days: number | null,
@@ -1800,14 +1844,27 @@ const make = Effect.gen(function* () {
     rotatedLogs: boolean,
     removed: { files: number; bytes: number },
   ) {
-    if (days === null || !(yield* fs.exists(root))) return removed;
-    // A symlinked parent (a linked T3 home) is fine; a symlinked folder is not.
-    const realRoot = yield* fs.realPath(root);
-    const realParent = yield* fs.realPath(path.dirname(root));
-    if (realRoot !== path.join(realParent, path.basename(root))) return removed;
+    const realRoot = yield* resolveSafeRoot(root);
+    if (realRoot === null) return removed;
+    const realTerminalLogsDir = rotatedLogs
+      ? yield* resolveSafeRoot(config.terminalLogsDir)
+      : null;
+
+    type RetainedFile = {
+      readonly target: string;
+      readonly mtimeMs: number;
+      readonly size: number;
+    };
+    const survivingBrowserArtifacts: Array<RetainedFile> = [];
+    const survivingTerminalLogs: Array<RetainedFile> = [];
+    const survivingHeapSnapshots: Array<RetainedFile> = [];
+
     const visit = Effect.fn("StorageCleanup.visitFiles")(function* (
       directory: string,
     ): Effect.fn.Return<void, PlatformError | ServerSettingsError> {
+      const inTerminalLogs =
+        realTerminalLogsDir !== null &&
+        (directory === realTerminalLogsDir || inside(realTerminalLogsDir, directory));
       for (const name of yield* fs.readDirectory(directory)) {
         const target = path.join(directory, name);
         if (!inside(realRoot, target)) continue;
@@ -1816,21 +1873,222 @@ const make = Effect.gen(function* () {
         if ((yield* fs.realPath(target)) !== target) continue;
         if (stat.type === "Directory" && rotatedLogs) {
           yield* visit(target);
-        } else if (stat.type === "File" && (!rotatedLogs || /\.(?:log|ndjson)\.\d+$/.test(name))) {
+        } else if (stat.type === "File") {
           const modified = Option.getOrNull(stat.mtime);
-          if (modified !== null && modified.getTime() < now - days * DAY_MS) {
-            const current = (yield* settingsService.getSettings).storageCleanup;
-            if ((rotatedLogs ? current.logsAfterDays : current.browserArtifactsAfterDays) !== days)
-              return;
-            yield* fs.remove(target);
-            removed.files++;
-            removed.bytes += Number(stat.size);
+          const mtimeMs = modified?.getTime() ?? null;
+          const size = Number(stat.size);
+          if (!rotatedLogs) {
+            if (days !== null && mtimeMs !== null && mtimeMs < now - days * DAY_MS) {
+              const current = (yield* settingsService.getSettings).storageCleanup;
+              if (current.browserArtifactsAfterDays !== days) return;
+              yield* fs.remove(target);
+              removed.files++;
+              removed.bytes += size;
+            } else {
+              survivingBrowserArtifacts.push({ target, mtimeMs: mtimeMs ?? now, size });
+            }
+          } else if (name.endsWith(".heapsnapshot")) {
+            if (
+              mtimeMs !== null &&
+              mtimeMs < now - caps.heapSnapshotMaxAgeDays * DAY_MS
+            ) {
+              yield* fs.remove(target);
+              removed.files++;
+              removed.bytes += size;
+            } else {
+              survivingHeapSnapshots.push({ target, mtimeMs: mtimeMs ?? now, size });
+            }
+          } else if (inTerminalLogs && name.endsWith(".log")) {
+            const ttlDays = days ?? caps.terminalLogsDefaultDays;
+            if (mtimeMs !== null && mtimeMs < now - ttlDays * DAY_MS) {
+              if (days !== null) {
+                const current = (yield* settingsService.getSettings).storageCleanup;
+                if (current.logsAfterDays !== days) return;
+              }
+              yield* fs.remove(target);
+              removed.files++;
+              removed.bytes += size;
+            } else {
+              survivingTerminalLogs.push({ target, mtimeMs: mtimeMs ?? now, size });
+            }
+          } else if (/\.(?:log|ndjson)\.\d+$/.test(name)) {
+            if (days !== null && mtimeMs !== null && mtimeMs < now - days * DAY_MS) {
+              const current = (yield* settingsService.getSettings).storageCleanup;
+              if (current.logsAfterDays !== days) return;
+              yield* fs.remove(target);
+              removed.files++;
+              removed.bytes += size;
+            }
           }
         }
       }
     });
     yield* visit(realRoot);
+
+    const enforceByteCap = Effect.fnUntraced(function* (
+      candidates: Array<RetainedFile>,
+      maxBytes: number,
+    ) {
+      let totalBytes = candidates.reduce((sum, item) => sum + item.size, 0);
+      if (totalBytes <= maxBytes) return;
+      candidates.sort((a, b) => a.mtimeMs - b.mtimeMs || a.target.localeCompare(b.target));
+      for (const item of candidates) {
+        if (totalBytes <= maxBytes) break;
+        yield* fs.remove(item.target);
+        totalBytes -= item.size;
+        removed.files++;
+        removed.bytes += item.size;
+      }
+    });
+
+    if (!rotatedLogs) {
+      yield* enforceByteCap(survivingBrowserArtifacts, caps.browserArtifactsMaxBytes);
+    } else {
+      yield* enforceByteCap(survivingTerminalLogs, caps.terminalLogsMaxBytes);
+      if (survivingHeapSnapshots.length > caps.heapSnapshotMaxKeep) {
+        survivingHeapSnapshots.sort(
+          (a, b) => b.mtimeMs - a.mtimeMs || b.target.localeCompare(a.target),
+        );
+        for (const stale of survivingHeapSnapshots.slice(caps.heapSnapshotMaxKeep)) {
+          yield* fs.remove(stale.target);
+          removed.files++;
+          removed.bytes += stale.size;
+        }
+      }
+    }
+
     return removed;
+  });
+
+  const cleanOrphanAttachments = Effect.fn("StorageCleanup.cleanOrphanAttachments")(function* (
+    now: number,
+  ) {
+    const realRoot = yield* resolveSafeRoot(config.attachmentsDir);
+    if (realRoot === null) return;
+    const cutoffMs = now - caps.orphanAttachmentGraceMs;
+    const candidates: Array<{
+      readonly target: string;
+      readonly segment: string;
+      readonly size: number;
+    }> = [];
+    for (const name of yield* fs.readDirectory(realRoot)) {
+      if (name.endsWith(".part")) continue;
+      const target = path.join(realRoot, name);
+      if (!inside(realRoot, target)) continue;
+      const stat = yield* fs.lstat(target);
+      if (stat.type !== "File") continue;
+      if ((yield* fs.realPath(target)) !== target) continue;
+      const ext = path.extname(name);
+      const attachmentId = ext.length > 0 ? name.slice(0, -ext.length) : name;
+      const segment = parseThreadSegmentFromAttachmentId(attachmentId);
+      if (segment === null || segment === PENDING_ATTACHMENT_THREAD_SEGMENT) continue;
+      const modified = Option.getOrNull(stat.mtime);
+      if (modified === null || modified.getTime() >= cutoffMs) continue;
+      candidates.push({ target, segment, size: Number(stat.size) });
+    }
+    if (candidates.length === 0) return;
+
+    const retainedSegments = new Set<string>();
+    const sqlRows = yield* sql<{ readonly threadId: unknown }>`
+      WITH RECURSIVE retained_attachment_threads(thread_id) AS (
+        SELECT thread_id FROM orchestration_v2_projection_threads WHERE deleted_at IS NULL
+        UNION
+        SELECT json_extract(t.payload_json, '$.forkedFrom.threadId')
+        FROM orchestration_v2_projection_threads t
+        JOIN retained_attachment_threads retained ON retained.thread_id = t.thread_id
+        WHERE json_extract(t.payload_json, '$.forkedFrom.type') = 'run'
+          AND json_extract(t.payload_json, '$.forkedFrom.threadId') IS NOT NULL
+      )
+      SELECT thread_id AS "threadId" FROM retained_attachment_threads
+      UNION
+      SELECT thread_id AS "threadId" FROM orchestration_v2_effect_outbox
+      WHERE status IN ('pending', 'running')
+    `.pipe(NodeSqliteClient.readOnly);
+    for (const row of sqlRows) {
+      if (typeof row.threadId !== "string") continue;
+      const seg = toSafeThreadAttachmentSegment(row.threadId);
+      if (seg !== null) retainedSegments.add(seg);
+    }
+    const snapshot = yield* projections
+      .getShellSnapshot()
+      .pipe(Effect.orElseSucceed(() => null));
+    if (snapshot !== null) {
+      for (const thread of [...snapshot.threads, ...snapshot.archivedThreads]) {
+        const seg = toSafeThreadAttachmentSegment(thread.id);
+        if (seg !== null) retainedSegments.add(seg);
+      }
+    }
+
+    let removedFiles = 0;
+    let removedBytes = 0;
+    for (const candidate of candidates) {
+      if (retainedSegments.has(candidate.segment)) continue;
+      yield* fs.remove(candidate.target);
+      removedFiles += 1;
+      removedBytes += candidate.size;
+    }
+    if (removedFiles > 0) {
+      yield* Effect.logInfo("storage cleanup removed orphan attachments", {
+        files: removedFiles,
+        bytes: removedBytes,
+      });
+    }
+  });
+
+  const cleanTriageDir = Effect.fn("StorageCleanup.cleanTriageDir")(function* (now: number) {
+    const triageRoot = path.join(config.stateDir, "triage");
+    const realRoot = yield* resolveSafeRoot(triageRoot);
+    if (realRoot === null) return;
+    const cutoffMs = now - caps.triageMaxAgeDays * DAY_MS;
+    let removedEntries = 0;
+    let removedBytes = 0;
+
+    const inspectTree = Effect.fn("StorageCleanup.inspectTriageTree")(function* (
+      target: string,
+    ): Effect.fn.Return<{ readonly newestMtimeMs: number; readonly bytes: number; readonly hasSymlink: boolean }, PlatformError> {
+      const stat = yield* fs.lstat(target);
+      if (stat.type === "SymbolicLink") {
+        return { newestMtimeMs: Infinity, bytes: 0, hasSymlink: true };
+      }
+      if ((yield* fs.realPath(target)) !== target) {
+        return { newestMtimeMs: Infinity, bytes: 0, hasSymlink: true };
+      }
+      let newestMtimeMs = Option.getOrNull(stat.mtime)?.getTime() ?? now;
+      if (stat.type === "File") {
+        return { newestMtimeMs, bytes: Number(stat.size), hasSymlink: false };
+      }
+      if (stat.type !== "Directory") {
+        return { newestMtimeMs: Infinity, bytes: 0, hasSymlink: true };
+      }
+      let bytes = 0;
+      for (const childName of yield* fs.readDirectory(target)) {
+        const child = path.join(target, childName);
+        if (!inside(realRoot, child)) {
+          return { newestMtimeMs: Infinity, bytes: 0, hasSymlink: true };
+        }
+        const childInfo = yield* inspectTree(child);
+        if (childInfo.hasSymlink) return childInfo;
+        if (childInfo.newestMtimeMs > newestMtimeMs) newestMtimeMs = childInfo.newestMtimeMs;
+        bytes += childInfo.bytes;
+      }
+      return { newestMtimeMs, bytes, hasSymlink: false };
+    });
+
+    for (const name of yield* fs.readDirectory(realRoot)) {
+      const target = path.join(realRoot, name);
+      if (!inside(realRoot, target)) continue;
+      const info = yield* inspectTree(target);
+      if (info.hasSymlink || info.newestMtimeMs >= cutoffMs) continue;
+      yield* fs.remove(target, { recursive: true });
+      removedEntries += 1;
+      removedBytes += info.bytes;
+    }
+    if (removedEntries > 0) {
+      yield* Effect.logInfo("storage cleanup removed expired triage sessions", {
+        entries: removedEntries,
+        bytes: removedBytes,
+      });
+    }
   });
 
   const reportRef = yield* SubscriptionRef.make<StorageCleanupReport | null>(null);
@@ -1960,6 +2218,12 @@ const make = Effect.gen(function* () {
     yield* cleanCheckpointRefs().pipe(
       Effect.catch((cause) => Effect.logWarning("checkpoint ref cleanup failed", { cause })),
     );
+    yield* cleanOrphanAttachments(now).pipe(
+      Effect.catch((cause) => Effect.logWarning("orphan attachment cleanup failed", { cause })),
+    );
+    yield* cleanTriageDir(now).pipe(
+      Effect.catch((cause) => Effect.logWarning("triage directory cleanup failed", { cause })),
+    );
     const deletedWorktrees = yield* cleanWorktrees(serverSettings, now, entries, trigger).pipe(
       Effect.catch((error) =>
         Effect.gen(function* () {
@@ -1996,10 +2260,10 @@ const make = Effect.gen(function* () {
         label: "rotated logs",
       },
     ]) {
-      if (category.days === null) continue;
       const removed = { files: 0, bytes: 0 };
       yield* cleanFiles(category.root, category.days, now, category.kind === "logs", removed).pipe(
-        Effect.map(({ files, bytes }) =>
+        Effect.map(({ files, bytes }) => {
+          if (category.days === null && files === 0) return;
           entries.push({
             kind: category.kind,
             outcome: files > 0 ? "removed" : "kept",
@@ -2010,8 +2274,8 @@ const make = Effect.gen(function* () {
             threadTitle: null,
             bytes: files > 0 ? bytes : null,
             files: files > 0 ? files : null,
-          }),
-        ),
+          });
+        }),
         Effect.catch((error) =>
           Effect.gen(function* () {
             entries.push({

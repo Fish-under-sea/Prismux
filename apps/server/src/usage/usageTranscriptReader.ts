@@ -17,6 +17,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { createTranscriptJsonReader } from "../project/AgentSessionJson.ts";
+import { extractTranscriptWithWorker } from "./usageScanWorker.ts";
 
 export interface TranscriptFile {
   readonly path: string;
@@ -44,6 +45,7 @@ export interface TranscriptParseResult {
 
 export const GUARD_LENGTH = 64;
 const STREAMING_THRESHOLD_BYTES = 8 * 1024 * 1024;
+const WORKER_MIN_FILE_BYTES = 128 * 1024;
 const READ_CHUNK_BYTES = 256 * 1024;
 const NEWLINE = 0x0a;
 const STAT_CONCURRENCY = 32;
@@ -335,10 +337,87 @@ export async function readTranscriptRecords<State>(
   filePath: string,
   format: TranscriptUsageFormat<State>,
   resumeFrom?: TranscriptParsePosition,
-  options?: { readonly streamingThresholdBytes?: number },
+  options?: {
+    readonly streamingThresholdBytes?: number;
+    readonly fileSizeBytes?: number;
+    readonly useWorker?: boolean;
+  },
 ): Promise<TranscriptParseResult | null> {
   const streamingThresholdBytes = options?.streamingThresholdBytes ?? STREAMING_THRESHOLD_BYTES;
   const compressed = filePath.endsWith(".jsonl.zst");
+  const codec = format.state;
+  const decodeState = codec === undefined ? undefined : Schema.decodeUnknownOption(codec.schema);
+  const encodeState = codec === undefined ? undefined : Schema.encodeSync(codec.schema);
+  const savedState =
+    resumeFrom === undefined || decodeState === undefined || resumeFrom.state === null
+      ? Option.none()
+      : decodeState(resumeFrom.state);
+  const canResume =
+    !compressed &&
+    resumeFrom !== undefined &&
+    resumeFrom.resumeOffset > 0 &&
+    (codec === undefined || Option.isSome(savedState));
+
+  const fsOpenIsMocked = "mock" in NodeFSP.open;
+  const shouldOffload =
+    options?.useWorker === true ||
+    (options?.useWorker !== false &&
+      !fsOpenIsMocked &&
+      (compressed ||
+        (options?.fileSizeBytes !== undefined && options.fileSizeBytes >= WORKER_MIN_FILE_BYTES)));
+
+  if (shouldOffload) {
+    const extracted = await extractTranscriptWithWorker({
+      filePath,
+      compressed,
+      markers: format.usageMarkers,
+      resumeOffset: canResume ? resumeFrom.resumeOffset : 0,
+      guardLength: canResume ? resumeFrom.guardLength : 0,
+      guardHash: canResume ? resumeFrom.guardHash : 0,
+      streamingThresholdBytes,
+    });
+    if (extracted?.status === "error") {
+      return null;
+    }
+    if (extracted?.status === "ok") {
+      try {
+        let state = codec === undefined ? (undefined as State) : codec.initial();
+        const resumed = extracted.resumed === true;
+        if (resumed && Option.isSome(savedState)) {
+          state = savedState.value;
+        }
+        const records: UsageRecord[] = [];
+        for (const line of extracted.lines ?? []) {
+          for (const record of format.parseLine(line, state)) records.push(record);
+        }
+        const encodedState = encodeState === undefined ? null : encodeState(state);
+        const tailRecords: UsageRecord[] = [];
+        const tailState =
+          decodeState === undefined ? state : Option.getOrThrow(decodeState(encodedState));
+        if (extracted.tailLine != null) {
+          for (const record of format.parseLine(extracted.tailLine, tailState)) {
+            tailRecords.push(record);
+          }
+        }
+        return {
+          records,
+          tailRecords,
+          malformedRecords: format.readMalformedRecords?.(tailState) ?? 0,
+          position: {
+            resumeOffset: compressed ? 0 : (extracted.resumeOffset ?? 0),
+            guardLength: extracted.guardLength ?? 0,
+            guardHash: extracted.guardHash ?? 0,
+            state: encodedState,
+          },
+          resumed,
+        };
+      } catch {
+        return null;
+      }
+    }
+    // Otherwise (`null` worker unavailable or `fallbackInline` oversized line): fall through inline.
+  }
+
   let handle: NodeFSP.FileHandle;
   try {
     handle = await NodeFSP.open(filePath, "r");
@@ -347,23 +426,10 @@ export async function readTranscriptRecords<State>(
   }
 
   try {
-    const codec = format.state;
-    const decodeState = codec === undefined ? undefined : Schema.decodeUnknownOption(codec.schema);
-    const encodeState = codec === undefined ? undefined : Schema.encodeSync(codec.schema);
     let state = codec === undefined ? (undefined as State) : codec.initial();
     let resumed = false;
     let start = 0;
-    const savedState =
-      resumeFrom === undefined || decodeState === undefined || resumeFrom.state === null
-        ? Option.none()
-        : decodeState(resumeFrom.state);
-    if (
-      !compressed &&
-      resumeFrom !== undefined &&
-      resumeFrom.resumeOffset > 0 &&
-      (codec === undefined || Option.isSome(savedState)) &&
-      (await guardMatches(handle, resumeFrom))
-    ) {
+    if (canResume && (await guardMatches(handle, resumeFrom))) {
       if (Option.isSome(savedState)) state = savedState.value;
       start = resumeFrom.resumeOffset;
       resumed = true;

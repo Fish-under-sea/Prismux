@@ -645,7 +645,7 @@ function resolveDshBootstrapForExecutable(
   const appDir = path.dirname(executablePath);
   const asarPath =
     platform === "darwin"
-      ? path.resolve(appDir, "..", "Resources", "app.asar")
+      ? path.join(path.dirname(appDir), "Resources", "app.asar")
       : path.join(appDir, "resources", "app.asar");
   for (const relativeEntry of DSH_ASAR_BOOTSTRAP_ENTRIES) {
     if (fs.hasAsarEntry(asarPath, relativeEntry)) {
@@ -701,10 +701,41 @@ function collectWindowsDshDirExecutableCandidates(
   return candidates;
 }
 
+const DSH_DESKTOP_SPAWN_CACHE_TTL_MS = 5 * 60 * 1_000;
+const DSH_DESKTOP_SPAWN_CACHE_MAX_ENTRIES = 64;
+const DSH_DESKTOP_SPAWN_CACHE_KEY_SEPARATOR = "\0";
+
+interface CachedPackagedDshDesktopEntry {
+  readonly match: { readonly executablePath: string; readonly bootstrapPath: string } | null;
+  readonly expiresAtMs: number;
+}
+
+const packagedDshDesktopCache = new Map<string, CachedPackagedDshDesktopEntry>();
+
+export function clearPackagedDshDesktopCacheForTests(): void {
+  packagedDshDesktopCache.clear();
+}
+
+function setPackagedDshDesktopCacheEntry(
+  cacheKey: string,
+  entry: CachedPackagedDshDesktopEntry,
+): void {
+  if (packagedDshDesktopCache.has(cacheKey)) {
+    packagedDshDesktopCache.delete(cacheKey);
+  } else if (packagedDshDesktopCache.size >= DSH_DESKTOP_SPAWN_CACHE_MAX_ENTRIES) {
+    const oldestKey = packagedDshDesktopCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      packagedDshDesktopCache.delete(oldestKey);
+    }
+  }
+  packagedDshDesktopCache.set(cacheKey, entry);
+}
+
 /**
  * Discovers a packaged DSH Desktop (`DSH NEXT` / `DSH` / `DeepSeek Harness`) installation from
- * environment-derived standard install directories, Windows Uninstall Registry entries, and
- * common cross-drive roots so `dsh acp` works seamlessly even when `dsh` is not on `PATH`.
+ * environment-derived standard install directories and Windows Uninstall Registry entries so
+ * `dsh acp` works seamlessly even when `dsh` is not on `PATH`. Cross-drive root probing
+ * (`C:`..`F:`) is opt-in via `probeDriveRoots: true`.
  */
 export function resolvePackagedDshDesktopSpawn(input: {
   readonly commandArgs: ReadonlyArray<string>;
@@ -717,6 +748,7 @@ export function resolvePackagedDshDesktopSpawn(input: {
   const usingDefaultHostFs = input.fs === undefined;
   const fs = input.fs ?? DEFAULT_FS;
   const { platform, env } = input;
+  const probeDriveRoots = input.probeDriveRoots === true;
   const path = platform === "win32" ? NodePath.win32 : NodePath.posix;
 
   // 1. Honor explicit DSH Desktop launcher env vars if present and valid.
@@ -733,15 +765,48 @@ export function resolvePackagedDshDesktopSpawn(input: {
     });
   }
 
-  // 2. Probe standard OS install directories, Windows Uninstall Registry, and common drive roots.
+  const useCache = usingDefaultHostFs && input.queryRegistry === undefined;
+  const userProfile = readEnvValue(env, "USERPROFILE", platform);
+  const localAppData =
+    readEnvValue(env, "LOCALAPPDATA", platform) ??
+    (platform === "win32" && userProfile ? path.join(userProfile, "AppData", "Local") : undefined);
+  const programFiles = readEnvValue(env, "ProgramFiles", platform);
+  const programFilesX86 = readEnvValue(env, "ProgramFiles(x86)", platform);
+  const home = readEnvValue(env, "HOME", platform);
+  const cacheKey = useCache
+    ? [
+        platform,
+        explicitApp ?? "",
+        explicitBootstrap ?? "",
+        userProfile ?? "",
+        localAppData ?? "",
+        programFiles ?? "",
+        programFilesX86 ?? "",
+        home ?? "",
+        probeDriveRoots ? "1" : "0",
+      ].join(DSH_DESKTOP_SPAWN_CACHE_KEY_SEPARATOR)
+    : undefined;
+  // @effect-diagnostics-next-line globalDate:off
+  const nowMs = useCache ? Date.now() : 0;
+  if (cacheKey !== undefined) {
+    const cached = packagedDshDesktopCache.get(cacheKey);
+    if (cached !== undefined && cached.expiresAtMs > nowMs) {
+      return cached.match === null
+        ? undefined
+        : buildDshDesktopSpawn({
+            executablePath: cached.match.executablePath,
+            bootstrapPath: cached.match.bootstrapPath,
+            commandArgs: input.commandArgs,
+            env,
+            platform,
+            fs,
+          });
+    }
+  }
+
+  // 2. Probe standard OS install directories, Windows Uninstall Registry, and optional drive roots.
   const candidateExecutables: Array<string> = [];
   if (platform === "win32") {
-    const userProfile = readEnvValue(env, "USERPROFILE", platform);
-    const localAppData =
-      readEnvValue(env, "LOCALAPPDATA", platform) ??
-      (userProfile ? path.join(userProfile, "AppData", "Local") : undefined);
-    const programFiles = readEnvValue(env, "ProgramFiles", platform);
-    const programFilesX86 = readEnvValue(env, "ProgramFiles(x86)", platform);
     const envRoots = [
       ...(localAppData ? [path.join(localAppData, "Programs"), localAppData] : []),
       ...(programFiles ? [programFiles] : []),
@@ -770,8 +835,8 @@ export function resolvePackagedDshDesktopSpawn(input: {
       }
     }
 
-    // Probe common drive roots only on default host FS (or when explicitly opted-in for tests).
-    if (input.probeDriveRoots ?? usingDefaultHostFs) {
+    // Probe common drive roots only when explicitly opted-in (never by default on hot startup/probes).
+    if (probeDriveRoots) {
       for (const drive of WINDOWS_COMMON_DRIVES) {
         for (const subdir of WINDOWS_DSH_DRIVE_SUBDIRS) {
           const installDir = `${drive}\\${subdir}`;
@@ -781,7 +846,6 @@ export function resolvePackagedDshDesktopSpawn(input: {
       }
     }
   } else if (platform === "darwin") {
-    const home = readEnvValue(env, "HOME", platform);
     if (home) {
       for (const root of ["/Applications", path.join(home, "Applications")]) {
         for (const candidate of MACOS_DSH_DESKTOP_CANDIDATES) {
@@ -800,6 +864,12 @@ export function resolvePackagedDshDesktopSpawn(input: {
     seenExecutables.add(dedupeKey);
     const bootstrapPath = resolveDshBootstrapForExecutable(executablePath, platform, fs);
     if (bootstrapPath !== undefined) {
+      if (cacheKey !== undefined) {
+        setPackagedDshDesktopCacheEntry(cacheKey, {
+          match: { executablePath, bootstrapPath },
+          expiresAtMs: nowMs + DSH_DESKTOP_SPAWN_CACHE_TTL_MS,
+        });
+      }
       return buildDshDesktopSpawn({
         executablePath,
         bootstrapPath,
@@ -811,6 +881,12 @@ export function resolvePackagedDshDesktopSpawn(input: {
     }
   }
 
+  if (cacheKey !== undefined) {
+    setPackagedDshDesktopCacheEntry(cacheKey, {
+      match: null,
+      expiresAtMs: nowMs + DSH_DESKTOP_SPAWN_CACHE_TTL_MS,
+    });
+  }
   return undefined;
 }
 

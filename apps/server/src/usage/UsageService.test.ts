@@ -1060,7 +1060,22 @@ describe("UsageService", () => {
           }
         });
         const service = yield* UsageService.make.pipe(
-          Effect.provide(layerService({ prefix: "usage-service-opencode", home, settings })),
+          Effect.provide(
+            layerService({
+              prefix: "usage-service-opencode",
+              home,
+              settings: {
+                ...settings,
+                providerInstances: {
+                  ...settings.providerInstances,
+                  [ProviderInstanceId.make("opencode")]: {
+                    driver: ProviderDriverKind.make("opencode"),
+                    enabled: true,
+                  },
+                },
+              },
+            }),
+          ),
         );
         const summary = yield* service.readSummary(WINDOW);
         assert.strictEqual(summary.buckets[0]?.provider, "opencode");
@@ -1102,7 +1117,22 @@ describe("UsageService", () => {
         await NodeFSP.writeFile(NodePath.join(directory, "msg_unpriced.json"), unpriced);
       });
       const service = yield* UsageService.make.pipe(
-        Effect.provide(layerService({ prefix: "usage-service-unpriced-tokens", home, settings })),
+        Effect.provide(
+          layerService({
+            prefix: "usage-service-unpriced-tokens",
+            home,
+            settings: {
+              ...settings,
+              providerInstances: {
+                ...settings.providerInstances,
+                [ProviderInstanceId.make("opencode")]: {
+                  driver: ProviderDriverKind.make("opencode"),
+                  enabled: true,
+                },
+              },
+            },
+          }),
+        ),
       );
       const summary = yield* service.readSummary(WINDOW);
       const model = mergeUsage(
@@ -1221,6 +1251,7 @@ describe("UsageService", () => {
         );
       });
       const service = yield* UsageService.make.pipe(
+        Effect.provideService(UsageService.IncludeUnconfiguredUsageDrivers, true),
         Effect.provide(
           layerService({
             prefix: "usage-service-aliased-roots-test",
@@ -1405,10 +1436,10 @@ describe("UsageService", () => {
       assert.deepStrictEqual(removed.buckets, summary.buckets);
 
       const sources = summary.sources.filter((source) => source.status === "ok");
-      assert.strictEqual(sources.length, 4);
+      assert.strictEqual(sources.length, 3);
       assert.strictEqual(
         sources.reduce((sum, source) => sum + source.scannedFiles, 0),
-        4,
+        3,
       );
       assert.strictEqual(
         sources.filter((source) => source.fingerprint.provider === "codex").length,
@@ -3028,8 +3059,23 @@ describe("UsageService", () => {
         );
       });
 
+      const dshSettings = {
+        ...settings,
+        providerInstances: {
+          ...settings.providerInstances,
+          [ProviderInstanceId.make("dsh")]: {
+            driver: ProviderDriverKind.make("acpRegistry"),
+            enabled: true,
+            config: {
+              source: "local",
+              commandPath: "dsh",
+              commandArgs: ["acp"],
+            },
+          },
+        },
+      };
       const service = yield* UsageService.make.pipe(
-        Effect.provide(layerService({ prefix: "usage-service-dsh-test", home, settings })),
+        Effect.provide(layerService({ prefix: "usage-service-dsh-test", home, settings: dshSettings })),
       );
       const summary = yield* service.readSummary(WINDOW);
       const decoded = yield* decodeUsageSummary(summary);
@@ -3062,5 +3108,144 @@ describe("UsageService", () => {
       assert.strictEqual(dshLog?.durationMs, 5_200);
       assert.strictEqual(dshLog?.tps, 50); // 200 tokens / ((5200 - 1200) / 1000)s
     }),
+  );
+
+  it.effect(
+    "skips scanning unconfigured or disabled built-in drivers by default and supports IncludeUnconfiguredUsageDrivers opt-in",
+    () =>
+      Effect.gen(function* () {
+        const { settings, home } = yield* setup;
+        const opencodeDir = NodePath.join(home, "opencode", "storage", "message", "session-1");
+        yield* Effect.promise(async () => {
+          await NodeFSP.mkdir(opencodeDir, { recursive: true });
+          await NodeFSP.writeFile(
+            NodePath.join(opencodeDir, "msg_1.json"),
+            encodeUnknownJsonString({
+              id: "msg_1",
+              sessionID: "session-1",
+              role: "assistant",
+              modelID: "example-model",
+              time: { created: Date.parse("2026-08-01T10:00:00Z") },
+              tokens: { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } },
+            }),
+          );
+        });
+
+        const gatedSettings = {
+          ...settings,
+          providerInstances: {
+            ...settings.providerInstances,
+            [ProviderInstanceId.make("codex")]: {
+              driver: ProviderDriverKind.make("codex"),
+              enabled: false,
+              config: { homePath: NodePath.join(home, "codex") },
+            },
+          },
+        };
+        const gatedService = yield* UsageService.make.pipe(
+          Effect.provide(
+            layerService({ prefix: "usage-service-gated", home, settings: gatedSettings }),
+          ),
+        );
+        const gatedSummary = yield* gatedService.readSummary(WINDOW);
+        assert.isFalse(
+          gatedSummary.sources.some((source) => source.fingerprint.provider === "opencode"),
+        );
+        assert.isFalse(
+          gatedSummary.sources.some((source) => source.fingerprint.provider === "codex"),
+        );
+        assert.isFalse(
+          gatedSummary.sources.some((source) => source.fingerprint.provider === "antigravity"),
+        );
+        assert.isFalse(
+          gatedSummary.sources.some((source) => source.fingerprint.provider === "dsh"),
+        );
+
+        const optInService = yield* UsageService.make.pipe(
+          Effect.provideService(UsageService.IncludeUnconfiguredUsageDrivers, true),
+          Effect.provide(
+            layerService({ prefix: "usage-service-optin", home, settings: gatedSettings }),
+          ),
+        );
+        const optInSummary = yield* optInService.readSummary(WINDOW);
+        assert.isTrue(optInSummary.buckets.some((bucket) => bucket.provider === "opencode"));
+      }),
+  );
+
+  it.effect(
+    "skips a disabled acpRegistry DSH instance even when another acpRegistry agent is enabled",
+    () =>
+      Effect.gen(function* () {
+        const { settings, home } = yield* setup;
+        const dshSessionDir = NodePath.join(home, ".dsh", "sessions", "--D-Proj--", "dsh-disabled");
+        const ts = Date.parse("2026-08-01T11:00:00.000Z");
+        yield* Effect.promise(async () => {
+          await NodeFSP.mkdir(dshSessionDir, { recursive: true });
+          await NodeFSP.writeFile(
+            NodePath.join(dshSessionDir, "session.v4.jsonl"),
+            [
+              JSON.stringify({
+                type: "session",
+                version: 4,
+                id: "dsh-disabled",
+                createdAt: ts - 1_000,
+                isSeeded: false,
+                delegationDepth: 0,
+              }),
+              JSON.stringify({
+                seq: 1,
+                type: "assistant/message",
+                time: ts,
+                data: {
+                  turn: 1,
+                  step: 1,
+                  usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+                  message: {
+                    source: { provider: "magpie", model: "deepseek-chat" },
+                    content: [{ type: "text", text: "ignored" }],
+                  },
+                },
+              }),
+            ].join("\n") + "\n",
+          );
+        });
+
+        const mixedAcpSettings = {
+          ...settings,
+          providerInstances: {
+            ...settings.providerInstances,
+            [ProviderInstanceId.make("kimi")]: {
+              driver: ProviderDriverKind.make("acpRegistry"),
+              enabled: true,
+              config: {
+                source: "local",
+                commandPath: "kimi",
+                commandArgs: ["acp"],
+              },
+            },
+            [ProviderInstanceId.make("dsh")]: {
+              driver: ProviderDriverKind.make("acpRegistry"),
+              enabled: false,
+              config: {
+                source: "local",
+                commandPath: "dsh",
+                commandArgs: ["acp"],
+              },
+            },
+          },
+        };
+        const service = yield* UsageService.make.pipe(
+          Effect.provide(
+            layerService({
+              prefix: "usage-service-acp-mixed",
+              home,
+              settings: mixedAcpSettings,
+            }),
+          ),
+        );
+        const summary = yield* service.readSummary(WINDOW);
+        assert.isFalse(summary.sources.some((source) => source.fingerprint.provider === "dsh"));
+        assert.isFalse(summary.buckets.some((bucket) => bucket.provider === "dsh"));
+      }),
   );
 });

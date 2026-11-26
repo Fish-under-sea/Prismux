@@ -56,17 +56,17 @@ it("drops theme defaults from a client's settings patch", () => {
 });
 
 describe("storage cleanup settings", () => {
-  it("enables safe worktree cleanup defaults while keeping destructive policies opt-in", () => {
+  it("enables safe worktree, log, and browser artifact cleanup defaults while keeping aggressive age pruning opt-in", () => {
     expect(decodeServerSettings({}).worktreeCleanup).toBeNull();
     expect(decodeServerSettings({}).storageCleanup).toEqual({
       worktreeAfterDays: null,
-      worktreeSettledAfterDays: null,
-      worktreeOnMerge: false,
+      worktreeSettledAfterDays: 7,
+      worktreeOnMerge: true,
       worktreeOnDelete: true,
       worktreeUnchanged: true,
       worktreeKeepWhen: "uncommitted-changes",
-      browserArtifactsAfterDays: null,
-      logsAfterDays: null,
+      browserArtifactsAfterDays: 14,
+      logsAfterDays: 14,
     });
   });
 

@@ -567,6 +567,7 @@ function resolveCommandCandidates(
 
 // Explicit paths bypass the cache for new installs; cached misses can otherwise hide binaries for 30 seconds.
 const COMMAND_RESOLUTION_CACHE_TTL_NANOS = 30_000_000_000n;
+const SPAWN_COMMAND_MISS_CACHE_TTL_NANOS = 60_000_000_000n;
 const COMMAND_RESOLUTION_CACHE_MAX_ENTRIES = 512;
 const COMMAND_RESOLUTION_CACHE_KEY_SEPARATOR = String.fromCharCode(0);
 
@@ -718,6 +719,7 @@ function cacheCommandResolution(
   cacheKey: string,
   resolvedPath: string | null,
   nowNanos: bigint,
+  ttlNanos: bigint = COMMAND_RESOLUTION_CACHE_TTL_NANOS,
 ): void {
   if (cache.size >= COMMAND_RESOLUTION_CACHE_MAX_ENTRIES) {
     const oldestKey = cache.keys().next().value;
@@ -727,7 +729,7 @@ function cacheCommandResolution(
   }
   cache.set(cacheKey, {
     resolvedPath,
-    expiresAtNanos: nowNanos + COMMAND_RESOLUTION_CACHE_TTL_NANOS,
+    expiresAtNanos: nowNanos + ttlNanos,
   });
 }
 
@@ -1150,9 +1152,9 @@ export const resolveSpawnCommand = Effect.fnUntraced(function* (
     };
   }
   // The scan is synchronous and runs before every child process, so it shares
-  // the PATH scan cache above. Explicit paths stay uncached for the same reason,
-  // and so do misses: a failed spawn is how providers report "not installed",
-  // and that has to clear the moment the binary appears.
+  // the PATH scan cache above. Explicit paths stay uncached for new installs,
+  // while bare-command misses are cached briefly so absent CLIs do not re-scan
+  // PATH on every call.
   const explicitPath = command.includes("/") || command.includes("\\");
   const cache = yield* CommandResolutionCache;
   const cacheKey = [
@@ -1172,8 +1174,16 @@ export const resolveSpawnCommand = Effect.fnUntraced(function* (
   } else {
     const found = resolveExecutable(command, platform, env);
     resolvedExecutable = found === undefined ? null : preferGitForWindowsBinary(found, env);
-    if (!explicitPath && resolvedExecutable !== null) {
-      cacheCommandResolution(cache, cacheKey, resolvedExecutable, nowNanos);
+    if (!explicitPath) {
+      cacheCommandResolution(
+        cache,
+        cacheKey,
+        resolvedExecutable,
+        nowNanos,
+        resolvedExecutable === null
+          ? SPAWN_COMMAND_MISS_CACHE_TTL_NANOS
+          : COMMAND_RESOLUTION_CACHE_TTL_NANOS,
+      );
     }
   }
   const resolvedCommand = resolvedExecutable ?? command;
@@ -1561,8 +1571,43 @@ export function discoverWindowsUninstallInstallDirs(options: {
   return deduped;
 }
 
+const AGENT_PROBE_CACHE_TTL_MS = 5 * 60 * 1_000;
+const AGENT_PROBE_CACHE_MAX_ENTRIES = 256;
+const windowsAntigravityCliDirsCache = new Map<
+  string,
+  { readonly dirs: ReadonlyArray<string>; readonly expiresAtMs: number }
+>();
+const agentExecutableFallbackCache = new Map<
+  string,
+  { readonly resolvedPath: string | undefined; readonly expiresAtMs: number }
+>();
+
+function setBoundedTtlCacheEntry<V>(
+  cache: Map<string, V>,
+  key: string,
+  value: V,
+  maxEntries: number,
+): void {
+  if (cache.has(key)) {
+    cache.delete(key);
+  } else if (cache.size >= maxEntries) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey !== undefined) {
+      cache.delete(oldestKey);
+    }
+  }
+  cache.set(key, value);
+}
+
 export function clearWindowsUninstallRegistryCacheForTests(): void {
   windowsUninstallDirsCache.clear();
+  windowsAntigravityCliDirsCache.clear();
+  agentExecutableFallbackCache.clear();
+}
+
+export function clearAgentProbeCachesForTests(): void {
+  windowsAntigravityCliDirsCache.clear();
+  agentExecutableFallbackCache.clear();
 }
 
 const ANTIGRAVITY_UNINSTALL_NAME_PATTERN = /^(?:google\s+)?antigravity(?:\s|$)/iu;
@@ -1570,7 +1615,7 @@ const ANTIGRAVITY_UNINSTALL_NAME_PATTERN = /^(?:google\s+)?antigravity(?:\s|$)/i
 /**
  * Discovers Antigravity CLI (`agy`) binary directories from Windows Uninstall Registry
  * and standard desktop install roots, returning only directories where an actual `agy`
- * executable exists.
+ * executable exists. Cross-drive root probing (`C:`..`F:`) is opt-in via `probeDriveRoots: true`.
  */
 export function findWindowsAntigravityCliDirs(options: {
   readonly env: NodeJS.ProcessEnv;
@@ -1580,10 +1625,30 @@ export function findWindowsAntigravityCliDirs(options: {
 } = { env: process.env }): ReadonlyArray<string> {
   const isFile = options.isFile ?? isFileSync;
   const usingDefaultHostFs = options.isFile === undefined;
+  const probeDriveRoots = options.probeDriveRoots === true;
   const localAppData = readCaseInsensitiveEnvValue(options.env, "LOCALAPPDATA", "win32");
   const userProfile = readCaseInsensitiveEnvValue(options.env, "USERPROFILE", "win32");
   const programFiles = readCaseInsensitiveEnvValue(options.env, "ProgramFiles", "win32");
   const programFilesX86 = readCaseInsensitiveEnvValue(options.env, "ProgramFiles(x86)", "win32");
+
+  const useCache = usingDefaultHostFs && options.queryRegistry === undefined;
+  const cacheKey = useCache
+    ? [
+        localAppData ?? "",
+        userProfile ?? "",
+        programFiles ?? "",
+        programFilesX86 ?? "",
+        probeDriveRoots ? "1" : "0",
+      ].join(COMMAND_RESOLUTION_CACHE_KEY_SEPARATOR)
+    : undefined;
+  // @effect-diagnostics-next-line globalDate:off
+  const nowMs = useCache ? Date.now() : 0;
+  if (cacheKey !== undefined) {
+    const cached = windowsAntigravityCliDirsCache.get(cacheKey);
+    if (cached !== undefined && cached.expiresAtMs > nowMs) {
+      return cached.dirs;
+    }
+  }
 
   const candidateDirs: string[] = [
     ...(localAppData
@@ -1618,7 +1683,7 @@ export function findWindowsAntigravityCliDirs(options: {
     }
   }
 
-  if (options.probeDriveRoots ?? usingDefaultHostFs) {
+  if (probeDriveRoots) {
     for (const drive of ["C:", "D:", "E:", "F:"]) {
       candidateDirs.push(
         `${drive}\\Antigravity\\bin`,
@@ -1636,6 +1701,14 @@ export function findWindowsAntigravityCliDirs(options: {
         break;
       }
     }
+  }
+  if (cacheKey !== undefined) {
+    setBoundedTtlCacheEntry(
+      windowsAntigravityCliDirsCache,
+      cacheKey,
+      { dirs: verifiedDirs, expiresAtMs: nowMs + AGENT_PROBE_CACHE_TTL_MS },
+      AGENT_PROBE_CACHE_MAX_ENTRIES,
+    );
   }
   return verifiedDirs;
 }
@@ -1692,11 +1765,48 @@ export function resolveAgentExecutableWithFallback(input: {
 }): string | undefined {
   const command = input.command.trim();
   if (command.length === 0) return undefined;
+  const explicitPath = command.includes("/") || command.includes("\\");
+  const useCache =
+    !explicitPath &&
+    input.resolveExecutable === undefined &&
+    input.isFile === undefined &&
+    input.queryRegistry === undefined;
+  const cacheKey = useCache
+    ? [
+        input.platform,
+        command,
+        resolvePathEnvironmentVariable(input.env),
+        input.platform === "win32" ? resolveWindowsPathExtensions(input.env).join(";") : "",
+        ...resolveKnownAgentCliDirs(input.env, input.platform),
+        readCaseInsensitiveEnvValue(input.env, "ProgramFiles", input.platform) ?? "",
+        readCaseInsensitiveEnvValue(input.env, "ProgramFiles(x86)", input.platform) ?? "",
+        input.probeDriveRoots === true ? "1" : "0",
+      ].join(COMMAND_RESOLUTION_CACHE_KEY_SEPARATOR)
+    : undefined;
+  // @effect-diagnostics-next-line globalDate:off
+  const nowMs = useCache ? Date.now() : 0;
+  if (cacheKey !== undefined) {
+    const cached = agentExecutableFallbackCache.get(cacheKey);
+    if (cached !== undefined && cached.expiresAtMs > nowMs) {
+      return cached.resolvedPath;
+    }
+  }
+
   const resolveExecutable = input.resolveExecutable ?? resolveSpawnExecutableWithNode;
   const direct = resolveExecutable(command, input.platform, input.env);
-  if (direct !== undefined) return direct;
+  if (direct !== undefined) {
+    if (cacheKey !== undefined) {
+      setBoundedTtlCacheEntry(
+        agentExecutableFallbackCache,
+        cacheKey,
+        { resolvedPath: direct, expiresAtMs: nowMs + AGENT_PROBE_CACHE_TTL_MS },
+        AGENT_PROBE_CACHE_MAX_ENTRIES,
+      );
+    }
+    return direct;
+  }
 
-  if (command.includes("/") || command.includes("\\")) {
+  if (explicitPath) {
     return undefined;
   }
 
@@ -1715,13 +1825,22 @@ export function resolveAgentExecutableWithFallback(input: {
     );
   }
 
-  return resolveAgentExecutableInDirs({
+  const resolved = resolveAgentExecutableInDirs({
     command,
     dirs: fallbackDirs,
     platform: input.platform,
     env: input.env,
     ...(input.isFile ? { isFile: input.isFile } : {}),
   });
+  if (cacheKey !== undefined) {
+    setBoundedTtlCacheEntry(
+      agentExecutableFallbackCache,
+      cacheKey,
+      { resolvedPath: resolved, expiresAtMs: nowMs + AGENT_PROBE_CACHE_TTL_MS },
+      AGENT_PROBE_CACHE_MAX_ENTRIES,
+    );
+  }
+  return resolved;
 }
 
 /** Keep one PATH spelling in copied Windows environment records. */

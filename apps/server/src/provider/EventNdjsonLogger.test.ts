@@ -493,7 +493,7 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
         yield* TestClock.adjust("5 minutes");
         yield* logger.write({ id: "active-first" }, ThreadId.make("active"));
         assert.equal(NodeFS.existsSync(finishedPath), true);
-        NodeFS.truncateSync(finishedPath, 512 * 1024 * 1024 + 1);
+        NodeFS.truncateSync(finishedPath, 256 * 1024 * 1024 + 1);
 
         yield* TestClock.adjust("5 minutes");
         yield* logger.write({ id: "active-second" }, ThreadId.make("active"));

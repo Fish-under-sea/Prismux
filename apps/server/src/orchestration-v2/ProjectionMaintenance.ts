@@ -27,6 +27,8 @@ export interface ProjectionMaintenanceV2Shape {
     {
       readonly deletedEventCount: number;
       readonly deletedReceiptCount: number;
+      readonly deletedAuthSessionCount?: number;
+      readonly deletedReviewGuideCount?: number;
       readonly reclaimableBytes: number;
     },
     ProjectionMaintenanceError
@@ -40,6 +42,8 @@ export class ProjectionMaintenanceV2 extends Context.Service<
 
 // Reconnect replay and command-id retries read this tail; older cursors resync from a snapshot.
 const RETAINED_EVENT_HISTORY = Duration.days(1);
+// Expired auth sessions, stale PR review guides, and old v2 command receipts prune after 30 days.
+const RETAINED_METADATA_HISTORY = Duration.days(30);
 // Small pages bound work on the reader worker and synchronous fallback.
 const PAGE_SIZE = 50;
 const REFERENCE_SCAN_WINDOW = 1000;
@@ -184,9 +188,11 @@ export const layer: Layer.Layer<ProjectionMaintenanceV2, never, SqlClient.SqlCli
     });
 
     // Imported legacy threads are served from v2 rows; their v1 events and receipts have no reader.
+    // Old v2 receipts (>30d) are pruned in the same paginated sweep to avoid unbounded receipt growth.
     const pruneImportedLegacyHistory = Effect.fnUntraced(function* (
       throughSequence: number,
       throughReceiptRowId: number,
+      receiptCutoffIso: string,
       betweenPages: Effect.Effect<void>,
     ) {
       let deletedEventCount = 0;
@@ -223,22 +229,29 @@ export const layer: Layer.Layer<ProjectionMaintenanceV2, never, SqlClient.SqlCli
         const rows = yield* sql<{
           readonly row_id: number;
           readonly command_id: string;
-          readonly imported: number;
+          readonly prunable: number;
         }>`
           SELECT
             receipt.rowid AS row_id,
             receipt.command_id,
-            receipt.command_type = 'legacy' AND receipt.aggregate_kind = 'thread' AND EXISTS (
-              SELECT 1 FROM orchestration_v2_legacy_imports AS legacy_import
-              WHERE legacy_import.thread_id = receipt.aggregate_id
-                AND legacy_import.transcript_imported_at IS NOT NULL
-            ) AS imported
+            (
+              (
+                receipt.command_type = 'legacy' AND receipt.aggregate_kind = 'thread' AND EXISTS (
+                  SELECT 1 FROM orchestration_v2_legacy_imports AS legacy_import
+                  WHERE legacy_import.thread_id = receipt.aggregate_id
+                    AND legacy_import.transcript_imported_at IS NOT NULL
+                )
+              )
+              OR (
+                receipt.command_type != 'legacy' AND receipt.accepted_at < ${receiptCutoffIso}
+              )
+            ) AS prunable
           FROM orchestration_command_receipts AS receipt
           WHERE receipt.rowid > ${cursor} AND receipt.rowid <= ${throughReceiptRowId}
           ORDER BY receipt.rowid ASC
           LIMIT ${PAGE_SIZE}
         `.pipe(NodeSqliteClient.readOnly);
-        const obsolete = rows.filter((row) => row.imported === 1).map((row) => row.command_id);
+        const obsolete = rows.filter((row) => row.prunable === 1).map((row) => row.command_id);
         yield* Effect.yieldNow;
         if (obsolete.length > 0) {
           yield* sql`DELETE FROM orchestration_command_receipts WHERE command_id IN ${sql.in(obsolete)}`;
@@ -252,11 +265,109 @@ export const layer: Layer.Layer<ProjectionMaintenanceV2, never, SqlClient.SqlCli
       return { deletedEventCount, deletedReceiptCount };
     });
 
+    const pruneOldV2Receipts = Effect.fnUntraced(function* (
+      cutoffIso: string,
+      betweenPages: Effect.Effect<void>,
+    ) {
+      let deleted = 0;
+      for (let cursor = 0; ;) {
+        const rows = yield* sql<{ readonly row_id: number; readonly command_id: string }>`
+          SELECT rowid AS row_id, command_id
+          FROM orchestration_v2_command_receipts
+          WHERE rowid > ${cursor} AND accepted_at < ${cutoffIso}
+          ORDER BY rowid ASC
+          LIMIT ${PAGE_SIZE}
+        `.pipe(NodeSqliteClient.readOnly);
+        if (rows.length === 0) break;
+        const ids = rows.map((row) => row.command_id);
+        yield* Effect.yieldNow;
+        yield* sql`DELETE FROM orchestration_v2_command_receipts WHERE command_id IN ${sql.in(ids)}`;
+        deleted += ids.length;
+        yield* Effect.yieldNow;
+        yield* betweenPages;
+        if (rows.length < PAGE_SIZE) break;
+        cursor = rows.at(-1)?.row_id ?? cursor;
+      }
+      return deleted;
+    });
+
+    const pruneExpiredAuthSessions = Effect.fnUntraced(function* (
+      cutoffIso: string,
+      betweenPages: Effect.Effect<void>,
+    ) {
+      let deleted = 0;
+      for (let cursor = 0; ;) {
+        const rows = yield* sql<{ readonly row_id: number; readonly session_id: string }>`
+          SELECT rowid AS row_id, session_id
+          FROM auth_sessions
+          WHERE rowid > ${cursor}
+            AND (
+              expires_at < ${cutoffIso}
+              OR (revoked_at IS NOT NULL AND revoked_at < ${cutoffIso})
+            )
+          ORDER BY rowid ASC
+          LIMIT ${PAGE_SIZE}
+        `.pipe(NodeSqliteClient.readOnly);
+        if (rows.length === 0) break;
+        const ids = rows.map((row) => row.session_id);
+        yield* Effect.yieldNow;
+        yield* sql`DELETE FROM auth_sessions WHERE session_id IN ${sql.in(ids)}`;
+        deleted += ids.length;
+        yield* Effect.yieldNow;
+        yield* betweenPages;
+        if (rows.length < PAGE_SIZE) break;
+        cursor = rows.at(-1)?.row_id ?? cursor;
+      }
+      return deleted;
+    });
+
+    const pruneStaleReviewGuides = Effect.fnUntraced(function* (
+      cutoffIso: string,
+      betweenPages: Effect.Effect<void>,
+    ) {
+      let deleted = 0;
+      for (;;) {
+        const rows = yield* sql<{
+          readonly host: string;
+          readonly repository: string;
+          readonly number: number;
+        }>`
+          SELECT host, repository, number
+          FROM pull_request_review_guides
+          WHERE json_type(guide_json, '$.generatedAt') = 'text'
+            AND json_extract(guide_json, '$.generatedAt') < ${cutoffIso}
+          LIMIT ${PAGE_SIZE}
+        `.pipe(NodeSqliteClient.readOnly);
+        if (rows.length === 0) break;
+        yield* Effect.yieldNow;
+        yield* sql.withTransaction(
+          Effect.forEach(
+            rows,
+            (row) => sql`
+              DELETE FROM pull_request_review_guides
+              WHERE host = ${row.host}
+                AND repository = ${row.repository}
+                AND number = ${row.number}
+            `,
+            { discard: true },
+          ),
+        );
+        deleted += rows.length;
+        yield* Effect.yieldNow;
+        yield* betweenPages;
+        if (rows.length < PAGE_SIZE) break;
+      }
+      return deleted;
+    });
+
     // A pass prunes through the mark the previous pass left once that mark is a day old, so
-    // at least RETAINED_EVENT_HISTORY of events always remains. Receipts stay for idempotency.
+    // at least RETAINED_EVENT_HISTORY of events always remains. Receipts stay 30 days for idempotency.
     const pruneEventStore = Effect.fn("ProjectionMaintenance.pruneEventStore")(
       function* (betweenPages: Effect.Effect<void> = Effect.void) {
         const now = yield* DateTime.now;
+        const metadataCutoffIso = DateTime.formatIso(
+          DateTime.subtractDuration(now, RETAINED_METADATA_HISTORY),
+        );
         const metadata = yield* sql<MetadataRow>`
           SELECT projection_name, last_sequence, updated_at
           FROM orchestration_v2_projection_metadata
@@ -294,9 +405,19 @@ export const layer: Layer.Layer<ProjectionMaintenanceV2, never, SqlClient.SqlCli
         const legacy = yield* pruneImportedLegacyHistory(
           head,
           bounds[0]?.receipt_row_id ?? 0,
+          metadataCutoffIso,
           betweenPages,
         );
         deletedEventCount += legacy.deletedEventCount;
+        const deletedV2ReceiptCount = yield* pruneOldV2Receipts(metadataCutoffIso, betweenPages);
+        const deletedAuthSessionCount = yield* pruneExpiredAuthSessions(
+          metadataCutoffIso,
+          betweenPages,
+        );
+        const deletedReviewGuideCount = yield* pruneStaleReviewGuides(
+          metadataCutoffIso,
+          betweenPages,
+        );
 
         const freelistRows = yield* sql<{ readonly freelist_count: number }>`PRAGMA freelist_count`;
         const pageSizeRows = yield* sql<{ readonly page_size: number }>`PRAGMA page_size`;
@@ -305,7 +426,9 @@ export const layer: Layer.Layer<ProjectionMaintenanceV2, never, SqlClient.SqlCli
 
         return {
           deletedEventCount,
-          deletedReceiptCount: legacy.deletedReceiptCount,
+          deletedReceiptCount: legacy.deletedReceiptCount + deletedV2ReceiptCount,
+          deletedAuthSessionCount,
+          deletedReviewGuideCount,
           reclaimableBytes,
         };
       },

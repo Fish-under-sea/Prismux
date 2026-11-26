@@ -582,13 +582,49 @@ function usageCandidates(
   return records;
 }
 
+const ANTIGRAVITY_CACHE_MAX_ENTRIES = 200;
+// Slack preserves databases whose file mtime lags behind internal generation/trajectory timestamps.
+const ANTIGRAVITY_MTIME_SLACK_MS = 24 * 60 * 60 * 1000;
+
 interface CachedDatabase {
   readonly fingerprint: string;
   readonly data: Effect.Success<ReturnType<typeof readDatabase>>;
 }
 
-/** Fingerprint canonical DB/WAL paths by size, mtime and ctime; WAL holds new rows, and ctime catches restored mtimes. */
-export const makeAntigravityUsageCache = () => new Map<string, CachedDatabase>();
+class BoundedLruAntigravityUsageCache extends Map<string, CachedDatabase> {
+  private readonly maxEntries: number;
+
+  constructor(maxEntries: number) {
+    super();
+    this.maxEntries = Math.max(1, Math.trunc(maxEntries));
+  }
+
+  override get(key: string): CachedDatabase | undefined {
+    const value = super.get(key);
+    if (value !== undefined) {
+      super.delete(key);
+      super.set(key, value);
+    }
+    return value;
+  }
+
+  override set(key: string, value: CachedDatabase): this {
+    if (super.has(key)) {
+      super.delete(key);
+    } else if (this.size >= this.maxEntries) {
+      const oldestKey = this.keys().next().value;
+      if (oldestKey !== undefined) {
+        super.delete(oldestKey);
+      }
+    }
+    return super.set(key, value);
+  }
+}
+
+/** Fingerprint canonical DB/WAL paths by size, mtime and ctime; bounded LRU caps RAM growth. */
+export const makeAntigravityUsageCache = (
+  maxEntries = ANTIGRAVITY_CACHE_MAX_ENTRIES,
+): Map<string, CachedDatabase> => new BoundedLruAntigravityUsageCache(maxEntries);
 
 export const readAntigravityUsage = Effect.fn("readAntigravityUsage")(function* (
   conversationsDirectories: string | readonly string[],
@@ -696,11 +732,16 @@ export const readAntigravityUsage = Effect.fn("readAntigravityUsage")(function* 
       );
     const { stat, part } = yield* fingerprintOf(path);
     const wal = yield* fingerprintOf(`${path}-wal`).pipe(Effect.option);
+    const effectiveMtimeMs = Math.max(stat.mtimeMs, wal._tag === "Some" ? wal.value.stat.mtimeMs : 0);
+    if (sinceMs > 0 && effectiveMtimeMs + ANTIGRAVITY_MTIME_SLACK_MS < sinceMs) {
+      return null;
+    }
     const fingerprint = `${part}/${wal._tag === "Some" ? wal.value.part : "-"}`;
     const cached = cache?.get(canonical);
     if (cached?.fingerprint === fingerprint) return cached.data;
     const data = yield* readDatabase(path, pathService.basename(path, ".db"), stat.mtimeMs).pipe(
-      Effect.provide(NodeSqliteClient.layer({ filename: path, readonly: true })),
+      NodeSqliteClient.readOnly,
+      Effect.provide(NodeSqliteClient.layer({ filename: path, readonly: true, readerWorker: true })),
     );
     cache?.set(canonical, { fingerprint, data });
     return data;

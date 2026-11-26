@@ -3,10 +3,11 @@ import { describe, expect, it } from "@effect/vitest";
 import { faviconUrlForOrigin, toolActivityFaviconUrl } from "./favicon.ts";
 
 describe("faviconUrlForOrigin", () => {
-  it("sends only the public hostname and requested size, never the port", () => {
-    expect(faviconUrlForOrigin("https://github.com:8443/Fish-under-sea/Prismux?private=query", 64)).toBe(
-      "https://www.google.com/s2/favicons?domain=github.com&sz=64",
-    );
+  it("returns null for public origins so visited hostnames are never leaked to Google S2", () => {
+    expect(
+      faviconUrlForOrigin("https://github.com:8443/Fish-under-sea/Prismux?private=query", 64),
+    ).toBeNull();
+    expect(faviconUrlForOrigin("https://example.com/docs", 32)).toBeNull();
   });
 
   // regression: #5838 no favicon request for missing or non-http origins

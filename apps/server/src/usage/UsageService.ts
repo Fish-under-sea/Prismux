@@ -54,15 +54,18 @@ import {
   readTranscriptRecords,
 } from "./usageTranscriptReader.ts";
 import {
+  boundScanCacheEntries,
   decodeScanCache,
   dedupeWithinFile,
   LEGACY_SCAN_CACHE_FILE_NAMES,
   makeScanCacheWriter,
   pruneScanCache,
   SCAN_CACHE_FILE_NAME,
+  USAGE_SCAN_CACHE_VERSION,
   type CachedFile,
   type ScanCache,
 } from "./usageScanCache.ts";
+import { serializeScanCacheWithWorker } from "./usageScanWorker.ts";
 
 const LITELLM_RATES_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
@@ -80,6 +83,29 @@ const MAX_HOURLY_WINDOW_MS = 24 * 60 * 60 * 1000;
 const STALE_TEMP_DIRECTORY_MS = 60 * 60 * 1000;
 
 const TRANSCRIPT_READ_CONCURRENCY = 4;
+const MAX_FILE_CACHE_ENTRIES = 4_000;
+const WORKER_SERIALIZE_MIN_ENTRIES = 64;
+const AGGREGATION_YIELD_INTERVAL = 1_024;
+
+/** Opt-in override for callers/tests that explicitly want unconfigured built-in drivers scanned. */
+export const IncludeUnconfiguredUsageDrivers = Context.Reference<boolean>(
+  "@prismux/server/usage/IncludeUnconfiguredUsageDrivers",
+  { defaultValue: () => false },
+);
+
+function isProviderInstanceEnabledForUsage(instance: ProviderInstanceConfig): boolean {
+  if (instance.enabled === false) return false;
+  const config = instance.config;
+  if (
+    typeof config === "object" &&
+    config !== null &&
+    "enabled" in config &&
+    (config as { readonly enabled?: unknown }).enabled === false
+  ) {
+    return false;
+  }
+  return true;
+}
 
 const transcriptReaders = BUILT_IN_USAGE_DRIVERS.flatMap((driver) =>
   driver.usage?.kind === "transcripts" ? [{ driver, reader: driver.usage }] : [],
@@ -356,17 +382,36 @@ export const make = Effect.gen(function* () {
     ),
   );
 
+  const includeUnconfiguredDrivers = yield* IncludeUnconfiguredUsageDrivers;
   const usageInstances = Effect.fn("UsageService.usageInstances")(function* <Config>(
     driver: ProviderDriver<Config, unknown, unknown>,
     settings: ServerSettingsValue,
   ) {
+    const matchingEntries = Object.entries(settings.providerInstances).filter(
+      ([, instance]) => instance.driver === driver.driverKind,
+    );
+    const enabledEntries = matchingEntries.filter(([, instance]) =>
+      isProviderInstanceEnabledForUsage(instance),
+    );
+    const hasEnabledInstance = enabledEntries.length > 0;
+    // acpRegistry is a multi-agent meta-driver (e.g. kimi + dsh); only pass enabled instances so
+    // enabling one ACP agent never triggers scans for a separate disabled ACP agent.
+    const selectedEntries = driver.driverKind === "acpRegistry" ? enabledEntries : matchingEntries;
     const entries: Array<
       readonly [ProviderInstanceId, Pick<ProviderInstanceConfig, "config" | "environment">, boolean]
-    > = Object.entries(settings.providerInstances)
-      .filter(([, instance]) => instance.driver === driver.driverKind)
-      .map(([id, instance]) => [ProviderInstanceId.make(id), instance, true] as const);
-    // History in the driver's default home stays counted after every instance moves elsewhere; readers dedupe shared directories.
-    entries.push([ProviderInstanceId.make(driver.driverKind), {}, false]);
+    > = hasEnabledInstance
+      ? selectedEntries.map(([id, instance]) => [ProviderInstanceId.make(id), instance, true] as const)
+      : [];
+
+    if (!hasEnabledInstance) {
+      if (!includeUnconfiguredDrivers) {
+        return [];
+      }
+      entries.push([ProviderInstanceId.make(driver.driverKind), {}, false]);
+    } else if (driver.driverKind !== "acpRegistry") {
+      // History in an active driver's default home stays counted after instances move elsewhere; readers dedupe shared directories.
+      entries.push([ProviderInstanceId.make(driver.driverKind), {}, false]);
+    }
     const decodeConfig = Schema.decodeUnknownOption(driver.configSchema);
     return yield* Effect.forEach(
       entries,
@@ -515,13 +560,28 @@ export const make = Effect.gen(function* () {
   const persistCaches = Effect.gen(function* () {
     if (cacheDirty) {
       cacheDirty = false;
-      yield* Effect.sync(() =>
-        writeScanCache(fileCache, {
-          sources: Object.fromEntries(sourceCache),
-          coveredSince: Object.fromEntries(coveredSince),
-        }),
-      ).pipe(
-        Effect.flatMap((contents) => writeCacheFile(scanCachePath, contents)),
+      const extra = {
+        sources: Object.fromEntries(sourceCache),
+        coveredSince: Object.fromEntries(coveredSince),
+      };
+      const snapshot = [...fileCache];
+      yield* Effect.gen(function* () {
+        let contents: Iterable<string> | undefined;
+        if (snapshot.length >= WORKER_SERIALIZE_MIN_ENTRIES) {
+          const workerResult = yield* Effect.promise(() =>
+            serializeScanCacheWithWorker({
+              version: USAGE_SCAN_CACHE_VERSION,
+              entries: snapshot,
+              extra,
+            }),
+          );
+          if (workerResult?.status === "ok" && workerResult.chunks !== undefined) {
+            contents = workerResult.chunks;
+          }
+        }
+        const payload = contents ?? writeScanCache(new Map(snapshot), extra);
+        yield* writeCacheFile(scanCachePath, payload);
+      }).pipe(
         Effect.andThen(
           Effect.suspend(() => {
             if (supersededFilesRemoved) return Effect.void;
@@ -593,7 +653,9 @@ export const make = Effect.gen(function* () {
         ? cached.position
         : undefined;
 
-    const parsed = yield* Effect.promise(() => readTranscriptRecords(filePath, format, resumeFrom));
+    const parsed = yield* Effect.promise(() =>
+      readTranscriptRecords(filePath, format, resumeFrom, { fileSizeBytes: size }),
+    );
     // A read failure is not an empty transcript: caching it under this
     // (size, mtime) would silently drop the file's usage until it changes.
     if (parsed === null)
@@ -930,11 +992,23 @@ export const make = Effect.gen(function* () {
         return within;
       };
     };
-    const filesByDir = scannedDirs.map(({ provider, dir, files }) => {
+    const filesByDir: Array<
+      Array<{
+        readonly path: string;
+        readonly records: readonly UsageRecord[];
+        readonly malformedRecords: number;
+      }>
+    > = [];
+    let cacheScanSteps = 0;
+    for (const { provider, dir, files } of scannedDirs) {
       const retainedFiles = [...(files ?? [])];
       const livePaths = new Set(retainedFiles.map((file) => file.path));
       const isRetained = withinDir(dir);
       for (const [filePath, entry] of fileCache) {
+        cacheScanSteps += 1;
+        if (cacheScanSteps % AGGREGATION_YIELD_INTERVAL === 0) {
+          yield* Effect.yieldNow;
+        }
         if (
           entry.provider !== provider ||
           entry.mtimeMs < retainedSinceMs ||
@@ -951,8 +1025,8 @@ export const make = Effect.gen(function* () {
           malformedRecords: entry.malformedRecords,
         });
       }
-      return retainedFiles;
-    });
+      filesByDir.push(retainedFiles);
+    }
     // Usage two transcripts share counts in the first one, so saved files take the order an exact
     // scan reads them in: walked files in walk order, then the directory's deleted files.
     for (const { provider, dir, walked } of fromMemory ? [] : scannedDirs) {
@@ -981,9 +1055,14 @@ export const make = Effect.gen(function* () {
 
     // The models priced below, as UsageAggregator resolves them: an alias replaces rateModel.
     const rateModels = new Set<string>();
+    let rateScanRecords = 0;
     for (const files of filesByDir) {
       for (const file of files) {
         for (const record of file.records) {
+          rateScanRecords += 1;
+          if (rateScanRecords % AGGREGATION_YIELD_INTERVAL === 0) {
+            yield* Effect.yieldNow;
+          }
           const alias = modelAliases.get(record.model);
           const model = alias ?? record.model;
           if (priceOverrides.has(model.trim())) continue;
@@ -1076,6 +1155,7 @@ export const make = Effect.gen(function* () {
       const sessionIds = new Set<string>();
       let counted = false;
 
+      let aggregatedInDir = 0;
       for (const file of filesByDir[index] ?? []) {
         malformedRecords += file.malformedRecords;
         if (file.records.length === 0) {
@@ -1085,6 +1165,10 @@ export const make = Effect.gen(function* () {
         scannedFiles += 1;
         const eventOccurrences = new Map<string, number>();
         for (const rawRecord of file.records) {
+          aggregatedInDir += 1;
+          if (aggregatedInDir % AGGREGATION_YIELD_INTERVAL === 0) {
+            yield* Effect.yieldNow;
+          }
           const record = correctedRecord(rawRecord);
           let usageRecord = record;
           if (
@@ -1156,6 +1240,15 @@ export const make = Effect.gen(function* () {
               // Pruned files are no longer saved, so nothing before the cutoff stays covered.
               for (const [key, since] of coveredSince) {
                 if (since < retentionCutoffMs) coveredSince.set(key, retentionCutoffMs);
+              }
+            }
+            const bounded = boundScanCacheEntries(fileCache, MAX_FILE_CACHE_ENTRIES);
+            if (bounded.removed > 0) {
+              cacheDirty = true;
+              for (const [key, since] of coveredSince) {
+                if (since < bounded.maxEvictedMtimeMs) {
+                  coveredSince.set(key, bounded.maxEvictedMtimeMs);
+                }
               }
             }
           }
