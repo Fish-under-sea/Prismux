@@ -2,9 +2,14 @@ import { InlineAppearanceStudio } from "@prismux/appearance";
 import {
   WallpaperQuickPanel,
   WallpaperStage,
+  findWallpaperById,
+  isWallpaperGatedByEngine,
   useWallpaperStore,
   type InlineAppearanceRenderContext,
+  type WallpaperHostAdapter,
   type WallpaperItem,
+  type WallpaperSettingsState,
+  type WallpaperStore,
 } from "@prismux/wallpaper";
 import { memo, useId } from "react";
 
@@ -19,11 +24,16 @@ import { usePrismuxRuntime } from "./PrismuxRuntimeProvider";
 
 /**
  * Resolves the authenticated live runtime iframe URL for Web and live-supported Steam Scene wallpapers.
+ * Hard-blocks returning any Web/Scene runtime URL when `settings.advancedEngineEnabled` is false.
  */
 export function resolveWallpaperLiveRuntimeUrl(
   daemon: Pick<PrismuxDaemonClient, "resolveMediaUrl" | "buildMediaUrl">,
   wallpaper: WallpaperItem,
+  settings?: Pick<WallpaperSettingsState, "advancedEngineEnabled">,
 ): string | null {
+  if (settings && !settings.advancedEngineEnabled) {
+    return null;
+  }
   if (wallpaper.type === "web") {
     return (
       (wallpaper.mediaUrl ? daemon.resolveMediaUrl(wallpaper.mediaUrl) : null) ??
@@ -40,6 +50,33 @@ export function resolveWallpaperLiveRuntimeUrl(
 }
 
 /**
+ * Wraps a base `WallpaperHostAdapter` so toggling `advancedEngineEnabled` flushes immediately to
+ * Daemon (`PUT /v1/appearance`) and refreshes Steam catalog metadata before mounting a live runtime.
+ */
+export function createEngineAwareWallpaperHost(
+  baseHost: WallpaperHostAdapter,
+  daemon: Pick<PrismuxDaemonClient, "saveAppearance">,
+  wallpaperStore: Pick<WallpaperStore, "refreshLibrary">,
+): WallpaperHostAdapter {
+  if (baseHost.onAdvancedEngineToggle) return baseHost;
+  return {
+    ...baseHost,
+    onAdvancedEngineToggle: async (enabled: boolean) => {
+      try {
+        await daemon.saveAppearance({
+          wallpaper: { advancedEngineEnabled: enabled },
+        });
+      } catch {
+        // Offline mode: local store update still succeeds
+      }
+      if (enabled && baseHost.listWallpapers) {
+        await wallpaperStore.refreshLibrary(baseHost, false);
+      }
+    },
+  };
+}
+
+/**
  * Z-0 Fullscreen Wallpaper Stage (0 Token visual layer).
  * Mounts behind the Prismux shell, obeys window occlusion / visibility for 0 FPS suspension,
  * and resolves authenticated Daemon URLs for Steam/local web & live scene runtimes.
@@ -48,10 +85,17 @@ export const PrismuxWallpaperBackdrop = memo(function PrismuxWallpaperBackdrop()
   const { daemon, wallpaperStore, occluded } = usePrismuxRuntime();
   const snapshot = useWallpaperStore(wallpaperStore);
 
-  const resolveLiveRuntimeUrl = (wallpaper: WallpaperItem): string | null =>
-    resolveWallpaperLiveRuntimeUrl(daemon, wallpaper);
+  const currentWallpaper = findWallpaperById(snapshot.wallpapers, snapshot.settings.selectedId);
 
-  if (!snapshot.settings.selectedId) {
+  const resolveLiveRuntimeUrl = (
+    wallpaper: WallpaperItem,
+    settings: WallpaperSettingsState,
+  ): string | null => resolveWallpaperLiveRuntimeUrl(daemon, wallpaper, settings);
+
+  if (
+    !snapshot.settings.selectedId ||
+    isWallpaperGatedByEngine(currentWallpaper, snapshot.settings)
+  ) {
     return null;
   }
 
@@ -82,8 +126,10 @@ export const PrismuxWallpaperBackdrop = memo(function PrismuxWallpaperBackdrop()
  * `InlineAppearanceStudio` (zero route navigation) for live 6-zone glass tuning against Z-0.
  */
 export const PrismuxWallpaperQuickPanel = memo(function PrismuxWallpaperQuickPanel() {
-  const { appearance, setAppearance, setThemeMode, wallpaperStore, wallpaperHost } =
+  const { appearance, setAppearance, setThemeMode, daemon, wallpaperStore, wallpaperHost } =
     usePrismuxRuntime();
+
+  const engineAwareHost = createEngineAwareWallpaperHost(wallpaperHost, daemon, wallpaperStore);
 
   const renderInlineAppearance = ({ onBack }: InlineAppearanceRenderContext) => (
     <InlineAppearanceStudio
@@ -105,7 +151,7 @@ export const PrismuxWallpaperQuickPanel = memo(function PrismuxWallpaperQuickPan
     >
       <WallpaperQuickPanel
         store={wallpaperStore}
-        adapter={wallpaperHost}
+        adapter={engineAwareHost}
         renderInlineAppearance={renderInlineAppearance}
         dock="official"
         className="min-h-0 flex-1"

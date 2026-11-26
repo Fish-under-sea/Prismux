@@ -59,7 +59,9 @@ export function UserPropsDrillPanel({ store, adapter }: UserPropsDrillPanelProps
           : "这张壁纸没有可调用户属性（general.properties）";
 
   const liveActive =
-    (current.type === "scene" || current.type === "web") && snap.settings.sceneLive;
+    (current.type === "scene" || current.type === "web") &&
+    snap.settings.advancedEngineEnabled &&
+    snap.settings.sceneLive;
 
   return (
     <div className="pmx-wp-props" data-pmx-props-panel="1">
@@ -78,7 +80,7 @@ export function UserPropsDrillPanel({ store, adapter }: UserPropsDrillPanelProps
 
       {!liveActive && (current.type === "scene" || current.type === "web") ? (
         <div className="pmx-wp-props__hint">
-          实时渲染当前未开启，属性改动将在开启实时渲染后生效。
+          高级壁纸渲染引擎当前未开启，属性改动将在开启高级渲染引擎后生效。
         </div>
       ) : null}
 

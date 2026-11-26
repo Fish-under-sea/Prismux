@@ -2949,6 +2949,134 @@ describe('Single-layer viewport SVG <mask> shell cutout backdrop (#468)', () => 
       'all 3 solid fallbacks (Dark + Light) + forced-colors must cover resizable FileExplorerPane',
     );
   });
+
+  it('ignores chat stream mutations inside inner stage and non-structural DOM nodes while coalescing structural rescans with rAF', () => {
+    const env = createMockCutoutEnv({ width: 1440, height: 900 });
+    env.htmlAttrs.set('data-pmx-glass', '1');
+    const stageEl = createMockCutoutNode('div', { left: 240, top: 38, width: 1193, height: 842 });
+    stageEl.setAttribute('data-pmx-stage-frame', '1');
+    env.stageNodes.push(stageEl);
+
+    let qsaCount = 0;
+    const origQsa = env.doc.querySelectorAll;
+    env.doc.querySelectorAll = (selector: string) => {
+      qsaCount += 1;
+      return origQsa(selector);
+    };
+
+    const bodyCallbacks: Array<(records: MutationRecord[]) => void> = [];
+    const OrigMO = env.win.MutationObserver;
+    class CapturingMO {
+      private inner: InstanceType<typeof OrigMO>;
+      private cb: (records: MutationRecord[]) => void;
+      constructor(cb: (records: MutationRecord[]) => void) {
+        this.cb = cb;
+        this.inner = new OrigMO(cb as unknown as MutationCallback);
+      }
+      observe(target: Node, opts?: MutationObserverInit) {
+        if (opts?.childList && opts?.subtree) {
+          bodyCallbacks.push(this.cb);
+        }
+        this.inner.observe(target, opts);
+      }
+      disconnect() {
+        this.inner.disconnect();
+      }
+    }
+    env.win.MutationObserver = CapturingMO as unknown as typeof MutationObserver;
+
+    const handle = installPrismuxShellCutout(env.doc, { now: env.getNow });
+    // Flush initial post-layout confirmation rAF
+    env.flushRaf();
+    assert.equal(env.getPendingRafCount(), 0);
+    assert.equal(bodyCallbacks.length, 1);
+
+    const qsaBaseline = qsaCount;
+    const dispatchBodyMutations = (records: Array<Record<string, unknown>>) => {
+      bodyCallbacks[0]!(records as unknown as MutationRecord[]);
+    };
+
+    // 1. Streaming token characterData + childList inside [data-pmx-inner-stage="1"] / [data-chat-column] / [data-message-id]
+    const makeStreamTarget = (matchedSelector: string) => ({
+      nodeType: 1,
+      closest: (sel: string) => (sel.includes(matchedSelector) ? {} : null),
+    });
+    const streamingTokenNode = {
+      nodeType: 1,
+      matches: () => false,
+      querySelector: () => null,
+    };
+    dispatchBodyMutations([
+      {
+        type: 'characterData',
+        target: makeStreamTarget('[data-pmx-inner-stage="1"]'),
+        addedNodes: [],
+        removedNodes: [],
+      },
+      {
+        type: 'childList',
+        target: makeStreamTarget('[data-pmx-inner-stage="1"]'),
+        addedNodes: [streamingTokenNode],
+        removedNodes: [],
+      },
+      {
+        type: 'childList',
+        target: makeStreamTarget('[data-chat-column]'),
+        addedNodes: [streamingTokenNode],
+        removedNodes: [],
+      },
+      {
+        type: 'childList',
+        target: makeStreamTarget('[data-message-id]'),
+        addedNodes: [streamingTokenNode],
+        removedNodes: [],
+      },
+    ]);
+    assert.equal(
+      env.getPendingRafCount(),
+      0,
+      'chat message streaming mutations inside inner stage must schedule 0 rAFs',
+    );
+    assert.equal(qsaCount, qsaBaseline, 'streaming mutations must trigger 0 querySelectorAll calls');
+
+    // 2. Non-structural element mutations outside inner stage (e.g. tooltip / toast / badge)
+    const outsideBodyTarget = {
+      nodeType: 1,
+      closest: () => null,
+    };
+    dispatchBodyMutations([
+      {
+        type: 'childList',
+        target: outsideBodyTarget,
+        addedNodes: [{ nodeType: 1, matches: () => false, querySelector: () => null }],
+        removedNodes: [{ nodeType: 1, matches: () => false, querySelector: () => null }],
+      },
+    ]);
+    assert.equal(
+      env.getPendingRafCount(),
+      0,
+      'non-structural element additions outside inner stage must schedule 0 rAFs',
+    );
+    assert.equal(qsaCount, qsaBaseline);
+
+    // 3. Burst of structural mutations (e.g. stage frame or inline right sidebar mounted) coalesces into 1 rAF sync
+    const structuralNode = {
+      nodeType: 1,
+      matches: (sel: string) => sel.includes('[data-preview-panel-mode="inline"]'),
+      querySelector: () => null,
+    };
+    dispatchBodyMutations([
+      { type: 'childList', target: outsideBodyTarget, addedNodes: [structuralNode], removedNodes: [] },
+    ]);
+    dispatchBodyMutations([
+      { type: 'childList', target: outsideBodyTarget, addedNodes: [structuralNode], removedNodes: [] },
+    ]);
+    assert.equal(env.getPendingRafCount(), 1, 'multiple structural mutations must coalesce into 1 rAF');
+    env.flushRaf();
+    assert.ok(qsaCount > qsaBaseline, 'flushing coalesced structural rAF must sync cutout targets');
+
+    handle.dispose();
+  });
 });
 
 describe('6th glass zone `workPanels` (Tasks / Workspace Board / Scheduled Tasks) & anti-whiteout bridge (#490)', () => {

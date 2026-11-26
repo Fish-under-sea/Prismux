@@ -39,6 +39,7 @@ import {
   readVideoDimensions,
   SystemFontService
 } from "../index.js";
+import { WallpaperMediaService } from "../wallpapers/WallpaperMediaService.js";
 
 const tempDirs: string[] = [];
 const cleanups: Array<() => Promise<void>> = [];
@@ -337,6 +338,24 @@ test("Steam 431960 scan, zero built-in scenes, custom import dedup, HTTP 206 str
   );
   assert.equal(previewRes.status, 200);
   assert.equal(previewRes.headers.get("content-type"), "image/png");
+
+  // Web wallpaper static asset: hard-blocked with 403 ENGINE_DISABLED by default until advancedEngineEnabled is opted in
+  const webGatedRes = await fetch(
+    `${ready.httpUrl}/v1/wallpapers/web/9002002/index.html?token=${encodeURIComponent(authToken)}`
+  );
+  assert.equal(webGatedRes.status, 403);
+  const webGatedBody = (await webGatedRes.json()) as { error?: { code?: string } };
+  assert.equal(webGatedBody.error?.code, "ENGINE_DISABLED");
+
+  const enableEngineRes = await fetch(`${ready.httpUrl}/v1/appearance`, {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${authToken}`
+    },
+    body: JSON.stringify({ wallpaper: { advancedEngineEnabled: true } })
+  });
+  assert.equal(enableEngineRes.status, 200);
 
   // Web wallpaper static asset + scoped subresource cookie auth + path traversal defense
   const webEntryRes = await fetch(
@@ -2032,6 +2051,24 @@ test("RC.2 Web wallpaper URL-path token (/web-t/), Referer fallback, Spine/video
   assert.equal(vidItem.orientation, "landscape");
   assert.equal(vidItem.mediaUrl, "/v1/wallpapers/media/3839308585");
 
+  // 0. /v1/wallpapers/web-t/ is gated with 403 ENGINE_DISABLED until advancedEngineEnabled is enabled
+  const webTGated = await fetch(
+    `${ready.httpUrl}/v1/wallpapers/web-t/${encodeURIComponent(authToken)}/3650874083/index.html`
+  );
+  assert.equal(webTGated.status, 403);
+  const webTGatedBody = (await webTGated.json()) as { error?: { code?: string } };
+  assert.equal(webTGatedBody.error?.code, "ENGINE_DISABLED");
+
+  const enableWebEngineRes = await fetch(`${ready.httpUrl}/v1/appearance`, {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${authToken}`
+    },
+    body: JSON.stringify({ wallpaper: { advancedEngineEnabled: true } })
+  });
+  assert.equal(enableWebEngineRes.status, 200);
+
   // 1. /v1/wallpapers/web-t/<token>/<id>/index.html authenticates with ZERO cookies and injects WE bridge
   const webTEntry = await fetch(
     `${ready.httpUrl}/v1/wallpapers/web-t/${encodeURIComponent(authToken)}/3650874083/index.html`
@@ -2273,6 +2310,41 @@ test("RC.3 Steam scene.pkg /scene-t/ streaming (206), Web 404 vs 403, token fall
   cleanups.push(async () => {
     await daemon.stop();
   });
+
+  // By default (advancedEngineEnabled: false), inventory keeps Scene/Web visible at ~0 I/O cost
+  // (skips inspectSteamScenePackage so sceneLiveSupported is false) and /scene-t/ returns 403 ENGINE_DISABLED.
+  const gatedInvRes = await fetch(`${ready.httpUrl}/v1/wallpapers/inventory`, {
+    headers: { Authorization: `Bearer ${authToken}` }
+  });
+  assert.equal(gatedInvRes.status, 200);
+  const gatedInv = (await gatedInvRes.json()) as {
+    items: Array<{ id: string; sceneLiveSupported: boolean }>;
+  };
+  const gatedSceneItem = gatedInv.items.find((x) => x.id === "2966081148");
+  assert.ok(gatedSceneItem, "Scene item must remain visible in catalog when engine is disabled");
+  assert.equal(
+    gatedSceneItem.sceneLiveSupported,
+    false,
+    "inspectSteamScenePackage must be skipped while advancedEngineEnabled is false"
+  );
+
+  const gatedSceneHtmlRes = await fetch(
+    `${ready.httpUrl}/v1/wallpapers/scene-t/${encodeURIComponent(authToken)}/2966081148/index.html`
+  );
+  assert.equal(gatedSceneHtmlRes.status, 403);
+  const gatedSceneBody = (await gatedSceneHtmlRes.json()) as { error?: { code?: string } };
+  assert.equal(gatedSceneBody.error?.code, "ENGINE_DISABLED");
+
+  // Opt in to advancedEngineEnabled -> triggers rescan that inspects scene.pkg and unlocks /scene-t/ & /web-t/
+  const enableRc3EngineRes = await fetch(`${ready.httpUrl}/v1/appearance`, {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${authToken}`
+    },
+    body: JSON.stringify({ wallpaper: { advancedEngineEnabled: true } })
+  });
+  assert.equal(enableRc3EngineRes.status, 200);
 
   // Inventory reports sceneLiveSupported: true, /v1/wallpapers/scene/<id>/index.html, and true 2560x1798 landscape
   const invRes = await fetch(`${ready.httpUrl}/v1/wallpapers/inventory`, {
@@ -2890,4 +2962,496 @@ test("RC.3 Steam scene.pkg /scene-t/ streaming (206), Web 404 vs 403, token fall
   runLayoutGuardHarness("raf");
   runLayoutGuardHarness("resizeObserver");
   runLayoutGuardHarness("fallback300ms");
+});
+
+test("Wave 2: PUT /v1/appearance skips rescan on card clicks & sliders and only rescans on customDirs/steamRootOverride/advancedEngineEnabled changes", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "prismux-wp-norescan-data-"));
+  const steamRoot = mkdtempSync(join(tmpdir(), "prismux-wp-norescan-steam-"));
+  const extraCustom = mkdtempSync(join(tmpdir(), "prismux-wp-norescan-custom-"));
+  tempDirs.push(dataDir, steamRoot, extraCustom);
+
+  const wsDir = join(steamRoot, "steamapps", "workshop", "content", "431960", "555111");
+  mkdirSync(wsDir, { recursive: true });
+  writeFileSync(join(wsDir, "bg.png"), createMinimalPngBuffer(1920, 1080));
+  writeFileSync(
+    join(wsDir, "project.json"),
+    JSON.stringify({
+      title: "Calm Landscape",
+      type: "Image",
+      file: "bg.png",
+      preview: "bg.png",
+      contentrating: "Everyone"
+    }),
+    "utf8"
+  );
+
+  let steamDiscoverCalls = 0;
+  const authToken = "wave2-norescan-token";
+  const daemon = new PrismuxDaemon({
+    headless: true,
+    host: "127.0.0.1",
+    port: 0,
+    dataDir,
+    authToken,
+    steamRootsDiscoverer: async () => {
+      steamDiscoverCalls += 1;
+      return [steamRoot];
+    }
+  });
+  const ready = await daemon.start();
+  cleanups.push(async () => {
+    await daemon.stop();
+  });
+
+  // Prime inventory once
+  const invRes = await fetch(`${ready.httpUrl}/v1/wallpapers/inventory`, {
+    headers: { Authorization: `Bearer ${authToken}` }
+  });
+  assert.equal(invRes.status, 200);
+  const baselineCalls = steamDiscoverCalls;
+  assert.ok(baselineCalls >= 1);
+
+  // Clicking wallpaper cards and dragging appearance sliders MUST NEVER trigger a Steam 431960 rescan
+  const nonRescanPayloads = [
+    { wallpaper: { selectedId: "555111", playing: true } },
+    { wallpaper: { wallpaperBlur: 12, scrim: 0.25, backgroundBrightness: 110 } },
+    { themeMode: "dark", glassPreset: "frosted" },
+    { wallpaper: { selectedId: null, playing: false } }
+  ];
+  for (const payload of nonRescanPayloads) {
+    const res = await fetch(`${ready.httpUrl}/v1/appearance`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        Authorization: `Bearer ${authToken}`
+      },
+      body: JSON.stringify(payload)
+    });
+    assert.equal(res.status, 200);
+  }
+  assert.equal(
+    steamDiscoverCalls,
+    baselineCalls,
+    "card clicks and appearance slider saves must trigger 0 wallpaper rescans"
+  );
+
+  // Changing customDirs -> triggers exactly 1 rescan
+  const resCustom = await fetch(`${ready.httpUrl}/v1/appearance`, {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${authToken}`
+    },
+    body: JSON.stringify({ wallpaper: { customDirs: [extraCustom] } })
+  });
+  assert.equal(resCustom.status, 200);
+  assert.equal(steamDiscoverCalls, baselineCalls + 1);
+
+  // Re-sending identical customDirs -> triggers 0 rescans
+  const resSameCustom = await fetch(`${ready.httpUrl}/v1/appearance`, {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${authToken}`
+    },
+    body: JSON.stringify({ wallpaper: { customDirs: [extraCustom] } })
+  });
+  assert.equal(resSameCustom.status, 200);
+  assert.equal(steamDiscoverCalls, baselineCalls + 1);
+
+  // Toggling advancedEngineEnabled -> triggers exactly 1 rescan
+  const resToggleEngine = await fetch(`${ready.httpUrl}/v1/appearance`, {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${authToken}`
+    },
+    body: JSON.stringify({ wallpaper: { advancedEngineEnabled: true } })
+  });
+  assert.equal(resToggleEngine.status, 200);
+  assert.equal(steamDiscoverCalls, baselineCalls + 2);
+
+  // Changing steamRootOverride -> triggers exactly 1 rescan (custom override skips discoverer, so verify inventory succeeds)
+  const resSteamOverride = await fetch(`${ready.httpUrl}/v1/appearance`, {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${authToken}`
+    },
+    body: JSON.stringify({ wallpaper: { steamRootOverride: steamRoot } })
+  });
+  assert.equal(resSteamOverride.status, 200);
+});
+
+test("Wave 2: WallpaperMediaService async rescan single-flight coalescing", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "prismux-wp-sf-data-"));
+  const steamRoot = mkdtempSync(join(tmpdir(), "prismux-wp-sf-steam-"));
+  tempDirs.push(dataDir, steamRoot);
+
+  const wsDir = join(steamRoot, "steamapps", "workshop", "content", "431960", "777888");
+  mkdirSync(wsDir, { recursive: true });
+  writeFileSync(join(wsDir, "cover.png"), createMinimalPngBuffer(1280, 720));
+  writeFileSync(
+    join(wsDir, "project.json"),
+    JSON.stringify({
+      title: "Coalesce Test",
+      type: "Image",
+      file: "cover.png",
+      preview: "cover.png",
+      contentrating: "Everyone"
+    }),
+    "utf8"
+  );
+
+  const gate = {
+    fn: null as (() => void) | null,
+    enteredFn: null as (() => void) | null,
+    release() {
+      this.fn?.();
+    }
+  };
+  let enteredPromise = new Promise<void>((resolve) => {
+    gate.enteredFn = resolve;
+  });
+  let discoverCalls = 0;
+  const service = new WallpaperMediaService({
+    dataDir,
+    advancedEngineEnabled: false,
+    steamRootsDiscoverer: async () => {
+      discoverCalls += 1;
+      if (discoverCalls === 1) {
+        gate.enteredFn?.();
+        await new Promise<void>((resolve) => {
+          gate.fn = resolve;
+        });
+      }
+      return [steamRoot];
+    }
+  });
+
+  // Fire 5 concurrent rescans with identical arguments while the first scan is suspended
+  const p1 = service.rescan({ advancedEngineEnabled: false });
+  const p2 = service.rescan({ advancedEngineEnabled: false });
+  const p3 = service.rescan({ advancedEngineEnabled: false });
+  const p4 = service.rescan({ advancedEngineEnabled: false });
+  const p5 = service.rescan({ advancedEngineEnabled: false });
+
+  await enteredPromise;
+  assert.equal(discoverCalls, 1, "identical concurrent rescans must share a single in-flight promise");
+  gate.release();
+
+  const results = await Promise.all([p1, p2, p3, p4, p5]);
+  assert.equal(service.getRescanCount(), 1, "5 identical concurrent rescans must perform exactly 1 scan");
+  for (const inv of results) {
+    assert.equal(inv.items.some((x) => x.id === "777888"), true);
+  }
+
+  // Now test coalescing when options change mid-flight (queues exactly 1 follow-up rescan with latest options)
+  discoverCalls = 0;
+  gate.fn = null;
+  enteredPromise = new Promise<void>((resolve) => {
+    gate.enteredFn = resolve;
+  });
+  const slow1 = service.rescan({ advancedEngineEnabled: false });
+  await enteredPromise;
+  const followUpA = service.rescan({ advancedEngineEnabled: true });
+  const followUpB = service.rescan({ advancedEngineEnabled: true });
+  gate.release();
+  await Promise.all([slow1, followUpA, followUpB]);
+  assert.equal(
+    service.getRescanCount(),
+    3,
+    "initial scan + 1 coalesced follow-up scan (total 1 + 2 = 3)"
+  );
+  assert.equal(service.isAdvancedEngineEnabled(), true);
+});
+
+test("Wave 2: AppearanceConfigStore advancedEngineEnabled defaults false and smoothly migrates existing web/scene users", async () => {
+  // 1. Fresh config defaults to advancedEngineEnabled: false
+  const def = createDefaultAppearanceConfig();
+  assert.equal(def.wallpaper.advancedEngineEnabled, false);
+
+  const dirFresh = mkdtempSync(join(tmpdir(), "prismux-app-fresh-"));
+  const dirLegacyImage = mkdtempSync(join(tmpdir(), "prismux-app-legacy-img-"));
+  const dirLegacyWeb = mkdtempSync(join(tmpdir(), "prismux-app-legacy-web-"));
+  const dirLegacySteamScene = mkdtempSync(join(tmpdir(), "prismux-app-legacy-scene-"));
+  const steamRoot = mkdtempSync(join(tmpdir(), "prismux-app-legacy-steam-"));
+  tempDirs.push(dirFresh, dirLegacyImage, dirLegacyWeb, dirLegacySteamScene, steamRoot);
+
+  const freshStore = new AppearanceConfigStore({ dataDir: dirFresh });
+  assert.equal(freshStore.get().config.wallpaper.advancedEngineEnabled, false);
+
+  // 2. Legacy config on image wallpaper -> stays false
+  writeFileSync(
+    join(dirLegacyImage, "appearance.json"),
+    JSON.stringify({
+      version: 1,
+      wallpaper: {
+        selectedId: "custom-img-1",
+        selectedWallpaperType: "image"
+      }
+    }),
+    "utf8"
+  );
+  const legacyImgStore = new AppearanceConfigStore({ dataDir: dirLegacyImage });
+  assert.equal(legacyImgStore.get().config.wallpaper.advancedEngineEnabled, false);
+
+  // 3. Legacy config on web/scene wallpaper (no advancedEngineEnabled field) -> auto-migrates to true
+  writeFileSync(
+    join(dirLegacyWeb, "appearance.json"),
+    JSON.stringify({
+      version: 1,
+      wallpaper: {
+        selectedId: "web:legacy-live",
+        selectedWallpaperType: "web"
+      }
+    }),
+    "utf8"
+  );
+  const legacyWebStore = new AppearanceConfigStore({ dataDir: dirLegacyWeb });
+  assert.equal(legacyWebStore.get().config.wallpaper.advancedEngineEnabled, true);
+
+  // 4. Deferred Steam catalog upgrade migration: legacy appearance.json has numeric Steam Scene selectedId with NO selectedWallpaperType
+  const wsDir = join(steamRoot, "steamapps", "workshop", "content", "431960", "2966081148");
+  mkdirSync(wsDir, { recursive: true });
+  const embeddedMp4 = Buffer.concat([
+    Buffer.from([0x00, 0x00, 0x00, 0x18]),
+    Buffer.from("ftypmp42\x00\x00\x00\x00mp42isom", "latin1"),
+    Buffer.from("MIGRATION-SCENE-DATA", "ascii")
+  ]);
+  writeFileSync(
+    join(wsDir, "scene.pkg"),
+    buildScenePkgFixture("PKGV0018", [
+      {
+        name: "scene.json",
+        data: Buffer.from(
+          JSON.stringify({
+            general: { orthogonalprojection: { width: 1920, height: 1080 } },
+            objects: [
+              {
+                name: "bg",
+                image: "models/bg.json",
+                visible: true,
+                origin: "960 540 0",
+                size: "1920 1080"
+              }
+            ]
+          }),
+          "utf8"
+        )
+      },
+      {
+        name: "models/bg.json",
+        data: Buffer.from(JSON.stringify({ material: "materials/bg.json" }), "utf8")
+      },
+      {
+        name: "materials/bg.json",
+        data: Buffer.from(JSON.stringify({ passes: [{ textures: ["bg"] }] }), "utf8")
+      },
+      {
+        name: "materials/bg.tex",
+        data: buildTexB3Fixture(1920, 1080, 34, embeddedMp4)
+      }
+    ])
+  );
+  writeFileSync(join(wsDir, "preview.png"), createMinimalPngBuffer(512, 512));
+  writeFileSync(
+    join(wsDir, "project.json"),
+    JSON.stringify({
+      title: "Legacy Active Scene",
+      type: "Scene",
+      file: "scene.json",
+      preview: "preview.png",
+      contentrating: "Everyone"
+    }),
+    "utf8"
+  );
+  writeFileSync(
+    join(dirLegacySteamScene, "appearance.json"),
+    JSON.stringify({
+      version: 1,
+      wallpaper: {
+        selectedId: "2966081148"
+      }
+    }),
+    "utf8"
+  );
+
+  const authToken = "wave2-migration-token";
+  const daemon = new PrismuxDaemon({
+    headless: true,
+    host: "127.0.0.1",
+    port: 0,
+    dataDir: dirLegacySteamScene,
+    authToken,
+    steamRootsDiscoverer: async () => [steamRoot]
+  });
+  const ready = await daemon.start();
+  cleanups.push(async () => {
+    await daemon.stop();
+  });
+
+  // First inventory fetch detects active selectedId 2966081148 is a Steam Scene, auto-migrates advancedEngineEnabled: true, and rescans
+  const invRes = await fetch(`${ready.httpUrl}/v1/wallpapers/inventory`, {
+    headers: { Authorization: `Bearer ${authToken}` }
+  });
+  assert.equal(invRes.status, 200);
+  const inv = (await invRes.json()) as {
+    items: Array<{ id: string; sceneLiveSupported: boolean }>;
+  };
+  assert.equal(inv.items.find((x) => x.id === "2966081148")?.sceneLiveSupported, true);
+
+  const appRes = await fetch(`${ready.httpUrl}/v1/appearance`, {
+    headers: { Authorization: `Bearer ${authToken}` }
+  });
+  assert.equal(appRes.status, 200);
+  const appJson = (await appRes.json()) as { wallpaper?: { advancedEngineEnabled?: boolean } };
+  assert.equal(appJson.wallpaper?.advancedEngineEnabled, true);
+});
+
+test("Wave 2: Web bridge intercepts requestAnimationFrame while paused and flushes on resume while preserving master mute", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "prismux-wp-rafpause-data-"));
+  const steamRoot = mkdtempSync(join(tmpdir(), "prismux-wp-rafpause-steam-"));
+  tempDirs.push(dataDir, steamRoot);
+
+  const webDir = join(steamRoot, "steamapps", "workshop", "content", "431960", "991122");
+  mkdirSync(webDir, { recursive: true });
+  writeFileSync(
+    join(webDir, "index.html"),
+    "<!doctype html><html><head></head><body><canvas id='canvas'></canvas></body></html>",
+    "utf8"
+  );
+  writeFileSync(
+    join(webDir, "project.json"),
+    JSON.stringify({ title: "rAF Pause Test", type: "Web", file: "index.html", contentrating: "Everyone" }),
+    "utf8"
+  );
+
+  const authToken = "wave2-raf-token";
+  const daemon = new PrismuxDaemon({
+    headless: true,
+    host: "127.0.0.1",
+    port: 0,
+    dataDir,
+    authToken,
+    steamRootsDiscoverer: async () => [steamRoot]
+  });
+  const ready = await daemon.start();
+  cleanups.push(async () => {
+    await daemon.stop();
+  });
+
+  await fetch(`${ready.httpUrl}/v1/appearance`, {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${authToken}`
+    },
+    body: JSON.stringify({ wallpaper: { advancedEngineEnabled: true } })
+  });
+
+  const htmlRes = await fetch(
+    `${ready.httpUrl}/v1/wallpapers/web-t/${encodeURIComponent(authToken)}/991122/index.html`
+  );
+  assert.equal(htmlRes.status, 200);
+  const html = await htmlRes.text();
+  const scriptMatch = /<script data-pmx-we-bridge="1">([\s\S]*?)<\/script>/.exec(html);
+  assert.ok(scriptMatch && scriptMatch[1]);
+
+  const realRafQueue = new Map<number, (ts: number) => void>();
+  let nextRealRafId = 1;
+  const listeners = new Map<string, Array<(ev: unknown) => void>>();
+  const winObj: Record<string, unknown> = {
+    location: { href: `${ready.httpUrl}/v1/wallpapers/web-t/${authToken}/991122/index.html` },
+    parent: { postMessage: () => undefined },
+    addEventListener: (type: string, cb: (ev: unknown) => void) => {
+      const list = listeners.get(type) ?? [];
+      list.push(cb);
+      listeners.set(type, list);
+    },
+    requestAnimationFrame: (cb: (ts: number) => void) => {
+      const id = nextRealRafId++;
+      realRafQueue.set(id, cb);
+      return id;
+    },
+    cancelAnimationFrame: (id: number) => {
+      realRafQueue.delete(id);
+    },
+    Audio: class {
+      volume = 1;
+      muted = false;
+      paused = true;
+      play() {
+        this.paused = false;
+        return Promise.resolve();
+      }
+      pause() {
+        this.paused = true;
+      }
+      addEventListener() {}
+    }
+  };
+  winObj["window"] = winObj;
+
+  NodeVM.runInNewContext(scriptMatch[1], {
+    window: winObj,
+    document: {
+      readyState: "complete",
+      documentElement: { clientWidth: 1280, clientHeight: 720 },
+      querySelectorAll: () => [],
+      addEventListener: () => undefined
+    },
+    URL,
+    queueMicrotask,
+    setTimeout: () => 1,
+    clearTimeout: () => undefined
+  });
+
+  // Drain any boot rAFs
+  realRafQueue.clear();
+
+  // Pause the web wallpaper via host postMessage
+  for (const cb of listeners.get("message") ?? []) {
+    cb({
+      data: {
+        type: "wallpaperPropertyListener",
+        applyGeneralProperties: { paused: true },
+        audio: { muted: true, volume: 0 }
+      }
+    });
+  }
+
+  const wrappedRaf = winObj["requestAnimationFrame"] as (cb: (ts: number) => void) => number;
+  const wrappedCancel = winObj["cancelAnimationFrame"] as (id: number) => void;
+
+  let keptRan = 0;
+  let cancelledRan = 0;
+  const keptId = wrappedRaf(() => {
+    keptRan += 1;
+  });
+  const cancelledId = wrappedRaf(() => {
+    cancelledRan += 1;
+  });
+  wrappedCancel(cancelledId);
+
+  assert.equal(realRafQueue.size, 0, "while paused, wrapped rAF must NOT schedule real browser rAF ticks");
+  assert.equal(keptRan, 0);
+  assert.ok(keptId > 0);
+
+  // Resume -> queued non-cancelled rAF flushes to real browser rAF
+  for (const cb of listeners.get("message") ?? []) {
+    cb({
+      data: {
+        type: "wallpaperPropertyListener",
+        applyGeneralProperties: { paused: false },
+        audio: { muted: true, volume: 0 }
+      }
+    });
+  }
+  assert.equal(realRafQueue.size, 1, "resuming must flush queued rAF callbacks");
+  for (const [, cb] of Array.from(realRafQueue.entries())) {
+    cb(2000);
+  }
+  assert.equal(keptRan, 1);
+  assert.equal(cancelledRan, 0, "cancelled queued rAF callback must never execute on resume");
 });

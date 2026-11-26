@@ -301,6 +301,7 @@ export function createDefaultSettings(): WallpaperSettingsState {
     switchTransition: "fade",
 
     // Live & power
+    advancedEngineEnabled: false,
     sceneLive: true,
     liveBootDelay: 3,
     sceneLiveFps: 30,

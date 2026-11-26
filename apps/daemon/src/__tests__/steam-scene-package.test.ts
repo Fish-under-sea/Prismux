@@ -905,8 +905,8 @@ test("8K scene player uses viewport-scaled CSS stage, percentage layers, no will
 
   const html = renderSteamScenePlayerHtml(manifest, "8K Test Scene");
   assert.doesNotMatch(html, /will-change\s*:\s*transform/i);
-  assert.doesNotMatch(html, /decoding\s*=\s*["']async["']/i);
-  assert.match(html, /img\.decoding\s*=\s*["']sync["']/);
+  assert.doesNotMatch(html, /img\.decoding\s*=\s*["']sync["']/i);
+  assert.match(html, /img\.decoding\s*=\s*["']async["']/);
   assert.match(html, /img\.decode/);
   assert.doesNotMatch(html, /stageEl\.style\.width\s*=\s*scene\.orthoWidth/);
 
@@ -969,6 +969,7 @@ test("8K scene player uses viewport-scaled CSS stage, percentage layers, no will
   viewportEl.id = "pmx-viewport";
   const posted: Array<{ type?: string }> = [];
   const rafQueue: Array<(ts: number) => void> = [];
+  const winListeners = new Map<string, Array<(ev: unknown) => void>>();
 
   const fakeWin: Record<string, unknown> = {
     innerWidth: 1280,
@@ -979,7 +980,11 @@ test("8K scene player uses viewport-scaled CSS stage, percentage layers, no will
         posted.push(msg);
       }
     },
-    addEventListener: () => undefined
+    addEventListener: (type: string, cb: (ev: unknown) => void) => {
+      const list = winListeners.get(type) ?? [];
+      list.push(cb);
+      winListeners.set(type, list);
+    }
   };
   fakeWin["window"] = fakeWin;
 
@@ -1022,8 +1027,8 @@ test("8K scene player uses viewport-scaled CSS stage, percentage layers, no will
   assert.equal(accentLayer.style["width"], "50%");
   assert.equal(accentLayer.style["height"], "25%");
 
-  // Verify img.decoding === "sync" and prismuxWebReady waits until BOTH load AND decode() finish
-  assert.equal(createdImgs[0]!.decoding, "sync");
+  // Verify img.decoding === "async" (no main-thread decode hitch) and prismuxWebReady waits until BOTH load AND decode() finish
+  assert.equal(createdImgs[0]!.decoding, "async");
   assert.equal(
     posted.some((m) => m.type === "prismuxWebReady"),
     false
@@ -1049,13 +1054,36 @@ test("8K scene player uses viewport-scaled CSS stage, percentage layers, no will
 
   // Verify rAF tick parallax/breathe deltas use screen CSS stageW/stageH (NOT raw 7680/4320)
   assert.ok(rafQueue.length >= 1);
-  rafQueue[0]!(1500);
+  rafQueue.shift()!(1500);
   const tf = bgLayer.style["transform"] ?? "";
   const match = /translate3d\(([-\d.]+)px,([-\d.]+)px,0\)/.exec(tf);
   assert.ok(match, `Expected translate3d in transform, got: ${tf}`);
   assert.ok(
     Math.abs(Number(match[1])) < 5 && Math.abs(Number(match[2])) < 5,
     `Expected screen-scaled breathe delta (< 5px), got dx=${match[1]}, dy=${match[2]}`
+  );
+
+  // Verify applyGeneralProperties.fps throttles startLoop() instead of burning 60-240Hz unconditionally
+  for (const cb of winListeners.get("message") ?? []) {
+    cb({
+      data: {
+        type: "wallpaperPropertyListener",
+        applyGeneralProperties: { fps: 15, paused: false }
+      }
+    });
+  }
+  const beforeThrottleTf = bgLayer.style["transform"] ?? "";
+  // +16ms and +32ms are well below 1000/15 (~66.7ms) -> skipped, transform stays identical
+  rafQueue.shift()!(1516);
+  assert.equal(bgLayer.style["transform"], beforeThrottleTf);
+  rafQueue.shift()!(1532);
+  assert.equal(bgLayer.style["transform"], beforeThrottleTf);
+  // +120ms exceeds 66.7ms frame interval -> renders updated transform
+  rafQueue.shift()!(1620);
+  assert.notEqual(
+    bgLayer.style["transform"],
+    beforeThrottleTf,
+    "startLoop must render once elapsed timestamp exceeds 1000/fpsLimit"
   );
 });
 
@@ -1124,7 +1152,7 @@ test("Conditional real-world verification on local Steam 431960 scene.pkg archiv
       assert.equal(manifest.sounds.length, 3);
       const html = renderSteamScenePlayerHtml(manifest, "8K Real Scene");
       assert.doesNotMatch(html, /will-change\s*:\s*transform/i);
-      assert.match(html, /img\.decoding\s*=\s*["']sync["']/);
+      assert.match(html, /img\.decoding\s*=\s*["']async["']/);
     }
   }
 

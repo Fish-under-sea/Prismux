@@ -12,7 +12,7 @@ import {
   normalizeWallpaperScrim,
   useWallpaperStore,
 } from "../store.js";
-import type { ObjectFitMode, RenderSurface } from "../types.js";
+import type { ObjectFitMode, RenderSurface, WallpaperHostAdapter } from "../types.js";
 import { CtlText, SectionHead, SliderRow, SwitchRow } from "./controls.js";
 
 const OBJECT_FIT_LABELS: Record<ObjectFitMode, string> = {
@@ -25,6 +25,7 @@ const OBJECT_FIT_LABELS: Record<ObjectFitMode, string> = {
 export interface PlaybackEffectsSectionProps {
   store: WallpaperStore;
   surface: RenderSurface;
+  adapter?: WallpaperHostAdapter;
   onPickWallpaper?: () => void;
 }
 
@@ -34,6 +35,7 @@ export interface PlaybackEffectsSectionProps {
 export function PlaybackEffectsSection({
   store,
   surface,
+  adapter,
   onPickWallpaper,
 }: PlaybackEffectsSectionProps) {
   const snap = useWallpaperStore(store);
@@ -41,27 +43,111 @@ export function PlaybackEffectsSection({
   const sidebarSurface = surface === "sidebar";
   const current = findWallpaperById(wallpapers, settings.selectedId);
 
+  const handleToggleAdvancedEngine = (enabled: boolean) => {
+    store.setSetting("advancedEngineEnabled", enabled);
+    if (adapter?.onAdvancedEngineToggle) {
+      void Promise.resolve(adapter.onAdvancedEngineToggle(enabled));
+    }
+  };
+
+  const advancedEngineCard = (
+    <section
+      className="pmx-wp-glass-card pmx-wp-engine-card"
+      data-pmx-playback-card="advanced-engine"
+    >
+      <SectionHead
+        label="高级渲染引擎"
+        hint={settings.advancedEngineEnabled ? "已开启" : "默认关闭"}
+      />
+      <SwitchRow
+        label="高级壁纸渲染引擎（网页 / Steam 场景）"
+        checked={settings.advancedEngineEnabled}
+        hint="开启后可播放网页壁纸与 Steam 场景包；实时渲染会占用更高 GPU 与显存，轻度办公建议关闭以保持流畅低功耗"
+        onChange={handleToggleAdvancedEngine}
+      />
+      {settings.advancedEngineEnabled ? (
+        <>
+          <div className="pmx-wp-card-divider" />
+          <div className="pmx-wp-ctl pmx-wp-ctl--wrap">
+            <CtlText label="实时渲染帧率" hint="越低越省电" />
+            <div className="pmx-wp-seg">
+              {SCENE_LIVE_FPS_VALUES.map((fps) => (
+                <button
+                  key={fps}
+                  type="button"
+                  className={
+                    "pmx-wp-btn pmx-wp-rate" +
+                    (settings.sceneLiveFps === fps ? " pmx-wp-rate--active" : "")
+                  }
+                  aria-pressed={settings.sceneLiveFps === fps}
+                  onClick={() => store.setSetting("sceneLiveFps", fps)}
+                >
+                  {fps}fps
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="pmx-wp-ctl pmx-wp-ctl--wrap">
+            <CtlText label="启动最长等待时间" hint="延迟挂载重型实时壁纸，避免冷启动卡顿" />
+            <div className="pmx-wp-seg">
+              {LIVE_BOOT_DELAY_VALUES.map((sec) => (
+                <button
+                  key={sec}
+                  type="button"
+                  className={
+                    "pmx-wp-btn pmx-wp-rate" +
+                    (settings.liveBootDelay === sec ? " pmx-wp-rate--active" : "")
+                  }
+                  aria-pressed={settings.liveBootDelay === sec}
+                  onClick={() => store.setSetting("liveBootDelay", sec)}
+                >
+                  {sec === 0 ? "立即" : `≤${sec}s`}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <SwitchRow
+            label="自动画质"
+            checked={settings.sceneAutoQuality}
+            hint="帧率不足时自动降低后处理以保流畅"
+            onChange={(on) => store.setSetting("sceneAutoQuality", on)}
+          />
+          <SwitchRow
+            label="软件渲染时暂停实时渲染"
+            checked={settings.sceneSoftRenderPause}
+            hint="无 GPU 加速时定格首帧避免吃满 CPU"
+            onChange={(on) => store.setSetting("sceneSoftRenderPause", on)}
+          />
+        </>
+      ) : null}
+    </section>
+  );
+
   if (!current) {
     return (
-      <div className="pmx-wp-glass-card pmx-wp-empty">
-        <span className="pmx-wp-empty__title">还没有启用壁纸</span>
-        <span className="pmx-wp-hint">
-          选择一款壁纸后，可在这里调整滤镜、构图适配、帧率、倍速与节能策略
-        </span>
-        {onPickWallpaper ? (
-          <button
-            type="button"
-            className="pmx-wp-btn pmx-wp-btn--primary"
-            onClick={onPickWallpaper}
-          >
-            {sidebarSurface ? "去挑一张 ›" : "选择壁纸"}
-          </button>
-        ) : null}
+      <div className="pmx-wp-playback-stack" data-pmx-section="playback">
+        {advancedEngineCard}
+        <div className="pmx-wp-glass-card pmx-wp-empty">
+          <span className="pmx-wp-empty__title">还没有启用壁纸</span>
+          <span className="pmx-wp-hint">
+            选择一款壁纸后，可在这里调整滤镜、构图适配、帧率、倍速与节能策略
+          </span>
+          {onPickWallpaper ? (
+            <button
+              type="button"
+              className="pmx-wp-btn pmx-wp-btn--primary"
+              onClick={onPickWallpaper}
+            >
+              {sidebarSurface ? "去挑一张 ›" : "选择壁纸"}
+            </button>
+          ) : null}
+        </div>
       </div>
     );
   }
 
-  const isLiveType = current.type === "scene" || current.type === "web";
   const framingDirty =
     settings.layerPositionX !== 50 ||
     settings.layerPositionY !== 50 ||
@@ -71,6 +157,9 @@ export function PlaybackEffectsSection({
 
   return (
     <div className="pmx-wp-playback-stack" data-pmx-section="playback">
+      {/* 0. 高级壁纸渲染引擎门禁（网页 / Steam 场景） */}
+      {advancedEngineCard}
+
       {/* 1. 画面滤镜 */}
       <section className="pmx-wp-glass-card" data-pmx-playback-card="filters">
         <SectionHead
@@ -302,75 +391,6 @@ export function PlaybackEffectsSection({
               </div>
             ) : null}
 
-            <div className="pmx-wp-card-divider" />
-          </>
-        ) : null}
-
-        {/* 实时渲染控制（Scene / Web）*/}
-        {isLiveType ? (
-          <>
-            <SwitchRow
-              label={current.type === "web" ? "网页实时渲染" : "场景实时渲染"}
-              checked={settings.sceneLive}
-              hint="WebWallGL 实时渲染 · 异常自动降级绝不黑屏"
-              onChange={(on) => store.setSetting("sceneLive", on)}
-            />
-            {settings.sceneLive ? (
-              <>
-                <div className="pmx-wp-ctl pmx-wp-ctl--wrap">
-                  <CtlText label="实时渲染帧率" hint="越低越省电" />
-                  <div className="pmx-wp-seg">
-                    {SCENE_LIVE_FPS_VALUES.map((fps) => (
-                      <button
-                        key={fps}
-                        type="button"
-                        className={
-                          "pmx-wp-btn pmx-wp-rate" +
-                          (settings.sceneLiveFps === fps ? " pmx-wp-rate--active" : "")
-                        }
-                        aria-pressed={settings.sceneLiveFps === fps}
-                        onClick={() => store.setSetting("sceneLiveFps", fps)}
-                      >
-                        {fps}fps
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="pmx-wp-ctl pmx-wp-ctl--wrap">
-                  <CtlText label="启动最长等待时间" />
-                  <div className="pmx-wp-seg">
-                    {LIVE_BOOT_DELAY_VALUES.map((sec) => (
-                      <button
-                        key={sec}
-                        type="button"
-                        className={
-                          "pmx-wp-btn pmx-wp-rate" +
-                          (settings.liveBootDelay === sec ? " pmx-wp-rate--active" : "")
-                        }
-                        aria-pressed={settings.liveBootDelay === sec}
-                        onClick={() => store.setSetting("liveBootDelay", sec)}
-                      >
-                        {sec === 0 ? "立即" : `≤${sec}s`}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <SwitchRow
-                  label="自动画质"
-                  checked={settings.sceneAutoQuality}
-                  hint="帧率不足时自动降低后处理以保流畅"
-                  onChange={(on) => store.setSetting("sceneAutoQuality", on)}
-                />
-                <SwitchRow
-                  label="软件渲染时暂停实时渲染"
-                  checked={settings.sceneSoftRenderPause}
-                  hint="无 GPU 加速时定格首帧避免吃满 CPU"
-                  onChange={(on) => store.setSetting("sceneSoftRenderPause", on)}
-                />
-              </>
-            ) : null}
             <div className="pmx-wp-card-divider" />
           </>
         ) : null}

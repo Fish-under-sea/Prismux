@@ -3,16 +3,25 @@ export * from "./defaults.js";
 export * from "./store.js";
 export * from "./userProps.js";
 export * from "./videoPrewarm.js";
-export { WallpaperStage } from "./WallpaperStage.js";
+export {
+  WallpaperStage,
+  WATCHDOG_BACKOFF_MS,
+  resolveEffectiveLiveFps,
+} from "./WallpaperStage.js";
 export type { WallpaperStageProps } from "./WallpaperStage.js";
 export {
   WallpaperQuickPanel,
+  QP_VIRTUALIZE_THRESHOLD,
   resolveQuickPanelTab,
   openInlineAppearanceInStore,
   closeInlineAppearanceInStore,
 } from "./WallpaperQuickPanel.js";
 export type { WallpaperQuickPanelProps } from "./WallpaperQuickPanel.js";
-export { WallpaperSettingsView } from "./WallpaperSettingsView.js";
+export {
+  WallpaperSettingsView,
+  SETTINGS_VIRTUALIZE_THRESHOLD,
+  SETTINGS_VP_FIRST,
+} from "./WallpaperSettingsView.js";
 export type { WallpaperSettingsViewProps } from "./WallpaperSettingsView.js";
 export { AppearanceSections } from "./renderers/AppearanceSections.js";
 export type { AppearanceSectionsProps } from "./renderers/AppearanceSections.js";

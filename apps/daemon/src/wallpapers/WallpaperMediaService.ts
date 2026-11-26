@@ -1,6 +1,7 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
+import * as NodeFSP from "node:fs/promises";
 import type * as NodeHttp from "node:http";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -123,6 +124,7 @@ export interface WallpaperInventorySnapshot {
 export interface WallpaperRescanRequest {
   customDirs?: string[];
   steamRootOverride?: string;
+  advancedEngineEnabled?: boolean;
 }
 
 export interface WallpaperImportRequest {
@@ -136,6 +138,7 @@ export interface WallpaperServiceOptions {
   dataDir: string;
   customDirs?: string[];
   steamRootOverride?: string;
+  advancedEngineEnabled?: boolean;
   steamRootsDiscoverer?: () => Promise<string[]>;
 }
 
@@ -330,6 +333,80 @@ export function isPathStrictlyInsideDir(
  * strictly inside `rootDir` WITHOUT calling `decodeURIComponent()` so filenames
  * containing literal `%` characters are preserved intact.
  */
+async function pathExistsAsync(candidatePath: string): Promise<boolean> {
+  try {
+    await NodeFSP.access(candidatePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isPathStrictlyInsideDirAsync(
+  candidatePath: string,
+  rootDir: string,
+  cachedRealRoot?: string
+): Promise<boolean> {
+  const resolvedRoot = resolve(rootDir);
+  const resolvedCandidate = resolve(candidatePath);
+  if (
+    resolvedCandidate.toLowerCase() === resolvedRoot.toLowerCase() &&
+    HOST_PLATFORM === "win32"
+  ) {
+    return true;
+  }
+  if (resolvedCandidate === resolvedRoot) {
+    return true;
+  }
+
+  const rel = relative(resolvedRoot, resolvedCandidate);
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+    return false;
+  }
+
+  try {
+    const realRoot = cachedRealRoot ?? (await NodeFSP.realpath(resolvedRoot));
+    const realCandidate = await NodeFSP.realpath(resolvedCandidate);
+    if (realCandidate === realRoot) {
+      return true;
+    }
+    if (
+      HOST_PLATFORM === "win32" &&
+      realCandidate.toLowerCase() === realRoot.toLowerCase()
+    ) {
+      return true;
+    }
+    const realRel = relative(realRoot, realCandidate);
+    return realRel === "" || (!realRel.startsWith("..") && !isAbsolute(realRel));
+  } catch {
+    return false;
+  }
+}
+
+async function safeResolveLocalPathAsync(
+  rootDir: string,
+  rawRelativePath: string,
+  cachedRealRoot?: string
+): Promise<string | null> {
+  if (rawRelativePath.includes("\0")) {
+    return null;
+  }
+  const normalizedSlashes = rawRelativePath.replace(/\\/g, "/");
+  const segments = normalizedSlashes.split("/");
+  if (segments.some((seg) => seg === "..")) {
+    return null;
+  }
+  const cleanRel = normalizedSlashes.replace(/^\/+/, "");
+  if (cleanRel.length === 0) {
+    return null;
+  }
+  const candidate = resolve(rootDir, cleanRel);
+  if (!(await isPathStrictlyInsideDirAsync(candidate, rootDir, cachedRealRoot))) {
+    return null;
+  }
+  return candidate;
+}
+
 export function safeResolveLocalPath(
   rootDir: string,
   rawRelativePath: string
@@ -527,6 +604,142 @@ export function parseByteRangeHeader(
   };
 }
 
+function parseImageDimensionsFromSlice(
+  slice: Buffer
+): { width: number; height: number } | null {
+  // PNG: 8-byte signature + IHDR width/height at offsets 16 and 20
+  if (
+    slice.length >= 24 &&
+    slice[0] === 0x89 &&
+    slice[1] === 0x50 &&
+    slice[2] === 0x4e &&
+    slice[3] === 0x47
+  ) {
+    return {
+      width: slice.readUInt32BE(16),
+      height: slice.readUInt32BE(20)
+    };
+  }
+
+  // GIF: GIF87a / GIF89a
+  if (
+    slice.length >= 10 &&
+    slice.subarray(0, 3).toString("ascii") === "GIF"
+  ) {
+    return {
+      width: slice.readUInt16LE(6),
+      height: slice.readUInt16LE(8)
+    };
+  }
+
+  // BMP: BM
+  if (slice.length >= 26 && slice[0] === 0x42 && slice[1] === 0x4d) {
+    return {
+      width: Math.abs(slice.readInt32LE(18)),
+      height: Math.abs(slice.readInt32LE(22))
+    };
+  }
+
+  // WEBP: RIFF....WEBP (VP8 / VP8L / VP8X)
+  if (
+    slice.length >= 30 &&
+    slice.subarray(0, 4).toString("ascii") === "RIFF" &&
+    slice.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
+    const chunkHeader = slice.subarray(12, 16).toString("ascii");
+    if (chunkHeader === "VP8X" && slice.length >= 30) {
+      const w = 1 + (slice[24]! | (slice[25]! << 8) | (slice[26]! << 16));
+      const h = 1 + (slice[27]! | (slice[28]! << 8) | (slice[29]! << 16));
+      return { width: w, height: h };
+    }
+    if (chunkHeader === "VP8L" && slice.length >= 25) {
+      const bits = slice.readUInt32LE(21);
+      return {
+        width: (bits & 0x3fff) + 1,
+        height: ((bits >> 14) & 0x3fff) + 1
+      };
+    }
+    if (chunkHeader === "VP8 " && slice.length >= 30) {
+      return {
+        width: slice.readUInt16LE(26) & 0x3fff,
+        height: slice.readUInt16LE(28) & 0x3fff
+      };
+    }
+  }
+
+  // JPEG: SOI (FF D8) + SOF0..SOF3/SOF5..SOF7/SOF9..SOF11/SOF13..SOF15
+  if (slice.length >= 4 && slice[0] === 0xff && slice[1] === 0xd8) {
+    let offset = 2;
+    while (offset + 4 < slice.length) {
+      if (slice[offset] !== 0xff) {
+        offset += 1;
+        continue;
+      }
+      while (offset < slice.length && slice[offset] === 0xff) {
+        offset += 1;
+      }
+      if (offset >= slice.length) {
+        break;
+      }
+      const marker = slice[offset]!;
+      offset += 1;
+      if (marker === 0xd8 || marker === 0xd9 || marker === 0x01) {
+        continue;
+      }
+      if (marker >= 0xd0 && marker <= 0xd7) {
+        continue;
+      }
+      if (offset + 2 > slice.length) {
+        break;
+      }
+      const segmentLen = slice.readUInt16BE(offset);
+      if (segmentLen < 2) {
+        break;
+      }
+      const isSof =
+        (marker >= 0xc0 && marker <= 0xc3) ||
+        (marker >= 0xc5 && marker <= 0xc7) ||
+        (marker >= 0xc9 && marker <= 0xcb) ||
+        (marker >= 0xcd && marker <= 0xcf);
+      if (isSof && offset + 7 <= slice.length) {
+        return {
+          height: slice.readUInt16BE(offset + 3),
+          width: slice.readUInt16BE(offset + 5)
+        };
+      }
+      offset += segmentLen;
+    }
+  }
+  return null;
+}
+
+export async function readImageDimensionsAsync(
+  filePath: string
+): Promise<{ width: number; height: number } | null> {
+  let fh: NodeFSP.FileHandle | undefined;
+  try {
+    fh = await NodeFSP.open(filePath, "r");
+    const stats = await fh.stat();
+    if (!stats.isFile() || stats.size < 16) {
+      return null;
+    }
+    const readBytes = Math.min(stats.size, 65_536);
+    const buffer = Buffer.allocUnsafe(readBytes);
+    const { bytesRead } = await fh.read(buffer, 0, readBytes, 0);
+    return parseImageDimensionsFromSlice(buffer.subarray(0, bytesRead));
+  } catch {
+    return null;
+  } finally {
+    if (fh !== undefined) {
+      try {
+        await fh.close();
+      } catch {
+        // ignore close failure
+      }
+    }
+  }
+}
+
 export function readImageDimensions(
   filePath: string
 ): { width: number; height: number } | null {
@@ -540,112 +753,7 @@ export function readImageDimensions(
     const buffer = Buffer.allocUnsafe(readBytes);
     fd = openSync(filePath, "r");
     const bytesRead = readSync(fd, buffer, 0, readBytes, 0);
-    const slice = buffer.subarray(0, bytesRead);
-
-    // PNG: 8-byte signature + IHDR width/height at offsets 16 and 20
-    if (
-      slice.length >= 24 &&
-      slice[0] === 0x89 &&
-      slice[1] === 0x50 &&
-      slice[2] === 0x4e &&
-      slice[3] === 0x47
-    ) {
-      return {
-        width: slice.readUInt32BE(16),
-        height: slice.readUInt32BE(20)
-      };
-    }
-
-    // GIF: GIF87a / GIF89a
-    if (
-      slice.length >= 10 &&
-      slice.subarray(0, 3).toString("ascii") === "GIF"
-    ) {
-      return {
-        width: slice.readUInt16LE(6),
-        height: slice.readUInt16LE(8)
-      };
-    }
-
-    // BMP: BM
-    if (slice.length >= 26 && slice[0] === 0x42 && slice[1] === 0x4d) {
-      return {
-        width: Math.abs(slice.readInt32LE(18)),
-        height: Math.abs(slice.readInt32LE(22))
-      };
-    }
-
-    // WEBP: RIFF....WEBP (VP8 / VP8L / VP8X)
-    if (
-      slice.length >= 30 &&
-      slice.subarray(0, 4).toString("ascii") === "RIFF" &&
-      slice.subarray(8, 12).toString("ascii") === "WEBP"
-    ) {
-      const chunkHeader = slice.subarray(12, 16).toString("ascii");
-      if (chunkHeader === "VP8X" && slice.length >= 30) {
-        const w = 1 + (slice[24]! | (slice[25]! << 8) | (slice[26]! << 16));
-        const h = 1 + (slice[27]! | (slice[28]! << 8) | (slice[29]! << 16));
-        return { width: w, height: h };
-      }
-      if (chunkHeader === "VP8L" && slice.length >= 25) {
-        const bits = slice.readUInt32LE(21);
-        return {
-          width: (bits & 0x3fff) + 1,
-          height: ((bits >> 14) & 0x3fff) + 1
-        };
-      }
-      if (chunkHeader === "VP8 " && slice.length >= 30) {
-        return {
-          width: slice.readUInt16LE(26) & 0x3fff,
-          height: slice.readUInt16LE(28) & 0x3fff
-        };
-      }
-    }
-
-    // JPEG: SOI (FF D8) + SOF0..SOF3/SOF5..SOF7/SOF9..SOF11/SOF13..SOF15
-    if (slice.length >= 4 && slice[0] === 0xff && slice[1] === 0xd8) {
-      let offset = 2;
-      while (offset + 4 < slice.length) {
-        if (slice[offset] !== 0xff) {
-          offset += 1;
-          continue;
-        }
-        while (offset < slice.length && slice[offset] === 0xff) {
-          offset += 1;
-        }
-        if (offset >= slice.length) {
-          break;
-        }
-        const marker = slice[offset]!;
-        offset += 1;
-        if (marker === 0xd8 || marker === 0xd9 || marker === 0x01) {
-          continue;
-        }
-        if (marker >= 0xd0 && marker <= 0xd7) {
-          continue;
-        }
-        if (offset + 2 > slice.length) {
-          break;
-        }
-        const segmentLen = slice.readUInt16BE(offset);
-        if (segmentLen < 2) {
-          break;
-        }
-        const isSof =
-          (marker >= 0xc0 && marker <= 0xc3) ||
-          (marker >= 0xc5 && marker <= 0xc7) ||
-          (marker >= 0xc9 && marker <= 0xcb) ||
-          (marker >= 0xcd && marker <= 0xcf);
-        if (isSof && offset + 7 <= slice.length) {
-          return {
-            height: slice.readUInt16BE(offset + 3),
-            width: slice.readUInt16BE(offset + 5)
-          };
-        }
-        offset += segmentLen;
-      }
-    }
-    return null;
+    return parseImageDimensionsFromSlice(buffer.subarray(0, bytesRead));
   } catch {
     return null;
   } finally {
@@ -864,6 +972,97 @@ function parseEbmlVideoDimensions(buf: Buffer): { width: number; height: number 
  * Pure-Node binary video dimension parser supporting MP4/MOV/M4V (`moov`/`tkhd` in head,
  * top-level box seek over large `mdat`, or EOF tail) and WebM/MKV (EBML `PixelWidth`/`PixelHeight`).
  */
+export async function readVideoDimensionsAsync(
+  filePath: string
+): Promise<{ width: number; height: number } | null> {
+  let fh: NodeFSP.FileHandle | undefined;
+  try {
+    fh = await NodeFSP.open(filePath, "r");
+    const stats = await fh.stat();
+    if (!stats.isFile() || stats.size < 16) {
+      return null;
+    }
+    const fileSize = stats.size;
+
+    const headLen = Math.min(fileSize, VIDEO_HEAD_PROBE_BYTES);
+    const headBuf = Buffer.allocUnsafe(headLen);
+    const { bytesRead: headRead } = await fh.read(headBuf, 0, headLen, 0);
+    const head = headBuf.subarray(0, headRead);
+
+    if (
+      head.length >= 4 &&
+      head[0] === 0x1a &&
+      head[1] === 0x45 &&
+      head[2] === 0xdf &&
+      head[3] === 0xa3
+    ) {
+      return parseEbmlVideoDimensions(head);
+    }
+
+    const fromHead = parseMp4BoxesForDimensions(head, 0, head.length) ?? scanBufferForTkhd(head);
+    if (fromHead) {
+      return fromHead;
+    }
+
+    if (fileSize > headLen) {
+      const hdr = Buffer.allocUnsafe(16);
+      let pos = 0;
+      for (let i = 0; i < 64 && pos + 8 <= fileSize; i += 1) {
+        const { bytesRead: got } = await fh.read(hdr, 0, Math.min(16, fileSize - pos), pos);
+        if (got < 8) break;
+        let boxSize = hdr.readUInt32BE(0);
+        const boxType = hdr.subarray(4, 8).toString("ascii");
+        let headerSize = 8;
+        if (boxSize === 1) {
+          if (got < 16) break;
+          boxSize = hdr.readUInt32BE(8) * 0x100000000 + hdr.readUInt32BE(12);
+          headerSize = 16;
+        } else if (boxSize === 0) {
+          boxSize = fileSize - pos;
+        }
+        if (!Number.isFinite(boxSize) || boxSize < headerSize) break;
+        if (boxType === "moov") {
+          const readLen = Math.min(boxSize, MAX_MOOV_READ_BYTES, fileSize - pos);
+          const moovBuf = Buffer.allocUnsafe(readLen);
+          const { bytesRead: moovGot } = await fh.read(moovBuf, 0, readLen, pos);
+          const moovSlice = moovBuf.subarray(0, moovGot);
+          const fromMoov =
+            parseMp4BoxesForDimensions(moovSlice, 0, moovSlice.length) ??
+            scanBufferForTkhd(moovSlice);
+          if (fromMoov) {
+            return fromMoov;
+          }
+          break;
+        }
+        if (pos + boxSize <= pos) break;
+        pos += boxSize;
+      }
+
+      const tailLen = Math.min(fileSize, VIDEO_TAIL_PROBE_BYTES);
+      const tailOffset = Math.max(0, fileSize - tailLen);
+      const tailBuf = Buffer.allocUnsafe(tailLen);
+      const { bytesRead: tailGot } = await fh.read(tailBuf, 0, tailLen, tailOffset);
+      const tail = tailBuf.subarray(0, tailGot);
+      const fromTail = scanBufferForTkhd(tail);
+      if (fromTail) {
+        return fromTail;
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (fh !== undefined) {
+      try {
+        await fh.close();
+      } catch {
+        // ignore close failure
+      }
+    }
+  }
+}
+
 export function readVideoDimensions(
   filePath: string
 ): { width: number; height: number } | null {
@@ -1156,6 +1355,26 @@ export function computeBufferSha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+export async function computeFileSha256Async(filePath: string): Promise<string> {
+  const hash = createHash("sha256");
+  const chunk = Buffer.allocUnsafe(256 * 1024);
+  const fh = await NodeFSP.open(filePath, "r");
+  try {
+    let offset = 0;
+    while (true) {
+      const { bytesRead } = await fh.read(chunk, 0, chunk.length, offset);
+      if (bytesRead <= 0) {
+        break;
+      }
+      hash.update(bytesRead === chunk.length ? chunk : chunk.subarray(0, bytesRead));
+      offset += bytesRead;
+    }
+  } finally {
+    await fh.close();
+  }
+  return hash.digest("hex");
+}
+
 export function computeFileSha256(filePath: string): string {
   const hash = createHash("sha256");
   const chunk = Buffer.allocUnsafe(256 * 1024);
@@ -1374,9 +1593,14 @@ export class WallpaperMediaService {
   readonly customWallpaperDir: string;
   private customDirs: string[];
   private steamRootOverride: string;
+  private advancedEngineEnabled: boolean;
   private readonly steamRootsDiscoverer: () => Promise<string[]>;
-  private readonly itemsById = new Map<string, IndexedWallpaperEntry>();
+  private itemsById = new Map<string, IndexedWallpaperEntry>();
   private lastInventory: WallpaperInventorySnapshot | null = null;
+  private inFlightRescan: Promise<WallpaperInventorySnapshot> | null = null;
+  private queuedRescan: Promise<WallpaperInventorySnapshot> | null = null;
+  private queuedRescanRequested = false;
+  private rescanCount = 0;
 
   constructor(options: WallpaperServiceOptions) {
     this.customWallpaperDir = resolve(options.dataDir, "wallpapers");
@@ -1386,11 +1610,32 @@ export class WallpaperMediaService {
       .filter((dir) => dir.length > 0)
       .map((dir) => resolve(dir));
     this.steamRootOverride = (options.steamRootOverride ?? "").trim();
+    this.advancedEngineEnabled = options.advancedEngineEnabled === true;
     this.steamRootsDiscoverer =
       options.steamRootsDiscoverer ?? discoverDefaultSteamRoots;
   }
 
-  async getInventory(): Promise<WallpaperInventorySnapshot> {
+  isAdvancedEngineEnabled(): boolean {
+    return this.advancedEngineEnabled;
+  }
+
+  setAdvancedEngineEnabled(enabled: boolean): void {
+    this.advancedEngineEnabled = Boolean(enabled);
+  }
+
+  getRescanCount(): number {
+    return this.rescanCount;
+  }
+
+  async getInventory(options?: {
+    advancedEngineEnabled?: boolean;
+  }): Promise<WallpaperInventorySnapshot> {
+    if (
+      options?.advancedEngineEnabled !== undefined &&
+      options.advancedEngineEnabled !== this.advancedEngineEnabled
+    ) {
+      return this.rescan({ advancedEngineEnabled: options.advancedEngineEnabled });
+    }
     if (this.lastInventory !== null) {
       return this.lastInventory;
     }
@@ -1398,29 +1643,94 @@ export class WallpaperMediaService {
   }
 
   async rescan(request?: WallpaperRescanRequest): Promise<WallpaperInventorySnapshot> {
+    let configChanged = false;
     if (request?.customDirs !== undefined) {
-      this.customDirs = [...new Set(
-        request.customDirs
-          .map((d) => d.trim())
-          .filter((d) => d.length > 0)
-          .map((d) => resolve(d))
-      )];
+      const nextCustomDirs = [
+        ...new Set(
+          request.customDirs
+            .map((d) => d.trim())
+            .filter((d) => d.length > 0)
+            .map((d) => resolve(d))
+        )
+      ];
+      if (
+        nextCustomDirs.length !== this.customDirs.length ||
+        nextCustomDirs.some((d, idx) => d !== this.customDirs[idx])
+      ) {
+        this.customDirs = nextCustomDirs;
+        configChanged = true;
+      }
     }
     if (request?.steamRootOverride !== undefined) {
-      this.steamRootOverride = request.steamRootOverride.trim();
+      const nextOverride = request.steamRootOverride.trim();
+      if (nextOverride !== this.steamRootOverride) {
+        this.steamRootOverride = nextOverride;
+        configChanged = true;
+      }
+    }
+    if (request?.advancedEngineEnabled !== undefined) {
+      const nextEnabled = Boolean(request.advancedEngineEnabled);
+      if (nextEnabled !== this.advancedEngineEnabled) {
+        this.advancedEngineEnabled = nextEnabled;
+        configChanged = true;
+      }
     }
 
-    mkdirSync(this.customWallpaperDir, { recursive: true });
+    // Single-flight + coalescing lock: concurrent identical rescans share one in-flight promise,
+    // while config changes during an active scan coalesce into at most one follow-up scan.
+    if (this.inFlightRescan !== null) {
+      if (!configChanged && !this.queuedRescanRequested) {
+        return this.inFlightRescan;
+      }
+      this.queuedRescanRequested = true;
+      if (this.queuedRescan === null) {
+        const waitForCurrent = this.inFlightRescan;
+        this.queuedRescan = waitForCurrent
+          .catch(() => undefined)
+          .then(() => {
+            this.queuedRescan = null;
+            this.queuedRescanRequested = false;
+            return this.startSingleFlightRescan();
+          });
+      }
+      return this.queuedRescan;
+    }
 
-    const steamRoots = await this.resolveAllSteamLibraryRoots();
-    const workshopDirs = this.resolveWorkshopDirs(steamRoots);
+    return this.startSingleFlightRescan();
+  }
 
-    this.itemsById.clear();
+  private startSingleFlightRescan(): Promise<WallpaperInventorySnapshot> {
+    const run = this.performRescan().finally(() => {
+      if (this.inFlightRescan === run) {
+        this.inFlightRescan = null;
+      }
+    });
+    this.inFlightRescan = run;
+    return run;
+  }
+
+  private async performRescan(): Promise<WallpaperInventorySnapshot> {
+    this.rescanCount += 1;
+    const scanCustomDirs = [...this.customDirs];
+    const scanSteamRootOverride = this.steamRootOverride;
+    const scanAdvancedEngineEnabled = this.advancedEngineEnabled;
+
+    await NodeFSP.mkdir(this.customWallpaperDir, { recursive: true });
+
+    const steamRoots = await this.resolveAllSteamLibraryRoots(scanSteamRootOverride);
+    const workshopDirs = await this.resolveWorkshopDirs(steamRoots);
+
+    const nextItemsById = new Map<string, IndexedWallpaperEntry>();
     const collected: WallpaperInventoryItem[] = [];
 
-    // 1. Steam Workshop 431960 items
+    // 1. Steam Workshop 431960 items (async traversal; skips scene.pkg parsing when engine disabled)
     for (const workshopDir of workshopDirs) {
-      this.scanWorkshopDirectory(workshopDir, collected);
+      await this.scanWorkshopDirectory(
+        workshopDir,
+        collected,
+        nextItemsById,
+        scanAdvancedEngineEnabled
+      );
     }
 
     // 2. Local managed custom wallpaper dir + extra user-configured customDirs (deduplicated by size + SHA-256)
@@ -1430,20 +1740,23 @@ export class WallpaperMediaService {
     >();
     const localScanDirs = [
       this.customWallpaperDir,
-      ...this.customDirs.filter((d) => d !== this.customWallpaperDir)
+      ...scanCustomDirs.filter((d) => d !== this.customWallpaperDir)
     ];
     for (const dir of localScanDirs) {
-      if (existsSync(dir)) {
-        this.scanCustomDirectory(dir, collected, seenCustomBySize);
+      if (await pathExistsAsync(dir)) {
+        await this.scanCustomDirectory(dir, collected, nextItemsById, seenCustomBySize);
       }
     }
+
+    // Atomic index swap so concurrent preview/media requests never observe an emptied map mid-scan
+    this.itemsById = nextItemsById;
 
     const snapshot: WallpaperInventorySnapshot = {
       schemaVersion: 1,
       scannedAt: Date.now(),
       customWallpaperDir: this.customWallpaperDir,
-      customDirs: [...this.customDirs],
-      steamRootOverride: this.steamRootOverride,
+      customDirs: scanCustomDirs,
+      steamRootOverride: scanSteamRootOverride,
       steamRoots,
       workshopDirs,
       items: collected,
@@ -1626,10 +1939,23 @@ export class WallpaperMediaService {
     rawId: string,
     rawRelPath: string,
     req: IncomingMessage,
-    res: ServerResponse
+    res: ServerResponse,
+    options?: { advancedEngineEnabled?: boolean }
   ): Promise<void> {
     if (hasRawTraversal(rawRelPath)) {
       this.writeError(res, 403, "PATH_TRAVERSAL_BLOCKED", "Path traversal is forbidden.");
+      return;
+    }
+
+    const engineEnabled =
+      options?.advancedEngineEnabled ?? this.advancedEngineEnabled;
+    if (!engineEnabled) {
+      this.writeError(
+        res,
+        403,
+        "ENGINE_DISABLED",
+        "Advanced wallpaper rendering engine (Web / Steam Scene) is disabled."
+      );
       return;
     }
 
@@ -1725,10 +2051,22 @@ export class WallpaperMediaService {
     rawRelPath: string,
     req: IncomingMessage,
     res: ServerResponse,
-    options?: { refererWallpaperId?: string | null }
+    options?: { refererWallpaperId?: string | null; advancedEngineEnabled?: boolean }
   ): Promise<void> {
     if (hasRawTraversal(rawRelPath)) {
       this.writeError(res, 403, "PATH_TRAVERSAL_BLOCKED", "Path traversal is forbidden.");
+      return;
+    }
+
+    const engineEnabled =
+      options?.advancedEngineEnabled ?? this.advancedEngineEnabled;
+    if (!engineEnabled) {
+      this.writeError(
+        res,
+        403,
+        "ENGINE_DISABLED",
+        "Advanced wallpaper rendering engine (Web / Steam Scene) is disabled."
+      );
       return;
     }
 
@@ -1792,6 +2130,53 @@ let pendingInit=null,layoutRafId=0,layoutFallbackTimer=null;
 let masterMuted=true,masterVol=0,isPaused=false;
 let webReadySent=false;
 const seenInitUrls=[];
+
+// 0. Master rAF Pause Controller (freezes uncooperative Web/WebGL wallpapers cleanly when paused/occluded)
+const origRaf=typeof window.requestAnimationFrame==="function"
+  ? window.requestAnimationFrame.bind(window)
+  : (typeof requestAnimationFrame==="function"?requestAnimationFrame:null);
+const origCancelRaf=typeof window.cancelAnimationFrame==="function"
+  ? window.cancelAnimationFrame.bind(window)
+  : (typeof cancelAnimationFrame==="function"?cancelAnimationFrame:null);
+const pausedRafQueue=new Map();
+let syntheticRafSeq=1000000;
+
+function scheduleManagedRaf(cb){
+  if(!origRaf||typeof cb!=="function")return 0;
+  if(isPaused){
+    const qId=++syntheticRafSeq;
+    pausedRafQueue.set(qId,cb);
+    return qId;
+  }
+  return origRaf((ts)=>{
+    if(isPaused){
+      const qId=++syntheticRafSeq;
+      pausedRafQueue.set(qId,cb);
+      return;
+    }
+    cb(ts);
+  });
+}
+
+function flushPausedRafQueue(){
+  if(isPaused||!origRaf||pausedRafQueue.size===0)return;
+  const queued=Array.from(pausedRafQueue.values());
+  pausedRafQueue.clear();
+  for(let i=0;i<queued.length;i++){
+    scheduleManagedRaf(queued[i]);
+  }
+}
+
+if(origRaf){
+  window.requestAnimationFrame=scheduleManagedRaf;
+  window.cancelAnimationFrame=function(id){
+    if(pausedRafQueue.has(id)){
+      pausedRafQueue.delete(id);
+      return;
+    }
+    if(origCancelRaf){origCancelRaf(id);}
+  };
+}
 
 const wpRootUrl=(()=>{try{return new URL("./",window.location.href);}catch{return null;}})();
 const wpRootHref=wpRootUrl?wpRootUrl.href:"";
@@ -2144,6 +2529,9 @@ function applyMasterPaused(nextPaused){
     }
   });
   audioCtxSet.forEach((ctx)=>{syncAudioContext(ctx);});
+  if(!isPaused){
+    flushPausedRafQueue();
+  }
 }
 
 // 3. Wallpaper Engine property bridge + duplicate initial modelresolution reload guard
@@ -2194,7 +2582,7 @@ function hasViewportLayout(){
 }
 
 function clearLayoutDefer(){
-  if(layoutRafId&&typeof cancelAnimationFrame==="function"){cancelAnimationFrame(layoutRafId);}
+  if(layoutRafId&&origCancelRaf){origCancelRaf(layoutRafId);}
   layoutRafId=0;
   if(layoutFallbackTimer){clearTimeout(layoutFallbackTimer);layoutFallbackTimer=null;}
 }
@@ -2216,17 +2604,17 @@ function scheduleLayoutDefer(){
       flushPendingInit(true);
     },300);
   }
-  if(!layoutRafId&&typeof requestAnimationFrame==="function"){
+  if(!layoutRafId&&origRaf){
     const step=()=>{
       layoutRafId=0;
       if(delivered||!pendingInit)return;
       if(hasViewportLayout()){
         flushPendingInit(false);
       }else{
-        layoutRafId=requestAnimationFrame(step);
+        layoutRafId=origRaf(step);
       }
     };
-    layoutRafId=requestAnimationFrame(step);
+    layoutRafId=origRaf(step);
   }
 }
 
@@ -2345,7 +2733,7 @@ window.addEventListener("load",()=>{
   scheduleFallback();
   const hasCanvas=Boolean(document&&document.querySelector&&document.querySelector("canvas"));
   if(!hasCanvas){
-    if(typeof requestAnimationFrame==="function"){requestAnimationFrame(markWebReady);}else{markWebReady();}
+    if(origRaf){origRaf(markWebReady);}else{markWebReady();}
   }else{
     setTimeout(markWebReady,1200);
   }
@@ -2434,43 +2822,43 @@ window.addEventListener("load",()=>{
     return this.itemsById.get(decodedId) ?? null;
   }
 
-  private async resolveAllSteamLibraryRoots(): Promise<string[]> {
+  private async resolveAllSteamLibraryRoots(
+    steamRootOverride: string
+  ): Promise<string[]> {
     const roots: string[] = [];
     const seen = new Set<string>();
 
-    const addRoot = (candidate: string) => {
+    const addRoot = async (candidate: string) => {
       const normalized = resolve(candidate);
       const key =
         HOST_PLATFORM === "win32" ? normalized.toLowerCase() : normalized;
-      if (!seen.has(key) && existsSync(normalized)) {
+      if (!seen.has(key) && (await pathExistsAsync(normalized))) {
         seen.add(key);
         roots.push(normalized);
       }
     };
 
     const seedRoots: string[] = [];
-    if (this.steamRootOverride.length > 0) {
-      seedRoots.push(resolve(this.steamRootOverride));
+    if (steamRootOverride.length > 0) {
+      seedRoots.push(resolve(steamRootOverride));
     } else {
       seedRoots.push(...(await this.steamRootsDiscoverer()));
     }
 
     for (const seed of seedRoots) {
-      addRoot(seed);
+      await addRoot(seed);
       const vdfCandidates = [
         join(seed, "steamapps", "libraryfolders.vdf"),
         join(seed, "config", "libraryfolders.vdf")
       ];
       for (const vdfPath of vdfCandidates) {
-        if (existsSync(vdfPath)) {
-          try {
-            const vdfText = readFileSync(vdfPath, "utf8");
-            for (const libRoot of parseLibraryFoldersVdf(vdfText)) {
-              addRoot(libRoot);
-            }
-          } catch {
-            // ignore unreadable vdf
+        try {
+          const vdfText = await NodeFSP.readFile(vdfPath, "utf8");
+          for (const libRoot of parseLibraryFoldersVdf(vdfText)) {
+            await addRoot(libRoot);
           }
+        } catch {
+          // ignore missing or unreadable vdf
         }
       }
     }
@@ -2478,7 +2866,7 @@ window.addEventListener("load",()=>{
     return roots;
   }
 
-  private resolveWorkshopDirs(steamRoots: readonly string[]): string[] {
+  private async resolveWorkshopDirs(steamRoots: readonly string[]): Promise<string[]> {
     const dirs: string[] = [];
     const seen = new Set<string>();
     for (const root of steamRoots) {
@@ -2489,7 +2877,7 @@ window.addEventListener("load",()=>{
         "content",
         WALLPAPER_ENGINE_APP_ID
       );
-      if (!existsSync(candidate)) {
+      if (!(await pathExistsAsync(candidate))) {
         continue;
       }
       const key =
@@ -2502,13 +2890,15 @@ window.addEventListener("load",()=>{
     return dirs;
   }
 
-  private scanWorkshopDirectory(
+  private async scanWorkshopDirectory(
     workshopDir: string,
-    out: WallpaperInventoryItem[]
-  ): void {
+    out: WallpaperInventoryItem[],
+    itemsById: Map<string, IndexedWallpaperEntry>,
+    advancedEngineEnabled: boolean
+  ): Promise<void> {
     let entries;
     try {
-      entries = readdirSync(workshopDir, { withFileTypes: true });
+      entries = await NodeFSP.readdir(workshopDir, { withFileTypes: true });
     } catch {
       return;
     }
@@ -2519,29 +2909,27 @@ window.addEventListener("load",()=>{
       }
       const itemDir = join(workshopDir, dirent.name);
       const projectJsonPath = join(itemDir, "project.json");
-      if (!existsSync(projectJsonPath)) {
+      let rawProjectText: string;
+      try {
+        rawProjectText = await NodeFSP.readFile(projectJsonPath, "utf8");
+      } catch {
         continue;
       }
 
       const visibilityPath = join(itemDir, "visibility.json");
-      if (existsSync(visibilityPath)) {
-        try {
-          const vis = JSON.parse(
-            sanitizeJsonText(readFileSync(visibilityPath, "utf8"))
-          ) as unknown;
-          if (isPlainRecord(vis) && vis["hidden"] === true) {
-            continue;
-          }
-        } catch {
-          // ignore malformed visibility.json
+      try {
+        const visText = await NodeFSP.readFile(visibilityPath, "utf8");
+        const vis = JSON.parse(sanitizeJsonText(visText)) as unknown;
+        if (isPlainRecord(vis) && vis["hidden"] === true) {
+          continue;
         }
+      } catch {
+        // ignore missing or malformed visibility.json
       }
 
       let project: unknown;
       try {
-        project = JSON.parse(
-          sanitizeJsonText(readFileSync(projectJsonPath, "utf8"))
-        );
+        project = JSON.parse(sanitizeJsonText(rawProjectText));
       } catch {
         continue;
       }
@@ -2554,8 +2942,15 @@ window.addEventListener("load",()=>{
           ? String(project["id"]).trim()
           : dirent.name;
       const id = rawId.length > 0 ? rawId : dirent.name;
-      if (this.itemsById.has(id)) {
+      if (itemsById.has(id)) {
         continue;
+      }
+
+      let realItemDir: string | undefined;
+      try {
+        realItemDir = await NodeFSP.realpath(itemDir);
+      } catch {
+        realItemDir = undefined;
       }
 
       const title =
@@ -2571,15 +2966,17 @@ window.addEventListener("load",()=>{
           ? project["preview"].trim()
           : null;
 
-      const mediaFile = rawFile ? safeResolveLocalPath(itemDir, rawFile) : null;
+      const mediaFile = rawFile
+        ? await safeResolveLocalPathAsync(itemDir, rawFile, realItemDir)
+        : null;
       const previewFile = rawPreview
-        ? safeResolveLocalPath(itemDir, rawPreview)
+        ? await safeResolveLocalPathAsync(itemDir, rawPreview, realItemDir)
         : null;
 
       const resolvedMedia =
-        mediaFile && existsSync(mediaFile) ? mediaFile : null;
+        mediaFile && (await pathExistsAsync(mediaFile)) ? mediaFile : null;
       const resolvedPreview =
-        previewFile && existsSync(previewFile) ? previewFile : null;
+        previewFile && (await pathExistsAsync(previewFile)) ? previewFile : null;
 
       const type = normalizeWallpaperType(project["type"], rawFile);
       const contentRating = normalizeContentRating(project["contentrating"]);
@@ -2593,24 +2990,34 @@ window.addEventListener("load",()=>{
       let sceneManifest: SteamScenePackageManifest | null = null;
 
       if (type === "video" && resolvedMedia) {
-        dimensions = readVideoDimensions(resolvedMedia);
+        dimensions = await readVideoDimensionsAsync(resolvedMedia);
       } else if (type === "image" && resolvedMedia) {
-        dimensions = readImageDimensions(resolvedMedia);
+        dimensions = await readImageDimensionsAsync(resolvedMedia);
       } else if (type === "scene") {
-        const candidatePkg = safeResolveLocalPath(itemDir, "scene.pkg");
-        if (candidatePkg && existsSync(candidatePkg)) {
-          scenePkgPath = candidatePkg;
-          sceneManifest = inspectSteamScenePackage(candidatePkg);
-          if (sceneManifest && sceneManifest.layers.length > 0) {
-            dimensions = {
-              width: sceneManifest.width,
-              height: sceneManifest.height
-            };
+        // When advancedEngineEnabled is false, SKIP inspectSteamScenePackage(candidatePkg)
+        // completely so catalog scans incur ~0 I/O while keeping Scene items visible.
+        if (advancedEngineEnabled) {
+          const candidatePkg = await safeResolveLocalPathAsync(
+            itemDir,
+            "scene.pkg",
+            realItemDir
+          );
+          if (candidatePkg && (await pathExistsAsync(candidatePkg))) {
+            scenePkgPath = candidatePkg;
+            // Yield a macrotask turn before bounded binary header probe so HTTP/RPC remains responsive
+            await new Promise<void>((r) => setImmediate(r));
+            sceneManifest = inspectSteamScenePackage(candidatePkg);
+            if (sceneManifest && sceneManifest.layers.length > 0) {
+              dimensions = {
+                width: sceneManifest.width,
+                height: sceneManifest.height
+              };
+            }
           }
         }
       }
       if (!dimensions && resolvedPreview) {
-        dimensions = readImageDimensions(resolvedPreview);
+        dimensions = await readImageDimensionsAsync(resolvedPreview);
       }
 
       let fileSize: number | undefined;
@@ -2618,7 +3025,7 @@ window.addEventListener("load",()=>{
       const statTarget = resolvedMedia ?? scenePkgPath ?? resolvedPreview;
       if (statTarget) {
         try {
-          const st = statSync(statTarget);
+          const st = await NodeFSP.stat(statTarget);
           fileSize = st.size;
           mtimeMs = st.mtimeMs;
         } catch {
@@ -2635,6 +3042,7 @@ window.addEventListener("load",()=>{
       let webEntryUrl: string | null = null;
       let webEntryRelPath: string | null = null;
       const sceneLiveSupported =
+        advancedEngineEnabled &&
         type === "scene" &&
         sceneManifest !== null &&
         sceneManifest.layers.length > 0;
@@ -2681,7 +3089,7 @@ window.addEventListener("load",()=>{
       };
 
       out.push(item);
-      this.itemsById.set(id, {
+      itemsById.set(id, {
         item,
         allowedRoot: itemDir,
         mediaFile: resolvedMedia,
@@ -2694,11 +3102,12 @@ window.addEventListener("load",()=>{
     }
   }
 
-  private scanCustomDirectory(
+  private async scanCustomDirectory(
     rootDir: string,
     out: WallpaperInventoryItem[],
+    itemsById: Map<string, IndexedWallpaperEntry>,
     seenBySize: Map<number, Array<{ filePath: string; sha256: string | null }>>
-  ): void {
+  ): Promise<void> {
     interface CustomCandidate {
       fullPath: string;
       fileName: string;
@@ -2707,13 +3116,20 @@ window.addEventListener("load",()=>{
       mtimeMs: number | undefined;
     }
 
+    let realRootDir: string | undefined;
+    try {
+      realRootDir = await NodeFSP.realpath(rootDir);
+    } catch {
+      realRootDir = undefined;
+    }
+
     const candidates: CustomCandidate[] = [];
     const stack: string[] = [rootDir];
     while (stack.length > 0) {
       const current = stack.pop()!;
       let entries;
       try {
-        entries = readdirSync(current, { withFileTypes: true });
+        entries = await NodeFSP.readdir(current, { withFileTypes: true });
       } catch {
         continue;
       }
@@ -2734,14 +3150,14 @@ window.addEventListener("load",()=>{
         if (!ALLOWED_IMPORT_EXTENSIONS.has(ext)) {
           continue;
         }
-        if (!isPathStrictlyInsideDir(fullPath, rootDir)) {
+        if (!(await isPathStrictlyInsideDirAsync(fullPath, rootDir, realRootDir))) {
           continue;
         }
 
         let fileSize: number | undefined;
         let mtimeMs: number | undefined;
         try {
-          const st = statSync(fullPath);
+          const st = await NodeFSP.stat(fullPath);
           fileSize = st.size;
           mtimeMs = st.mtimeMs;
         } catch {
@@ -2771,7 +3187,7 @@ window.addEventListener("load",()=>{
         } else {
           let candidateSha: string | null = null;
           try {
-            candidateSha = computeFileSha256(fullPath);
+            candidateSha = await computeFileSha256Async(fullPath);
           } catch {
             candidateSha = null;
           }
@@ -2780,7 +3196,7 @@ window.addEventListener("load",()=>{
             for (const existing of bucket) {
               if (existing.sha256 === null) {
                 try {
-                  existing.sha256 = computeFileSha256(existing.filePath);
+                  existing.sha256 = await computeFileSha256Async(existing.filePath);
                 } catch {
                   existing.sha256 = "";
                 }
@@ -2810,13 +3226,13 @@ window.addEventListener("load",()=>{
         .replace(/^-+|-+$/g, "")
         .slice(0, 32);
       const id = `custom-${rawSlug || "media"}-${idHash}`;
-      if (this.itemsById.has(id)) {
+      if (itemsById.has(id)) {
         continue;
       }
 
       const dimensions = isVideo
-        ? readVideoDimensions(fullPath)
-        : readImageDimensions(fullPath);
+        ? await readVideoDimensionsAsync(fullPath)
+        : await readImageDimensionsAsync(fullPath);
       const encodedId = encodeURIComponent(id);
       const mediaUrl = `/v1/wallpapers/media/${encodedId}`;
       const previewUrl = isVideo ? null : `/v1/wallpapers/preview/${encodedId}`;
@@ -2844,7 +3260,7 @@ window.addEventListener("load",()=>{
       };
 
       out.push(item);
-      this.itemsById.set(id, {
+      itemsById.set(id, {
         item,
         allowedRoot: rootDir,
         mediaFile: fullPath,

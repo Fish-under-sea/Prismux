@@ -28,8 +28,14 @@ import {
   computeWallpaperStageStyles,
   dispatchWebWallpaperRuntimeState,
   disposeVideoElement,
+  resolveEffectiveLiveFps,
   silenceAndBlankIframe,
+  WATCHDOG_BACKOFF_MS,
 } from "../WallpaperStage.js";
+import {
+  SETTINGS_VIRTUALIZE_THRESHOLD,
+  SETTINGS_VP_FIRST,
+} from "../WallpaperSettingsView.js";
 import {
   importLocalWallpaperFile,
   isPathInsideDir,
@@ -49,9 +55,12 @@ import {
   filterPlayableWallpapers,
   filterVisibleWallpapers,
   findWallpaperById,
+  isAdvancedWallpaperType,
+  isWallpaperGatedByEngine,
   normalizeWallpaperFadeOpacity,
   normalizeWallpaperScrim,
   pickNextWallpaperId,
+  resolveRotationCandidates,
 } from "../store.js";
 import {
   BUILTIN_WEBWALLGL_SCENES,
@@ -642,6 +651,13 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
       selectedId: "w1",
     });
 
+    // With default advancedEngineEnabled: false, Web item w3 is excluded from rotation (cycles w1 -> w2 -> w1)
+    assert.equal(store.getSnapshot().settings.advancedEngineEnabled, false);
+    assert.equal(store.nextWallpaper(), "w2");
+    assert.equal(store.nextWallpaper(), "w1");
+
+    // Once advancedEngineEnabled is opted in, Web item w3 participates cleanly (w1 -> w2 -> w3 -> w1)
+    store.setSetting("advancedEngineEnabled", true);
     assert.equal(store.nextWallpaper(), "w2");
     assert.equal(store.nextWallpaper(), "w3");
     // Wrap around
@@ -1365,7 +1381,7 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
     assert.match(stageSrc, /data\.type === "prismuxWeBridgeReady"/);
     assert.match(stageSrc, /data\.type === "prismuxWebReady"/);
     assert.match(stageSrc, /setRenderReadySrc\(src\);[\s\S]*?2500/);
-    assert.match(stageSrc, /paused=\{effectivePaused \|\| !settings\.sceneLive\}/);
+    assert.match(stageSrc, /paused=\{liveRuntimePaused \|\| !settings\.sceneLive\}/);
     assert.equal(
       (stageSrc.match(/muted=\{!settings\.videoAudioEnabled\}/g) ?? []).length,
       3,
@@ -1376,5 +1392,159 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
       3,
       "both WebWallpaperStage sites and SteamSceneFallback must receive objectFit={settings.objectFit}",
     );
+  });
+
+  it("enforces opt-in advancedEngineEnabled gate, smooth upgrade migration, rotation exclusion, red gated UI, settings grid virtualization, and stage perf fixes (Wave 2)", async () => {
+    // 1. Default advancedEngineEnabled === false + helpers
+    assert.equal(createDefaultSettings().advancedEngineEnabled, false);
+    assert.equal(isAdvancedWallpaperType("web"), true);
+    assert.equal(isAdvancedWallpaperType("scene"), true);
+    assert.equal(isAdvancedWallpaperType("video"), false);
+    assert.equal(isAdvancedWallpaperType("image"), false);
+    assert.equal(isWallpaperGatedByEngine(sampleWallpapers[2], createDefaultSettings()), true);
+    assert.equal(isWallpaperGatedByEngine(sampleWallpapers[0], createDefaultSettings()), false);
+
+    // 2. Smooth upgrade migration: legacy active web/scene migrates to true; image/video/none stays false; explicit false respected
+    const migratedWebStore = createWallpaperStore({
+      wallpapers: sampleWallpapers,
+      includeBuiltins: false,
+      storage: createMemoryStorage(),
+      settings: { selectedId: "w3" }, // w3 is type: "web", no advancedEngineEnabled provided
+    });
+    assert.equal(migratedWebStore.getSnapshot().settings.advancedEngineEnabled, true);
+    migratedWebStore.dispose();
+
+    const deferredSceneStore = createWallpaperStore({
+      wallpapers: [],
+      includeBuiltins: false,
+      storage: createMemoryStorage(),
+      settings: { selectedId: "w4" }, // catalog not yet loaded
+    });
+    assert.equal(deferredSceneStore.getSnapshot().settings.advancedEngineEnabled, false);
+    deferredSceneStore.setWallpapers(sampleWallpapers); // w4 is type: "scene"
+    assert.equal(deferredSceneStore.getSnapshot().settings.advancedEngineEnabled, true);
+    deferredSceneStore.dispose();
+
+    const imageUserStore = createWallpaperStore({
+      wallpapers: sampleWallpapers,
+      includeBuiltins: false,
+      storage: createMemoryStorage(),
+      settings: { selectedId: "w1" }, // image
+    });
+    assert.equal(imageUserStore.getSnapshot().settings.advancedEngineEnabled, false);
+    imageUserStore.dispose();
+
+    const explicitOffStore = createWallpaperStore({
+      wallpapers: sampleWallpapers,
+      includeBuiltins: false,
+      storage: createMemoryStorage(),
+      settings: { selectedId: "w3", advancedEngineEnabled: false },
+    });
+    assert.equal(explicitOffStore.getSnapshot().settings.advancedEngineEnabled, false);
+    explicitOffStore.dispose();
+
+    // 3. Library visibility vs selection block vs rotation exclusion vs disable cleanup
+    const blockedItems: string[] = [];
+    const store = createWallpaperStore({
+      wallpapers: sampleWallpapers,
+      includeBuiltins: false,
+      storage: createMemoryStorage(),
+      onGatedSelectionBlocked: (w) => blockedItems.push(w.id),
+    });
+
+    // filterVisibleWallpapers KEEPS web & scene visible when disabled
+    const visible = filterVisibleWallpapers(sampleWallpapers, store.getSnapshot().settings);
+    assert.equal(visible.some((w) => w.type === "web"), true);
+    assert.equal(visible.some((w) => w.type === "scene"), true);
+
+    // resolveRotationCandidates EXCLUDES web & scene when disabled
+    const rotDisabled = resolveRotationCandidates(sampleWallpapers, store.getSnapshot().settings);
+    assert.equal(rotDisabled.some((w) => w.type === "web" || w.type === "scene"), false);
+    assert.deepEqual(
+      rotDisabled.map((w) => w.id),
+      ["w1", "w2"],
+    );
+
+    // Clicking a gated web/scene item blocks selection & records gatedAttempt without changing selectedId
+    store.selectWallpaper("w1");
+    assert.equal(store.getSnapshot().settings.selectedId, "w1");
+    store.selectWallpaper("w3");
+    assert.equal(store.getSnapshot().settings.selectedId, "w1", "gated selection must not overwrite selectedId");
+    assert.equal(store.getSnapshot().gatedAttempt?.wallpaper.id, "w3");
+    assert.deepEqual(blockedItems, ["w3"]);
+
+    // 1-click enableAdvancedEngineAndSelect unlocks and selects the blocked wallpaper cleanly
+    store.enableAdvancedEngineAndSelect();
+    assert.equal(store.getSnapshot().settings.advancedEngineEnabled, true);
+    assert.equal(store.getSnapshot().settings.selectedId, "w3");
+    assert.equal(store.getSnapshot().gatedAttempt, null);
+
+    // Turning advancedEngineEnabled true -> false while a web/scene wallpaper is active clears it immediately
+    store.setSetting("advancedEngineEnabled", false);
+    assert.equal(store.getSnapshot().settings.advancedEngineEnabled, false);
+    assert.equal(store.getSnapshot().settings.selectedId, null);
+    assert.equal(store.getSnapshot().settings.playing, false);
+
+    // Turning advancedEngineEnabled true -> false while an image/video wallpaper is active keeps it intact
+    store.setSetting("advancedEngineEnabled", true);
+    store.selectWallpaper("w2");
+    store.setSetting("advancedEngineEnabled", false);
+    assert.equal(store.getSnapshot().settings.selectedId, "w2");
+    store.dispose();
+
+    // 4. Performance helpers & virtualization constants
+    assert.equal(resolveEffectiveLiveFps(60, 30), 30);
+    assert.equal(resolveEffectiveLiveFps(30, 60), 30);
+    assert.equal(resolveEffectiveLiveFps(60, 0), 60);
+    assert.deepEqual([...WATCHDOG_BACKOFF_MS], [1800, 3500, 7000]);
+    assert.equal(SETTINGS_VIRTUALIZE_THRESHOLD, 24);
+    assert.equal(SETTINGS_VP_FIRST, 24);
+
+    // 5. Static source verification of Wave 2 fixes & red disabled UI/CSS invariants
+    const testDir = dirname(fileURLToPath(import.meta.url));
+    const pkgRoot = join(testDir, "..", "..");
+    const [stageSrc, quickSrc, settingsSrc, playbackSrc, panelCss] = await Promise.all([
+      readFile(join(pkgRoot, "src", "WallpaperStage.tsx"), "utf8"),
+      readFile(join(pkgRoot, "src", "WallpaperQuickPanel.tsx"), "utf8"),
+      readFile(join(pkgRoot, "src", "WallpaperSettingsView.tsx"), "utf8"),
+      readFile(join(pkgRoot, "src", "renderers", "PlaybackSections.tsx"), "utf8"),
+      readFile(join(pkgRoot, "src", "styles", "wallpaper-panel.css"), "utf8"),
+    ]);
+
+    // WallpaperStage: no per-frame syncSize() inside paintOnce(), no React setParallax state, hard engine gate, wired perf knobs
+    const paintOnceBlock = stageSrc.slice(
+      stageSrc.indexOf("const paintOnce ="),
+      stageSrc.indexOf("const tick ="),
+    );
+    assert.doesNotMatch(paintOnceBlock, /syncSize\(/, "paintOnce must not call syncSize() per frame");
+    assert.doesNotMatch(stageSrc, /setParallax/, "SteamSceneFallback must update DOM ref directly without React setParallax");
+    assert.match(stageSrc, /if \(!currentWallpaper \|\| engineGated\)/);
+    assert.match(stageSrc, /useBatteryDischarging/);
+    assert.match(stageSrc, /useDeferredLiveBoot/);
+    assert.match(stageSrc, /sceneSoftRenderPause/);
+
+    // QuickPanel & SettingsView: red disabled badges, aria-disabled, inline enable banner, settings grid virtualization
+    assert.match(quickSrc, /pmx-wp-qp__card--gated/);
+    assert.match(quickSrc, /渲染引擎未开启/);
+    assert.match(quickSrc, /data-pmx-engine-gate-banner="1"/);
+    assert.match(quickSrc, /开启高级渲染引擎/);
+    assert.match(settingsSrc, /pmx-wp-card--gated/);
+    assert.match(settingsSrc, /渲染引擎未开启/);
+    assert.match(settingsSrc, /data-pmx-engine-gate-banner="1"/);
+    assert.match(settingsSrc, /useSettingsGridVirtualWindow/);
+    assert.match(settingsSrc, /data-pmx-grid-virtualized=/);
+    assert.match(playbackSrc, /高级壁纸渲染引擎（网页 \/ Steam 场景）/);
+    assert.match(playbackSrc, /data-pmx-playback-card="advanced-engine"/);
+
+    // CSS: balanced braces, zero prefers-color-scheme, gated red card & banner styles present
+    const cssNoComments = panelCss.replace(/\/\*[\s\S]*?\*\//g, "");
+    assert.equal(cssNoComments.includes("prefers-color-scheme"), false);
+    assert.equal(
+      (cssNoComments.match(/\{/g) ?? []).length,
+      (cssNoComments.match(/\}/g) ?? []).length,
+    );
+    assert.match(panelCss, /\.pmx-wp-qp__card--gated/);
+    assert.match(panelCss, /\.pmx-wp-card--gated/);
+    assert.match(panelCss, /\.pmx-wp-gate-banner\s*\{/);
   });
 });

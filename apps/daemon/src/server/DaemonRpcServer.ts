@@ -1212,7 +1212,30 @@ export class DaemonRpcServer {
           "WallpaperMediaService is not configured."
         );
       }
-      const inventory = await this.wallpaperService.getInventory();
+      const advancedEngineEnabled = this.appearanceStore
+        ? this.appearanceStore.get().config.wallpaper.advancedEngineEnabled
+        : this.wallpaperService.isAdvancedEngineEnabled();
+      let inventory = await this.wallpaperService.getInventory({
+        advancedEngineEnabled
+      });
+      if (this.appearanceStore?.isLegacyAdvancedEngineMigrationPending()) {
+        const selectedId = this.appearanceStore.get().config.wallpaper.selectedId;
+        const matched = selectedId
+          ? inventory.items.find(
+              (item) =>
+                item.id === selectedId || `steam:${item.id}` === selectedId
+            )
+          : undefined;
+        const migratedToTrue =
+          this.appearanceStore.resolveLegacyAdvancedEngineMigration(
+            matched?.type ?? null
+          );
+        if (migratedToTrue) {
+          inventory = await this.wallpaperService.rescan({
+            advancedEngineEnabled: true
+          });
+        }
+      }
       writeJsonResponse(res, 200, inventory);
       return true;
     }
@@ -1237,6 +1260,13 @@ export class DaemonRpcServer {
         if (typeof rawBody["steamRootOverride"] === "string") {
           rescanReq.steamRootOverride = rawBody["steamRootOverride"];
         }
+        if (typeof rawBody["advancedEngineEnabled"] === "boolean") {
+          rescanReq.advancedEngineEnabled = rawBody["advancedEngineEnabled"];
+        }
+      }
+      if (rescanReq.advancedEngineEnabled === undefined && this.appearanceStore) {
+        rescanReq.advancedEngineEnabled =
+          this.appearanceStore.get().config.wallpaper.advancedEngineEnabled;
       }
       const inventory = await this.wallpaperService.rescan(rescanReq);
       this.diagnosticsService?.clearCache();
@@ -1362,7 +1392,13 @@ export class DaemonRpcServer {
         });
         return true;
       }
-      if (await this.wallpaperService.isWebWallpaperId(parsed.rawId)) {
+      const advancedEngineEnabled = this.appearanceStore
+        ? this.appearanceStore.get().config.wallpaper.advancedEngineEnabled
+        : this.wallpaperService.isAdvancedEngineEnabled();
+      if (
+        advancedEngineEnabled &&
+        (await this.wallpaperService.isWebWallpaperId(parsed.rawId))
+      ) {
         this.lastWebWallpaperIdByToken.set(parsed.token, parsed.rawId);
       }
       const refererWallpaperId =
@@ -1374,7 +1410,7 @@ export class DaemonRpcServer {
         parsed.relPath,
         req,
         res,
-        { refererWallpaperId }
+        { refererWallpaperId, advancedEngineEnabled }
       );
       return true;
     }
@@ -1413,11 +1449,15 @@ export class DaemonRpcServer {
         });
         return true;
       }
+      const advancedEngineEnabled = this.appearanceStore
+        ? this.appearanceStore.get().config.wallpaper.advancedEngineEnabled
+        : this.wallpaperService.isAdvancedEngineEnabled();
       await this.wallpaperService.serveSceneAsset(
         parsed.rawId,
         parsed.relPath,
         req,
-        res
+        res,
+        { advancedEngineEnabled }
       );
       return true;
     }
@@ -1457,7 +1497,12 @@ export class DaemonRpcServer {
         });
         return true;
       }
-      await this.wallpaperService.serveSceneAsset(rawId, relPath, req, res);
+      const advancedEngineEnabled = this.appearanceStore
+        ? this.appearanceStore.get().config.wallpaper.advancedEngineEnabled
+        : this.wallpaperService.isAdvancedEngineEnabled();
+      await this.wallpaperService.serveSceneAsset(rawId, relPath, req, res, {
+        advancedEngineEnabled
+      });
       return true;
     }
 
@@ -1498,7 +1543,12 @@ export class DaemonRpcServer {
         });
         return true;
       }
-      await this.wallpaperService.serveWebAsset(rawId, relPath, req, res);
+      const advancedEngineEnabled = this.appearanceStore
+        ? this.appearanceStore.get().config.wallpaper.advancedEngineEnabled
+        : this.wallpaperService.isAdvancedEngineEnabled();
+      await this.wallpaperService.serveWebAsset(rawId, relPath, req, res, {
+        advancedEngineEnabled
+      });
       return true;
     }
 
@@ -1554,16 +1604,26 @@ export class DaemonRpcServer {
           "Appearance payload must be a JSON object."
         );
       }
+      const prevWallpaper = this.appearanceStore.get().config.wallpaper;
       const updated = this.appearanceStore.update(rawBody);
+      const nextWallpaper = updated.wallpaper;
+      const customDirsChanged =
+        prevWallpaper.customDirs.length !== nextWallpaper.customDirs.length ||
+        prevWallpaper.customDirs.some(
+          (dir, idx) => dir !== nextWallpaper.customDirs[idx]
+        );
+      const steamRootChanged =
+        prevWallpaper.steamRootOverride !== nextWallpaper.steamRootOverride;
+      const advancedEngineChanged =
+        prevWallpaper.advancedEngineEnabled !== nextWallpaper.advancedEngineEnabled;
       if (
         this.wallpaperService &&
-        (isRecord(rawBody["wallpaper"]) ||
-          "customDirs" in rawBody ||
-          "steamRootOverride" in rawBody)
+        (customDirsChanged || steamRootChanged || advancedEngineChanged)
       ) {
         await this.wallpaperService.rescan({
-          customDirs: updated.wallpaper.customDirs,
-          steamRootOverride: updated.wallpaper.steamRootOverride
+          customDirs: nextWallpaper.customDirs,
+          steamRootOverride: nextWallpaper.steamRootOverride,
+          advancedEngineEnabled: nextWallpaper.advancedEngineEnabled
         });
       }
       writeJsonResponse(res, 200, { ok: true, ...updated });

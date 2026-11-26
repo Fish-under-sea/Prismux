@@ -105,6 +105,7 @@ export type WallpaperOrientationFilter = "all" | "landscape" | "portrait";
 
 export interface PersistedWallpaperState {
   selectedId: string | null;
+  selectedWallpaperType?: PersistedWallpaperType | null;
   playing: boolean;
   videoAudioEnabled: boolean;
   videoVolume: number;
@@ -123,6 +124,7 @@ export interface PersistedWallpaperState {
   backgroundContrast: number;
   backgroundSaturate: number;
   switchTransition: WallpaperSwitchTransition;
+  advancedEngineEnabled: boolean;
   sceneLive: boolean;
   liveBootDelay: WallpaperLiveBootDelay;
   sceneLiveFps: 15 | 30 | 60;
@@ -335,6 +337,44 @@ const VALID_WALLPAPER_TYPES = new Set<PersistedWallpaperType>([
   "image"
 ]);
 
+function normalizeSelectedWallpaperType(
+  value: unknown,
+  fallback: PersistedWallpaperType | null | undefined
+): PersistedWallpaperType | null | undefined {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value === "string") {
+    const lower = value.trim().toLowerCase();
+    if (VALID_WALLPAPER_TYPES.has(lower as PersistedWallpaperType)) {
+      return lower as PersistedWallpaperType;
+    }
+  }
+  return fallback;
+}
+
+function isLegacyBuiltinId(id: string | null | undefined): boolean {
+  if (typeof id !== "string") {
+    return false;
+  }
+  const lower = id.trim().toLowerCase();
+  return lower.startsWith("builtin:") || lower.startsWith("builtin-");
+}
+
+function isCustomLocalWallpaperId(id: string | null | undefined): boolean {
+  if (typeof id !== "string") {
+    return false;
+  }
+  const lower = id.trim().toLowerCase();
+  return lower.startsWith("custom-") || lower.startsWith("custom:");
+}
+
+function isAdvancedWallpaperType(
+  type: PersistedWallpaperType | null | undefined
+): boolean {
+  return type === "web" || type === "scene";
+}
+
 function normalizeEnumArray<T extends string>(
   value: unknown,
   allowed: ReadonlySet<T>,
@@ -473,6 +513,7 @@ export function createDefaultAppearanceConfig(): PersistedAppearanceConfig {
       backgroundContrast: 100,
       backgroundSaturate: 100,
       switchTransition: "fade",
+      advancedEngineEnabled: false,
       sceneLive: true,
       liveBootDelay: 3,
       sceneLiveFps: 30,
@@ -721,6 +762,12 @@ export function mergeAppearanceConfig(
   if ("customWallpaperDir" in rawPatch && !("customWallpaperDir" in wallpaperPatch)) {
     wallpaperPatch["customWallpaperDir"] = rawPatch["customWallpaperDir"];
   }
+  if ("advancedEngineEnabled" in rawPatch && !("advancedEngineEnabled" in wallpaperPatch)) {
+    wallpaperPatch["advancedEngineEnabled"] = rawPatch["advancedEngineEnabled"];
+  }
+  if ("selectedWallpaperType" in rawPatch && !("selectedWallpaperType" in wallpaperPatch)) {
+    wallpaperPatch["selectedWallpaperType"] = rawPatch["selectedWallpaperType"];
+  }
 
   const nextSelectedId =
     wallpaperPatch["selectedId"] === null
@@ -728,6 +775,16 @@ export function mergeAppearanceConfig(
       : typeof wallpaperPatch["selectedId"] === "string"
         ? wallpaperPatch["selectedId"].trim() || null
         : base.wallpaper.selectedId;
+
+  const nextSelectedWallpaperType =
+    "selectedWallpaperType" in wallpaperPatch
+      ? normalizeSelectedWallpaperType(
+          wallpaperPatch["selectedWallpaperType"],
+          base.wallpaper.selectedWallpaperType
+        )
+      : nextSelectedId === null
+        ? null
+        : base.wallpaper.selectedWallpaperType;
 
   const fontWeightRaw = typoRaw["fontWeight"];
   const nextFontWeight =
@@ -910,6 +967,9 @@ export function mergeAppearanceConfig(
     },
     wallpaper: {
       selectedId: nextSelectedId,
+      ...(nextSelectedWallpaperType !== undefined
+        ? { selectedWallpaperType: nextSelectedWallpaperType }
+        : {}),
       playing: readBoolean(wallpaperPatch["playing"], base.wallpaper.playing),
       videoAudioEnabled: readBoolean(
         wallpaperPatch["videoAudioEnabled"],
@@ -984,6 +1044,10 @@ export function mergeAppearanceConfig(
       switchTransition: normalizeSwitchTransition(
         wallpaperPatch["switchTransition"],
         base.wallpaper.switchTransition
+      ),
+      advancedEngineEnabled: readBoolean(
+        wallpaperPatch["advancedEngineEnabled"],
+        base.wallpaper.advancedEngineEnabled
       ),
       sceneLive: readBoolean(
         wallpaperPatch["sceneLive"],
@@ -1121,9 +1185,58 @@ export class AppearanceConfigStore {
   readonly filePath: string;
   private cached: PersistedAppearanceConfig | null = null;
   private recoveredAtLoad = false;
+  private legacyAdvancedEnginePending = false;
 
   constructor(options: AppearanceConfigStoreOptions) {
     this.filePath = NodePath.join(NodePath.resolve(options.dataDir), "appearance.json");
+  }
+
+  isLegacyAdvancedEngineMigrationPending(): boolean {
+    if (this.cached === null) {
+      this.get();
+    }
+    return this.legacyAdvancedEnginePending;
+  }
+
+  /**
+   * Completes deferred legacy upgrade migration once the selected wallpaper's true type
+   * is resolved from the wallpaper catalog. Returns `true` if `advancedEngineEnabled`
+   * was auto-migrated from `false` to `true`.
+   */
+  resolveLegacyAdvancedEngineMigration(
+    selectedType: PersistedWallpaperType | null
+  ): boolean {
+    if (this.cached === null) {
+      this.get();
+    }
+    if (!this.legacyAdvancedEnginePending || this.cached === null) {
+      return false;
+    }
+    this.legacyAdvancedEnginePending = false;
+    if (isAdvancedWallpaperType(selectedType)) {
+      const migrated: PersistedAppearanceConfig = {
+        ...this.cached,
+        updatedAt: Date.now(),
+        wallpaper: {
+          ...this.cached.wallpaper,
+          advancedEngineEnabled: true,
+          selectedWallpaperType: selectedType
+        }
+      };
+      writeJsonAtomic(this.filePath, migrated);
+      this.cached = migrated;
+      return true;
+    }
+    if (selectedType !== null) {
+      this.cached = {
+        ...this.cached,
+        wallpaper: {
+          ...this.cached.wallpaper,
+          selectedWallpaperType: selectedType
+        }
+      };
+    }
+    return false;
   }
 
   get(): AppearanceLoadResult {
@@ -1137,6 +1250,7 @@ export class AppearanceConfigStore {
       const defaults = createDefaultAppearanceConfig();
       this.cached = defaults;
       this.recoveredAtLoad = false;
+      this.legacyAdvancedEnginePending = false;
       return { config: defaults, recoveredFromCorruption: false };
     }
 
@@ -1150,6 +1264,37 @@ export class AppearanceConfigStore {
         createDefaultAppearanceConfig(),
         parsed
       );
+
+      // Smooth upgrade migration: if legacy config has NO explicit `advancedEngineEnabled` field
+      // yet AND has an active `web`/`scene` wallpaper, auto-migrate `advancedEngineEnabled = true`
+      // so existing users do not lose their active wallpaper.
+      const rawWallpaper = isPlainRecord(parsed["wallpaper"]) ? parsed["wallpaper"] : {};
+      const hasExplicitAdvancedEngine =
+        typeof rawWallpaper["advancedEngineEnabled"] === "boolean" ||
+        typeof parsed["advancedEngineEnabled"] === "boolean";
+      this.legacyAdvancedEnginePending = false;
+
+      if (!hasExplicitAdvancedEngine) {
+        const selectedId = normalized.wallpaper.selectedId;
+        const selectedType = normalized.wallpaper.selectedWallpaperType ?? null;
+        if (
+          selectedId &&
+          !isLegacyBuiltinId(selectedId) &&
+          !isCustomLocalWallpaperId(selectedId)
+        ) {
+          if (
+            isAdvancedWallpaperType(selectedType) ||
+            /^(?:web|scene):/i.test(selectedId)
+          ) {
+            normalized.wallpaper.advancedEngineEnabled = true;
+            writeJsonAtomic(this.filePath, normalized);
+          } else if (selectedType === null) {
+            // Defer exact type lookup until WallpaperMediaService reads lightweight project.json
+            this.legacyAdvancedEnginePending = true;
+          }
+        }
+      }
+
       this.cached = normalized;
       this.recoveredAtLoad = false;
       return { config: normalized, recoveredFromCorruption: false };
@@ -1167,12 +1312,20 @@ export class AppearanceConfigStore {
       writeJsonAtomic(this.filePath, defaults);
       this.cached = defaults;
       this.recoveredAtLoad = true;
+      this.legacyAdvancedEnginePending = false;
       return { config: defaults, recoveredFromCorruption: true };
     }
   }
 
   update(patch: Record<string, unknown>): PersistedAppearanceConfig {
     const current = this.get().config;
+    const rawWallpaper = isPlainRecord(patch["wallpaper"]) ? patch["wallpaper"] : {};
+    if (
+      typeof rawWallpaper["advancedEngineEnabled"] === "boolean" ||
+      typeof patch["advancedEngineEnabled"] === "boolean"
+    ) {
+      this.legacyAdvancedEnginePending = false;
+    }
     const next = mergeAppearanceConfig(current, patch);
     writeJsonAtomic(this.filePath, next);
     this.cached = next;
