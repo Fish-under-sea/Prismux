@@ -1,6 +1,10 @@
 import { scopeThreadRef, scopedThreadKey } from "@prismux/client-runtime/environment";
 import { threadRuntimeCanArchive } from "@prismux/client-runtime/state/models";
-import type { ContextMenuSource, ScopedThreadRef } from "@prismux/core-contracts";
+import {
+  ProviderDriverKind,
+  type ContextMenuSource,
+  type ScopedThreadRef,
+} from "@prismux/core-contracts";
 import { useGT, T } from "gt-react";
 import {
   ArchiveIcon,
@@ -22,8 +26,15 @@ import {
 import { cn } from "~/lib/utils";
 import { textDirection } from "~/textDirection";
 import { contextMenuSourceOf } from "../../contextMenuSource";
-import { AgentBrandLogo } from "../../prismux/agentBrand";
+import {
+  acpBrandKeyToAgentBrandId,
+  inferAgentBrandFromModel,
+  resolveAcpAgentBrandKey,
+  resolveAgentBrandId,
+  type AgentBrandId,
+} from "../../prismux/agentBrand";
 import type { SidebarThreadSummary } from "../../types";
+import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import {
   hasUnseenCompletion,
   resolveSidebarRowStatus,
@@ -270,6 +281,94 @@ function DelegatedChildStatusIcon(props: {
   );
 }
 
+const GENERIC_ACP_IDENTIFIER_RE = /^(?:acp[-_]?registry|acp)$/i;
+
+export interface DelegatedChildProviderPresentation {
+  readonly brandId: AgentBrandId;
+  readonly driverKind: ProviderDriverKind;
+  readonly displayName: string;
+  readonly instanceId: string;
+  readonly accentColor?: string | undefined;
+  readonly acpRegistryAgentId?: string | undefined;
+  readonly acpRegistryIconUrl?: string | undefined;
+  readonly acpCommandPath?: string | undefined;
+  readonly model?: string | undefined;
+}
+
+export function resolveDelegatedChildProviderPresentation(input: {
+  readonly providerEntry: SidebarProviderEntry | null;
+  readonly modelInstanceId: string;
+  readonly runtimeProviderName?: string | null | undefined;
+  readonly modelSlug?: string | null | undefined;
+  readonly selectedModelName?: string | null | undefined;
+}): DelegatedChildProviderPresentation {
+  const { providerEntry, modelInstanceId, runtimeProviderName, modelSlug, selectedModelName } =
+    input;
+  const trimmedInstanceId = modelInstanceId.trim();
+  const trimmedRuntimeName = runtimeProviderName?.trim() || "";
+  const trimmedModelSlug = modelSlug?.trim() || "";
+  const trimmedSelectedModelName = selectedModelName?.trim() || "";
+  const slugBrand = inferAgentBrandFromModel(trimmedModelSlug);
+  const selectedNameBrand =
+    slugBrand !== null ? null : inferAgentBrandFromModel(trimmedSelectedModelName);
+  const inferredModelBrand = slugBrand ?? selectedNameBrand;
+  const modelForInference =
+    (slugBrand !== null
+      ? trimmedModelSlug
+      : selectedNameBrand !== null
+        ? trimmedSelectedModelName
+        : trimmedModelSlug || trimmedSelectedModelName) || undefined;
+
+  const driverKind =
+    providerEntry?.driverKind ??
+    (/^acp[-_]?registry/i.test(trimmedInstanceId) || trimmedInstanceId.length === 0
+      ? ProviderDriverKind.make("acpRegistry")
+      : ProviderDriverKind.make(trimmedInstanceId));
+
+  const displayName =
+    providerEntry?.displayName?.trim() ||
+    trimmedRuntimeName ||
+    (!GENERIC_ACP_IDENTIFIER_RE.test(trimmedInstanceId) ? trimmedInstanceId : "");
+
+  const directDriverBrand = providerEntry
+    ? resolveAgentBrandId(providerEntry.driverKind)
+    : "custom";
+  const acpBrandKey = resolveAcpAgentBrandKey({
+    agentId: providerEntry?.acpRegistryAgentId,
+    commandPath: providerEntry?.acpCommandPath,
+    instanceId: providerEntry?.instanceId ?? trimmedInstanceId,
+    displayName: providerEntry?.displayName ?? trimmedRuntimeName,
+  });
+  const directInstanceBrand = resolveAgentBrandId(trimmedInstanceId);
+
+  let brandId: AgentBrandId;
+  if (directDriverBrand !== "acp" && directDriverBrand !== "custom") {
+    brandId = directDriverBrand;
+  } else if (acpBrandKey !== null) {
+    brandId = acpBrandKeyToAgentBrandId(acpBrandKey);
+  } else if (directInstanceBrand !== "acp" && directInstanceBrand !== "custom") {
+    brandId = directInstanceBrand;
+  } else if (inferredModelBrand !== null) {
+    brandId = inferredModelBrand;
+  } else if (driverKind === "acpRegistry" || driverKind === "acp") {
+    brandId = "acp";
+  } else {
+    brandId = "custom";
+  }
+
+  return {
+    brandId,
+    driverKind,
+    displayName,
+    instanceId: providerEntry?.instanceId ?? trimmedInstanceId,
+    accentColor: providerEntry?.accentColor,
+    acpRegistryAgentId: providerEntry?.acpRegistryAgentId,
+    acpRegistryIconUrl: providerEntry?.acpRegistryIconUrl,
+    acpCommandPath: providerEntry?.acpCommandPath,
+    model: modelForInference,
+  };
+}
+
 export const DelegatedSubthreadTree = memo(function DelegatedSubthreadTree(
   props: DelegatedSubthreadTreeProps,
 ) {
@@ -347,8 +446,13 @@ export const DelegatedSubthreadTree = memo(function DelegatedSubthreadTree(
           selectedModel,
           driverKind: providerEntry?.driverKind,
         });
-        const brandProvider =
-          providerEntry?.acpRegistryAgentId ?? providerEntry?.driverKind ?? modelInstanceId;
+        const providerPresentation = resolveDelegatedChildProviderPresentation({
+          providerEntry,
+          modelInstanceId,
+          runtimeProviderName: child.runtime?.providerName,
+          modelSlug: child.modelSelection.model,
+          selectedModelName: selectedModel?.name,
+        });
 
         const canArchive =
           canOperateEnvironment &&
@@ -419,12 +523,23 @@ export const DelegatedSubthreadTree = memo(function DelegatedSubthreadTree(
                 isUnread={isUnread}
                 hasRun={child.latestRun !== null}
               />
-              <span aria-hidden className="inline-flex size-4 shrink-0 items-center justify-center">
-                <AgentBrandLogo
-                  provider={brandProvider}
-                  online={isChildActive}
-                  breathing={isChildActive}
-                  size={13}
+              <span
+                aria-hidden
+                data-agent-brand={providerPresentation.brandId}
+                data-agent-logo-breathing={isChildActive ? "1" : "0"}
+                className="inline-flex size-4 shrink-0 items-center justify-center"
+              >
+                <ProviderInstanceIcon
+                  driverKind={providerPresentation.driverKind}
+                  displayName={providerPresentation.displayName}
+                  instanceId={providerPresentation.instanceId}
+                  accentColor={providerPresentation.accentColor}
+                  acpRegistryAgentId={providerPresentation.acpRegistryAgentId}
+                  acpRegistryIconUrl={providerPresentation.acpRegistryIconUrl}
+                  acpCommandPath={providerPresentation.acpCommandPath}
+                  model={providerPresentation.model}
+                  size="compact"
+                  iconClassName="size-3.5 opacity-92 text-sidebar-foreground/90"
                 />
               </span>
               <span

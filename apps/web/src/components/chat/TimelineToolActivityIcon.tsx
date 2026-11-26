@@ -3,7 +3,7 @@ import { type ToolActivityIcon } from "@prismux/core-contracts";
 import { toolActivityFaviconUrl } from "@prismux/core-shared/favicon";
 import { getProjectFaviconCacheKey } from "@prismux/core-shared/projectFavicon";
 import { use, useState } from "react";
-import { T3Wordmark } from "../T3Wordmark";
+import { PrismuxWordmark } from "../PrismuxWordmark";
 import {
   BotIcon,
   BrainIcon,
@@ -31,6 +31,13 @@ export const failedToolIconClassName = "text-tool-error-icon/40";
 
 export function toolIconAcceptsTint(toolIcon: ToolActivityIcon | undefined): boolean {
   return toolIcon === undefined;
+}
+
+export function isWideToolActivityIcon(
+  toolIcon: ToolActivityIcon | undefined,
+  fallbackName: WorkEntryIconName | undefined,
+): boolean {
+  return toolIcon === undefined && fallbackName === "t3-code";
 }
 
 export type WorkEntryIconName =
@@ -245,7 +252,7 @@ function WorkEntryIcon({ name, className }: { name: WorkEntryIconName; className
     case "device":
       return <SmartphoneIcon className={className} aria-hidden />;
     case "t3-code":
-      return <T3Wordmark className={className} aria-hidden />;
+      return <PrismuxWordmark className={className} aria-hidden />;
     case "check":
       return <CheckIcon className={className} aria-hidden />;
     case "list-todo":

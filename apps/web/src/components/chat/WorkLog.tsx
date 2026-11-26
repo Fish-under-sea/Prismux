@@ -46,6 +46,7 @@ export function WorkLogList({ children }: { children: ReactNode }) {
 
 type RowContent = {
   icon?: ReactNode;
+  wideIcon?: boolean | undefined;
   label: ReactNode;
   trailing?: ReactNode;
   wrapLabel?: boolean;
@@ -56,7 +57,14 @@ const focusRingClassName =
 
 type LineProps = Omit<ComponentProps<"div">, "className" | "style" | "children">;
 
-function WorkLogLine({ icon, label, trailing, wrapLabel, ...lineProps }: RowContent & LineProps) {
+function WorkLogLine({
+  icon,
+  wideIcon = false,
+  label,
+  trailing,
+  wrapLabel,
+  ...lineProps
+}: RowContent & LineProps) {
   return (
     <div
       {...lineProps}
@@ -66,13 +74,24 @@ function WorkLogLine({ icon, label, trailing, wrapLabel, ...lineProps }: RowCont
         lineProps.role === "button" && focusRingClassName,
       )}
     >
-      <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
+      <div
+        className={cn(
+          "flex min-w-0 flex-1 gap-1.5",
+          wideIcon && !wrapLabel ? "items-center" : "items-baseline",
+        )}
+      >
         {icon ? (
-          <span className="relative w-6 shrink-0 leading-0">
-            <span className="inline-block size-6 overflow-hidden align-[calc(0.5cap_-_0.75rem)]">
-              <span className="flex size-full items-center justify-center">{icon}</span>
+          wideIcon ? (
+            <span className="relative inline-flex h-6 shrink-0 items-center leading-none">
+              {icon}
             </span>
-          </span>
+          ) : (
+            <span className="relative w-6 shrink-0 leading-0">
+              <span className="inline-block size-6 overflow-hidden align-[calc(0.5cap_-_0.75rem)]">
+                <span className="flex size-full items-center justify-center">{icon}</span>
+              </span>
+            </span>
+          )
         ) : null}
         <div
           className={cn(
@@ -100,6 +119,7 @@ function useRowClassName(interactive: boolean, focusable = interactive) {
 
 export function WorkLogButton({
   icon,
+  wideIcon,
   label,
   trailing,
   wrapLabel = false,
@@ -108,7 +128,13 @@ export function WorkLogButton({
   const className = useRowClassName(true);
   return (
     <button {...buttonProps} type="button" className={className}>
-      <WorkLogLine icon={icon} label={label} trailing={trailing} wrapLabel={wrapLabel} />
+      <WorkLogLine
+        icon={icon}
+        wideIcon={wideIcon}
+        label={label}
+        trailing={trailing}
+        wrapLabel={wrapLabel}
+      />
     </button>
   );
 }
@@ -123,6 +149,7 @@ type RowProps = Omit<ComponentProps<"div">, "className" | "style"> & {
  */
 export function WorkLogRow({
   icon,
+  wideIcon,
   label,
   trailing,
   wrapLabel = false,
@@ -138,6 +165,7 @@ export function WorkLogRow({
         aria-controls={toggle ? detailsId : undefined}
         {...toggle}
         icon={icon}
+        wideIcon={wideIcon}
         label={label}
         trailing={trailing}
         wrapLabel={wrapLabel}

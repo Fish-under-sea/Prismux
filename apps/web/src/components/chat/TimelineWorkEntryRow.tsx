@@ -120,6 +120,7 @@ import {
 } from "./timelineRowContext";
 import { MESSAGE_HEADING_LEVEL, TimelineRowTimestamp } from "./TimelineRowParts";
 import {
+  isWideToolActivityIcon,
   toolIconAcceptsTint,
   ToolActivityIconView,
 } from "./TimelineToolActivityIcon";
@@ -237,6 +238,7 @@ export function DshDisclosureLeadingSlot({
   role,
   ariaLabel,
   liveDot = false,
+  wideIcon = false,
 }: {
   readonly icon: ReactNode;
   readonly expandable: boolean;
@@ -246,6 +248,7 @@ export function DshDisclosureLeadingSlot({
   readonly role?: "img" | undefined;
   readonly ariaLabel?: string | undefined;
   readonly liveDot?: boolean | undefined;
+  readonly wideIcon?: boolean | undefined;
 }) {
   const hideOnHoverFocus =
     groupScope === "live-work"
@@ -263,8 +266,10 @@ export function DshDisclosureLeadingSlot({
   return (
     <span
       data-disclosure-leading="true"
+      data-disclosure-wide-icon={wideIcon ? "true" : undefined}
       className={cn(
-        "relative inline-flex size-4 shrink-0 items-center justify-center",
+        "relative inline-flex shrink-0 items-center justify-center",
+        wideIcon ? "h-4 w-auto" : "size-4",
         iconClassName,
       )}
       role={role}
@@ -276,7 +281,8 @@ export function DshDisclosureLeadingSlot({
             <span
               data-disclosure-icon-idle="true"
               className={cn(
-                "inline-flex size-4 items-center justify-center opacity-100 transition-opacity duration-200 ease-out motion-reduce:transition-none",
+                "inline-flex items-center justify-center opacity-100 transition-opacity duration-200 ease-out motion-reduce:transition-none",
+                wideIcon ? "h-4 w-auto" : "size-4",
                 hideOnHoverFocus,
               )}
             >
@@ -303,7 +309,14 @@ export function DshDisclosureLeadingSlot({
           </span>
         </>
       ) : (
-        <span className="inline-flex size-4 items-center justify-center">{icon}</span>
+        <span
+          className={cn(
+            "inline-flex items-center justify-center",
+            wideIcon ? "h-4 w-auto" : "size-4",
+          )}
+        >
+          {icon}
+        </span>
       )}
       {liveDot && !expanded ? (
         <span
@@ -529,12 +542,7 @@ function ExpandableCodeBlock({
 
   return (
     <div className="space-y-1.5">
-      <pre
-        className={cn(
-          "max-h-56 overflow-auto text-foreground/90",
-          STEP_MONO_CLASS,
-        )}
-      >
+      <pre className={cn("max-h-56 overflow-auto text-foreground/90", STEP_MONO_CLASS)}>
         {activeLanguage ? (
           <RenderErrorBoundary fallback={visibleText}>
             <Suspense fallback={visibleText}>
@@ -706,10 +714,7 @@ function DshReasoningWorkEntryRow({
             ref={labelRef}
             className="flex min-w-0 flex-1 items-center overflow-hidden text-xs leading-6"
           >
-            <span
-              data-reasoning-title="true"
-              className="shrink-0 font-medium text-primary"
-            >
+            <span data-reasoning-title="true" className="shrink-0 font-medium text-primary">
               {reasoningTitleLabel}
             </span>
             {!expanded && reasoningSummaryLine ? (
@@ -1153,9 +1158,7 @@ function FileChangeDetailCard({
                 >
                   {line.kind === "hunk" ? "" : line.prefix}
                 </span>
-                <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">
-                  {line.text}
-                </span>
+                <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">{line.text}</span>
               </div>
             ))}
           </div>
@@ -1343,10 +1346,10 @@ function FrostedV2StepInspector({
     const hasInputSection = Boolean(call.args || call.argsText);
     const hasOutputSection = Boolean(
       detail.outputImages.length > 0 ||
-        detail.outputText ||
-        detail.pending ||
-        detail.error ||
-        detail.empty,
+      detail.outputText ||
+      detail.pending ||
+      detail.error ||
+      detail.empty,
     );
     return (
       <div
@@ -1555,11 +1558,7 @@ function FrostedReadOutputCard({
           <pre className={cn("min-w-0 flex-1 text-foreground/90", STEP_MONO_CLASS)}>
             {plainOutput}
           </pre>
-          <StepCopyButton
-            text={plainOutput}
-            label={copy.copyPath}
-            copiedLabel={copy.copied}
-          />
+          <StepCopyButton text={plainOutput} label={copy.copyPath} copiedLabel={copy.copied} />
         </div>
       ) : null}
       {plainOutputFetches && projectedItem ? (
@@ -1687,8 +1686,8 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
   const isReasoning = workEntry.itemType === "reasoning" || workEntry.tone === "thinking";
   const shouldAutoExpand = Boolean(
     autoExpandDetails ||
-      ctx.workStepsPolicy?.defaultExpandLongItems ||
-      (autoExpandReasoning && isReasoning),
+    ctx.workStepsPolicy?.defaultExpandLongItems ||
+    (autoExpandReasoning && isReasoning),
   );
   const defaultExpanded =
     (groupView?.state.expandedEntries.has(workEntry.id) ?? false) || shouldAutoExpand;
@@ -2025,8 +2024,10 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
               extractTodoChecklistFromTurnItem(workEntry.projectedItem.item) !== null,
             ));
 
+  const isWideEntryIcon = isWideToolActivityIcon(entryToolIcon, entryIconName);
   const iconWrapperClass = cn(
-    "relative flex size-4 items-center justify-center",
+    "relative flex items-center justify-center",
+    isWideEntryIcon ? "h-4 w-auto" : "size-4",
     showWarningIndicator
       ? "text-warning"
       : showDestructiveRowStyle || showFailedIndicator || workEntry.tone === "error"
@@ -2076,9 +2077,9 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
 
   const hasHeaderAccessory = Boolean(
     (isFileChangeEntry && fileChangePayload && workEntry.projectedItem && ctx.onOpenToolDiff) ||
-      createdThread ||
-      notifiedSubagentThreadId ||
-      (showFailedIndicator && !showDestructiveRowStyle && !toolIconAcceptsTint(entryToolIcon)),
+    createdThread ||
+    notifiedSubagentThreadId ||
+    (showFailedIndicator && !showDestructiveRowStyle && !toolIconAcceptsTint(entryToolIcon)),
   );
 
   return (
@@ -2126,6 +2127,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
             role={showFailedIndicator ? "img" : undefined}
             ariaLabel={showFailedIndicator ? gt("Tool call failed") : undefined}
             liveDot={isRunning}
+            wideIcon={isWideEntryIcon}
           />
           <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
             {isCommandEntry && strippedCommand ? (
@@ -2444,11 +2446,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
                 )}
               />
             ) : todoFallbackSnapshot ? (
-              <AgyTodoChecklist
-                variant="inline"
-                snapshot={todoFallbackSnapshot}
-                defaultOpen
-              />
+              <AgyTodoChecklist variant="inline" snapshot={todoFallbackSnapshot} defaultOpen />
             ) : isCommandEntry && rawCommandText ? (
               <CommandExecutionDetailCard
                 rawCommand={rawCommandText}

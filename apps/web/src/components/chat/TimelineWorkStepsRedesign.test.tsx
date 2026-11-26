@@ -95,6 +95,8 @@ vi.mock("./CommandOutputPanel", () => ({
 
 vi.mock("./TimelineToolActivityIcon", () => ({
   failedToolIconClassName: "text-destructive",
+  isWideToolActivityIcon: (icon: unknown, fallbackName: string | undefined) =>
+    icon === undefined && fallbackName === "t3-code",
   toolIconAcceptsTint: () => true,
   ToolActivityIconView: ({ fallbackName, muted }: { fallbackName: string; muted?: boolean }) => (
     <span data-mock-tool-icon={fallbackName} data-mock-tool-muted={String(Boolean(muted))} />
@@ -245,7 +247,7 @@ describe("1:1 DSH NEXT Thinking & Command/Tool hierarchy & disclosure guarantees
       tone: "tool",
       itemType: "command_execution",
       toolLifecycleStatus: "inProgress",
-      command: '"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe" -Command \'pwd; ls -Name\'',
+      command: "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'pwd; ls -Name'",
     };
     const row: Extract<TimelineRow, { kind: "work-live" }> = {
       kind: "work-live",
@@ -273,7 +275,8 @@ describe("1:1 DSH NEXT Thinking & Command/Tool hierarchy & disclosure guarantees
   });
 
   it("renders command execution with leading hover-swap chevron, clean header without timestamp noise, and 0.5px-bordered terminal card on expand", () => {
-    const rawCmd = '"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe" -Command \'pwd; ls -Name\'';
+    const rawCmd =
+      "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'pwd; ls -Name'";
     const item: OrchestrationV2ProjectedTurnItem["item"] = {
       ...makeProjectedBase("cmd-1", "2026-11-25T08:49:00.000Z", "2026-11-25T08:49:00.142Z"),
       type: "command_execution",
@@ -530,9 +533,13 @@ describe("1:1 DSH NEXT Thinking & Command/Tool hierarchy & disclosure guarantees
     expect(collapsedHtml).toContain('data-disclosure-icon-idle="true"');
     expect(collapsedHtml).toContain('data-mock-tool-icon="brain" data-mock-tool-muted="false"');
     expect(collapsedHtml).toContain('data-disclosure-state="closed"');
-    expect(collapsedHtml).toMatch(/data-reasoning-title="true"[^>]*font-medium text-primary[^>]*>思考了 5\.1s</);
+    expect(collapsedHtml).toMatch(
+      /data-reasoning-title="true"[^>]*font-medium text-primary[^>]*>思考了 5\.1s</,
+    );
     expect(collapsedHtml).toContain('data-reasoning-separator="true"');
-    expect(collapsedHtml).toMatch(/data-reasoning-summary-preview="true"[^>]*text-muted-foreground\/80/);
+    expect(collapsedHtml).toMatch(
+      /data-reasoning-summary-preview="true"[^>]*text-muted-foreground\/80/,
+    );
     expect(collapsedHtml).toContain("User wants me to think and inspect pwsh");
     expect(collapsedHtml).not.toContain("**User");
     expect(collapsedHtml).not.toContain('data-reasoning-body="true"');
@@ -553,7 +560,9 @@ describe("1:1 DSH NEXT Thinking & Command/Tool hierarchy & disclosure guarantees
       </TimelineRowCtx>,
     );
     expect(streamingHtml).toMatch(/data-disclosure-leading="true"[^>]*text-primary/);
-    expect(streamingHtml).toMatch(/data-reasoning-title="true"[^>]*font-medium text-primary[^>]*>正在思考/);
+    expect(streamingHtml).toMatch(
+      /data-reasoning-title="true"[^>]*font-medium text-primary[^>]*>正在思考/,
+    );
     expect(streamingHtml).toContain('data-streaming="true"');
     expect(streamingHtml).toContain("Second step streaming");
     expect(streamingHtml).toContain("linear-gradient(to_right,black_calc(100%-48px),transparent)");

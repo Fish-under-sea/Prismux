@@ -3,7 +3,14 @@ import {
   providerInstanceInitials,
   stripUuidNoise,
 } from "@prismux/client-runtime/state/provider-instance-display";
-import { createElement, memo, useEffect, useId, type CSSProperties, type ReactElement } from "react";
+import {
+  createElement,
+  memo,
+  useEffect,
+  useId,
+  type CSSProperties,
+  type ReactElement,
+} from "react";
 
 export { containsUuidNoise, stripUuidNoise };
 
@@ -589,11 +596,7 @@ function matchSpecificAgentBrand(
     if (key.startsWith("claude") || tokenSet.has("claude")) {
       return "claude-code";
     }
-    if (
-      key.startsWith("antigravity") ||
-      tokenSet.has("antigravity") ||
-      tokenSet.has("agy")
-    ) {
+    if (key.startsWith("antigravity") || tokenSet.has("antigravity") || tokenSet.has("agy")) {
       return "antigravity";
     }
     if (key.startsWith("gemini") || tokenSet.has("gemini")) {
@@ -712,6 +715,73 @@ function matchSpecificAgentBrand(
   return null;
 }
 
+/**
+ * Fallback brand inference from a model slug (e.g. `"DeepSeek-V4.1-Flash"` -> `"dsh"`).
+ * Use only when no authoritative provider or ACP agent brand matched.
+ */
+export function inferAgentBrandFromModel(
+  modelSlugOrName: string | null | undefined,
+): Exclude<AgentBrandId, "acp" | "custom"> | null {
+  if (!modelSlugOrName || typeof modelSlugOrName !== "string") return null;
+  const key = normalizeLookupKey(modelSlugOrName);
+  if (!key) return null;
+
+  const tokens = tokenizeIdentifier(key);
+  const tokenSet = new Set(tokens);
+
+  if (tokenSet.has("deepseek") || key.includes("deepseek")) {
+    return "dsh";
+  }
+  if (
+    tokenSet.has("claude") ||
+    tokenSet.has("anthropic") ||
+    tokenSet.has("sonnet") ||
+    tokenSet.has("opus") ||
+    tokenSet.has("haiku")
+  ) {
+    return "claude-code";
+  }
+  if (
+    tokenSet.has("codex") ||
+    tokenSet.has("gpt") ||
+    tokenSet.has("openai") ||
+    /(?:^|[/_\-:\s])o[134](?:$|[/_\-:\s.])/.test(key)
+  ) {
+    return "codex";
+  }
+  if (tokenSet.has("antigravity") || tokenSet.has("agy")) {
+    return "antigravity";
+  }
+  if (tokenSet.has("gemini")) {
+    return "gemini";
+  }
+  if (tokenSet.has("qwen") || tokenSet.has("qwq")) {
+    return "qwen";
+  }
+  if (tokenSet.has("glm") || tokenSet.has("chatglm")) {
+    return "glm";
+  }
+  if (tokenSet.has("kimi") || tokenSet.has("moonshot")) {
+    return "kimi";
+  }
+  if (tokenSet.has("minimax")) {
+    return "minimax";
+  }
+  if (
+    tokenSet.has("mistral") ||
+    tokenSet.has("codestral") ||
+    tokenSet.has("devstral") ||
+    tokenSet.has("pixtral")
+  ) {
+    return "mistral-vibe";
+  }
+  if (tokenSet.has("grok")) {
+    return "grok";
+  }
+
+  return null;
+}
+
 export function agentBrandIdToAcpBrandKey(
   brandId: AgentBrandId | null | undefined,
 ): AcpAgentBrandKey | null {
@@ -720,7 +790,9 @@ export function agentBrandIdToAcpBrandKey(
   return brandId;
 }
 
-export function acpBrandKeyToAgentBrandId(key: AcpAgentBrandKey): Exclude<AgentBrandId, "acp" | "custom"> {
+export function acpBrandKeyToAgentBrandId(
+  key: AcpAgentBrandKey,
+): Exclude<AgentBrandId, "acp" | "custom"> {
   if (key === "claude") return "claude-code";
   return key;
 }
@@ -737,9 +809,7 @@ export interface ResolveAcpAgentBrandInput {
  * bundled brand key by checking agentId, executable basename, instanceId, and displayName
  * in authoritative priority order.
  */
-export function resolveAcpAgentBrandKey(
-  input: ResolveAcpAgentBrandInput,
-): AcpAgentBrandKey | null {
+export function resolveAcpAgentBrandKey(input: ResolveAcpAgentBrandInput): AcpAgentBrandKey | null {
   const candidates = [
     input.agentId,
     extractCommandStem(input.commandPath),
@@ -1277,7 +1347,7 @@ export interface AgentBrandLogoProps {
 
 function resolveMonogramInitials(raw: string | null | undefined): string {
   const cleaned = typeof raw === "string" ? stripUuidNoise(stripAcpPrefix(raw)).trim() : "";
-  if (!cleaned) return "AC";
+  if (!cleaned || /^(?:acp[-_]?registry|acp)$/i.test(cleaned)) return "AC";
   const initials = providerInstanceInitials(cleaned).trim();
   return initials.length > 0 ? initials : "AC";
 }
@@ -1361,7 +1431,14 @@ export function renderBundledBrandSvg(options: {
               null,
               createElement(
                 "linearGradient",
-                { id: gradId, x1: "2", y1: "2", x2: "22", y2: "22", gradientUnits: "userSpaceOnUse" },
+                {
+                  id: gradId,
+                  x1: "2",
+                  y1: "2",
+                  x2: "22",
+                  y2: "22",
+                  gradientUnits: "userSpaceOnUse",
+                },
                 createElement("stop", { offset: "0%", stopColor: "#4285F4" }),
                 createElement("stop", { offset: "55%", stopColor: "#9B72CB" }),
                 createElement("stop", { offset: "100%", stopColor: "#D96570" }),
