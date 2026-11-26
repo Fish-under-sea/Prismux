@@ -127,7 +127,6 @@ const browserTestProject = {
       "fast-xml-parser",
       "entities",
       "dompurify",
-      "heic-to/csp",
       "jszip",
       "pdfjs-dist",
       "sql.js",

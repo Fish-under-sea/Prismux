@@ -28,6 +28,7 @@ export interface UpdateSplitArchivePart {
   url: string;
   effectiveUrl?: string;
   size?: number;
+  sha256?: string | null;
 }
 
 export type UpdateInstallState =
@@ -81,7 +82,7 @@ export const DEFAULT_UPDATE_POLICY: UpdatePolicyConfig = {
   customGhProxyPrefix: "",
   pluginRegistryOverride: "auto",
   timeoutMs: 15_000,
-  autoCheckEnabled: true
+  autoCheckEnabled: false
 } as const;
 
 export const UPDATE_ENDPOINTS = {

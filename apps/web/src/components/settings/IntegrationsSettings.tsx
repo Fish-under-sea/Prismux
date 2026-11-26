@@ -6,7 +6,6 @@ import { ScopedSwitch } from "./ScopedSwitch";
 import { DeviceSourcesSettings } from "./DeviceSourcesSettings";
 import {
   AuthSettingsWriteScope,
-  BrowserImportFailureReason,
   BROWSER_PROFILE_MAX_COUNT,
   type BrowserLinkTarget,
   type BrowserProfile,
@@ -32,7 +31,6 @@ import {
   findBrowserProfile,
   isBuiltInBrowserProfileId,
   resolveBrowserProfiles,
-  type BrowserImportSource,
   type PreviewAppearancePreference,
   type PreviewViewportSetting,
 } from "@prismux/core-contracts";
@@ -121,8 +119,6 @@ import { SettingsSegmentedTabs, type SettingsSegmentedTabItem } from "./Settings
 import { useSearchableSetting } from "./settingsSearch";
 import { AdvancedSettings } from "./AdvancedSettings";
 import { useSettingsScope } from "./SettingsScopeContext";
-import { BrowserImportWizard, type WizardTarget } from "./BrowserImportWizard";
-import type { ImportOutcome } from "./browserImportWizard.logic";
 
 export const BROWSER_SETTINGS_TAB_ANCHORS = {
   browser: [
@@ -216,110 +212,6 @@ class ProfileLimitReachedError extends Schema.TaggedError<ProfileLimitReachedErr
 ) {
   override get message(): string {
     return "Browser profile limit reached.";
-  }
-}
-
-const isProfileLimitReachedError = Schema.is(ProfileLimitReachedError);
-
-export const importFailureReason = (cause: unknown): BrowserImportFailureReason => {
-  const message = String((cause as { message?: unknown } | undefined)?.message ?? "");
-  return (
-    BrowserImportFailureReason.literals.find((reason) => message.includes(`failed: ${reason}.`)) ??
-    "readFailed"
-  );
-};
-
-/**
- * The desktop's refusal when the machine's managed policy forbids cookie import. IPC wraps the
- * message in its own prefixes, so the sentence is matched on the contract's wording.
- */
-export const importPolicyRefusal = (cause: unknown): string | undefined => {
-  const message = String((cause as { message?: unknown } | undefined)?.message ?? "");
-  return (
-    /The managed policy at .* importing browser cookies is not allowed\./u.exec(message)?.[0] ??
-    /(?:^|: )([^:]*'s policy does not allow importing browser cookies\.)/u.exec(message)?.[1]
-  );
-};
-
-async function importBrowserCookiesIntoTarget(
-  bridge: NonNullable<typeof previewBridge>,
-  source: BrowserImportSource,
-  environmentId: EnvironmentId,
-  input: { readonly sourceProfileDirectory: string; readonly target: WizardTarget },
-): Promise<ImportOutcome> {
-  try {
-    const result = await bridge.importBrowserCookies({
-      environmentId,
-      sourceId: source.id,
-      sourceProfileDirectory: input.sourceProfileDirectory,
-      targetProfileId: input.target.profileId,
-    });
-    if (
-      input.target.kind === "existing" &&
-      !resolveBrowserProfiles(getClientSettings().browserProfiles).some(
-        (profile) => profile.id === input.target.profileId,
-      )
-    ) {
-      return { kind: "blocked", reason: "readFailed" };
-    }
-    let targetName: string;
-    if (input.target.kind === "new") {
-      if (result.imported > 0) {
-        try {
-          const persisted = await persistClientSettingsUpdate((current) => {
-            const existing = current.browserProfiles.find(
-              (profile) => profile.id === input.target.profileId,
-            );
-            if (existing) return current;
-            // The profile cap may be reached during import; enforce it against the updater's latest settings.
-            if (current.browserProfiles.length >= BROWSER_PROFILE_MAX_COUNT) {
-              throw new ProfileLimitReachedError();
-            }
-            const taken = new Set(
-              resolveBrowserProfiles(current.browserProfiles).map((profile) => profile.name),
-            );
-            let name = source.name;
-            for (let index = 2; taken.has(name); index += 1) name = `${source.name} ${index}`;
-            return {
-              ...current,
-              browserProfiles: [
-                ...current.browserProfiles,
-                { id: input.target.profileId, name, kind: "persistent" as const },
-              ],
-            };
-          });
-          targetName =
-            persisted.browserProfiles.find((profile) => profile.id === input.target.profileId)
-              ?.name ?? source.name;
-        } catch (cause) {
-          // Clear the new target's partition on registration failure so imported cookies cannot outlive its
-          // profile.
-          await clearBrowserProfileData(bridge, [environmentId], input.target.profileId).catch(
-            () => undefined,
-          );
-          const reason = isProfileLimitReachedError(cause)
-            ? "profileLimitReached"
-            : "profileNotSaved";
-          throw new Error(`Importing cookies from ${source.id} failed: ${reason}.`, { cause });
-        }
-      } else {
-        targetName = source.name;
-      }
-    } else {
-      targetName = input.target.name;
-    }
-    return {
-      kind: "imported",
-      imported: result.imported,
-      skipped: result.skipped,
-      skippedDomains: result.skippedDomains,
-      targetName,
-    };
-  } catch (cause) {
-    const policyRefusal = importPolicyRefusal(cause);
-    return policyRefusal !== undefined
-      ? { kind: "blocked", reason: "readFailed", message: policyRefusal }
-      : { kind: "blocked", reason: importFailureReason(cause) };
   }
 }
 
@@ -1224,20 +1116,6 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
   // The default profile is a device preference, which a project cannot override.
   const defaultProfileReadOnly = scope.kind === "project" || scope.kind === "checkout";
   const { environments, isReady: environmentsReady } = useEnvironments();
-  const primaryEnvironment = usePrimaryEnvironment();
-  // Cookie import runs on this desktop, whose policy the primary environment reports.
-  const messages = useMessages();
-  const cookieImportDenial = managedCapabilityDenial(
-    usePrimaryManagedPolicy(),
-    "browserCookieImport",
-    messages,
-  );
-  const [sources, setSources] = useState<ReadonlyArray<BrowserImportSource> | null>(null);
-  const [importSession, setImportSession] = useState<{
-    readonly source: BrowserImportSource;
-    readonly environmentId: EnvironmentId;
-    readonly environmentName: string;
-  } | null>(null);
   const [profilePendingRemoval, setProfilePendingRemoval] = useState<BrowserProfile | null>(null);
   const [profilePendingClear, setProfilePendingClear] = useState<BrowserProfile | null>(null);
   const [profileRemovalError, setProfileRemovalError] = useState<string | null>(null);
@@ -1264,8 +1142,6 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
     environments.length,
     serverProfileData.environmentIds.length,
   );
-  const importInFlightRef = useRef(false);
-  const [importInFlight, setImportInFlight] = useState(false);
   const profileWritesDisabled = disabled || !settingsHydrated;
 
   const profiles = resolveBrowserProfiles(userProfiles);
@@ -1274,7 +1150,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
     findBrowserProfile(listedProfiles, defaultProfileId)?.id ?? DEFAULT_BROWSER_PROFILE_ID;
 
   const createProfile = (baseName: string) => {
-    if (!settingsHydrated || importInFlightRef.current) return undefined;
+    if (!settingsHydrated) return undefined;
     const currentProfiles = getClientSettings().browserProfiles;
     // Check live settings; repeated clicks before render can bypass the disabled control.
     if (currentProfiles.length >= BROWSER_PROFILE_MAX_COUNT) return undefined;
@@ -1288,7 +1164,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
   };
 
   const renameProfile = (id: string, next: string) => {
-    if (!settingsHydrated || importInFlightRef.current) return;
+    if (!settingsHydrated) return;
     const name = next.trim().slice(0, BROWSER_PROFILE_NAME_MAX_LENGTH);
     if (name === "") return;
     const currentProfiles = getClientSettings().browserProfiles;
@@ -1300,7 +1176,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
   };
 
   const clearProfileData = (id: string, name: string) => {
-    if (!settingsHydrated || importInFlightRef.current) return;
+    if (!settingsHydrated) return;
     if (!removalAvailable) {
       toastManager.add({
         type: "error",
@@ -1327,7 +1203,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
   };
 
   const removeProfile = async (id: string) => {
-    if (!settingsHydrated || importInFlightRef.current) return;
+    if (!settingsHydrated) return;
     if (!removalAvailable) {
       setProfileRemovalError(gt("Connect to an environment before removing this profile."));
       return;
@@ -1357,58 +1233,6 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
     setProfilePendingRemoval(null);
   };
 
-  const importableSources = (sources ?? []).filter(
-    (source) =>
-      source.unavailable !== "notInstalled" && source.unavailable !== "unsupportedPlatform",
-  );
-
-  const loadSources = () => {
-    if (!previewBridge) return;
-    void previewBridge
-      .listBrowserImportSources()
-      .then(setSources)
-      .catch(() => setSources((previous) => previous ?? []));
-  };
-
-  const runWizardImport = async (
-    source: BrowserImportSource,
-    environmentId: EnvironmentId,
-    input: { readonly sourceProfileDirectory: string; readonly target: WizardTarget },
-  ): Promise<ImportOutcome> => {
-    if (!previewBridge) return { kind: "blocked", reason: "sessionUnavailable" };
-    if (!settingsHydrated) return { kind: "blocked", reason: "sessionUnavailable" };
-    if (
-      input.target.kind === "existing" &&
-      !resolveBrowserProfiles(getClientSettings().browserProfiles).some(
-        (profile) => profile.id === input.target.profileId,
-      )
-    ) {
-      return { kind: "blocked", reason: "readFailed" };
-    }
-    if (importInFlightRef.current) return { kind: "blocked", reason: "readFailed" };
-    importInFlightRef.current = true;
-    setImportInFlight(true);
-    return importBrowserCookiesIntoTarget(previewBridge, source, environmentId, input).finally(
-      () => {
-        importInFlightRef.current = false;
-        setImportInFlight(false);
-      },
-    );
-  };
-
-  const refreshImportSource = async (
-    sourceId: BrowserImportSource["id"],
-  ): Promise<BrowserImportSource | undefined> => {
-    if (!previewBridge) return undefined;
-    try {
-      const latest = await previewBridge.listBrowserImportSources();
-      setSources(latest);
-      return latest.find((source) => source.id === sourceId);
-    } catch {
-      return undefined;
-    }
-  };
-
   const atProfileLimit = userProfiles.length >= BROWSER_PROFILE_MAX_COUNT;
 
   return (
@@ -1418,78 +1242,15 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
         "Profiles separate cookies and logins. Incognito data is cleared when the app closes.",
       )}
       control={
-        <Menu onOpenChange={(open) => open && loadSources()}>
-          <MenuTrigger
-            render={
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={profileWritesDisabled || importInFlight}
-              />
-            }
-          >
-            <PlusIcon />
-            <T>Add profile</T>
-          </MenuTrigger>
-          <MenuPopup align="end">
-            <MenuItem
-              disabled={!settingsHydrated || atProfileLimit}
-              onClick={() => createProfile(gt("New profile"))}
-            >
-              <T>Blank profile</T>
-            </MenuItem>
-            {atProfileLimit ? (
-              <MenuItem disabled>
-                <T>You&rsquo;ve reached the profile limit</T>
-              </MenuItem>
-            ) : null}
-            <MenuSeparator />
-            <MenuGroup>
-              <MenuGroupLabel>
-                <T>Import from</T>
-              </MenuGroupLabel>
-              {cookieImportDenial !== undefined ? (
-                <MenuItem disabled>{cookieImportDenial}</MenuItem>
-              ) : sources === null ? (
-                <MenuItem disabled>
-                  <T>Looking for browsers…</T>
-                </MenuItem>
-              ) : importableSources.length === 0 ? (
-                <MenuItem disabled>
-                  <T>No supported browsers found</T>
-                </MenuItem>
-              ) : (
-                <>
-                  {importableSources.map((source) => (
-                    <MenuItem
-                      key={source.id}
-                      disabled={!settingsHydrated || primaryEnvironment == null}
-                      onClick={() => {
-                        if (!settingsHydrated || primaryEnvironment == null) return;
-                        setImportSession({
-                          source,
-                          environmentId: primaryEnvironment.environmentId,
-                          environmentName: resolveEnvironmentOptionLabel({
-                            isPrimary: true,
-                            environmentId: primaryEnvironment.environmentId,
-                            runtimeLabel: primaryEnvironment.label,
-                          }),
-                        });
-                      }}
-                    >
-                      {source.name}
-                    </MenuItem>
-                  ))}
-                  {primaryEnvironment == null ? (
-                    <MenuItem disabled>
-                      <T>Connect to an environment to import cookies</T>
-                    </MenuItem>
-                  ) : null}
-                </>
-              )}
-            </MenuGroup>
-          </MenuPopup>
-        </Menu>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={profileWritesDisabled || atProfileLimit}
+          onClick={() => createProfile(gt("New profile"))}
+        >
+          <PlusIcon />
+          <T>Add profile</T>
+        </Button>
       }
     >
       <div className="mt-2 mb-2 overflow-hidden rounded-lg border border-border/60">
@@ -1521,7 +1282,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
                     size="sm"
                     className="w-full max-w-56"
                     aria-label={gt("Rename {name}", { name: profileLabel })}
-                    disabled={profileWritesDisabled || importInFlight}
+                    disabled={profileWritesDisabled}
                     maxLength={BROWSER_PROFILE_NAME_MAX_LENGTH}
                     value={profile.name}
                     onCommit={(next) => renameProfile(profile.id, next)}
@@ -1539,7 +1300,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
                     <Button
                       size="icon-xs"
                       variant="ghost-muted"
-                      disabled={profileWritesDisabled || importInFlight}
+                      disabled={profileWritesDisabled}
                       aria-label={gt("{name} options", { name: profileLabel })}
                     />
                   }
@@ -1691,38 +1452,6 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
           </AlertDialogFooter>
         </AlertDialogPopup>
       </AlertDialog>
-      {importSession ? (
-        <BrowserImportWizard
-          source={importSession.source}
-          destinationEnvironmentName={importSession.environmentName}
-          targetProfiles={listedProfiles.map((profile) => ({
-            id: profile.id,
-            name: formatBrowserProfileLabel(profile, locale),
-          }))}
-          canCreateProfile={settingsHydrated && !atProfileLimit}
-          onImport={(input) =>
-            runWizardImport(importSession.source, importSession.environmentId, input)
-          }
-          onRefreshSource={() => refreshImportSource(importSession.source.id)}
-          onCheckFullDiskAccess={
-            window.desktopBridge
-              ? () => window.desktopBridge!.checkSystemPermission("full-disk-access")
-              : undefined
-          }
-          onOpenFullDiskAccessSettings={async () => {
-            await readLocalApi()
-              ?.shell.openSystemSettings("full-disk-access")
-              .catch(() => {
-                toastManager.add({
-                  type: "error",
-                  title: gt("Could not open System Settings"),
-                  description: gt("Open Privacy & Security → Full Disk Access manually."),
-                });
-              });
-          }}
-          onClose={() => setImportSession(null)}
-        />
-      ) : null}
     </SettingsRow>
   );
 }

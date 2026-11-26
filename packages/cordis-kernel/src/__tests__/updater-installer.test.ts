@@ -182,7 +182,8 @@ test("probePluginRegistries selects fastest reachable registry and falls back on
     const fastReport = await probePluginRegistries({
       npmRegistryUrl: slowNpmjs.baseUrl,
       npmMirrorRegistryUrl: fastMirror.baseUrl,
-      timeoutMs: 2_000
+      timeoutMs: 2_000,
+      allowInsecureLoopbackForTesting: true
     });
     assert.equal(fastReport.recommendedRegistryId, "npmmirror");
     assert.equal(fastReport.recommendedUrl, fastMirror.baseUrl);
@@ -192,7 +193,8 @@ test("probePluginRegistries selects fastest reachable registry and falls back on
     const healthyNpmReport = await probePluginRegistries({
       npmRegistryUrl: slowNpmjs.baseUrl,
       npmMirrorRegistryUrl: failingNpmjs.baseUrl,
-      timeoutMs: 2_000
+      timeoutMs: 2_000,
+      allowInsecureLoopbackForTesting: true
     });
     assert.equal(healthyNpmReport.recommendedRegistryId, "npmjs");
     assert.equal(healthyNpmReport.recommendedUrl, slowNpmjs.baseUrl);
@@ -210,6 +212,8 @@ test("installFromNpm honors auto/domestic/global preference and falls back on 40
 
   const pkg = createPluginTarball("prismux-plugin-mirror-demo", "mirror-demo", false);
   const riskyPkg = createPluginTarball("prismux-plugin-risky-mirror", "risky-mirror", true);
+  const pkgSri = `sha512-${createHash("sha512").update(pkg.tarball).digest("base64")}`;
+  const riskyPkgSri = `sha512-${createHash("sha512").update(riskyPkg.tarball).digest("base64")}`;
 
   let npmjsHits = 0;
   let npmmirrorHits = 0;
@@ -244,7 +248,10 @@ test("installFromNpm honors auto/domestic/global preference and falls back on 40
             "0.0.1-alpha.1": {
               version: "0.0.1-alpha.1",
               engines: { prismux: ">=0.0.1-0 <2.0.0" },
-              dist: { tarball: `${npmjsServer.baseUrl}/tar/demo.tgz` }
+              dist: {
+                tarball: `${npmjsServer.baseUrl}/tar/demo.tgz`,
+                integrity: pkgSri
+              }
             }
           }
         })
@@ -285,7 +292,10 @@ test("installFromNpm honors auto/domestic/global preference and falls back on 40
             "0.0.1-alpha.1": {
               version: "0.0.1-alpha.1",
               engines: { prismux: ">=0.0.1-0 <2.0.0" },
-              dist: { tarball: `${npmmirrorServer.baseUrl}/tar/demo.tgz` }
+              dist: {
+                tarball: `${npmmirrorServer.baseUrl}/tar/demo.tgz`,
+                integrity: pkgSri
+              }
             }
           }
         })
@@ -308,7 +318,10 @@ test("installFromNpm honors auto/domestic/global preference and falls back on 40
             "0.0.1-alpha.1": {
               version: "0.0.1-alpha.1",
               engines: { prismux: ">=0.0.1-0 <2.0.0" },
-              dist: { tarball: `${npmmirrorServer.baseUrl}/tar/risky.tgz` }
+              dist: {
+                tarball: `${npmmirrorServer.baseUrl}/tar/risky.tgz`,
+                integrity: riskyPkgSri
+              }
             }
           }
         })
@@ -329,7 +342,8 @@ test("installFromNpm honors auto/domestic/global preference and falls back on 40
       pluginsDir,
       hostVersion: "0.0.1-alpha.1",
       defaultRegistryUrl: npmjsServer.baseUrl,
-      defaultFallbackRegistryUrl: npmmirrorServer.baseUrl
+      defaultFallbackRegistryUrl: npmmirrorServer.baseUrl,
+      allowInsecureLoopbackForTesting: true
     });
 
     // 1. domestic hits npmmirror directly without touching npmjs
@@ -340,7 +354,8 @@ test("installFromNpm honors auto/domestic/global preference and falls back on 40
       networkPreference: "domestic",
       expectedSha256: pkg.sha256,
       ignoreScripts: true,
-      distribution: "managed"
+      distribution: "managed",
+      confirmedAudit: true
     });
     assert.equal(domesticRes.registryUsed, npmmirrorServer.baseUrl);
     assert.equal(domesticRes.usedFallbackRegistry, false);
@@ -358,7 +373,8 @@ test("installFromNpm honors auto/domestic/global preference and falls back on 40
       networkPreference: "domestic",
       expectedSha256: pkg.sha256,
       ignoreScripts: true,
-      distribution: "managed"
+      distribution: "managed",
+      confirmedAudit: true
     });
     assert.equal(domesticFallbackRes.registryUsed, npmjsServer.baseUrl);
     assert.equal(domesticFallbackRes.usedFallbackRegistry, true);
@@ -375,7 +391,8 @@ test("installFromNpm honors auto/domestic/global preference and falls back on 40
       networkPreference: "global",
       expectedSha256: pkg.sha256,
       ignoreScripts: true,
-      distribution: "managed"
+      distribution: "managed",
+      confirmedAudit: true
     });
     assert.equal(globalFallbackRes.registryUsed, npmmirrorServer.baseUrl);
     assert.equal(globalFallbackRes.usedFallbackRegistry, true);
@@ -390,7 +407,8 @@ test("installFromNpm honors auto/domestic/global preference and falls back on 40
       networkPreference: "auto",
       expectedSha256: pkg.sha256,
       ignoreScripts: true,
-      distribution: "managed"
+      distribution: "managed",
+      confirmedAudit: true
     });
     assert.equal(autoRes.registryUsed, npmmirrorServer.baseUrl);
     assert.equal(autoRes.usedFallbackRegistry, false);

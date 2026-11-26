@@ -21,7 +21,6 @@ vi.mock("electron", () => ({}));
 vi.mock("../ipc/DesktopIpcHandlers.ts", () => ({
   installDesktopIpcHandlers: () => Effect.void,
 }));
-vi.mock("../updates/DesktopRemoteUpdates.ts", () => ({ listen: Effect.void }));
 vi.mock("./DesktopStartupRecovery.ts", () => ({ listen: Effect.void }));
 
 import * as DesktopApp from "./DesktopApp.ts";
@@ -41,19 +40,16 @@ import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
-import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as PrismuxDaemonService from "../prismux/PrismuxDaemonService.ts";
 import * as PreviewPasskeys from "../preview/Passkeys.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as DesktopSnapShot from "../snapShot/DesktopSnapShot.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
-import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
 import * as DesktopApplicationMenu from "../window/DesktopApplicationMenu.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopWslBackend from "../wsl/DesktopWslBackend.ts";
 
-import * as BrowserImport from "../preview/BrowserImport/BrowserImport.ts";
 import * as DesktopBackendConfiguration from "../backend/DesktopBackendConfiguration.ts";
 import * as DesktopCliCommand from "./DesktopCliCommand.ts";
 import * as DesktopCliShim from "./DesktopCliShim.ts";
@@ -65,7 +61,6 @@ import * as DesktopManagedPolicy from "./DesktopManagedPolicy.ts";
 import * as DesktopPrimaryPaste from "./DesktopPrimaryPaste.ts";
 import * as DesktopSshEnvironment from "../ssh/DesktopSshEnvironment.ts";
 import * as DesktopSshPasswordPrompts from "../ssh/DesktopSshPasswordPrompts.ts";
-import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import * as DesktopWebLinks from "./DesktopWebLinks.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
@@ -158,9 +153,6 @@ const runStubbedDesktop = (stub: StubbedDesktop) =>
         Effect.provideService(DesktopApplicationMenu.DesktopApplicationMenu, {
           configure: stub.record("menu"),
         }),
-        Effect.provideService(DesktopUpdates.DesktopUpdates, {
-          configure: Effect.void,
-        } as unknown as DesktopUpdates.DesktopUpdates["Service"]),
         Effect.provideService(DesktopLinuxUrlHandler.DesktopLinuxUrlHandler, {
           register: stub.registerLinuxUrlHandler,
         }),
@@ -222,7 +214,6 @@ const runStubbedDesktop = (stub: StubbedDesktop) =>
     return yield* runApp.pipe(
       Effect.provide(
         Layer.mergeAll(
-          Layer.mock(BrowserImport.BrowserImport, {}),
           Layer.mock(ChildProcessSpawner.ChildProcessSpawner, {}),
           Layer.mock(DesktopBackendConfiguration.DesktopBackendConfiguration, {}),
           Layer.mock(DesktopCliCommand.DesktopCliCommand, {}),
@@ -247,13 +238,11 @@ const runStubbedDesktop = (stub: StubbedDesktop) =>
           Layer.succeed(DesktopPrimaryPaste.DesktopPrimaryPaste, { enabled: true }),
           Layer.mock(DesktopSshEnvironment.DesktopSshEnvironment, {}),
           Layer.mock(DesktopSshPasswordPrompts.DesktopSshPasswordPrompts, {}),
-          Layer.mock(DesktopTelemetryPublisher.DesktopTelemetryPublisher, {}),
           Layer.mock(DesktopWebLinks.DesktopWebLinks, {}),
           Layer.mock(DesktopWslEnvironment.DesktopWslEnvironment, {}),
           Layer.mock(ElectronMenu.ElectronMenu, {}),
           Layer.mock(ElectronShell.ElectronShell, {}),
           Layer.mock(ElectronTheme.ElectronTheme, {}),
-          Layer.mock(ElectronUpdater.ElectronUpdater, {}),
           Layer.mock(ElectronWindow.ElectronWindow, {}),
           Layer.mock(MacPermissions.MacPermissions, {}),
           Layer.mock(AppleSpeech.AppleSpeech, {}),

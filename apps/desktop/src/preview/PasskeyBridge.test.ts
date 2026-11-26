@@ -2,7 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { afterEach, vi } from "vite-plus/test";
 
 import { PASSKEY_CREATE_CHANNEL, PASSKEY_GET_CHANNEL } from "./GuestProtocol.ts";
-import { installPasskeyBridge } from "./PasskeyBridge.ts";
+import { installIsolatedPasskeyBridge, installPasskeyBridge } from "./PasskeyBridge.ts";
 
 const base64Url = (bytes: ReadonlyArray<number>) => Buffer.from(bytes).toString("base64url");
 const bytesOf = (buffer: ArrayBuffer | null) => (buffer ? [...new Uint8Array(buffer)] : null);
@@ -157,5 +157,74 @@ describe("installPasskeyBridge", () => {
     const error = await pending;
     assert.instanceOf(error, DOMException);
     assert.strictEqual((error as DOMException).name, "AbortError");
+  });
+
+  it("isolates passkey ceremonies over a nonce-guarded MessageChannel without exposing ipcRenderer", async () => {
+    const scriptCaptured: string[] = [];
+    let transferredPort: MessagePort | undefined;
+    const invoke = vi.fn(async (channel: string, _publicKey: unknown) => ({
+      success: true,
+      data: { channel, ...assertionData },
+    }));
+
+    const bridge = installIsolatedPasskeyBridge({
+      executeInMainWorld: async (script) => {
+        scriptCaptured.push(script);
+      },
+      invoke,
+      targetWindow: {
+        postMessage: (_msg: unknown, _targetOrigin: string, transfer?: Transferable[]) => {
+          transferredPort = transfer?.[0] as MessagePort | undefined;
+        },
+      },
+    });
+    await bridge.ready;
+
+    assert.strictEqual(scriptCaptured.length, 1);
+    assert.notInclude(scriptCaptured[0] ?? "", "ipcRenderer");
+    assert.isDefined(transferredPort);
+
+    // Messages with a wrong nonce must be silently dropped and never invoke IPC.
+    transferredPort!.postMessage({
+      nonce: "wrong-nonce",
+      id: 1,
+      channel: PASSKEY_GET_CHANNEL,
+      publicKey: { challenge: new Uint8Array([1]) },
+    });
+    await new Promise<void>((resolve) => queueMicrotask(() => queueMicrotask(resolve)));
+    assert.strictEqual(invoke.mock.calls.length, 0);
+
+    // Disallowed IPC channels must be rejected with SecurityError and never invoke IPC.
+    const rejectedReply = await new Promise<Record<string, unknown>>((resolve) => {
+      transferredPort!.onmessage = (event: MessageEvent) =>
+        resolve(event.data as Record<string, unknown>);
+      transferredPort!.postMessage({
+        nonce: bridge.nonce,
+        id: 2,
+        channel: "desktop:arbitrary-channel",
+        publicKey: {},
+      });
+    });
+    assert.strictEqual(rejectedReply.ok, false);
+    assert.strictEqual(rejectedReply.error, "SecurityError");
+    assert.strictEqual(invoke.mock.calls.length, 0);
+
+    // Valid nonce + allowlisted channel invokes preload handler and returns reply.
+    const okReply = await new Promise<Record<string, unknown>>((resolve) => {
+      transferredPort!.onmessage = (event: MessageEvent) =>
+        resolve(event.data as Record<string, unknown>);
+      transferredPort!.postMessage({
+        nonce: bridge.nonce,
+        id: 3,
+        channel: PASSKEY_GET_CHANNEL,
+        publicKey: { rpId: "example.com" },
+      });
+    });
+    assert.strictEqual(okReply.ok, true);
+    assert.strictEqual(invoke.mock.calls.length, 1);
+    assert.strictEqual(invoke.mock.calls[0]?.[0], PASSKEY_GET_CHANNEL);
+
+    transferredPort!.close();
+    bridge.port.close();
   });
 });

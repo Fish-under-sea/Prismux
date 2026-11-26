@@ -31,11 +31,6 @@ import { CustomSnoozeDialogHost } from "../components/CustomSnoozeDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
 import { UseInAnotherAppDialogHost } from "../components/mcp/UseInAnotherAppDialog";
 
-const GuestShareDialogHost = lazy(() =>
-  import("../components/chat/GuestShareControls").then((m) => ({
-    default: m.GuestShareDialogHost,
-  })),
-);
 const AddProjectToMachineDialogHost = lazy(() =>
   import("../components/AddProjectToMachineDialog").then((m) => ({
     default: m.AddProjectToMachineDialogHost,
@@ -44,19 +39,9 @@ const AddProjectToMachineDialogHost = lazy(() =>
 const DevReplayHost = lazy(() =>
   import("../components/DevReplayHost").then((m) => ({ default: m.DevReplayHost })),
 );
-const ConnectOnboardingDialog = lazy(() =>
-  import("../components/cloud/ConnectOnboardingDialog").then((m) => ({
-    default: m.ConnectOnboardingDialog,
-  })),
-);
 const PrismuxRemoteConnectDialogHost = lazy(() =>
   import("../components/cloud/PrismuxRemoteConnectDialog").then((m) => ({
     default: m.PrismuxRemoteConnectDialogHost,
-  })),
-);
-const RelayClientInstallDialog = lazy(() =>
-  import("../components/cloud/RelayClientInstallDialog").then((m) => ({
-    default: m.RelayClientInstallDialog,
   })),
 );
 const ThemeEditorHost = lazy(() =>
@@ -232,12 +217,9 @@ function RootRouteBranch() {
       <ThreadUndoToast />
       <ConnectDeviceApprovalCoordinator />
       <Suspense fallback={null}>
-        <RelayClientInstallDialog />
-        <ConnectOnboardingDialog />
         <PrismuxRemoteConnectDialogHost />
         <SshPasswordPromptDialog />
         <CustomSnoozeDialogHost />
-        <GuestShareDialogHost />
         <AddProjectToMachineDialogHost />
         <UseInAnotherAppDialogHost />
         {import.meta.env.DEV && primaryEnvironmentAuthenticated ? <DevReplayHost /> : null}

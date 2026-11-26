@@ -37,7 +37,13 @@ import { withExecutedModelNote } from "@prismux/provider-core/server/subagentPro
 import type * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import {
   canonicalizeProviderAlias,
+  DelegationSubscriptionGuardConfig,
+  evaluateDelegationSubscriptionGuard,
+  isAntigravityTargetProvider,
   normalizeProviderLookupKey,
+  SUBSCRIPTION_ORCHESTRATION_BLOCKED_CODE,
+  SUBSCRIPTION_WAIVER_SETTINGS_ROUTE,
+  type DelegationGuardTargetProvider,
 } from "../mcp/DelegationSubscriptionGuard.ts";
 import { ProjectToolkit } from "../mcp/toolkits/project/tools.ts";
 import {
@@ -51,6 +57,8 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as PeerForwarding from "./PeerForwarding.ts";
 import * as PeerLinks from "./PeerLinks.ts";
@@ -166,6 +174,9 @@ const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
   const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const random = yield* SecureRandom.SecureRandom;
+  const layerGuardConfig = yield* DelegationSubscriptionGuardConfig;
+  const settingsServiceOption = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+  const providerRegistryOption = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
   const hereId = yield* ServerEnvironment.ServerEnvironment.pipe(
     Effect.flatMap((environment) => environment.getEnvironmentId),
   );
@@ -295,9 +306,21 @@ const make = Effect.gen(function* () {
           message: `Provider instance ${named.providerInstanceId} there uses driver ${named.driverKind}, not ${requested.driverKind}.`,
         });
       }
-      if (named !== undefined) return named.providerInstanceId;
+      if (named !== undefined) {
+        return {
+          providerInstanceId: named.providerInstanceId,
+          driverKind: named.driverKind,
+          displayName: named.displayName,
+          dispatchPolicy: named.dispatchPolicy,
+        };
+      }
       if (isProviderInstanceId(requested.providerInstanceId)) {
-        return requested.providerInstanceId;
+        return {
+          providerInstanceId: requested.providerInstanceId,
+          driverKind: requested.driverKind,
+          displayName: null,
+          dispatchPolicy: undefined,
+        };
       }
       return yield* new OrchestratorMcpFailure({
         code: "provider_unavailable",
@@ -320,7 +343,12 @@ const make = Effect.gen(function* () {
         message: `No instance of driver ${requested.driverKind ?? "unknown"} there can run a child task. orchestrator_capabilities with this environmentId lists its providers.`,
       });
     }
-    return chosen.providerInstanceId;
+    return {
+      providerInstanceId: chosen.providerInstanceId,
+      driverKind: chosen.driverKind,
+      displayName: chosen.displayName,
+      dispatchPolicy: chosen.dispatchPolicy,
+    };
   });
 
   const delegate: RemoteDelegation["Service"]["delegate"] = Effect.fn("RemoteDelegation.delegate")(
@@ -361,12 +389,22 @@ const make = Effect.gen(function* () {
       // The provider and model inherit as they do for a task here. Another
       // provider there has no model to inherit, so the caller names one.
       const inherited = parent.thread.modelSelection;
-      const instanceId: ProviderInstanceId =
+      const resolvedTarget =
         target.driverKind === undefined
           ? target.providerInstanceId === undefined
-            ? inherited.instanceId
+            ? {
+                providerInstanceId: inherited.instanceId,
+                driverKind: undefined,
+                displayName: null,
+                dispatchPolicy: undefined,
+              }
             : isProviderInstanceId(target.providerInstanceId)
-              ? target.providerInstanceId
+              ? {
+                  providerInstanceId: target.providerInstanceId,
+                  driverKind: undefined,
+                  displayName: null,
+                  dispatchPolicy: undefined,
+                }
               : yield* resolveRemoteInstance(scope, target.environmentId, {
                   driverKind: undefined,
                   providerInstanceId: target.providerInstanceId,
@@ -377,6 +415,107 @@ const make = Effect.gen(function* () {
               providerInstanceId: target.providerInstanceId,
               inheritedInstanceId: inherited.instanceId,
             });
+      const instanceId: ProviderInstanceId = resolvedTarget.providerInstanceId;
+
+      // Enforce unified subscription/AGY orchestration guard BEFORE forwarding remotely
+      // (covers both unattended AGY hard-block and personal subscription_oauth waiver gate).
+      {
+        const fiberGuardConfig = yield* DelegationSubscriptionGuardConfig;
+        const guardConfig = { ...layerGuardConfig, ...fiberGuardConfig };
+        const settings = Option.isSome(settingsServiceOption)
+          ? yield* Effect.suspend(() => settingsServiceOption.value.getSettings).pipe(
+              Effect.catchCause(() => Effect.undefined),
+            )
+          : undefined;
+        const localProviders = Option.isSome(providerRegistryOption)
+          ? yield* Effect.suspend(() => providerRegistryOption.value.getProviders).pipe(
+              Effect.catchCause(() => Effect.succeed([])),
+            )
+          : [];
+        const matchedLocalProvider = localProviders.find(
+          (candidate) => candidate.instanceId === instanceId,
+        );
+        const instanceConfig = settings?.providerInstances?.[instanceId];
+        const inferredDriver =
+          resolvedTarget.driverKind ??
+          target.driverKind ??
+          matchedLocalProvider?.driver ??
+          (canonicalizeProviderAlias(instanceId) === "antigravity"
+            ? "acpRegistry"
+            : String(instanceId));
+        const targetProvider: DelegationGuardTargetProvider = {
+          instanceId,
+          driver: ProviderDriverKind.make(inferredDriver),
+          displayName:
+            resolvedTarget.displayName ??
+            matchedLocalProvider?.displayName ??
+            target.providerInstanceId ??
+            String(instanceId),
+          auth: matchedLocalProvider?.auth ?? { status: "authenticated" },
+        };
+
+        let scheduledTaskId: string | undefined;
+        const userMessageId = parentRun.userMessageId;
+        if (
+          isAntigravityTargetProvider(targetProvider, instanceConfig) &&
+          userMessageId !== undefined &&
+          !String(userMessageId).startsWith("scheduled-task-message:")
+        ) {
+          const messageRecords = yield* threads
+            .getThreadRecords(parent.thread.id, ["messages"], {
+              messageIds: [userMessageId],
+            })
+            .pipe(Effect.orElseSucceed(() => ({ messages: [] })));
+          const originMessage = messageRecords.messages.find(
+            (candidate) => candidate.id === userMessageId,
+          );
+          if (originMessage?.scheduledTaskId !== undefined) {
+            scheduledTaskId = originMessage.scheduledTaskId;
+          }
+        }
+
+        const decision = evaluateDelegationSubscriptionGuard({
+          provider: targetProvider,
+          instanceConfig,
+          caller: {
+            createdBy: parent.thread.createdBy,
+            creationSource: parent.thread.creationSource,
+            threadTags: parent.thread.tags,
+            userMessageId,
+            scheduledTaskId,
+            requestNamespace: scope.requestNamespace,
+            clientLabel: scope.client?.label,
+          },
+          config: guardConfig,
+        });
+        if (!decision.allowed) {
+          return yield* new OrchestratorMcpFailure({
+            code: decision.code,
+            message: decision.message,
+            reasonCode: decision.reasonCode,
+            settingsRoute: decision.settingsRoute,
+            providerId: decision.providerId,
+          });
+        }
+        if (
+          resolvedTarget.dispatchPolicy === "blocked" ||
+          resolvedTarget.dispatchPolicy === "waiver_required"
+        ) {
+          const isAgy = isAntigravityTargetProvider(targetProvider, instanceConfig);
+          return yield* new OrchestratorMcpFailure({
+            code: SUBSCRIPTION_ORCHESTRATION_BLOCKED_CODE,
+            message: `ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED: Remote target provider ${instanceId} requires subscription risk waiver approval or is blocked for delegation (${SUBSCRIPTION_WAIVER_SETTINGS_ROUTE}).`,
+            reasonCode:
+              resolvedTarget.dispatchPolicy === "blocked"
+                ? "AGY_UNATTENDED_FORBIDDEN"
+                : isAgy
+                  ? "AGY_CONTROLLED_AGENT_LOCKED"
+                  : "EXTERNAL_SUBSCRIPTION_SWARM_LOCKED",
+            settingsRoute: SUBSCRIPTION_WAIVER_SETTINGS_ROUTE,
+            providerId: isAgy ? "antigravity" : String(instanceId),
+          });
+        }
+      }
       const model =
         target.model ?? (instanceId === inherited.instanceId ? inherited.model : undefined);
       if (model === undefined) {

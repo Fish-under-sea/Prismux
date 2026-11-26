@@ -4,11 +4,6 @@ import type { PreviewCaptureFailureEncoded } from "./previewCapture.ts";
 import { SnapShotSource } from "./chatAttachment.ts";
 import { EnvironmentId, PortSchema, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
-import type {
-  BrowserImportResult,
-  BrowserImportSource,
-  BrowserImportSourceId,
-} from "./browserImport.ts";
 import { AuthAccessTokenResult, AuthSessionState } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
@@ -1590,13 +1585,6 @@ export interface DesktopPreviewBridge {
   /** Whether the environment runs on this machine, where its ports need no forward. */
   sharesLoopback: (environmentId: EnvironmentId) => Promise<boolean>;
   onPortForwards: (listener: (forwards: ReadonlyArray<DesktopPortForward>) => void) => () => void;
-  listBrowserImportSources: () => Promise<ReadonlyArray<BrowserImportSource>>;
-  importBrowserCookies: (input: {
-    readonly environmentId: EnvironmentId;
-    readonly sourceId: BrowserImportSourceId;
-    readonly sourceProfileDirectory: string;
-    readonly targetProfileId: string;
-  }) => Promise<BrowserImportResult>;
   setAnnotationTheme: (theme: DesktopPreviewAnnotationTheme) => Promise<void>;
   setAnnotationSendEnabled: (tabId: string, enabled: boolean) => Promise<void>;
   annotationVoice: {

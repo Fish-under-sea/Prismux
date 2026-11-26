@@ -557,6 +557,7 @@ const layerTestNodeServices = Layer.mergeAll(
   NodeCrypto.layer,
   Layer.mock(CodexManagedTokenBroker.CodexManagedTokenBroker)({
     endpoint: Effect.succeed("unused-private-pipe"),
+    authSecret: Effect.succeed("0".repeat(64)),
   }),
   Layer.mock(CodexInstallation.CodexInstallation)({
     managedDirectory: "unused-managed-installation",

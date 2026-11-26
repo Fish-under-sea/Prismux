@@ -9,14 +9,10 @@ function faviconUrlForPage(rawUrl: string | null | undefined, _size = 32): strin
   }
 }
 
+// Keep themed favicon mapping empty so zero third-party asset hosts are hotlinked.
 const THEMED_FAVICON_BY_HOSTNAME: Readonly<
   Record<string, Readonly<{ light: string; dark: string }>>
-> = {
-  "github.com": {
-    light: "https://github.githubassets.com/favicons/favicon.svg",
-    dark: "https://github.githubassets.com/favicons/favicon-dark.svg",
-  },
-};
+> = {};
 
 function themedFaviconUrlForPage(
   rawUrl: string | null | undefined,

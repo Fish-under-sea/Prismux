@@ -1,0 +1,23 @@
+Proprietary Third-Party Component Carve-Out: @anthropic-ai/claude-agent-sdk
+
+IMPORTANT LICENSE SCOPE NOTICE
+------------------------------
+The root MIT License (`LICENSE`) of the Prismux repository applies SOLELY to
+first-party Prismux source code authored by the Prismux contributors. It does
+NOT apply to `@anthropic-ai/claude-agent-sdk`, which is proprietary third-party
+software owned by Anthropic PBC.
+
+Upstream Package: @anthropic-ai/claude-agent-sdk (version 0.3.321)
+Upstream Repository: https://github.com/anthropics/claude-agent-sdk-typescript
+Legal Terms & Compliance: https://code.claude.com/docs/en/legal-and-compliance
+
+Verbatim Upstream License Notice (`LICENSE.md`):
+------------------------------------------------
+© Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements
+outlined here: https://code.claude.com/docs/en/legal-and-compliance.
+
+Packaging Scope Note:
+---------------------
+Optional bundled platform CLI executables (`@anthropic-ai/claude-agent-sdk-*`)
+are excluded from Prismux desktop artifacts. Users invoke their own officially
+installed local `claude` CLI under Anthropic's applicable legal terms.

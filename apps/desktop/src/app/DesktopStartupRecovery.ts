@@ -14,8 +14,8 @@ import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import { m } from "../i18n/messages.ts";
-import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
 import type { BackendStartupFailure } from "../backend/DesktopBackendManager.ts";
+import { createInitialDesktopUpdateState } from "../updates/updateMachine.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopObservability from "./DesktopObservability.ts";
 import * as DesktopState from "./DesktopState.ts";
@@ -175,7 +175,6 @@ export const listen: Effect.Effect<
   void,
   never,
   | DesktopState.DesktopState
-  | DesktopUpdates.DesktopUpdates
   | DesktopEnvironment.DesktopEnvironment
   | ElectronApp.ElectronApp
   | ElectronShell.ElectronShell
@@ -185,7 +184,6 @@ export const listen: Effect.Effect<
   | Scope.Scope
 > = Effect.gen(function* () {
   const { primaryBackendStartup, quitting } = yield* DesktopState.DesktopState;
-  const updates = yield* DesktopUpdates.DesktopUpdates;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const electronApp = yield* ElectronApp.ElectronApp;
   const electronShell = yield* ElectronShell.ElectronShell;
@@ -207,15 +205,21 @@ export const listen: Effect.Effect<
   // The failure that opened the window; later restarts do not reload its details.
   const failureRef = yield* Ref.make(Option.none<BackendStartupFailure>());
   const renderedHtmlRef = yield* Ref.make("");
-  const checkedRef = yield* Ref.make(false);
   let backendHasStarted = false;
-  const { latest, changes: updateChanges } = yield* updates.subscribe;
-  const updateStateRef = yield* Ref.make(latest);
+  const disabledUpdateState = createInitialDesktopUpdateState(
+    environment.appVersion,
+    environment.runtimeInfo ?? {
+      hostArch: "x64",
+      appArch: "x64",
+      runningUnderArm64Translation: false,
+    },
+    "latest",
+  );
 
-  const offer = Effect.all([Ref.get(updateStateRef), Ref.get(failureRef)]).pipe(
-    Effect.map(([state, failure]) =>
+  const offer = Ref.get(failureRef).pipe(
+    Effect.map((failure) =>
       resolveStartupRecoveryOffer(
-        state,
+        disabledUpdateState,
         lastStartedVersion,
         Option.exists(failure, ({ managedPolicy }) => managedPolicy),
       ),
@@ -243,16 +247,7 @@ export const listen: Effect.Effect<
     const current = yield* offer;
     switch (action) {
       case "update": {
-        if (current._tag !== "Update") return;
-        let { downloadedVersion } = yield* updates.getState;
-        if (downloadedVersion === null) {
-          // The download re-checks first, so it can fetch a newer build than the one offered.
-          const download = yield* updates.download;
-          if (!download.completed) return;
-          downloadedVersion = download.state.downloadedVersion;
-        }
-        if (downloadedVersion === null) return;
-        yield* updates.installPrepared(downloadedVersion);
+        yield* electronShell.openExternal(RELEASES_URL);
         return;
       }
       case "reinstall":
@@ -364,11 +359,6 @@ export const listen: Effect.Effect<
     ),
   );
 
-  yield* updateChanges.pipe(
-    Stream.runForEach((state) => Ref.set(updateStateRef, state).pipe(Effect.andThen(render))),
-    Effect.forkScoped,
-  );
-
   yield* SubscriptionRef.changes(primaryBackendStartup).pipe(
     Stream.runForEach(
       Effect.fn("desktop.startupRecovery.onStartupChange")(function* (startup) {
@@ -386,9 +376,6 @@ export const listen: Effect.Effect<
         // The backend manager already logs each failure's reason.
         yield* logWarning("primary backend failing to start");
         yield* show();
-        if (!(yield* Ref.getAndSet(checkedRef, true))) {
-          yield* updates.check("startup-recovery").pipe(Effect.forkScoped);
-        }
       }),
     ),
     Effect.catchCause((cause) =>

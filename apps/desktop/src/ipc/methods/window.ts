@@ -43,7 +43,6 @@ import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as Electron from "electron";
 import { msg } from "gt-i18n";
 import * as MacPermissions from "../../permissions/MacPermissions.ts";
-import { safariPermissionCheck } from "../../preview/BrowserImport/SafariPermission.ts";
 import { m } from "../../i18n/messages.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
@@ -415,8 +414,7 @@ export const openSystemSettings = DesktopIpc.makeIpcMethod({
     const opened = yield* shell.openSystemSettings(pane);
     if (opened && environment.isPackaged) {
       const permissions = yield* MacPermissions.MacPermissions;
-      const isGranted = yield* safariPermissionCheck;
-      yield* permissions.showHelper(pane, owner, isGranted);
+      yield* permissions.showHelper(pane, owner, () => Promise.resolve(false));
     }
     return opened;
   }),
@@ -582,10 +580,7 @@ export const checkSystemPermission = DesktopIpc.makeIpcMethod({
   payload: SystemSettingsPaneSchema,
   result: Schema.Boolean,
   handler: Effect.fn("desktop.ipc.window.checkSystemPermission")(function* () {
-    const environment = yield* DesktopEnvironment.DesktopEnvironment;
-    if (environment.platform !== "darwin") return false;
-    const check = yield* safariPermissionCheck;
-    return yield* Effect.promise(check);
+    return false;
   }),
 });
 

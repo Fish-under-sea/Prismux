@@ -123,6 +123,8 @@ describe("Prismux installDownloadedUpdate security & lifecycle", () => {
         platform: process.platform,
         portableMode: false,
         allowedUpdatesDirs: [updatesDir],
+        resolveAuthoritativeDownload: () =>
+          Effect.succeed({ downloadedFilePath: outsideExe, downloadedSha256: hash }),
         showItemInFolder: () => {},
         stopManagedProcesses: () => Effect.void,
         spawnInstaller: () => {
@@ -168,10 +170,15 @@ describe("Prismux installDownloadedUpdate security & lifecycle", () => {
         actualHash.startsWith("a") ? `b${actualHash.slice(1)}` : `a${actualHash.slice(1)}`;
 
       let spawned = false;
-      const deps: PrismuxInstallDownloadedUpdateDeps = {
+      const makeDeps = (
+        filePath: string,
+        sha256: string,
+      ): PrismuxInstallDownloadedUpdateDeps => ({
         platform: process.platform,
         portableMode: false,
         allowedUpdatesDirs: [updatesDir],
+        resolveAuthoritativeDownload: () =>
+          Effect.succeed({ downloadedFilePath: filePath, downloadedSha256: sha256 }),
         showItemInFolder: () => {},
         stopManagedProcesses: () => Effect.void,
         spawnInstaller: () => {
@@ -179,13 +186,14 @@ describe("Prismux installDownloadedUpdate security & lifecycle", () => {
         },
         scheduleQuit: () => Effect.void,
         markQuitting: () => Effect.void,
-      };
+      });
 
+      const badHash = sha256Of("@echo off\r\necho pwned");
       const extError = await Effect.runPromise(
         Effect.flip(
           executePrismuxInstallDownloadedUpdate(
-            { filePath: badScript, expectedSha256: sha256Of("@echo off\r\necho pwned") },
-            deps,
+            { filePath: badScript, expectedSha256: badHash },
+            makeDeps(badScript, badHash),
           ),
         ),
       );
@@ -196,11 +204,41 @@ describe("Prismux installDownloadedUpdate security & lifecycle", () => {
         Effect.flip(
           executePrismuxInstallDownloadedUpdate(
             { filePath: validExe, expectedSha256: tamperedHash },
-            deps,
+            makeDeps(validExe, actualHash),
           ),
         ),
       );
       assert.equal(shaError.reason, "sha256_mismatch");
+      assert.isFalse(spawned);
+
+      // P1-8 regression: a forged renderer path+hash MUST be rejected when it disagrees with Daemon.
+      const forgedExe = NodePath.join(updatesDir, "forged.exe");
+      await NodeFSP.writeFile(forgedExe, "MZ-attacker-payload");
+      const forgedHash = await computeFileSha256Hex(forgedExe);
+      const forgedErr = await Effect.runPromise(
+        Effect.flip(
+          executePrismuxInstallDownloadedUpdate(
+            { filePath: forgedExe, expectedSha256: forgedHash },
+            makeDeps(validExe, actualHash),
+          ),
+        ),
+      );
+      assert.equal(forgedErr.reason, "sha256_mismatch");
+      assert.isFalse(spawned);
+
+      const noDaemonDownloadErr = await Effect.runPromise(
+        Effect.flip(
+          executePrismuxInstallDownloadedUpdate(
+            { filePath: forgedExe, expectedSha256: forgedHash },
+            {
+              ...makeDeps(forgedExe, forgedHash),
+              resolveAuthoritativeDownload: () =>
+                Effect.succeed({ downloadedFilePath: null, downloadedSha256: null }),
+            },
+          ),
+        ),
+      );
+      assert.equal(noDaemonDownloadErr.reason, "unverified_download");
       assert.isFalse(spawned);
     });
   });
@@ -226,6 +264,8 @@ describe("Prismux installDownloadedUpdate security & lifecycle", () => {
             platform: process.platform,
             portableMode: true,
             allowedUpdatesDirs: [portableUpdatesDir],
+            resolveAuthoritativeDownload: () =>
+              Effect.succeed({ downloadedFilePath: portablePkg, downloadedSha256: expectedSha256 }),
             showItemInFolder: (filePath) => {
               openedPaths.push(filePath);
             },
@@ -272,6 +312,8 @@ describe("Prismux installDownloadedUpdate security & lifecycle", () => {
             platform: process.platform,
             portableMode: false,
             allowedUpdatesDirs: [updatesDir],
+            resolveAuthoritativeDownload: () =>
+              Effect.succeed({ downloadedFilePath: installerExe, downloadedSha256: expectedSha256 }),
             showItemInFolder: () => {
               events.push("showItemInFolder");
             },

@@ -513,10 +513,16 @@ export function buildReleaseNotesTemplate(input: ReleaseNotesTemplateInput): str
 
   if (input.platform === 'gitee' && input.splitParts && input.splitParts.length > 0) {
     lines.push(
-      '# 1. 将全部分卷下载到同一目录后无损合并还原安装包（只需指定 .001）：',
+      `# 1. 解压前先逐卷校验全部 .7z.001..N 分卷 SHA-256（对照 ${softwareSums}）：`,
+      ...input.splitParts.map(
+        (part) =>
+          `(Get-FileHash .\\${part.name} -Algorithm SHA256).Hash.ToLower()  # 期望值: ${part.sha256}`,
+      ),
+      '',
+      '# 2. 分卷校验全部通过后，在同一目录无损合并还原安装包（只需指定 .001）：',
       `7z x ${input.splitParts[0]!.name}`,
       '',
-      `# 2. 校验完整安装包（或对照软件校验文件 ${softwareSums}）：`,
+      `# 3. 再次校验还原后的完整安装包（对照 ${softwareSums}）：`,
     );
   } else {
     lines.push(
@@ -535,6 +541,125 @@ export function buildReleaseNotesTemplate(input: ReleaseNotesTemplateInput): str
   }
 
   return `${lines.join('\n')}\n`;
+}
+
+export interface SplitSha256SumsResult {
+  readonly sumsPath: string;
+  readonly installerFilename: string;
+  readonly installerSha256: string;
+  readonly splitVolumes: ReadonlyArray<{ readonly filename: string; readonly sha256: string }>;
+}
+
+function parseSha256SumsEntries(content: string): Map<string, string> {
+  const entries = new Map<string, string>();
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) {
+      continue;
+    }
+    const match = /^([0-9a-fA-F]{64})\s+\*?(.+)$/.exec(line);
+    if (!match?.[1] || !match[2]) {
+      continue;
+    }
+    entries.set(basename(match[2].trim()), match[1].toLowerCase());
+  }
+  return entries;
+}
+
+/**
+ * Ensures the Gitee split-volume `Prismux-<version>-SHA256SUMS.txt` includes
+ * BOTH the full installer `.exe` SHA-256 hash AND per-volume SHA-256 hashes
+ * for EVERY `.7z.001..N` split archive volume so updaters can verify every
+ * volume before invoking `7za.exe` extraction.
+ */
+export function ensureSplitVolumesSha256Sums(
+  releaseDir: string,
+  version: string,
+  options: { readonly splitDir?: string } = {},
+): SplitSha256SumsResult | null {
+  const splitDir = options.splitDir ?? join(releaseDir, '.gitee-split');
+  if (!existsSync(splitDir) || !statSync(splitDir).isDirectory()) {
+    return null;
+  }
+  const splitFiles = readdirSync(splitDir)
+    .filter((name) => /\.7z\.\d{3}$/i.test(name) && statSync(join(splitDir, name)).isFile())
+    .sort((a, b) => a.localeCompare(b));
+  if (splitFiles.length === 0) {
+    return null;
+  }
+
+  const sumsFilename = formatSoftwareSumsFilename(version);
+  const rootSumsPath = join(releaseDir, sumsFilename);
+  const splitSumsPath = join(splitDir, sumsFilename);
+
+  const installerFiles = readdirSync(releaseDir)
+    .filter((name) => name.toLowerCase().endsWith('.exe') && statSync(join(releaseDir, name)).isFile())
+    .sort((a, b) => a.localeCompare(b));
+
+  let installerFilename: string | undefined;
+  let installerSha256: string | undefined;
+  if (installerFiles.length > 0) {
+    installerFilename = installerFiles[0]!;
+    installerSha256 = sha256File(join(releaseDir, installerFilename));
+  } else {
+    for (const candidateSums of [rootSumsPath, splitSumsPath]) {
+      if (!existsSync(candidateSums)) continue;
+      const parsed = parseSha256SumsEntries(readFileSync(candidateSums, 'utf8'));
+      for (const [name, digest] of parsed.entries()) {
+        if (name.toLowerCase().endsWith('.exe')) {
+          installerFilename = name;
+          installerSha256 = digest;
+          break;
+        }
+      }
+      if (installerFilename && installerSha256) break;
+    }
+  }
+
+  if (!installerFilename || !installerSha256) {
+    throw new Error(
+      `Cannot generate split-volume ${sumsFilename}: missing installer .exe hash in ${releaseDir} or ${rootSumsPath}.`,
+    );
+  }
+
+  const splitVolumes = splitFiles.map((filename) => ({
+    filename,
+    sha256: sha256File(join(splitDir, filename)),
+  }));
+
+  const lines = [
+    `${installerSha256}  ${installerFilename}`,
+    ...splitVolumes.map((vol) => `${vol.sha256}  ${vol.filename}`),
+  ];
+  writeFileSync(splitSumsPath, `${lines.join('\n')}\n`, 'utf8');
+
+  return {
+    sumsPath: splitSumsPath,
+    installerFilename,
+    installerSha256,
+    splitVolumes,
+  };
+}
+
+/**
+ * Validates that a consolidated software `SHA256SUMS` file covers the installer
+ * `.exe` hash as well as every `.7z.001..N` split volume present in `splitVolumeNames`.
+ */
+export function assertSplitSha256SumsCoversAllVolumes(
+  sumsContent: string,
+  expectedSplitVolumeNames: readonly string[],
+): void {
+  const entries = parseSha256SumsEntries(sumsContent);
+  const hasExe = [...entries.keys()].some((name) => name.toLowerCase().endsWith('.exe'));
+  if (!hasExe) {
+    throw new Error('SHA256SUMS is missing the full installer .exe SHA-256 entry.');
+  }
+  const missingVolumes = expectedSplitVolumeNames.filter((name) => !entries.has(basename(name)));
+  if (missingVolumes.length > 0) {
+    throw new Error(
+      `SHA256SUMS is missing per-volume SHA-256 entries for split volumes: ${missingVolumes.join(', ')}`,
+    );
+  }
 }
 
 export async function publishGiteeRelease(options: {
@@ -648,6 +773,14 @@ export async function publishGiteeRelease(options: {
     if (typeof item['name'] === 'string' && item['id'] !== undefined) {
       existingFiles.set(item['name'], String(item['id']));
     }
+  }
+
+  const splitSumsResult = ensureSplitVolumesSha256Sums(releaseDir, version);
+  if (splitSumsResult) {
+    assertSplitSha256SumsCoversAllVolumes(
+      readFileSync(splitSumsResult.sumsPath, 'utf8'),
+      splitSumsResult.splitVolumes.map((vol) => vol.filename),
+    );
   }
 
   const artifacts = collectReleaseArtifactFiles(releaseDir, {

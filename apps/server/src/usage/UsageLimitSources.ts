@@ -31,7 +31,6 @@ import * as SecretResolverLayer from "../secrets/SecretResolver.ts";
 import { resolveSettingsSecrets } from "../secrets/settingsSecretValue.ts";
 import * as Settings from "../serverSettings.ts";
 import { windowLimitsModel } from "../provider/claudeUsageLimits.ts";
-import { makeCliproxyApi } from "./cliproxyApi.ts";
 import { makeRelayQuotaApi, normalizeRelayBaseUrl } from "./relayQuotaApi.ts";
 
 export class UsageLimitSources extends Context.Service<
@@ -70,6 +69,9 @@ function keepLastGoodReadings(
       (candidate) => candidate.id === source.id && candidate.endpoint === source.endpoint,
     );
     if (!before) return source;
+    if (source.accounts.length === 0 && source.error !== undefined && before.accounts.length > 0) {
+      return { ...source, accounts: before.accounts };
+    }
     return {
       ...source,
       accounts: source.accounts.map((account) => {
@@ -94,11 +96,6 @@ function keepLastGoodReadings(
 }
 
 function missingManagementKey(config: UsageLimitSourceConfig): string {
-  if (config.kind === "cliproxy") {
-    return typeof config.managementKey === "string"
-      ? "No management key configured."
-      : "Could not read the management key from its secret provider.";
-  }
   return typeof config.managementKey === "string"
     ? "No API key configured."
     : "Could not read the API key from its secret provider.";
@@ -112,32 +109,23 @@ function buildSourceBase(
   config: UsageLimitSourceConfig,
   checkedAt: string,
 ) {
-  const url = URL.parse(config.url);
-  const relayUrl = config.kind === "cliproxy" ? null : normalizeRelayBaseUrl(config.url);
+  const relayUrl = normalizeRelayBaseUrl(config.url);
   return {
     id,
     kind: config.kind,
     label: sourceLabel(id, config),
-    ...(config.kind === "cliproxy"
-      ? url && /^https?:$/.test(url.protocol)
-        ? {
-            origin: url.origin,
-            endpoint: `${url.origin}${url.pathname.replace(/(\/management\.html)?\/*$/i, "")}`,
-          }
-        : {}
-      : relayUrl
-        ? {
-            origin: relayUrl.origin,
-            endpoint: relayUrl.baseUrl,
-          }
-        : {}),
+    ...(relayUrl
+      ? {
+          origin: relayUrl.origin,
+          endpoint: relayUrl.baseUrl,
+        }
+      : {}),
     checkedAt,
   } as const;
 }
 
 /** @public */
 export const make = Effect.gen(function* () {
-  const cliproxyApi = yield* makeCliproxyApi;
   const relayApi = yield* makeRelayQuotaApi;
   const settingsService = yield* Settings.ServerSettingsService;
   const secrets = yield* SecretResolver.SecretResolver;
@@ -164,16 +152,14 @@ export const make = Effect.gen(function* () {
     if (managementKey.length === 0) {
       return { ...base, accounts: [], error: missingManagementKey(config) };
     }
-    const accounts = yield* (
-      config.kind === "cliproxy"
-        ? cliproxyApi.readAccounts({ url: config.url, managementKey })
-        : relayApi.readAccounts({
-            kind: config.kind,
-            url: config.url,
-            apiKey: managementKey,
-            userId: config.userId,
-          })
-    ).pipe(Effect.result);
+    const accounts = yield* relayApi
+      .readAccounts({
+        kind: config.kind,
+        url: config.url,
+        apiKey: managementKey,
+        userId: config.userId,
+      })
+      .pipe(Effect.result);
     if (accounts._tag === "Failure") {
       yield* Effect.logDebug("usage limit source read failed", { id, cause: accounts.failure });
       return { ...base, accounts: [], error: accounts.failure.detail };
@@ -315,25 +301,9 @@ export const make = Effect.gen(function* () {
         detail: "The usage limit source is missing or disabled.",
       });
     }
-    if (config.kind !== "cliproxy") {
-      return yield* new UsageLimitSourceError({
-        detail: "Reset credits are only supported for CLIProxyAPI usage sources.",
-      });
-    }
-    const managementKey = yield* readManagementKey(config);
-    if (managementKey.length === 0) {
-      return yield* new UsageLimitSourceError({ detail: missingManagementKey(config) });
-    }
-    const result = yield* cliproxyApi.consume(
-      { url: config.url, managementKey },
-      input.accountId,
-      input.creditId,
-    );
-    // A redemption changes the reading, so a refused re-read must not bring back the one before it.
-    const snapshot = yield* readSource(input.sourceId, config);
-    const previous = yield* Ref.get(stateRef);
-    yield* publish(previous.map((source) => (source.id === input.sourceId ? snapshot : source)));
-    return result;
+    return yield* new UsageLimitSourceError({
+      detail: "Reset credits are not supported for relay quota usage sources.",
+    });
   }, refreshLock.withPermits(1));
 
   yield* settingsService.streamChanges.pipe(

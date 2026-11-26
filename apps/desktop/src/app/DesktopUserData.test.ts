@@ -8,11 +8,6 @@ import * as PlatformError from "effect/PlatformError";
 
 import { cleanupOrphanedSnapShots, ORPHAN_SNAPSHOT_MAX_AGE_MS } from "../snapShot/DesktopSnapShot.ts";
 import {
-  cleanupStalePendingInstallers,
-  extractInstallerVersion,
-  PENDING_INSTALLER_MAX_AGE_MS,
-} from "../updates/DesktopUpdates.ts";
-import {
   cleanupCompileCache,
   cleanupCrashpadReports,
   clearStaleGpuCaches,
@@ -324,53 +319,5 @@ it.effect("sweeps orphaned snap-shots older than 24 hours", () =>
     assert.isFalse(yield* fs.exists(staleJson));
     assert.isTrue(yield* fs.exists(freshPng));
     assert.isTrue(yield* fs.exists(unrelatedNote));
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-);
-
-it.effect("sweeps installed (<= currentVersion) and stale (>7d) pending updater installers", () =>
-  Effect.gen(function* () {
-    assert.equal(extractInstallerVersion("Prismux-0.2.2-rc.2-x64-setup.exe"), "0.2.2-rc.2");
-    assert.equal(extractInstallerVersion("Prismux Setup 0.2.1.exe"), "0.2.1");
-    assert.equal(extractInstallerVersion("update-info.json"), null);
-
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const pendingDir = yield* fs.makeTempDirectoryScoped({ prefix: "prismux-updater-pending-" });
-    const nowMs = Date.UTC(2026, 10, 26, 12, 0, 0);
-
-    const olderInstaller = path.join(pendingDir, "Prismux-0.2.2-rc.1-x64-setup.exe");
-    const sameInstaller = path.join(pendingDir, "Prismux-0.2.2-rc.2-x64-setup.exe");
-    const staleFutureInstaller = path.join(pendingDir, "Prismux-0.2.3-x64-setup.exe");
-    const freshFutureInstaller = path.join(pendingDir, "Prismux-0.2.4-x64-setup.exe");
-    const staleUpdateInfo = path.join(pendingDir, "update-info.json");
-    for (const filePath of [
-      olderInstaller,
-      sameInstaller,
-      staleFutureInstaller,
-      freshFutureInstaller,
-    ]) {
-      yield* fs.writeFileString(filePath, "installer");
-    }
-    yield* fs.writeFileString(
-      staleUpdateInfo,
-      JSON.stringify({ fileName: "Prismux-0.2.2-rc.2-x64-setup.exe", version: "0.2.2-rc.2" }),
-    );
-    yield* setMtimeMs(fs, olderInstaller, nowMs - 60_000);
-    yield* setMtimeMs(fs, sameInstaller, nowMs - 60_000);
-    yield* setMtimeMs(fs, staleFutureInstaller, nowMs - PENDING_INSTALLER_MAX_AGE_MS - 60_000);
-    yield* setMtimeMs(fs, freshFutureInstaller, nowMs - 60_000);
-    yield* setMtimeMs(fs, staleUpdateInfo, nowMs - 60_000);
-
-    const removed = yield* cleanupStalePendingInstallers({
-      pendingDir,
-      currentVersion: "0.2.2-rc.2",
-      nowMs,
-    });
-    assert.equal(removed, 4);
-    assert.isFalse(yield* fs.exists(olderInstaller));
-    assert.isFalse(yield* fs.exists(sameInstaller));
-    assert.isFalse(yield* fs.exists(staleFutureInstaller));
-    assert.isFalse(yield* fs.exists(staleUpdateInfo));
-    assert.isTrue(yield* fs.exists(freshFutureInstaller));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

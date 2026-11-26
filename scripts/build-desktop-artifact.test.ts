@@ -32,9 +32,9 @@ import {
   createBuildConfig,
   DESKTOP_FILE_EXCLUSIONS,
   InvalidMacPasskeyRpDomainError,
-  InvalidMacPasskeyPublishableKeyError,
   UnsupportedDesktopBuildArchitectureError,
   MacPasskeySigningConfigurationResolutionError,
+  MissingMacPasskeyDomainConfigurationError,
   MissingMacPasskeyProvisioningProfileError,
   packWindowsServerAsar,
   preflightWindowsDesktopBuild,
@@ -47,10 +47,8 @@ import {
   stageWslRuntimeArchive,
   ancestorNodeModulesPaths,
   copyDirectoryPreservingSymlinks,
-  LinuxBrowserSecretHostError,
   LinuxPackagedAppMissingError,
   MacPackagedAppMissingError,
-  stageBrowserSecret,
   validateLinuxPackagedPayload,
   validateMacPackagedPayload,
   validateWindowsPackagedPayload,
@@ -602,7 +600,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
-  it.effect("declares Calendar access for hosted commands in macOS builds", () =>
+  it.effect("omits unused Calendar and Camera TCC usage descriptions while preserving core permissions in macOS builds", () =>
     Effect.gen(function* () {
       for (const version of ["0.1.0", "0.1.1-nightly.20261019.1"]) {
         for (const signed of [false, true]) {
@@ -616,13 +614,22 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             undefined,
           );
           const mac = config.mac as { extendInfo: Record<string, unknown> };
-          for (const key of [
+          for (const removedKey of [
             "NSCalendarsUsageDescription",
             "NSCalendarsFullAccessUsageDescription",
             "NSCalendarsWriteOnlyAccessUsageDescription",
+            "NSCameraUsageDescription",
           ]) {
-            assert.isString(mac.extendInfo[key], `${version}, signed=${signed}: ${key}`);
-            assert.isNotEmpty(mac.extendInfo[key]);
+            assert.isUndefined(mac.extendInfo[removedKey], `${version}, signed=${signed}: ${removedKey}`);
+          }
+          for (const preservedKey of [
+            "NSLocalNetworkUsageDescription",
+            "NSScreenCaptureUsageDescription",
+            "NSMicrophoneUsageDescription",
+            "NSSpeechRecognitionUsageDescription",
+          ]) {
+            assert.isString(mac.extendInfo[preservedKey], `${version}, signed=${signed}: ${preservedKey}`);
+            assert.isNotEmpty(mac.extendInfo[preservedKey]);
           }
         }
       }
@@ -648,13 +655,14 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
-  it("stages only the externals of both bundles in merged packages", () => {
+  it("stages only the externals of both bundles in merged packages and keeps @napi-rs/keyring out of desktop externals", () => {
     assert.deepStrictEqual(
       resolveMergedStageDependencies({
         platform: "mac",
         serverDependencies: {
           "@anthropic-ai/claude-agent-sdk": "^0.3.170",
           "@ff-labs/fff-node": "0.9.4",
+          "@napi-rs/keyring": "1.3.0",
           "@opencode-ai/sdk": "^1.3.15",
           "@pierre/diffs": "1.3.0",
           "node-pty": "1.1.0",
@@ -668,8 +676,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       }),
       {
         "@ff-labs/fff-node": "0.9.4",
-        "node-pty": "1.1.0",
         "@napi-rs/keyring": "1.3.0",
+        "node-pty": "1.1.0",
         "playwright-core": "1.60.0",
         "@ff-labs/fff-bin-darwin-arm64": "0.9.4",
       },
@@ -679,7 +687,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       resolveMergedStageDependencies({
         platform: "linux",
         serverDependencies: { "@ff-labs/fff-node": "0.9.4", "node-pty": "1.1.0", effect: "4.0.0" },
-        desktopDependencies: { "@crowecawcaw/xa11y": "0.13.0" },
+        desktopDependencies: { "@crowecawcaw/xa11y": "0.13.0", "@napi-rs/keyring": "1.3.0" },
         arch: "x64",
         fffNodeVersion: "0.9.4",
       }),
@@ -1144,39 +1152,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     );
   });
 
-  it.effect("refuses a Linux build on a host that cannot build the browser secret helper", () => {
-    const commands: Array<{ readonly command: string }> = [];
-    const spawnerLayer = Layer.succeed(
-      ChildProcessSpawner.ChildProcessSpawner,
-      ChildProcessSpawner.make((command) => {
-        commands.push(command as unknown as (typeof commands)[number]);
-        return Effect.succeed(mockProcess(0));
-      }),
-    );
-
-    return Effect.gen(function* () {
-      const error = yield* stageBrowserSecret({
-        repoRoot: "/repo",
-        stageResourcesDir: "/stage/resources",
-        platform: "linux",
-        arch: "x64",
-        verbose: false,
-      }).pipe(Effect.flip);
-      assert.instanceOf(error, LinuxBrowserSecretHostError);
-      assert.equal(error.hostPlatform, "darwin");
-      assert.include(error.message, "Linux host");
-      assert.lengthOf(commands, 0);
-    }).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          spawnerLayer,
-          Layer.succeed(HostProcess.Platform, "darwin"),
-          Layer.succeed(HostProcess.Architecture, "arm64"),
-        ),
-      ),
-    );
-  });
-
   it.effect("skips the primary native probe for cross-architecture Windows payloads", () => {
     const commands: Array<{
       readonly command: string;
@@ -1518,27 +1493,12 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
-  it("derives macOS passkey signing configuration from the Clerk publishable key", () => {
-    const configuration = resolveMacPasskeySigningConfiguration({
-      PRISMUX_APPLE_TEAM_ID: "abc1234567",
-      PRISMUX_MACOS_PROVISIONING_PROFILE: "/tmp/prismux.provisionprofile",
-      PRISMUX_CLERK_PUBLISHABLE_KEY: `pk_test_${btoa("example.clerk.accounts.dev$")}`,
-    });
-
-    assert.deepStrictEqual(configuration, {
-      appId: "io.prismux.desktop",
-      teamId: "ABC1234567",
-      rpDomains: ["example.clerk.accounts.dev"],
-      provisioningProfilePath: "/tmp/prismux.provisionprofile",
-    });
-  });
-
-  it("normalizes explicit macOS passkey RP domains and renders required entitlements", () => {
+  it("normalizes explicit macOS passkey RP domains and renders required entitlements without camera access", () => {
     const configuration = resolveMacPasskeySigningConfiguration({
       PRISMUX_APPLE_TEAM_ID: "ABC1234567",
       PRISMUX_MACOS_PROVISIONING_PROFILE: "/tmp/prismux.provisionprofile",
-      PRISMUX_CLERK_PASSKEY_RP_DOMAINS:
-        " Clerk.Example.com,example.clerk.accounts.dev,clerk.example.com ",
+      PRISMUX_MACOS_PASSKEY_RP_DOMAINS:
+        " Example.Local,passkey.example.test,example.local ",
     });
     const entitlements = renderMacPasskeyEntitlements(configuration, {
       touchIdKeychainAccessGroup: undefined,
@@ -1546,14 +1506,14 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     });
 
     assert.deepStrictEqual(configuration.rpDomains, [
-      "clerk.example.com",
-      "example.clerk.accounts.dev",
+      "example.local",
+      "passkey.example.test",
     ]);
     assert.include(entitlements, "<string>ABC1234567.io.prismux.desktop</string>");
-    assert.include(entitlements, "<string>webcredentials:clerk.example.com</string>");
-    assert.include(entitlements, "<string>webcredentials:example.clerk.accounts.dev</string>");
+    assert.include(entitlements, "<string>webcredentials:example.local</string>");
+    assert.include(entitlements, "<string>webcredentials:passkey.example.test</string>");
     assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
-    assert.match(entitlements, /<key>com\.apple\.security\.device\.camera<\/key>\s*<true\/>/u);
+    assert.notInclude(entitlements, "com.apple.security.device.camera");
     assert.match(entitlements, /<key>com\.apple\.security\.device\.audio-input<\/key>\s*<true\/>/u);
     assert.notInclude(entitlements, "keychain-access-groups");
     assert.notInclude(entitlements, "com.apple.developer.web-browser.public-key-credential");
@@ -1638,7 +1598,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
     const missingProfileError = captureError({
       PRISMUX_APPLE_TEAM_ID: "ABC1234567",
-      PRISMUX_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev",
+      PRISMUX_MACOS_PASSKEY_RP_DOMAINS: "passkey.example.test",
     });
     assert.instanceOf(missingProfileError, MissingMacPasskeyProvisioningProfileError);
     assert.equal(
@@ -1646,12 +1606,18 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "PRISMUX_MACOS_PROVISIONING_PROFILE must point to an Associated Domains provisioning profile.",
     );
 
+    const missingDomainsError = captureError({
+      PRISMUX_APPLE_TEAM_ID: "ABC1234567",
+      PRISMUX_MACOS_PROVISIONING_PROFILE: "/tmp/prismux.provisionprofile",
+    });
+    assert.instanceOf(missingDomainsError, MissingMacPasskeyDomainConfigurationError);
+
     const unsafeDomain =
-      "https://domain-user:domain-secret@example.clerk.accounts.dev/path?token=query-secret";
+      "https://domain-user:domain-secret@passkey.example.test/path?token=query-secret";
     const invalidDomainError = captureError({
       PRISMUX_APPLE_TEAM_ID: "ABC1234567",
       PRISMUX_MACOS_PROVISIONING_PROFILE: "/tmp/prismux.provisionprofile",
-      PRISMUX_CLERK_PASSKEY_RP_DOMAINS: unsafeDomain,
+      PRISMUX_MACOS_PASSKEY_RP_DOMAINS: unsafeDomain,
     });
     assert.instanceOf(invalidDomainError, InvalidMacPasskeyRpDomainError);
     assert.equal(invalidDomainError.reason, "scheme-not-allowed");
@@ -1669,20 +1635,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         resolveMacPasskeySigningConfiguration({
           PRISMUX_APPLE_TEAM_ID: "ABC1234567",
           PRISMUX_MACOS_PROVISIONING_PROFILE: "/tmp/prismux.provisionprofile",
-          PRISMUX_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev:8443",
+          PRISMUX_MACOS_PASSKEY_RP_DOMAINS: "passkey.example.test:8443",
         }),
       /Invalid passkey RP domain/u,
     );
-    const invalidPublishableKeyError = captureError({
-      PRISMUX_APPLE_TEAM_ID: "ABC1234567",
-      PRISMUX_MACOS_PROVISIONING_PROFILE: "/tmp/prismux.provisionprofile",
-      PRISMUX_CLERK_PUBLISHABLE_KEY: "pk_test_%",
-    });
-    assert.instanceOf(invalidPublishableKeyError, InvalidMacPasskeyPublishableKeyError);
-    assert.ok(invalidPublishableKeyError.cause);
-    assert.equal(invalidPublishableKeyError.message, "PRISMUX_CLERK_PUBLISHABLE_KEY is invalid.");
-    assert.notProperty(invalidPublishableKeyError, "publishableKey");
-    assert.notInclude(invalidPublishableKeyError.message, "pk_test_%");
   });
 
   it("wraps unknown passkey signing configuration defects without copying cause text", () => {
@@ -1942,29 +1898,52 @@ it.effect.skipIf(!symlinksSupported)("preserves relative links when replacing di
   }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
 );
 
-it.effect("stages 7za.exe with sibling 7z.dll and rejects undersized binaries", () =>
+it.effect("stages verified 7za.exe with sibling 7z.dll + LGPL-2.1 license and fails closed on SHA-256 tamper", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const root = yield* fs.makeTempDirectoryScoped({ prefix: "prismux-7za-stage-" });
     const sevenZipDir = path.join(root, "7-Zip");
     const targetDir = path.join(root, "tools");
+    const licensesDir = path.join(root, "scripts", "licenses");
     yield* fs.makeDirectory(sevenZipDir, { recursive: true });
+    yield* fs.makeDirectory(licensesDir, { recursive: true });
+    const fakeExeBytes = new Uint8Array(WINDOWS_SEVEN_ZIP_MIN_BYTES + 1024).fill(0x5a);
+    const fakeDllBytes = new Uint8Array(4096).fill(0x37);
     const fakeExe = path.join(sevenZipDir, "7z.exe");
     const fakeDll = path.join(sevenZipDir, "7z.dll");
-    yield* fs.writeFile(fakeExe, new Uint8Array(WINDOWS_SEVEN_ZIP_MIN_BYTES + 1024));
-    yield* fs.writeFile(fakeDll, new Uint8Array(4096));
+    const fakeLicense = path.join(licensesDir, "7zip-LGPL-2.1.LICENSE");
+    yield* fs.writeFile(fakeExe, fakeExeBytes);
+    yield* fs.writeFile(fakeDll, fakeDllBytes);
+    yield* fs.writeFileString(fakeLicense, "7-Zip GNU LGPL-2.1+ with unRAR restriction\n");
+
+    const exeSha256 = NodeCrypto.createHash("sha256").update(fakeExeBytes).digest("hex");
+    const dllSha256 = NodeCrypto.createHash("sha256").update(fakeDllBytes).digest("hex");
+
+    // Unverified host binary without matching pinned SHA-256 must fail closed
+    const unverifiedError = yield* stageWindowsSevenZipTool({
+      repoRoot: root,
+      arch: "x64",
+      targetDir: path.join(root, "tools-unverified"),
+      candidates: [fakeExe],
+    }).pipe(Effect.flip);
+    assert.equal(unverifiedError._tag, "WindowsSevenZipToolError");
+    assert.equal(unverifiedError.reason, "sha256-mismatch");
 
     const staged = yield* stageWindowsSevenZipTool({
       repoRoot: root,
       arch: "x64",
       targetDir,
       candidates: [path.join(root, "missing-7za.exe"), fakeExe],
+      expectedSha256: [exeSha256],
+      expectedDllSha256: [dllSha256],
     });
     assert.equal(staged.sourcePath, fakeExe);
+    assert.equal(staged.sha256, exeSha256);
     assert.isTrue(staged.bundledSiblingDll);
     assert.isTrue(yield* fs.exists(path.join(targetDir, "7za.exe")));
     assert.isTrue(yield* fs.exists(path.join(targetDir, "7z.dll")));
+    assert.isTrue(yield* fs.exists(path.join(targetDir, "LICENSE-7zip-LGPL-2.1.txt")));
 
     const tinyExe = path.join(sevenZipDir, "tiny-7za.exe");
     yield* fs.writeFile(tinyExe, new Uint8Array(128));
@@ -2028,12 +2007,25 @@ it.effect(
       const targetDir = path.join(root, "prod-resources", "native", "sqlite-vec");
       const daemonDepsDir = path.join(root, "prod-resources", "prismux-daemon-deps");
       yield* fs.makeDirectory(sourcePkgDir, { recursive: true });
+      const fakeDllBytes = new Uint8Array(WINDOWS_SQLITE_VEC_MIN_BYTES + 1024).fill(0x56);
       const fakeDll = path.join(sourcePkgDir, "vec0.dll");
-      yield* fs.writeFile(fakeDll, new Uint8Array(WINDOWS_SQLITE_VEC_MIN_BYTES + 1024));
+      const fakeDllSha256 = NodeCrypto.createHash("sha256").update(fakeDllBytes).digest("hex");
+      yield* fs.writeFile(fakeDll, fakeDllBytes);
       yield* fs.writeFileString(
         path.join(sourcePkgDir, "package.json"),
         '{"name":"sqlite-vec-windows-x64","version":"0.1.9"}\n',
       );
+
+      // Tampered/unpinned vec0.dll must fail closed
+      const tamperedError = yield* stageSqliteVecNative({
+        repoRoot: root,
+        platform: "win",
+        arch: "x64",
+        targetDir: path.join(root, "target-tampered"),
+        candidates: [fakeDll],
+      }).pipe(Effect.flip);
+      assert.equal(tamperedError._tag, "SqliteVecNativeToolError");
+      assert.equal(tamperedError.reason, "sha256-mismatch");
 
       const staged = yield* stageSqliteVecNative({
         repoRoot: root,
@@ -2042,6 +2034,7 @@ it.effect(
         targetDir,
         daemonDepsTargetDir: daemonDepsDir,
         candidates: [path.join(root, "missing-vec0.dll"), fakeDll],
+        expectedSha256: [fakeDllSha256],
       });
       assert.equal(staged.sourcePath, fakeDll);
       assert.equal(staged.targetLibraryPath, path.join(targetDir, "vec0.dll"));

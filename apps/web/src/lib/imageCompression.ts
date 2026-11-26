@@ -672,17 +672,6 @@ function prepareHeicImage(file: File) {
   return preparation;
 }
 
-async function readPixelsAsDisplayP3(
-  bitmap: ImageBitmap,
-  { width, height }: ImageSize,
-): Promise<ImageBitmap | undefined> {
-  const raw = createCanvas(width, height, "srgb");
-  if (!raw) return undefined;
-  raw.context.drawImage(bitmap, 0, 0, width, height);
-  const pixels = raw.context.getImageData(0, 0, width, height);
-  return createImageBitmap(new ImageData(pixels.data, width, height, { colorSpace: "display-p3" }));
-}
-
 async function convertHeicImage(
   file: File,
   onThumbnail: (src: string | null) => void,
@@ -699,22 +688,13 @@ async function convertHeicImage(
       typeof createImageBitmap === "function"
         ? await createImageBitmap(file).catch(() => undefined)
         : undefined;
-    const decodedNatively = bitmap !== undefined;
     if (!bitmap) {
-      const { heicTo } = await import("heic-to/csp");
-      bitmap = await heicTo({ blob: file, type: "bitmap" });
+      return { ok: false, reason: "unreadable" };
     }
     const imageSize = fitImageAttachmentSize(bitmap) ?? {
       width: bitmap.width,
       height: bitmap.height,
     };
-    // heic-to ignores the color profile and hands back the raw Display P3 values as sRGB.
-    if (!decodedNatively && metadata.displayP3) {
-      const source = bitmap;
-      bitmap = await readPixelsAsDisplayP3(source, imageSize);
-      source.close();
-      if (!bitmap) return { ok: false, reason: "unreadable" };
-    }
     const colorSpace = metadata.displayP3 ? "display-p3" : "srgb";
     const surface = createCanvas(imageSize.width, imageSize.height, colorSpace);
     if (!surface) return { ok: false, reason: "unreadable" };

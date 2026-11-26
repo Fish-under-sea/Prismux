@@ -188,7 +188,6 @@ overrides:
   dbus-next: 0.10.2
   node-pty: 1.2.0-beta.15
   app-builder-lib: 26.16.1
-  electron-updater: 6.8.9
   '@exodus/bytes>@noble/hashes': 1.8.0
   dbus-next>usocket: '-'
   '@anthropic-ai/claude-agent-sdk>@anthropic-ai/claude-agent-sdk-darwin-arm64': '-'
@@ -247,7 +246,6 @@ patchedDependencies:
   '@pierre/diffs@1.7.0-beta.4': 7edcdd484a99c7ec0b2667499c4cb21d113ec9bea1f8570c0b0a030d33bbf1cd
   app-builder-lib@26.16.1: f9ad2611db211f5df92a7711d8710f0926549ac0bc0ac4add4e20d3f589cf558
   dbus-next@0.10.2: 00b44d3f7676a5f61ae23a0a5f51f7bd41fedf1c758cd8b7196b36b9252ee924
-  electron-updater@6.8.9: 91b5648a7eed42761523ef542ebb7e548b037eda41d66533c8152ac65ac72155
   mdast-util-math@3.0.0: afe6b2c89e1eaddfd3c90cf2723f12c9a17d513e65beff51653781486013251c
   mdast-util-to-hast@13.2.1: 57ea46c73aea3c876ab8d351fe0482ddd081dcb4a0610576e399dbe5eb59d2b1
   micromark-extension-gfm-table@2.1.1: 9ad23a530e45d9f83cba1da8654fe16d5af8b59d5c73d5c7a7c91fd25b9be1d8
@@ -305,9 +303,6 @@ importers:
       '@effect/platform-node':
         specifier: 4.1.5
         version: 4.1.5(effect@4.1.5)(redis@6.4.0(@opentelemetry/api@1.10.0))
-      '@napi-rs/keyring':
-        specifier: ^1.3.0
-        version: 1.3.0
       '@prismux/client-runtime':
         specifier: workspace:*
         version: link:../../packages/client-runtime
@@ -335,9 +330,6 @@ importers:
       electron-store:
         specifier: ^8.2.0
         version: 8.2.0
-      electron-updater:
-        specifier: 6.8.9
-        version: 6.8.9(patch_hash=91b5648a7eed42761523ef542ebb7e548b037eda41d66533c8152ac65ac72155)(supports-color@7.2.0)
       electron-webauthn:
         specifier: 'catalog:'
         version: 1.3.1(typescript@5.9.3)
@@ -718,9 +710,6 @@ importers:
       hast-util-to-jsx-runtime:
         specifier: ^2.3.6
         version: 2.3.7(supports-color@7.2.0)
-      heic-to:
-        specifier: ^1.5.2
-        version: 1.6.7
       html-url-attributes:
         specifier: ^3.0.1
         version: 3.0.1
@@ -5646,9 +5635,6 @@ packages:
   electron-to-chromium@1.5.493:
     resolution: {integrity: sha512-/Wto2sKd0EpepzMqwSP2il2TNc+rnBDF6k1poCvhRKpaSSD4sLGRBE+FydqHs2QwcW9cXKLVDqnauzJy1oByYw==}
 
-  electron-updater@6.8.9:
-    resolution: {integrity: sha512-ZhVxM9iGONUpZGI1FxdMRgJjUFXi7AYGVa5PwKlO1tV1/4zDxQmfKpXOHVztKrd6L9rLcFjERvi1Mf2vxyTkig==}
-
   electron-webauthn@1.3.1:
     resolution: {integrity: sha512-I8/SOjPfnIiVjN38eTX3BRZfuFDGzLWtlByh4OecmlVkfxQt9R/zCwEm4PquyvaqP+xtGgkFrBxwOuJ+DhWlDg==}
     peerDependencies:
@@ -6062,9 +6048,6 @@ packages:
   hastscript@9.0.3:
     resolution: {integrity: sha512-1ALZXSmCGmW3h8AMz4R4+QKSKFi7sNgXLVwmwB8FYVtl1CwQ3WDkSAEY/d5tp1g/vbQgq2s1WlHgfO3jbw1TsA==}
 
-  heic-to@1.6.7:
-    resolution: {integrity: sha512-GCPYNl86u6eZ7mr2aa+uQB+PrQOVKSBYfH8esovr8kh2c6EYQSDYIJ6uhXSmM2hPC8PdBVJ/Trn0jnfM9H9gvg==}
-
   help-me@5.0.0:
     resolution: {integrity: sha512-7xgomUX6ADmcYzFik0HzAxh/73YlKR9bmFzf51CZwR+b6YtzU2m0u49hQCqV6SvlqIqsaxovfwdvbnsw3b/zpg==}
 
@@ -6444,13 +6427,6 @@ packages:
   locate-path@3.0.0:
     resolution: {integrity: sha512-7AO748wWnIhNqAuaty2ZWHkQHRSNfPVIsPIfwEOWO22AmaoVrWavlOcMR5nzTLNYvp36X220/maaRsrec1G65A==}
     engines: {node: '>=6'}
-
-  lodash.escaperegexp@4.1.2:
-    resolution: {integrity: sha512-TM9YBvyC84ZxE3rgfefxUWiQKLilstD6k7PTGt6wfbtXF8ixIJLOL3VYyV/z+ZiPLsVxAsKAFVwWlWeb2Y8Yyw==}
-
-  lodash.isequal@4.5.0:
-    resolution: {integrity: sha512-pDo3lu8Jhfjqls6GkMgpahsF9kCyayhgykjyLMNFTKWrpVdAQtYyB4muAMWozBB4ig/dtWAmsMxLEI8wuz+DYQ==}
-    deprecated: This package is deprecated. Use require('node:util').isDeepStrictEqual instead.
 
   lodash@4.18.1:
     resolution: {integrity: sha512-dMInicTPVE8d1e5otfwmmjlxkZoUpiVLwyeTdUsi/Caj/gfzzblBcCE5sRHV/AsjuCmxWrte2TNGSYuCeCq+0Q==}
@@ -7772,9 +7748,6 @@ packages:
 
   tiny-async-pool@1.3.0:
     resolution: {integrity: sha512-01EAw5EDrcVrdgyCLgoSPvqznC0sVxDSVeiOz09FUpjh71G79VCqneOr+xvt7T1r76CF6ZZfPjHorN2+d+3mqA==}
-
-  tiny-typed-emitter@2.1.0:
-    resolution: {integrity: sha512-qVtvMxeXbVej0cQWKqVSSAHmKZEHAvxdF8HEUBFWts8h+xEo5m/lEiPakuyZ3BnCBjOD8i24kzNOiOLLgsSxhA==}
 
   tinybench@6.2.5:
     resolution: {integrity: sha512-b/8GRMdnY4cqkfCLyaFpTGIv1qwfi3oT0mWaepwT++6Z/ZrYehNfZZ2JDKVLKGhNoEkS3IIB1ELtCT0XS5DtOA==}
@@ -11470,19 +11443,6 @@ snapshots:
 
   electron-to-chromium@1.5.493: {}
 
-  electron-updater@6.8.9(patch_hash=91b5648a7eed42761523ef542ebb7e548b037eda41d66533c8152ac65ac72155)(supports-color@7.2.0):
-    dependencies:
-      builder-util-runtime: 9.7.0(supports-color@7.2.0)
-      fs-extra: 10.1.0
-      js-yaml: 4.3.2
-      lazy-val: 1.0.5
-      lodash.escaperegexp: 4.1.2
-      lodash.isequal: 4.5.0
-      semver: 7.7.4
-      tiny-typed-emitter: 2.1.0
-    transitivePeerDependencies:
-      - supports-color
-
   electron-webauthn@1.3.1(typescript@5.9.3):
     dependencies:
       '@electron-webauthn/types': 1.4.0
@@ -12129,8 +12089,6 @@ snapshots:
       property-information: 7.2.0
       space-separated-tokens: 2.0.2
 
-  heic-to@1.6.7: {}
-
   help-me@5.0.0: {}
 
   hexy@0.2.11: {}
@@ -12469,10 +12427,6 @@ snapshots:
     dependencies:
       p-locate: 3.0.0
       path-exists: 3.0.0
-
-  lodash.escaperegexp@4.1.2: {}
-
-  lodash.isequal@4.5.0: {}
 
   lodash@4.18.1: {}
 
@@ -14374,8 +14328,6 @@ snapshots:
   tiny-async-pool@1.3.0:
     dependencies:
       semver: 5.7.3
-
-  tiny-typed-emitter@2.1.0: {}
 
   tinybench@6.2.5: {}
 

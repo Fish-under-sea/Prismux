@@ -39,10 +39,10 @@ import type {
   TranscriptUsageFormat,
   UsageRecord,
 } from "@prismux/provider-core/server/usage";
+import { BUNDLED_LITELLM_RATES_DOCUMENT } from "./bundledLitellmRates.ts";
 import { canonicalModelFilter, resolveModelAliases, UsageAggregator } from "./usageAggregation.ts";
 import {
   createOverrideRateTable,
-  isUnlistedModel,
   parseRateTable,
   type RateTable,
 } from "./usagePricing.ts";
@@ -66,6 +66,8 @@ import {
   type ScanCache,
 } from "./usageScanCache.ts";
 import { serializeScanCacheWithWorker } from "./usageScanWorker.ts";
+
+const BUNDLED_LITELLM_RATES: RateTable = parseRateTable(BUNDLED_LITELLM_RATES_DOCUMENT);
 
 const LITELLM_RATES_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
@@ -277,10 +279,10 @@ export const make = Effect.gen(function* () {
       Effect.map((value) => value.trim() || hostname),
       Effect.orElseSucceed(() => hostname),
     ));
-  let rates: RateTable = new Map();
+  let rates: RateTable = BUNDLED_LITELLM_RATES;
   let ratesFetchedAtMs: number | null = null;
   let ratesLastFailedAtMs: number | null = null;
-  let ratesStatus: UsagePricing["status"] = "unavailable";
+  let ratesStatus: UsagePricing["status"] = BUNDLED_LITELLM_RATES.size > 0 ? "cached" : "unavailable";
   const ratesLock = yield* Semaphore.make(1);
 
   const pricing = (): UsagePricing => ({
@@ -310,7 +312,7 @@ export const make = Effect.gen(function* () {
       Effect.map((saved) => {
         const parsed = parseRateTable(saved.document);
         if (parsed.size === 0) return;
-        rates = parsed;
+        rates = new Map([...BUNDLED_LITELLM_RATES, ...parsed]);
         ratesFetchedAtMs = saved.fetchedAtMs;
         ratesStatus = "cached";
       }),
@@ -348,24 +350,8 @@ export const make = Effect.gen(function* () {
 
   const ensureRates = (force: boolean) => ratesLock.withPermit(loadRates(force));
 
-  // Rates are kept for RATES_TTL_MS, so a model released after the table was fetched would stay unpriced
-  // that long. A scan that meets a model the table does not list refetches early: once per model against
-  // a fresh table, with loadRates keeping RATES_REFRESH_FLOOR_MS between attempts.
-  const checkedUnlistedModels = new Set<string>();
-  const refreshForUnlistedModels = Effect.fn("UsageService.refreshForUnlistedModels")(function* (
-    models: ReadonlySet<string>,
-  ) {
-    const unlisted = [...models].filter(
-      (model) => !checkedUnlistedModels.has(model) && isUnlistedModel(rates, model),
-    );
-    if (unlisted.length === 0) return;
-    yield* ensureRates(true);
-    const now = yield* Clock.currentTimeMillis;
-    // A failed fetch leaves the models unchecked, so a later scan tries again.
-    if (ratesFetchedAtMs === null || now - ratesFetchedAtMs >= RATES_REFRESH_FLOOR_MS) return;
-    for (const model of unlisted) checkedUnlistedModels.add(model);
-  });
-
+  // Manual user-triggered pricing refresh only; routine usage scans stay 100% offline using
+  // the bundled pricing snapshot + any previously saved local cache.
   const refreshRates = ensureRates(true).pipe(
     Effect.map(pricing),
     Effect.withSpan("UsageService.refreshRates"),
@@ -962,7 +948,7 @@ export const make = Effect.gen(function* () {
         );
       const [, scanned] = yield* Effect.all(
         [
-          fromMemory ? loadSavedRates : provisional ? ensureRates(false) : Effect.void,
+          loadSavedRates,
           collectDirs(
             resolved,
             windowStartMs,
@@ -977,7 +963,7 @@ export const make = Effect.gen(function* () {
       return { scannedDirs: scanned, fromMemory };
     });
     const [{ scannedDirs, fromMemory }] = yield* Effect.all(
-      [collect, provisional ? Effect.void : ensureRates(false)],
+      [collect, Effect.void],
       { concurrency: 2 },
     );
 
@@ -1078,8 +1064,9 @@ export const make = Effect.gen(function* () {
         }
       }
     }
-    // A saved answer prices with saved rates and the full scan after it refetches.
-    if (!fromMemory) yield* refreshForUnlistedModels(rateModels);
+    // Zero silent outbound pricing fetches during summary reads: use bundled snapshot + saved local cache.
+    // Users refresh remote pricing explicitly via `UsageService.refreshRates`.
+    void rateModels;
 
     const summaryPricing = pricing();
 

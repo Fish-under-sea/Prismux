@@ -23,7 +23,6 @@ import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as Schema from "effect/Schema";
 
-import * as CloudLink from "../cloud/CloudLink.ts";
 import * as ServerConfig from "../config.ts";
 import { makeDpopKey } from "./dpop.testkit.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -57,7 +56,7 @@ const notLinked: EnvironmentCloudLinkStateResult = {
 };
 const makeLayerRoutes = (
   capture: (auth: EnvironmentAuth.EnvironmentAuth["Service"]) => void,
-  linkState: EnvironmentCloudLinkStateResult,
+  _linkState: EnvironmentCloudLinkStateResult,
 ) =>
   Layer.mergeAll(
     Layer.effectDiscard(
@@ -69,9 +68,6 @@ const makeLayerRoutes = (
         McpOAuthHttp.layer.pipe(
           Layer.provide(McpOAuth.layer),
           Layer.provide(ServerSettings.layerTest({ linkedEnvironmentsEnabled: true })),
-          Layer.provide(
-            Layer.mock(CloudLink.CloudLink)({ linkState: () => Effect.succeed(linkState) }),
-          ),
         ),
       ),
       Layer.provide(AuthHttp.layerAuthenticatedAuth),
@@ -740,11 +736,8 @@ it.effect(
         );
 
       const onTunnel = yield* handoff("box.example.ts.net");
-      const hosted = new URL(onTunnel.location);
-      expect(`${hosted.origin}${hosted.pathname}`).toBe("https://prismux.app/approve-agent");
-      expect(hosted.searchParams.get("environment")).toEqual(expect.any(String));
-      hosted.searchParams.delete("environment");
-      expect(hosted.searchParams.toString()).toBe(onTunnel.query);
+      expect(onTunnel.location).toBe(`/connect-agent?${onTunnel.query}`);
+      expect(onTunnel.location).not.toContain("prismux.app");
 
       const elsewhere = yield* handoff("other.relay.example.test");
       expect(elsewhere.location).toBe(`/connect-agent?${elsewhere.query}`);

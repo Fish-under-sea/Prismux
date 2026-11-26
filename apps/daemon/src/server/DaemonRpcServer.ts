@@ -76,12 +76,17 @@ import { AgentAuxService, AgentAuxValidationError } from "../agentAux/AgentAuxSe
 import type { OvernightRouteService } from "./OvernightRoutes.js";
 import type { PairingManager } from "./PairingManager.js";
 import { handleQuotaRoute } from "./QuotaRoutes.js";
+import { isAllowedCorsOrigin } from "./CorsOrigin.js";
 import type { DesktopIpcDispatchHub } from "../dispatch/DesktopIpcDispatchHub.js";
 import type { SubscriptionWaiverStore } from "../security/AntigravityPolicyStore.js";
 import { handleDispatchRoute, isDispatchOrSecurityRoute } from "./DispatchRoutes.js";
 
+export { isAllowedCorsOrigin } from "./CorsOrigin.js";
+
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const MAX_IMPORT_JSON_BODY_BYTES = 34 * 1024 * 1024;
+export const DEFAULT_PAIRING_RATE_LIMIT_MAX_REQUESTS = 10;
+export const DEFAULT_PAIRING_RATE_LIMIT_WINDOW_MS = 60_000;
 
 export interface DaemonRpcServerOptions {
   host?: string;
@@ -126,6 +131,8 @@ export interface DaemonRpcServerOptions {
   antigravityPolicyStore?: SubscriptionWaiverStore;
   dispatchHub?: DesktopIpcDispatchHub;
   startedAt?: number;
+  pairingRateLimitMaxRequests?: number;
+  pairingRateLimitWindowMs?: number;
   onRequestShutdown?: (reason?: string) => void | Promise<void>;
 }
 
@@ -402,49 +409,24 @@ async function readJsonBody(
   }
 }
 
-const ALLOWED_DESKTOP_ORIGIN_RE = /^prismux(?:-dev)?:\/\//i;
-
-function isAllowedCorsOrigin(origin: string): boolean {
-  const trimmed = origin.trim();
-  if (trimmed === "null") {
-    return true;
-  }
-  const lower = trimmed.toLowerCase();
-  if (
-    ALLOWED_DESKTOP_ORIGIN_RE.test(lower) ||
-    lower.startsWith("file://") ||
-    lower.startsWith("app://") ||
-    lower.startsWith("tauri://")
-  ) {
-    return true;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return false;
-    }
-    const host = parsed.hostname.toLowerCase();
-    return host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1";
-  } catch {
-    return false;
-  }
-}
-
 function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
-  const origin = req.headers.origin;
-  if (typeof origin === "string" && isAllowedCorsOrigin(origin)) {
-    res.setHeader("access-control-allow-origin", origin);
-    res.setHeader("vary", "Origin");
-    res.setHeader("access-control-allow-methods", "GET, HEAD, POST, PUT, DELETE, OPTIONS");
-    res.setHeader(
-      "access-control-allow-headers",
-      "Content-Type, Authorization, Range, X-Prismux-Token, Cache-Control, Last-Event-ID, Pragma, Accept",
-    );
-    res.setHeader(
-      "access-control-expose-headers",
-      "Content-Range, Accept-Ranges, Content-Length, ETag, Content-Type",
-    );
-    res.setHeader("access-control-max-age", "600");
+  const rawOrigin = req.headers.origin;
+  if (typeof rawOrigin === "string") {
+    const trimmed = rawOrigin.trim();
+    if (isAllowedCorsOrigin(trimmed)) {
+      res.setHeader("access-control-allow-origin", trimmed);
+      res.setHeader("vary", "Origin");
+      res.setHeader("access-control-allow-methods", "GET, HEAD, POST, PUT, DELETE, OPTIONS");
+      res.setHeader(
+        "access-control-allow-headers",
+        "Content-Type, Authorization, Range, X-Prismux-Token, Cache-Control, Last-Event-ID, Pragma, Accept",
+      );
+      res.setHeader(
+        "access-control-expose-headers",
+        "Content-Range, Accept-Ranges, Content-Length, ETag, Content-Type",
+      );
+      res.setHeader("access-control-max-age", "600");
+    }
   }
 }
 
@@ -552,6 +534,8 @@ export class DaemonRpcServer {
   private readonly subscriptionWaiverStore: SubscriptionWaiverStore | undefined;
   private readonly dispatchHub: DesktopIpcDispatchHub | undefined;
   private readonly startedAt: number;
+  private readonly pairingRateLimitMaxRequests: number;
+  private readonly pairingRateLimitWindowMs: number;
   private readonly onRequestShutdown: ((reason?: string) => void | Promise<void>) | undefined;
 
   private httpServer: Server | undefined;
@@ -563,6 +547,7 @@ export class DaemonRpcServer {
   private readonly socketCleanups = new Map<WebSocket, () => void>();
   private readonly activeSseCleanups = new Set<() => void>();
   private readonly lastWebWallpaperIdByToken = new Map<string, string>();
+  private readonly pairingExchangeTimestampsByIp = new Map<string, number[]>();
 
   constructor(options: DaemonRpcServerOptions) {
     this.host = options.host ?? "127.0.0.1";
@@ -602,6 +587,16 @@ export class DaemonRpcServer {
       options.subscriptionWaiverStore ?? options.antigravityPolicyStore;
     this.dispatchHub = options.dispatchHub;
     this.startedAt = options.startedAt ?? Date.now();
+    this.pairingRateLimitMaxRequests = Math.max(
+      1,
+      Math.floor(
+        options.pairingRateLimitMaxRequests ?? DEFAULT_PAIRING_RATE_LIMIT_MAX_REQUESTS,
+      ),
+    );
+    this.pairingRateLimitWindowMs = Math.max(
+      1_000,
+      Math.floor(options.pairingRateLimitWindowMs ?? DEFAULT_PAIRING_RATE_LIMIT_WINDOW_MS),
+    );
     this.onRequestShutdown = options.onRequestShutdown;
   }
 
@@ -744,6 +739,7 @@ export class DaemonRpcServer {
     }
     this.activeSseCleanups.clear();
     this.lastWebWallpaperIdByToken.clear();
+    this.pairingExchangeTimestampsByIp.clear();
 
     for (const ws of Array.from(this.activeSockets)) {
       const cleanup = this.socketCleanups.get(ws);
@@ -827,8 +823,21 @@ export class DaemonRpcServer {
       }
 
       if (method === "POST" && requestUrl.pathname === "/v1/pair/exchange") {
+        const rateLimit = this.consumePairingExchangeQuota(req);
+        if (!rateLimit.allowed) {
+          res.setHeader("retry-after", String(rateLimit.retryAfterSeconds));
+          writeJsonResponse(res, 429, {
+            ok: false,
+            error: {
+              code: "rate_limited",
+              message: "Too many pairing exchange attempts. Please try again later.",
+            },
+          });
+          return;
+        }
         const body = await readJsonBody(req);
         if (!isRecord(body) || typeof body.pairingCode !== "string") {
+          this.pairingManager.recordFailedPairingAttempt();
           writeJsonResponse(res, 400, {
             ok: false,
             error: {
@@ -2620,12 +2629,59 @@ export class DaemonRpcServer {
     return false;
   }
 
+  private consumePairingExchangeQuota(
+    req: IncomingMessage,
+  ): { allowed: true } | { allowed: false; retryAfterSeconds: number } {
+    const clientIp = req.socket?.remoteAddress?.trim() || "unknown";
+    const now = Date.now();
+    const cutoff = now - this.pairingRateLimitWindowMs;
+
+    if (this.pairingExchangeTimestampsByIp.size > 256) {
+      for (const [ip, timestamps] of this.pairingExchangeTimestampsByIp.entries()) {
+        const kept = timestamps.filter((ts) => ts > cutoff);
+        if (kept.length === 0) {
+          this.pairingExchangeTimestampsByIp.delete(ip);
+        } else {
+          this.pairingExchangeTimestampsByIp.set(ip, kept);
+        }
+      }
+    }
+
+    const existing = this.pairingExchangeTimestampsByIp.get(clientIp) ?? [];
+    const recent = existing.filter((ts) => ts > cutoff);
+    if (recent.length >= this.pairingRateLimitMaxRequests) {
+      this.pairingExchangeTimestampsByIp.set(clientIp, recent);
+      const oldest = recent[0] ?? now;
+      const retryAfterSeconds = Math.max(
+        1,
+        Math.ceil((oldest + this.pairingRateLimitWindowMs - now) / 1000),
+      );
+      return { allowed: false, retryAfterSeconds };
+    }
+
+    recent.push(now);
+    this.pairingExchangeTimestampsByIp.set(clientIp, recent);
+    return { allowed: true };
+  }
+
   private handleUpgrade(
     req: IncomingMessage,
     socket: Duplex,
     head: Buffer,
     wss: WebSocketServer,
   ): void {
+    const rawOrigin = req.headers.origin;
+    if (Array.isArray(rawOrigin)) {
+      socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    if (typeof rawOrigin === "string" && !isAllowedCorsOrigin(rawOrigin)) {
+      socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
     let requestUrl: URL;
     try {
       requestUrl = new URL(req.url ?? "/", "http://127.0.0.1");

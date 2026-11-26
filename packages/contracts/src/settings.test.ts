@@ -577,7 +577,10 @@ describe("Prismux privacy-safe default server settings", () => {
     expect(client.workStepsDisplay).toBe("detailed");
     expect(client.workStepsCollapseTiming).toBe("after-turn");
     expect(client.collapsedAssistantReplyMode).toBe("all");
-    expect(client.reasoningTranslationProvider).toBe("bing");
+    expect(client.reasoningTranslationProvider).toBe("off");
+    // Legacy saved Bing/Google translation providers must decode gracefully to "off".
+    expect(decodeClientSettings({ reasoningTranslationProvider: "bing" }).reasoningTranslationProvider).toBe("off");
+    expect(decodeClientSettings({ reasoningTranslationProvider: "google" }).reasoningTranslationProvider).toBe("off");
 
     const clientPatch = decodeClientSettingsPatch({
       workStepsDisplay: "expanded",
@@ -592,10 +595,10 @@ describe("Prismux privacy-safe default server settings", () => {
       reasoningTranslationProvider: "off",
     });
     expect(decodeClientSettingsPatch({ reasoningTranslationProvider: "bing" })).toEqual({
-      reasoningTranslationProvider: "bing",
+      reasoningTranslationProvider: "off",
     });
     expect(decodeClientSettingsPatch({ reasoningTranslationProvider: "google" })).toEqual({
-      reasoningTranslationProvider: "google",
+      reasoningTranslationProvider: "off",
     });
     expect(decodeClientSettingsPatch({ reasoningTranslationProvider: "text_model" })).toEqual({
       reasoningTranslationProvider: "text_model",

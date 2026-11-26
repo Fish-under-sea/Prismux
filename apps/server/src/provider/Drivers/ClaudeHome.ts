@@ -175,3 +175,44 @@ export const claudeSignedOutMessage = (input: {
       : "";
   return `Claude could not authenticate. For subscription login, run \`claude auth login\` on this environment's machine${configuration}, then start a new thread. For API-key authentication, check this instance's configured credentials.`;
 };
+
+const ClaudeAccountConfigSchema = Schema.Struct({
+  oauthAccount: Schema.optional(
+    Schema.Struct({
+      organizationUuid: Schema.optional(Schema.String),
+      accountUuid: Schema.optional(Schema.Unknown),
+    }),
+  ),
+});
+
+export const claudeAccountConfigPath = Effect.fn("claudeAccountConfigPath")(function* (
+  configDir: string | undefined,
+) {
+  const path = yield* Path.Path;
+  return configDir
+    ? path.join(configDir, ".claude.json")
+    : path.join(yield* HostProcess.HomeDirectory, ".claude.json");
+});
+
+/** Reads only non-secret account/org UUID metadata from `~/.claude.json` (never reads OAuth tokens). */
+export const readClaudeOauthAccount = Effect.fn("readClaudeOauthAccount")(
+  function* (accountConfigPath: string) {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const raw = yield* fileSystem.readFileString(accountConfigPath).pipe(
+      Effect.catchTags({
+        PlatformError: (error) =>
+          error.reason._tag === "NotFound" ? Effect.succeed("{}") : Effect.fail(error),
+      }),
+    );
+    const parsed = yield* Schema.decodeEffect(Schema.fromJsonString(ClaudeAccountConfigSchema))(
+      raw,
+    );
+    return parsed.oauthAccount;
+  },
+  Effect.orElseSucceed(() => undefined),
+);
+
+export const readClaudeOrganizationId = (accountConfigPath: string) =>
+  readClaudeOauthAccount(accountConfigPath).pipe(
+    Effect.map((account) => account?.organizationUuid?.trim() || undefined),
+  );

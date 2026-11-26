@@ -9,25 +9,12 @@ import { Command, Flag, GlobalFlag, Prompt } from "effect/cli";
 import * as CliError from "effect/cli/CliError";
 
 import packageJson from "../../package.json" with { type: "json" };
-import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as BootService from "../cloud/bootService.ts";
-import * as CliState from "../cloud/CliState.ts";
-import { CLOUD_ENDPOINT_RUNTIME_CONFIG, CLOUD_LINK_REVOKED } from "../cloud/config.ts";
-import { hasCloudPublicConfig } from "../cloud/publicConfig.ts";
 import { compareExactServiceVersions } from "../cloud/serviceProtocol.ts";
 import * as ServerConfig from "../config.ts";
 import * as ManagedLimits from "../policy/managedLimits.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
-import {
-  connectSubcommands,
-  disconnectCloud,
-  headlessFlag,
-  linkEnvironmentForConnect,
-  requireConnectAllowed,
-  runCloudCommand,
-  waitForReachability,
-} from "./connect.ts";
 import { resolveHostCliCommand } from "./invocation.ts";
 import * as CliService from "./service.ts";
 
@@ -37,9 +24,8 @@ type Routes = Readonly<Record<Route, boolean>>;
 /** How other devices reach this machine now. */
 interface Setup {
   readonly service: BootService.BootServiceStatus;
-  /** Null in builds without Prismux Connect. Off when Prismux Connect revoked the link. */
+  /** Always null in local-first Prismux builds (cloud relay excised). */
   readonly connect: boolean | null;
-  /** Prismux Connect revoked the link; `prismux connect` links again. */
   readonly connectRevoked: boolean;
   readonly lan: boolean;
   /** An installed service with no PRISMUX_LAN or PRISMUX_HOST keeps the old default: on. */
@@ -47,62 +33,38 @@ interface Setup {
   readonly host: string | undefined;
 }
 
-/**
- * Prismux Connect is on when this CLI asked for a managed link, or when the desktop or
- * web app made one: that saves the tunnel config but no CLI marker. Revoked is off.
- */
-export const connectEnabled = (link: {
+export const connectEnabled = (_link: {
   readonly cliDesired: boolean;
-  readonly cliMode: CliState.CliDesiredLinkMode;
+  readonly cliMode: "managed" | "publish_only";
   readonly managedTunnel: boolean;
   readonly revoked: boolean;
-}) =>
-  // The server starts no tunnel for a CLI publish-only link, even with an old tunnel config.
-  !link.revoked && (link.cliDesired ? link.cliMode === "managed" : link.managedTunnel);
+}) => false;
 
 const readSetup = Effect.fn("cli.up.read_setup")(function* () {
   const { baseDir } = yield* ServerConfig.ServerConfig;
   const service = yield* (yield* BootService.BootService).status;
   const { entries } = yield* CliService.readServiceEnv(baseDir);
-  // Parsed as the server parses it.
   const lan = yield* Config.Boolean("PRISMUX_LAN")
     .pipe(Config.option)
     .parse(ConfigProvider.fromEnv({ env: entries }));
-  const secrets = yield* ServerSecretStore.ServerSecretStore;
-  const connectRevoked =
-    hasCloudPublicConfig && Option.isSome(yield* secrets.get(CLOUD_LINK_REVOKED));
-  const connect = hasCloudPublicConfig
-    ? connectEnabled({
-        cliDesired: yield* CliState.readCliDesiredCloudLink,
-        cliMode: yield* CliState.readCliDesiredLinkMode,
-        managedTunnel: Option.isSome(yield* secrets.get(CLOUD_ENDPOINT_RUNTIME_CONFIG)),
-        revoked: connectRevoked,
-      })
-    : null;
-  // Another home's service doesn't read this home's service.env.
   const servesThisHome = service.installed && service.otherBaseDir === undefined;
   return {
     service,
-    connect,
-    connectRevoked,
+    connect: null,
+    connectRevoked: false,
     lan: Option.getOrElse(lan, () => servesThisHome),
     lanFromOldDefault: Option.isNone(lan) && servesThisHome && entries.PRISMUX_HOST === undefined,
     host: entries.PRISMUX_HOST,
   } satisfies Setup;
 });
 
-/**
- * The routes `t3 up` starts from. With no route flag it asks about every
- * route, starting a machine with no service from Prismux Connect. Any route flag
- * means it asks nothing and keeps the routes not named as they are.
- */
 export const planRoutes = (
   setup: { readonly installed: boolean; readonly connect: boolean | null; readonly lan: boolean },
   flags: { readonly connect: Option.Option<boolean>; readonly lan: Option.Option<boolean> },
 ) => {
   const ask = Option.isNone(flags.connect) && Option.isNone(flags.lan);
   const start = {
-    connect: setup.connect === true || (ask && !setup.installed && setup.connect !== null),
+    connect: false,
     lan: setup.lan,
   };
   return {
@@ -110,22 +72,16 @@ export const planRoutes = (
       connect: Option.getOrElse(flags.connect, () => start.connect),
       lan: Option.getOrElse(flags.lan, () => start.lan),
     } satisfies Routes,
-    ask: ask
-      ? (["connect", "lan"] as const).filter((r) => r !== "connect" || setup.connect !== null)
-      : [],
+    ask: ask ? (["lan"] as const) : [],
   };
 };
 
-/** A running service reads PRISMUX_LAN and its Prismux Connect link only when it starts. */
-const needsRestart = (before: Routes, after: Routes) =>
-  after.lan !== before.lan || (after.connect && !before.connect);
+const needsRestart = (before: Routes, after: Routes) => after.lan !== before.lan;
 
 const CHOICES = {
-  connect: { title: "Prismux Connect", description: "Creates a tunnel to control your PC." },
   lan: { title: "Local network", description: "LAN and tailnet. Pairing code required." },
-} satisfies Record<Route, { readonly title: string; readonly description: string }>;
+} as const;
 
-/** The commands hints name, run with the caller's --base-dir and launcher. */
 const resolveHints = Effect.fn("cli.up.resolve_hints")(function* (baseDir: Option.Option<string>) {
   const baseDirArgs = Option.match(baseDir, {
     onNone: () => [],
@@ -138,14 +94,12 @@ const resolveHints = Effect.fn("cli.up.resolve_hints")(function* (baseDir: Optio
     pair: yield* command("pair"),
     up: yield* command("up"),
     upNoLan: yield* command("up", ["--no-lan"]),
-    connect: yield* command("connect"),
   };
 });
 type Hints = Effect.Success<ReturnType<typeof resolveHints>>;
 
 const formatSetup = (setup: Setup, hints: Hints) => {
   const { service } = setup;
-  // This home's access settings reach no service, so only the service is shown.
   if (service.otherBaseDir !== undefined) {
     return [
       `  ${"Service".padEnd(15)}installed for another Prismux home · ${service.otherBaseDir}`,
@@ -162,18 +116,6 @@ const formatSetup = (setup: Setup, hints: Hints) => {
           ? `installed · prismux@${service.installedVersion ?? packageJson.version}`
           : "not installed",
     ],
-    ...(setup.connect === null
-      ? []
-      : [
-          [
-            "Prismux Connect",
-            setup.connect
-              ? "on · your Prismux account"
-              : setup.connectRevoked
-                ? `off · link revoked. Run \`${hints.connect}\`.`
-                : "off",
-          ] as const,
-        ]),
     [
       "Local network",
       setup.host !== undefined
@@ -201,11 +143,8 @@ const formatSetup = (setup: Setup, hints: Hints) => {
 
 const formatNextSteps = (routes: Routes, serviceInstalled: boolean, hints: Hints) =>
   [
-    ...(routes.connect
-      ? ["On your other device, sign in to Prismux Connect with the same account."]
-      : []),
     ...(routes.lan ? [`Run \`${hints.pair}\`. Use the code on your other device.`] : []),
-    ...(routes.connect || routes.lan
+    ...(routes.lan
       ? []
       : [
           serviceInstalled
@@ -221,7 +160,6 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
   readonly connect: Option.Option<boolean>;
   readonly lan: Option.Option<boolean>;
   readonly yes: boolean;
-  readonly headless: boolean;
 }) {
   const { baseDir } = yield* ServerConfig.ServerConfig;
   const service = yield* BootService.BootService;
@@ -231,26 +169,20 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
   });
   const hints = yield* resolveHints(flags.baseDir);
   const before = yield* readSetup();
-  // Before any question or write: install would refuse only after both.
   if (before.service.otherBaseDir !== undefined) {
     return yield* new BootService.BootServiceOtherBaseDirError({
       installedBaseDir: before.service.otherBaseDir,
       baseDir,
     });
   }
-  if (before.connect === null && Option.getOrElse(flags.connect, () => false)) {
+  if (Option.getOrElse(flags.connect, () => false)) {
     return yield* new CliError.UserError({
       cause: "connect",
-      userMessage: "Prismux Connect is unavailable in this build.",
+      userMessage: "Prismux Connect cloud relay is unavailable in local-first Prismux builds. Use --lan or Tailscale QR pairing instead.",
     });
   }
 
-  const current = { connect: before.connect === true, lan: before.lan };
-  // A publish-only link is not "on", but a rollback must put it back.
-  const priorPublishOnly =
-    hasCloudPublicConfig &&
-    (yield* CliState.readCliDesiredCloudLink) &&
-    (yield* CliState.readCliDesiredLinkMode) === "publish_only";
+  const current = { connect: false, lan: before.lan };
   const plan = planRoutes({ ...before, installed: before.service.installed }, flags);
   const interactive = !flags.yes && interactiveTerminal();
   let routes = plan.routes;
@@ -271,27 +203,21 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
       }),
     ).pipe(Effect.catchTags({ QuitError: () => Effect.succeed(null) }));
     if (picked === null) return yield* Console.log("Nothing changed.");
-    routes = { connect: picked.includes("connect"), lan: picked.includes("lan") };
+    routes = { connect: false, lan: picked.includes("lan") };
   } else if (plan.ask.length > 0 && !flags.yes && !before.service.installed) {
     return yield* new CliError.UserError({
       cause: "routes",
-      userMessage: `No terminal. Choose access with ${
-        before.connect === null ? "--lan" : "--connect or --lan"
-      }, or use --yes for the default. See \`prismux up --help\`.`,
+      userMessage:
+        "No terminal. Choose access with --lan, or use --yes for the default. See `prismux up --help`.",
     });
   }
-  if (routes.connect && !current.connect) yield* requireConnectAllowed;
   if (routes.lan && !current.lan) {
     const policy = yield* ManagedPolicy.ManagedPolicy;
     if (!ManagedLimits.allowsRemoteClients(policy)) {
       return yield* ManagedLimits.refuseRemoteClients(policy);
     }
   }
-  // Nothing to run in the background, but a route left on still gets turned off.
-  if (!before.service.installed && !routes.connect && !routes.lan) {
-    if (current.connect || before.connectRevoked) {
-      yield* disconnectCloud({ clearAuthorization: false });
-    }
+  if (!before.service.installed && !routes.lan) {
     if (current.lan) yield* CliService.writeServiceEnv(baseDir, { PRISMUX_LAN: "false" });
     return yield* Console.log(formatNextSteps(routes, false, hints));
   }
@@ -299,16 +225,11 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
   const newer =
     installedVersion !== undefined &&
     compareExactServiceVersions(installedVersion, packageJson.version) > 0;
-  // Asked before anything changes, so a declined restart leaves service.env
-  // matching what the running service read when it started.
-  // A stopped service of this version is not current, so reconcile starts it;
-  // a newer one is left alone and needs this restart to start.
   const stopped = before.service.problems?.includes("service-stopped") === true;
   const restart =
     before.service.installed &&
     (before.service.current || newer) &&
     (needsRestart(current, routes) || stopped);
-  // An older or broken service is reinstalled, which restarts it too.
   const update = before.service.installed && !before.service.current && !newer && !stopped;
   if ((restart || update) && interactive && !stopped) {
     const confirmed = yield* Prompt.run(
@@ -322,41 +243,11 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
     if (!confirmed) return yield* Console.log("Nothing changed.");
   }
 
-  if (routes.connect && !current.connect) {
-    const linked = yield* linkEnvironmentForConnect({
-      headless: flags.headless,
-      installRelayClient: true,
-    });
-    if (linked === null) return;
-    yield* Console.log(
-      `✓ Signed in to Prismux Connect${linked.identity ? ` as ${linked.identity}` : ""}`,
-    );
-  }
-  // A running server unlinks live; when that fails, only a restart stops its tunnel.
-  const unlinkFailed =
-    !routes.connect && (current.connect || before.connectRevoked)
-      ? (yield* disconnectCloud({ clearAuthorization: false })).status === "failed"
-      : false;
   const previousLan = (yield* CliService.readServiceEnv(baseDir)).entries.PRISMUX_LAN;
-  // Also with no service manager: the file records the choice that `t3 status` shows.
   yield* CliService.writeServiceEnv(baseDir, { PRISMUX_LAN: String(routes.lan) });
-  // When the service step fails, an installed service still runs with the old
-  // value, so the file goes back to match it.
-  // A new Prismux Connect link is undone too, with any tunnel the failed start saved, so a
-  // rerun sees it as a change and restarts. The sign-in stays.
   const restoreServiceEnv = before.service.installed
-    ? CliService.writeServiceEnv(baseDir, { PRISMUX_LAN: previousLan }).pipe(
-        Effect.andThen(
-          !routes.connect || current.connect
-            ? Effect.void
-            : priorPublishOnly
-              ? CliState.setCliDesiredCloudLink(true, "publish_only")
-              : disconnectCloud({ clearAuthorization: false }).pipe(Effect.asVoid),
-        ),
-      )
+    ? CliService.writeServiceEnv(baseDir, { PRISMUX_LAN: previousLan })
     : Effect.void;
-  // A failed update or restart may still have started the service with the new
-  // settings, so restart it once more on the old ones.
   const rollBack = before.service.installed
     ? restoreServiceEnv.pipe(Effect.andThen(service.restart.pipe(Effect.ignore)))
     : Effect.void;
@@ -369,11 +260,9 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
   const printServeCommand = Effect.fn(function* (reason: string) {
     const { command } = yield* resolveHostCliCommand("serve", [
       ...baseDirArgs,
-      // Explicit either way, so a PRISMUX_LAN in the shell cannot override the choice.
       routes.lan ? "--lan" : "--no-lan",
     ]);
     yield* Console.log(`${reason} Keep this command running:\n  ${command}`);
-    // A host wins over --lan and --no-lan, as it does in service.env.
     const shellHost = (yield* HostProcess.Environment).PRISMUX_HOST;
     if (shellHost !== undefined) {
       yield* Console.warn(
@@ -381,7 +270,6 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
       );
     }
   });
-  let started = false;
   if (!before.service.supported) {
     yield* printServeCommand("Background service unavailable.");
   } else {
@@ -401,7 +289,6 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
           Effect.tapError(() => rollBack),
         );
     if ("failed" in result && before.service.installed) {
-      // The old service still runs, so a foreground server would clash with it.
       yield* restoreServiceEnv;
       yield* Console.log(
         `Service setup failed: ${result.failed} Fix that, then run \`${hints.up}\` again.`,
@@ -410,45 +297,26 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
       yield* printServeCommand(`Service setup failed: ${result.failed}`);
     } else if (result.changed) {
       yield* Console.log(CliService.formatServiceChange(result));
-      started = true;
-    } else if (restart || (unlinkFailed && before.service.installed)) {
-      const confirmed =
-        restart ||
-        !interactive ||
-        (yield* Prompt.run(
-          Prompt.Confirm({
-            message:
-              "The running service still has Prismux Connect on. Restart it? Running agent turns will stop.",
-            initial: true,
-          }),
-        ).pipe(Effect.catchTags({ QuitError: () => Effect.succeed(false) })));
-      if (!confirmed) {
-        const { command } = yield* resolveHostCliCommand("service restart", baseDirArgs);
-        yield* Console.log(`Run \`${command}\` to turn Prismux Connect off.`);
-      } else {
-        if (!interactive && !stopped) {
-          yield* Console.log("Restarting Prismux. Running agent turns will stop.");
-        }
-        const outcome = yield* service.restart.pipe(Effect.tapError(() => rollBack));
-        if (outcome === "queued") {
-          yield* Console.log("Restart queued. This session will disconnect.");
-        }
-        if (outcome === "skipped") {
-          yield* Console.log(
-            "The installed service was not restarted. Run `prismux service status` to see why.",
-          );
-        }
-        started = outcome === "restarted";
+    } else if (restart) {
+      if (!interactive && !stopped) {
+        yield* Console.log("Restarting Prismux. Running agent turns will stop.");
+      }
+      const outcome = yield* service.restart.pipe(Effect.tapError(() => rollBack));
+      if (outcome === "queued") {
+        yield* Console.log("Restart queued. This session will disconnect.");
+      }
+      if (outcome === "skipped") {
+        yield* Console.log(
+          "The installed service was not restarted. Run `prismux service status` to see why.",
+        );
       }
     }
   }
-  if (started && routes.connect && !current.connect) yield* waitForReachability();
 
   const after = yield* readSetup();
   yield* Console.log(
-    // From what took effect: a failed service step can undo a choice.
     `\nThis machine\n${formatSetup(after, hints)}\n\n${formatNextSteps(
-      { connect: after.connect === true, lan: after.lan },
+      { connect: false, lan: after.lan },
       after.service.installed,
       hints,
     )}`,
@@ -458,9 +326,7 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
 export const upCommand = Command.make("up", {
   ...projectLocationFlags,
   connect: Flag.Boolean("connect").pipe(
-    Flag.withDescription(
-      "Allow access through Prismux Connect with your Prismux account. Turn off with --no-connect.",
-    ),
+    Flag.withDescription("Unavailable in local-first Prismux builds."),
     Flag.optional,
   ),
   lan: Flag.Boolean("lan").pipe(
@@ -470,44 +336,37 @@ export const upCommand = Command.make("up", {
     Flag.optional,
   ),
   yes: Flag.Boolean("yes").pipe(
-    Flag.withDescription(
-      "Ask nothing. Keep the access settings; a new machine gets Prismux Connect. A restart stops running agent turns.",
-    ),
+    Flag.withDescription("Ask nothing. Keep the access settings."),
     Flag.withDefault(false),
   ),
-  headless: headlessFlag,
 }).pipe(
-  Command.withShortDescription("Set up remote access and the Prismux background service."),
+  Command.withShortDescription("Set up LAN/tailnet remote access and the Prismux background service."),
   Command.withDescription(
-    "Set up remote access and the Prismux background service. Access flags skip the question, and routes not named keep their settings. Without a terminal, a needed restart runs without asking and stops running agent turns.",
+    "Set up LAN/tailnet remote access and the Prismux background service. Without a terminal, a needed restart runs without asking and stops running agent turns.",
   ),
   Command.withExamples([
     { command: "prismux up", description: "Choose remote access." },
-    { command: "prismux up --connect", description: "Turn on Prismux Connect. Keep other settings." },
     { command: "prismux up --lan", description: "Allow LAN access with pairing codes." },
     { command: "prismux up --no-lan", description: "Stop LAN access." },
     { command: "prismux up --yes", description: "Take the defaults with no questions." },
     { command: "prismux status --json", description: "Read the settings from a script." },
   ]),
-  Command.withHandler((flags) => runCloudCommand(flags, setUp(flags), { quietLogs: true })),
-);
-
-export const connectCommand = Command.make("connect", {
-  ...projectLocationFlags,
-  headless: headlessFlag,
-}).pipe(
-  Command.withDescription("Set up Prismux Connect for this machine. Same as `prismux up --connect`."),
-  Command.withHandler((flags) =>
-    runCloudCommand(
-      flags,
-      setUp({ ...flags, connect: Option.some(true), lan: Option.none(), yes: false }),
-      { quietLogs: true },
-    ),
+  Command.withHandler(
+    Effect.fn("cli.up.handler")(function* (flags) {
+      const config = yield* resolveCliAuthConfig(flags, yield* GlobalFlag.LogLevel, {
+        quietLogs: true,
+      });
+      yield* setUp(flags).pipe(
+        Effect.provide(
+          Layer.merge(CliService.layer(config), ManagedPolicy.layer).pipe(
+            Layer.provideMerge(ServerConfig.layer(config)),
+          ),
+        ),
+      );
+    }),
   ),
-  Command.withSubcommands(connectSubcommands),
 );
 
-/** `prismux status --json`, for scripts and agents. */
 const setupJson = (setup: Setup) =>
   JSON.stringify(
     {
@@ -517,8 +376,7 @@ const setupJson = (setup: Setup) =>
         installedVersion: setup.service.installedVersion ?? null,
         otherBaseDir: setup.service.otherBaseDir ?? null,
       },
-      connect:
-        setup.connect === null ? null : { enabled: setup.connect, revoked: setup.connectRevoked },
+      connect: null,
       lan: {
         enabled: setup.lan,
         inheritedDefault: setup.lanFromOldDefault,
@@ -546,12 +404,9 @@ export const statusCommand = Command.make("status", {
       const config = yield* resolveCliAuthConfig(flags, yield* GlobalFlag.LogLevel, {
         quietLogs: flags.json,
       });
-      // Only what readSetup reads: no database, unlike the Prismux Connect commands.
       const setup = yield* readSetup().pipe(
         Effect.provide(
-          Layer.merge(CliService.layer(config), ServerSecretStore.layer).pipe(
-            Layer.provideMerge(ServerConfig.layer(config)),
-          ),
+          CliService.layer(config).pipe(Layer.provideMerge(ServerConfig.layer(config))),
         ),
       );
       if (flags.json) return yield* Console.log(setupJson(setup));

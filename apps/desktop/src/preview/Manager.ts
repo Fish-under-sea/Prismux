@@ -484,7 +484,7 @@ const IN_PLACE_DENIED_PROTOCOLS = new Set([
   "view-source:",
 ]);
 
-/** Popups bypass will-attach-webview hardening and would inherit the picker's contextIsolation:false. */
+/** Popups enforce strict contextIsolation, sandbox, and no Node integration. */
 const POPUP_WINDOW_OPTIONS = {
   webPreferences: {
     contextIsolation: true,

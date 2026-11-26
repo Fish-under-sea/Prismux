@@ -670,10 +670,10 @@ describe("serverSettings helpers", () => {
   });
 
   it("upserts and removes usageLimitSources per entry so concurrent edits cannot clobber", () => {
-    const hubA = UsageLimitSourceId.make("cliproxy-a");
-    const hubB = UsageLimitSourceId.make("cliproxy-b");
+    const hubA = UsageLimitSourceId.make("relay-a");
+    const hubB = UsageLimitSourceId.make("relay-b");
     const source = (url: string) => ({
-      kind: "cliproxy" as const,
+      kind: "newapi" as const,
       url,
       managementKey: "secret",
       enabled: true,

@@ -53,7 +53,7 @@ describe("AddUsageLimitSourceDialog", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
-  it("supports switching to CLIProxyAPI legacy protocol", async () => {
+  it("supports switching to OpenAI Billing relay protocol without exposing CLIProxyAPI", async () => {
     updateSettings.mockClear();
     const onOpenChange = vi.fn();
     await using _screen = await render(
@@ -66,16 +66,16 @@ describe("AddUsageLimitSourceDialog", () => {
       />,
     );
 
-    await userEvent.click(page.getByRole("radio", { name: /CLIProxyAPI/i }));
-    await userEvent.type(page.getByLabelText("Proxy URL"), "https://proxy.example.com:8318");
-    await userEvent.type(page.getByLabelText("Management key"), "secret-key{Enter}");
+    await userEvent.click(page.getByRole("radio", { name: /OpenAI Billing/i }));
+    await userEvent.type(page.getByLabelText("Base URL"), "https://relay.example.com/v1");
+    await userEvent.type(page.getByLabelText("API Key"), "secret-key{Enter}");
 
     expect(updateSettings).toHaveBeenCalledOnce();
     expect(updateSettings).toHaveBeenCalledWith({
       usageLimitSources: {
-        "cliproxy-proxy.example.com-8318": expect.objectContaining({
-          kind: "cliproxy",
-          url: "https://proxy.example.com:8318",
+        "relay-relay.example.com": expect.objectContaining({
+          kind: "openaiBilling",
+          url: "https://relay.example.com/v1",
           managementKey: "secret-key",
           enabled: true,
         }),

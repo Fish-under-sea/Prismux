@@ -57,11 +57,6 @@ const parentWatchIntervalMs = 1_000;
 
 NodeChildProcess.execFileSync(
   process.execPath,
-  [NodePath.join(desktopDir, "scripts/build-browser-secret.mjs")],
-  { stdio: "inherit" },
-);
-NodeChildProcess.execFileSync(
-  process.execPath,
   [NodePath.join(desktopDir, "scripts/build-apple-speech.mjs")],
   { stdio: "inherit" },
 );

@@ -26,7 +26,7 @@ const settings = Schema.decodeSync(ServerSettings)({
     github: { tokens: { "github.com": personal("op://gh"), "ghe.acme.test": work } },
   },
   usageLimitSources: {
-    hub: { kind: "cliproxy", url: "https://hub.test", managementKey: personal("op://hub") },
+    hub: { kind: "newapi", url: "https://hub.test", managementKey: personal("op://hub") },
   },
   easDeviceHosts: [
     { kind: "eas", id: "eas", label: "Expo Simulators", accessToken: personal("op://expo") },

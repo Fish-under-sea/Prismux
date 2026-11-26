@@ -46,7 +46,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer home
             PRISMUX_HOME: homeName,
             PRISMUX_VERSION: version,
             PRISMUX_INSTALL_BIN_DIR: NodePath.dirname(launcher),
-            PRISMUX_RELEASE_BASE_URL: "http://127.0.0.1:1",
+            PRISMUX_RELEASE_BASE_URL: "https://127.0.0.1:1",
           },
           encoding: "utf8",
         });
@@ -220,7 +220,7 @@ async function installOver(input: {
       PRISMUX_VERSION: "1.2.3",
       PRISMUX_HOME: input.home,
       PRISMUX_INSTALL_BIN_DIR: input.binDir,
-      PRISMUX_RELEASE_BASE_URL: "http://127.0.0.1:9",
+      PRISMUX_RELEASE_BASE_URL: "https://127.0.0.1:9",
       ...input.env,
     },
   });

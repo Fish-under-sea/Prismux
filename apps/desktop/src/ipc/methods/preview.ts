@@ -17,10 +17,7 @@ import {
   DesktopPreviewSetColorSchemeInputSchema,
   DesktopPreviewSetDeviceEmulationInputSchema,
   DesktopPreviewSetZoomFactorInputSchema,
-  BrowserImportResult,
-  BrowserImportSource,
   DesktopPreviewClearDataInputSchema,
-  DesktopPreviewImportCookiesInputSchema,
   DesktopPreviewCreateTabInputSchema,
   DesktopPreviewTabInputSchema,
   DesktopPreviewTunnelAccessResolutionInputSchema,
@@ -41,7 +38,6 @@ import * as Option from "effect/Option";
 import * as NodeURL from "node:url";
 
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
-import * as BrowserImport from "../../preview/BrowserImport/BrowserImport.ts";
 import * as LoopbackTunnel from "../../preview/LoopbackTunnel.ts";
 import * as PreviewManager from "../../preview/Manager.ts";
 import { normalizeCaptureFailure } from "../../preview/captureErrors.ts";
@@ -433,38 +429,6 @@ const sharesLoopback = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.preview.sharesLoopback")(function* ({ environmentId }) {
     const tunnel = yield* LoopbackTunnel.LoopbackTunnel;
     return yield* tunnel.sharesLoopback(environmentId);
-  }),
-});
-
-export const listBrowserImportSources = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.PREVIEW_IMPORT_SOURCES_CHANNEL,
-  payload: Schema.Void,
-  result: Schema.Array(BrowserImportSource),
-  handler: Effect.fn("desktop.ipc.preview.listBrowserImportSources")(function* () {
-    const browserImport = yield* BrowserImport.BrowserImport;
-    return yield* browserImport.listSources;
-  }),
-});
-
-export const importBrowserCookies = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.PREVIEW_IMPORT_COOKIES_CHANNEL,
-  payload: DesktopPreviewImportCookiesInputSchema,
-  result: BrowserImportResult,
-  handler: Effect.fn("desktop.ipc.preview.importBrowserCookies")(function* ({
-    environmentId,
-    ...importInput
-  }) {
-    const browserImport = yield* BrowserImport.BrowserImport;
-    const { scope, persistent, namespace } = resolvePartitionScope(
-      environmentId,
-      importInput.targetProfileId,
-    );
-    return yield* browserImport.importCookies({
-      input: importInput,
-      scope,
-      persistent,
-      ...(namespace === undefined ? {} : { namespace }),
-    });
   }),
 });
 

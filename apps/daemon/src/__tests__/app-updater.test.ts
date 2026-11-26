@@ -74,6 +74,25 @@ function makeTempDir(prefix: string): string {
   return dir;
 }
 
+function findTestHostSevenZip(): string | null {
+  const bundled = resolve7zaBinary();
+  if (bundled !== null) {
+    return bundled;
+  }
+  for (const candidate of [
+    "C:\\Program Files\\7-Zip\\7za.exe",
+    "C:\\Program Files\\7-Zip\\7z.exe",
+    "C:\\Program Files (x86)\\7-Zip\\7za.exe",
+    "C:\\Program Files (x86)\\7-Zip\\7z.exe"
+  ]) {
+    const resolved = resolve7zaBinary(candidate);
+    if (resolved !== null) {
+      return resolved;
+    }
+  }
+  return null;
+}
+
 test("compareSemver and channel filtering recognize 0.0.1-alpha.1 < 0.0.1-alpha.2 < 0.1.0", async () => {
   assert.equal(compareSemver("0.0.1-alpha.1", "0.0.1-alpha.2"), -1);
   assert.equal(compareSemver("0.0.1-alpha.2", "0.1.0"), -1);
@@ -175,7 +194,8 @@ test("compareSemver and channel filtering recognize 0.0.1-alpha.1 < 0.0.1-alpha.
       dataDir,
       initialPolicy: { routePreference: "global", includePrerelease: true },
       githubApiBase: mockRef.baseUrl,
-      giteeApiBase: mockRef.baseUrl
+      giteeApiBase: mockRef.baseUrl,
+      allowInsecureLoopbackForTesting: true
     });
 
     // With includePrerelease: true, picks 0.0.1-alpha.2 over 0.0.1-alpha.1
@@ -333,7 +353,8 @@ test("AppUpdater route switching: domestic (Gitee->GitHub fallback), global (Git
       portableMode: true,
       githubApiBase: githubBase,
       giteeApiBase: giteeBase,
-      retryDelaysMs: [10, 20]
+      retryDelaysMs: [10, 20],
+      allowInsecureLoopbackForTesting: true
     });
 
     // Default policy uses empty ghProxyPrefix and auto routePreference
@@ -460,7 +481,8 @@ test("AppUpdater security gates: rejects missing .sha256 and deletes .part on 1-
       initialPolicy: { routePreference: "global" },
       githubApiBase: mockRef.baseUrl,
       giteeApiBase: mockRef.baseUrl,
-      retryDelaysMs: [5]
+      retryDelaysMs: [5],
+      allowInsecureLoopbackForTesting: true
     });
 
     // ④ Missing .sha256 MUST refuse download before hitting /dl/setup.exe
@@ -648,7 +670,8 @@ test("AppUpdater supports Range resume, 302 redirects (max 6 hops), and customGh
       githubApiBase: originRef.baseUrl,
       giteeApiBase: originRef.baseUrl,
       maxRedirects: 6,
-      retryDelaysMs: [10, 20]
+      retryDelaysMs: [10, 20],
+      allowInsecureLoopbackForTesting: true
     });
 
     // ⑥ 6 redirect hops (wait: /redirect/0 -> ... -> /redirect/5 -> /dl/setup.exe is 6 hops;
@@ -705,6 +728,9 @@ test("PrismuxDaemon integrates AppUpdater with 0.2.3-rc.2 default and exposes HT
     assert.equal(statusJson.policy.routePreference, "auto");
     assert.equal(statusJson.policy.includePrerelease, true);
     assert.equal(statusJson.policy.customGhProxyPrefix, "");
+    assert.equal(statusJson.policy.autoCheckEnabled, false);
+    assert.equal(statusJson.autoCheckEnabled, false);
+    assert.equal(statusJson.nextAutoCheckAt, null);
 
     const policyRes = await fetch(`${ready.httpUrl}/v1/updater/policy`, {
       method: "POST",
@@ -847,7 +873,8 @@ test("AppUpdater downloadUpdate switches to fallback source when primary asset C
       giteeApiBase: giteeRef.baseUrl,
       githubApiBase: githubRef.baseUrl,
       maxRetries: 1,
-      retryDelaysMs: [5]
+      retryDelaysMs: [5],
+      allowInsecureLoopbackForTesting: true
     });
 
     const check = await updater.checkForUpdates();
@@ -931,7 +958,7 @@ function writeChunkedBuffer(
 }
 
 test("AppUpdater probes Gitee 3-part split-7z sizes via HEAD when JSON omits size and emits monotonic 0->30->60->90->95->99.9->100% progress", async () => {
-  const sevenZip = resolve7zaBinary();
+  const sevenZip = findTestHostSevenZip();
   assert.ok(sevenZip !== null, "Expected 7za/7z binary on Windows test host");
 
   const exeName = "Prismux-Setup-0.1.2-preview.5.exe";
@@ -939,6 +966,11 @@ test("AppUpdater probes Gitee 3-part split-7z sizes via HEAD when JSON omits siz
   const expectedSha = sha256Hex(exePayload);
   const fixture = await createSplit7zThreePartFixture(sevenZip, exeName, exePayload, "28k");
   const totalArchiveBytes = fixture.parts.reduce((sum, part) => sum + part.bytes.length, 0);
+  const sumsText =
+    [
+      `${expectedSha}  ${exeName}`,
+      ...fixture.parts.map((part) => `${sha256Hex(part.bytes)}  ${part.name}`)
+    ].join("\n") + "\n";
 
   let headCount = 0;
   let mockRef!: { server: http.Server; baseUrl: string };
@@ -961,8 +993,8 @@ test("AppUpdater probes Gitee 3-part split-7z sizes via HEAD when JSON omits siz
                 browser_download_url: `${mockRef.baseUrl}/dl/${encodeURIComponent(part.name)}`
               })),
               {
-                name: `${exeName}.sha256`,
-                browser_download_url: `${mockRef.baseUrl}/dl/${encodeURIComponent(exeName)}.sha256`
+                name: "SHA256SUMS.txt",
+                browser_download_url: `${mockRef.baseUrl}/dl/SHA256SUMS.txt`
               }
             ]
           }
@@ -971,9 +1003,9 @@ test("AppUpdater probes Gitee 3-part split-7z sizes via HEAD when JSON omits siz
       return;
     }
 
-    if (urlPath === `/dl/${encodeURIComponent(exeName)}.sha256`) {
+    if (urlPath === "/dl/SHA256SUMS.txt") {
       res.statusCode = 200;
-      res.end(`${expectedSha}  ${exeName}\n`);
+      res.end(sumsText);
       return;
     }
 
@@ -1011,7 +1043,8 @@ test("AppUpdater probes Gitee 3-part split-7z sizes via HEAD when JSON omits siz
       giteeApiBase: `${mockRef.baseUrl}/gitee`,
       githubApiBase: `${mockRef.baseUrl}/github-offline`,
       initialPolicy: { routePreference: "domestic", includePrerelease: true },
-      retryDelaysMs: [10]
+      retryDelaysMs: [10],
+      allowInsecureLoopbackForTesting: true
     });
 
     const check = await updater.checkForUpdates({ sourceOverride: "gitee" });
@@ -1090,7 +1123,7 @@ test("AppUpdater probes Gitee 3-part split-7z sizes via HEAD when JSON omits siz
 });
 
 test("AppUpdater keeps smooth monotonic 0->30->60->90->95->99.9->100% progress even when HEAD returns 405 and part 3 uses Content-Range", async () => {
-  const sevenZip = resolve7zaBinary();
+  const sevenZip = findTestHostSevenZip();
   assert.ok(sevenZip !== null, "Expected 7za/7z binary on Windows test host");
 
   const exeName = "Prismux-Setup-0.1.2-preview.5.exe";
@@ -1098,6 +1131,11 @@ test("AppUpdater keeps smooth monotonic 0->30->60->90->95->99.9->100% progress e
   const expectedSha = sha256Hex(exePayload);
   const fixture = await createSplit7zThreePartFixture(sevenZip, exeName, exePayload, "28k");
   const totalArchiveBytes = fixture.parts.reduce((sum, part) => sum + part.bytes.length, 0);
+  const sumsText =
+    [
+      `${expectedSha}  ${exeName}`,
+      ...fixture.parts.map((part) => `${sha256Hex(part.bytes)}  ${part.name}`)
+    ].join("\n") + "\n";
 
   let head405Count = 0;
   let mockRef!: { server: http.Server; baseUrl: string };
@@ -1118,8 +1156,8 @@ test("AppUpdater keeps smooth monotonic 0->30->60->90->95->99.9->100% progress e
                 browser_download_url: `${mockRef.baseUrl}/dl/${encodeURIComponent(part.name)}`
               })),
               {
-                name: `${exeName}.sha256`,
-                browser_download_url: `${mockRef.baseUrl}/dl/${encodeURIComponent(exeName)}.sha256`
+                name: "SHA256SUMS.txt",
+                browser_download_url: `${mockRef.baseUrl}/dl/SHA256SUMS.txt`
               }
             ]
           }
@@ -1128,9 +1166,9 @@ test("AppUpdater keeps smooth monotonic 0->30->60->90->95->99.9->100% progress e
       return;
     }
 
-    if (urlPath === `/dl/${encodeURIComponent(exeName)}.sha256`) {
+    if (urlPath === "/dl/SHA256SUMS.txt") {
       res.statusCode = 200;
-      res.end(`${expectedSha}  ${exeName}\n`);
+      res.end(sumsText);
       return;
     }
 
@@ -1174,7 +1212,8 @@ test("AppUpdater keeps smooth monotonic 0->30->60->90->95->99.9->100% progress e
       giteeApiBase: `${mockRef.baseUrl}/gitee`,
       githubApiBase: `${mockRef.baseUrl}/github-offline`,
       initialPolicy: { routePreference: "domestic", includePrerelease: true },
-      retryDelaysMs: [10]
+      retryDelaysMs: [10],
+      allowInsecureLoopbackForTesting: true
     });
 
     const check = await updater.checkForUpdates({ sourceOverride: "gitee" });
@@ -1277,7 +1316,8 @@ test("AppUpdater throttles high-frequency chunk SSE broadcasts while preserving 
       initialPolicy: { routePreference: "global", includePrerelease: true },
       githubApiBase: mockRef.baseUrl,
       giteeApiBase: mockRef.baseUrl,
-      retryDelaysMs: [10]
+      retryDelaysMs: [10],
+      allowInsecureLoopbackForTesting: true
     });
 
     const check = await updater.checkForUpdates();
@@ -1587,7 +1627,8 @@ test("AppUpdater preserves full v0.1.3-preview.1 releaseNotes across GitHub API,
       githubApiBase: `${mockRef.baseUrl}/gh-api`,
       giteeApiBase: `${mockRef.baseUrl}/gitee-api`,
       giteeWebBase: `${mockRef.baseUrl}/gitee-web`,
-      initialPolicy: { routePreference: "global", includePrerelease: true }
+      initialPolicy: { routePreference: "global", includePrerelease: true },
+      allowInsecureLoopbackForTesting: true
     });
 
     const assertAllFiveHighlightsPresent = (notes: string | null, label: string) => {

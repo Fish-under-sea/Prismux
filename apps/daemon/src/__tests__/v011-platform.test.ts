@@ -73,6 +73,25 @@ function sha256Hex(buf: Buffer): string {
   return createHash("sha256").update(buf).digest("hex");
 }
 
+function findTestHostSevenZip(): string | null {
+  const bundled = resolve7zaBinary();
+  if (bundled !== null) {
+    return bundled;
+  }
+  for (const candidate of [
+    "C:\\Program Files\\7-Zip\\7za.exe",
+    "C:\\Program Files\\7-Zip\\7z.exe",
+    "C:\\Program Files (x86)\\7-Zip\\7za.exe",
+    "C:\\Program Files (x86)\\7-Zip\\7z.exe"
+  ]) {
+    const resolved = resolve7zaBinary(candidate);
+    if (resolved !== null) {
+      return resolved;
+    }
+  }
+  return null;
+}
+
 async function startMockServer(
   handler: http.RequestListener
 ): Promise<{ server: http.Server; baseUrl: string }> {
@@ -136,7 +155,7 @@ async function createRealSplit7zFixture(
 // ---------------------------------------------------------------------------
 
 test("AppUpdater recognizes Gitee split-7z-exe, resumes mid-part, extracts via 7z, verifies SHA-256, and streams SSE events", async () => {
-  const sevenZip = resolve7zaBinary();
+  const sevenZip = findTestHostSevenZip();
   assert.ok(sevenZip !== null, "Expected 7za/7z binary on Windows test host");
 
   const exeName = "Prismux-Setup-0.2.0-win-x64.exe";
@@ -144,6 +163,11 @@ test("AppUpdater recognizes Gitee split-7z-exe, resumes mid-part, extracts via 7
   const exePayload = randomBytes(68 * 1024);
   const expectedSha = sha256Hex(exePayload);
   const fixture = await createRealSplit7zFixture(sevenZip, exeName, exePayload, "24k");
+  const sumsText =
+    [
+      `${expectedSha}  ${exeName}`,
+      ...fixture.parts.map((part) => `${sha256Hex(part.bytes)}  ${part.name}`)
+    ].join("\n") + "\n";
 
   let part2RequestCount = 0;
   let mockRef!: { server: http.Server; baseUrl: string };
@@ -166,8 +190,8 @@ test("AppUpdater recognizes Gitee split-7z-exe, resumes mid-part, extracts via 7
                 size: part.bytes.length
               })),
               {
-                name: `${exeName}.sha256`,
-                browser_download_url: `${mockRef.baseUrl}/dl/${encodeURIComponent(exeName)}.sha256`
+                name: "SHA256SUMS.txt",
+                browser_download_url: `${mockRef.baseUrl}/dl/SHA256SUMS.txt`
               }
             ]
           }
@@ -176,9 +200,9 @@ test("AppUpdater recognizes Gitee split-7z-exe, resumes mid-part, extracts via 7
       return;
     }
 
-    if (urlPath === `/dl/${encodeURIComponent(exeName)}.sha256`) {
+    if (urlPath === "/dl/SHA256SUMS.txt") {
       res.statusCode = 200;
-      res.end(`${expectedSha}  ${exeName}\n`);
+      res.end(sumsText);
       return;
     }
 
@@ -238,7 +262,8 @@ test("AppUpdater recognizes Gitee split-7z-exe, resumes mid-part, extracts via 7
       giteeApiBase: `${mockRef.baseUrl}/gitee`,
       githubApiBase: `${mockRef.baseUrl}/github-offline`,
       initialPolicy: { routePreference: "domestic", includePrerelease: true },
-      retryDelaysMs: [10, 20]
+      retryDelaysMs: [10, 20],
+      allowInsecureLoopbackForTesting: true
     });
 
     const events: string[] = [];
@@ -253,7 +278,7 @@ test("AppUpdater recognizes Gitee split-7z-exe, resumes mid-part, extracts via 7
     assert.equal(check.recommendedAsset.kind, "split-7z-exe");
     assert.equal(check.recommendedAsset.expectedExeName, exeName);
     assert.equal(check.recommendedAsset.expectedSha256, expectedSha);
-    assert.ok(check.recommendedAsset.sha256Url?.includes(`${exeName}.sha256`));
+    assert.ok(check.recommendedAsset.sha256Url?.includes("SHA256SUMS.txt"));
     assert.equal(check.recommendedAsset.parts?.length, fixture.parts.length);
 
     const progressStages = new Set<string>();
@@ -295,7 +320,7 @@ test("AppUpdater recognizes Gitee split-7z-exe, resumes mid-part, extracts via 7
 });
 
 test("AppUpdater rejects 1-byte tampered split-7z extracted exe and wipes all temporary fragments immediately", async () => {
-  const sevenZip = resolve7zaBinary();
+  const sevenZip = findTestHostSevenZip();
   assert.ok(sevenZip !== null, "Expected 7za/7z binary on Windows test host");
 
   const exeName = "Prismux-Setup-0.2.1-win-x64.exe";
@@ -313,6 +338,13 @@ test("AppUpdater rejects 1-byte tampered split-7z extracted exe and wipes all te
     tamperedPayload,
     "24k"
   );
+  // Provide matching volume SHA-256s so pre-extract volume checks pass,
+  // proving post-extract .exe SHA-256 verification catches the tampered inner exe.
+  const sumsText =
+    [
+      `${legitSha}  ${exeName}`,
+      ...fixture.parts.map((part) => `${sha256Hex(part.bytes)}  ${part.name}`)
+    ].join("\n") + "\n";
 
   let mockRef!: { server: http.Server; baseUrl: string };
   mockRef = await startMockServer((req, res) => {
@@ -333,8 +365,8 @@ test("AppUpdater rejects 1-byte tampered split-7z extracted exe and wipes all te
                 size: part.bytes.length
               })),
               {
-                name: `${exeName}.sha256`,
-                browser_download_url: `${mockRef.baseUrl}/dl/${encodeURIComponent(exeName)}.sha256`
+                name: "SHA256SUMS.txt",
+                browser_download_url: `${mockRef.baseUrl}/dl/SHA256SUMS.txt`
               }
             ]
           }
@@ -343,9 +375,9 @@ test("AppUpdater rejects 1-byte tampered split-7z extracted exe and wipes all te
       return;
     }
 
-    if (urlPath === `/dl/${encodeURIComponent(exeName)}.sha256`) {
+    if (urlPath === "/dl/SHA256SUMS.txt") {
       res.statusCode = 200;
-      res.end(`${legitSha}  ${exeName}\n`);
+      res.end(sumsText);
       return;
     }
 
@@ -373,7 +405,8 @@ test("AppUpdater rejects 1-byte tampered split-7z extracted exe and wipes all te
       sevenZipPath: sevenZip,
       giteeApiBase: `${mockRef.baseUrl}/gitee`,
       githubApiBase: `${mockRef.baseUrl}/github-offline`,
-      initialPolicy: { routePreference: "domestic", includePrerelease: true }
+      initialPolicy: { routePreference: "domestic", includePrerelease: true },
+      allowInsecureLoopbackForTesting: true
     });
 
     const check = await updater.checkForUpdates({ sourceOverride: "gitee" });
@@ -442,7 +475,8 @@ test("AppUpdater schedules silent background auto-check (15s initial + 4h interv
       githubApiBase: `${mockRef.baseUrl}/github`,
       giteeApiBase: `${mockRef.baseUrl}/gitee-offline`,
       initialPolicy: { routePreference: "global", autoCheckEnabled: true },
-      timers: fakeTimers
+      timers: fakeTimers,
+      allowInsecureLoopbackForTesting: true
     });
 
     updater.startAutoCheck();
@@ -1183,7 +1217,7 @@ test("ResourceMonitorService aligns with Orca: computes Windows CPU% deltas, tra
 });
 
 test("AppUpdater prefers Prismux-<ver>-SHA256SUMS.txt over prismux-plugins-*-SHA256SUMS.txt for both single-exe and Gitee split-7z-exe without per-asset .sha256", async () => {
-  const sevenZip = resolve7zaBinary();
+  const sevenZip = findTestHostSevenZip();
   assert.ok(sevenZip !== null, "Expected 7za/7z binary on Windows test host");
 
   // Direct selector priority & negative-match verification
@@ -1345,7 +1379,8 @@ test("AppUpdater prefers Prismux-<ver>-SHA256SUMS.txt over prismux-plugins-*-SHA
       sevenZipPath: sevenZip,
       githubApiBase: `${mockRef.baseUrl}/github`,
       giteeApiBase: `${mockRef.baseUrl}/gitee`,
-      initialPolicy: { routePreference: "global", includePrerelease: true }
+      initialPolicy: { routePreference: "global", includePrerelease: true },
+      allowInsecureLoopbackForTesting: true
     });
 
     const ghCheck = await ghUpdater.checkForUpdates({ sourceOverride: "github" });
@@ -1364,7 +1399,8 @@ test("AppUpdater prefers Prismux-<ver>-SHA256SUMS.txt over prismux-plugins-*-SHA
       sevenZipPath: sevenZip,
       githubApiBase: `${mockRef.baseUrl}/github`,
       giteeApiBase: `${mockRef.baseUrl}/gitee`,
-      initialPolicy: { routePreference: "domestic", includePrerelease: true }
+      initialPolicy: { routePreference: "domestic", includePrerelease: true },
+      allowInsecureLoopbackForTesting: true
     });
 
     const giteeCheck = await giteeUpdater.checkForUpdates({ sourceOverride: "gitee" });
@@ -1821,7 +1857,8 @@ test("AppUpdater falls back to Gitee public Web Releases on OpenAPI v5 HTTP 403 
       githubWebBase: `${mockServer.baseUrl}/github-web`,
       giteeApiBase: `${mockServer.baseUrl}/gitee-api`,
       giteeWebBase: `${mockServer.baseUrl}/gitee-web`,
-      initialPolicy: { routePreference: "domestic", includePrerelease: true }
+      initialPolicy: { routePreference: "domestic", includePrerelease: true },
+      allowInsecureLoopbackForTesting: true
     });
 
     const probe = await updater.probeSources();

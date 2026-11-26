@@ -40,8 +40,10 @@ import {
   formatNpmPluginPackageName,
 } from '../build-npm-plugin-packages.ts';
 import {
+  assertSplitSha256SumsCoversAllVolumes,
   buildReleaseNotesTemplate,
   collectReleaseArtifactFiles,
+  ensureSplitVolumesSha256Sums,
   extractGiteeTokenFromCredentialsText,
   formatReleaseTitle,
   normalizeReleaseTag,
@@ -788,6 +790,61 @@ describe('release-and-npm-packages', () => {
     assert.ok(giteeNotes.includes(formatSoftwareSumsFilename(version)));
     assert.ok(giteeNotes.includes(`https://gitee.com/Fish-under-sea/Prismux/releases/download/v${version}/Prismux-Setup-${version}-win-x64.exe.7z.001`));
   });
+
+  it('writes per-volume .7z.001..N SHA-256 hashes alongside installer .exe hash in Gitee SHA256SUMS and rejects incomplete manifests', () => {
+    const dir = createTempDir('prismux-gitee-split-sums-');
+    const splitDir = join(dir, '.gitee-split');
+    const version = '0.2.3-rc.2';
+    const exeName = `Prismux-Setup-${version}-win-x64.exe`;
+    const part1Name = `${exeName}.7z.001`;
+    const part2Name = `${exeName}.7z.002`;
+    const part3Name = `${exeName}.7z.003`;
+
+    const exeBytes = Buffer.from('PRISMUX-INSTALLER-EXE-PAYLOAD');
+    const p1Bytes = Buffer.from('VOLUME-ONE-BYTES');
+    const p2Bytes = Buffer.from('VOLUME-TWO-BYTES');
+    const p3Bytes = Buffer.from('VOLUME-THREE-BYTES');
+
+    writeBinaryFile(join(dir, exeName), exeBytes);
+    writeBinaryFile(join(splitDir, part1Name), p1Bytes);
+    writeBinaryFile(join(splitDir, part2Name), p2Bytes);
+    writeBinaryFile(join(splitDir, part3Name), p3Bytes);
+
+    const res = ensureSplitVolumesSha256Sums(dir, version);
+    assert.ok(res !== null);
+    assert.equal(res.installerFilename, exeName);
+    assert.equal(res.installerSha256, createHash('sha256').update(exeBytes).digest('hex'));
+    assert.equal(res.splitVolumes.length, 3);
+
+    const sumsContent = readFileSync(res.sumsPath, 'utf8');
+    assert.ok(sumsContent.includes(`${res.installerSha256}  ${exeName}`));
+    assert.ok(sumsContent.includes(`${createHash('sha256').update(p1Bytes).digest('hex')}  ${part1Name}`));
+    assert.ok(sumsContent.includes(`${createHash('sha256').update(p2Bytes).digest('hex')}  ${part2Name}`));
+    assert.ok(sumsContent.includes(`${createHash('sha256').update(p3Bytes).digest('hex')}  ${part3Name}`));
+    assert.doesNotThrow(() =>
+      assertSplitSha256SumsCoversAllVolumes(sumsContent, [part1Name, part2Name, part3Name]),
+    );
+
+    // Reject SHA256SUMS missing a split volume
+    const missingPart3 = sumsContent
+      .split('\n')
+      .filter((line) => !line.includes(part3Name))
+      .join('\n');
+    assert.throws(
+      () => assertSplitSha256SumsCoversAllVolumes(missingPart3, [part1Name, part2Name, part3Name]),
+      /missing per-volume SHA-256 entries/i,
+    );
+
+    // Reject SHA256SUMS missing the .exe hash
+    const missingExe = sumsContent
+      .split('\n')
+      .filter((line) => !line.includes(`${exeName}\r`) && !line.endsWith(`  ${exeName}`))
+      .join('\n');
+    assert.throws(
+      () => assertSplitSha256SumsCoversAllVolumes(missingExe, [part1Name, part2Name, part3Name]),
+      /missing the full installer \.exe/i,
+    );
+  });
 });
 
 describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
@@ -845,8 +902,10 @@ describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
 
     const vecLibName = resolveSqliteVecLibraryFilename();
     const vecPkgName = resolveSqliteVecPackageName();
+    const mockVecBytes = Buffer.alloc(1024, 0x5a);
+    const mockVecSha256 = createHash('sha256').update(mockVecBytes).digest('hex');
     const mockVecBinary = join(mockRepo, 'node_modules', vecPkgName, vecLibName);
-    writeBinaryFile(mockVecBinary, Buffer.alloc(1024, 0x5a));
+    writeBinaryFile(mockVecBinary, mockVecBytes);
 
     const monitorExe = join(
       mockRepo,
@@ -865,6 +924,8 @@ describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
       repoRoot: mockRepo,
       installer: true,
       outDir,
+      verifyPinnedAssets: false,
+      sqliteVecExpectedSha256: [mockVecSha256],
       runner: (inv) => {
         invocations.push(inv);
         if (inv.command === 'cargo') {
@@ -927,6 +988,8 @@ describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
       skipRust: true,
       skipRootBuild: true,
       installer: false,
+      verifyPinnedAssets: false,
+      sqliteVecExpectedSha256: [mockVecSha256],
       runner: (inv) => {
         skipInvocations.push(inv);
         return { status: 0, stdout: '', stderr: '' };
@@ -946,13 +1009,15 @@ describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
           repoRoot: mockRepo,
           skipRust: true,
           skipRootBuild: true,
+          verifyPinnedAssets: false,
+          sqliteVecExpectedSha256: [mockVecSha256],
           runner: () => ({ status: 0, stdout: '', stderr: '' }),
         }),
       /missing/i,
     );
   });
 
-  it('rejects missing, empty, or .asar-targeted sqlite-vec native binary during desktop staging', () => {
+  it('rejects missing, empty, tampered SHA-256, or .asar-targeted sqlite-vec native binary during desktop staging', () => {
     const emptyRepo = createTempDir('prismux-vec-missing-');
     writeTextFile(
       join(emptyRepo, 'package.json'),
@@ -982,13 +1047,25 @@ describe('build-prismux-desktop and release-all (v0.1.0-alpha.1)', () => {
       /empty \(0 bytes\)/i,
     );
 
-    writeBinaryFile(zeroByteDll, Buffer.alloc(512, 0x42));
+    const validMockBytes = Buffer.alloc(512, 0x42);
+    const validMockSha = createHash('sha256').update(validMockBytes).digest('hex');
+    writeBinaryFile(zeroByteDll, validMockBytes);
+    // Unverified/tampered binary without matching pinned SHA-256 must fail closed
+    assert.throws(
+      () =>
+        stageSqliteVecBinaryForDesktop({
+          repoRoot: emptyRepo,
+          env: {},
+        }),
+      /SHA-256 verification failed/i,
+    );
     assert.throws(
       () =>
         stageSqliteVecBinaryForDesktop({
           repoRoot: emptyRepo,
           targetPath: join(emptyRepo, 'resources', 'app.asar', 'native', vecLibName),
           env: {},
+          expectedSha256: [validMockSha],
         }),
       /outside \.asar/i,
     );

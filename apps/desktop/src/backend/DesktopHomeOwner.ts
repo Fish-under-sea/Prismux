@@ -78,7 +78,7 @@ export const awaitHomeOwnershipRelease = Effect.fn("DesktopHomeOwner.awaitHomeOw
   }),
 );
 
-/** The live server recorded as owning the desktop's T3 home. Only call once the ownership lock is known held: a live PID alone may be reused. */
+/** The live server recorded as owning the desktop's Prismux home. Only call once the ownership lock is known held: a live PID alone may be reused. */
 export const readLiveHomeOwner = Effect.fn("DesktopHomeOwner.readLiveHomeOwner")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;

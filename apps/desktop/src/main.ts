@@ -35,7 +35,6 @@ import * as ElectronProtocol from "./electron/ElectronProtocol.ts";
 import * as ElectronSafeStorage from "./electron/ElectronSafeStorage.ts";
 import * as ElectronShell from "./electron/ElectronShell.ts";
 import * as ElectronTheme from "./electron/ElectronTheme.ts";
-import * as ElectronUpdater from "./electron/ElectronUpdater.ts";
 import * as ElectronWindow from "./electron/ElectronWindow.ts";
 import * as DesktopApp from "./app/DesktopApp.ts";
 import * as DesktopAppActivation from "./app/DesktopAppActivation.ts";
@@ -71,12 +70,7 @@ import * as PrismuxDaemonService from "./prismux/PrismuxDaemonService.ts";
 import { runPrismuxStartupUpgradeMigration } from "./prismux/PrismuxUpgradeMigration.ts";
 import * as DesktopState from "./app/DesktopState.ts";
 import * as DesktopLegacyLocalStorage from "./app/DesktopLegacyLocalStorage.ts";
-import * as DesktopTelemetryPublisher from "./telemetry/DesktopTelemetryPublisher.ts";
 import * as DesktopRendererHistory from "./telemetry/DesktopRendererHistory.ts";
-import * as DesktopUpdatePolicy from "./updates/DesktopUpdatePolicy.ts";
-import * as DesktopUpdates from "./updates/DesktopUpdates.ts";
-import * as BrowserImport from "./preview/BrowserImport/BrowserImport.ts";
-import * as LinuxBrowserSecret from "./preview/BrowserImport/LinuxBrowserSecret.ts";
 import * as AppleSpeech from "./speech/AppleSpeech.ts";
 import * as BrowserSession from "./preview/BrowserSession.ts";
 import * as DesktopBrowserHost from "./preview/DesktopBrowserHost.ts";
@@ -147,7 +141,6 @@ const layerElectron = Layer.mergeAll(
   ElectronSafeStorage.layer,
   ElectronShell.layer,
   ElectronTheme.layer,
-  ElectronUpdater.layer,
   ElectronWindow.layer,
   DesktopIpc.layer(Electron.ipcMain).pipe(Layer.provide(ElectronWindow.layer)),
 );
@@ -180,8 +173,6 @@ const layerDesktopServerExposure = DesktopServerExposure.layer.pipe(
 const layerDesktopPreview = PreviewManager.layer.pipe(
   Layer.provideMerge(LoopbackTunnel.layer),
   Layer.provideMerge(DesktopBrowserHost.layer),
-  // IPC needs both services on the same BrowserSession.
-  Layer.provideMerge(BrowserImport.layer.pipe(Layer.provide(LinuxBrowserSecret.layer))),
   Layer.provideMerge(BrowserSession.layer),
   Layer.provideMerge(PreviewPasskeys.layer),
   Layer.provideMerge(layerDesktopFoundation),
@@ -205,7 +196,6 @@ const layerDesktopBackend = DesktopBackendPool.layer.pipe(
   Layer.provideMerge(DesktopBackendConfiguration.layer),
   Layer.provideMerge(DesktopWslEnvironment.layer),
   Layer.provideMerge(DesktopWslServerTree.layer),
-  Layer.provideMerge(DesktopTelemetryPublisher.layer),
   Layer.provideMerge(DesktopShellEnvironment.layer),
   Layer.provideMerge(layerDesktopWindow),
 );
@@ -228,14 +218,6 @@ const layerDesktopApplication = Layer.mergeAll(
   PrismuxDaemonService.layer,
 ).pipe(
   Layer.provideMerge(layerDesktopSnapShot),
-  Layer.provideMerge(
-    DesktopUpdates.layer.pipe(
-      Layer.provide(DesktopUpdatePolicy.layer),
-      // The same layer as the foundation's, so the policy is still read once.
-      Layer.provide(DesktopManagedPolicy.layer),
-    ),
-  ),
-  // Updates closes the same tunnels the SSH IPC opens before quitAndInstall.
   Layer.provideMerge(layerDesktopSsh),
   Layer.provideMerge(layerDesktopWslBackend),
   Layer.provideMerge(layerDesktopLocalEnvironmentAuth),

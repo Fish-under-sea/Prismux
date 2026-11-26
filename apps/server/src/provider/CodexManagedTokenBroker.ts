@@ -36,9 +36,20 @@ export class CodexManagedTokenBroker extends Context.Service<
   CodexManagedTokenBroker,
   {
     readonly endpoint: Effect.Effect<string, BrokerStartError>;
+    readonly authSecret: Effect.Effect<string, BrokerStartError>;
     readonly awaitIdle: Effect.Effect<void>;
   }
 >()("@prismux/server/provider/CodexManagedTokenBroker") {}
+
+function verifyBrokerSecretConstantTime(providedHex: string, expectedHex: string): boolean {
+  const provided = Buffer.from(providedHex, "hex");
+  const expected = Buffer.from(expectedHex, "hex");
+  return (
+    provided.length === 32 &&
+    expected.length === 32 &&
+    NodeCrypto.timingSafeEqual(provided, expected)
+  );
+}
 
 const io = <A>(f: () => Promise<A>) =>
   Effect.tryPromise({ try: f, catch: (cause) => new BrokerStartError({ cause }) });
@@ -47,6 +58,7 @@ const acquireListener = Effect.gen(function* () {
   const environmentId = yield* identity.getEnvironmentId;
   const platform = yield* HostProcess.Platform;
   const uid = yield* HostProcess.UserId;
+  const authSecret = NodeCrypto.randomBytes(32).toString("hex");
   const owned = yield* Effect.acquireRelease(
     io(async () => {
       if (platform === "win32")
@@ -143,7 +155,13 @@ const acquireListener = Effect.gen(function* () {
           Protocol.REQUEST_BYTES,
           Protocol.SOCKET_IDLE_MS,
         ).pipe(Effect.flatMap(decode));
-        if (closing || admitted >= MAX_JOBS || request.environmentId !== environmentId) return;
+        if (
+          closing ||
+          admitted >= MAX_JOBS ||
+          request.environmentId !== environmentId ||
+          !verifyBrokerSecretConstantTime(request.authSecret, authSecret)
+        )
+          return;
         admitted++;
         transferred = true;
         runJob(
@@ -205,7 +223,7 @@ const acquireListener = Effect.gen(function* () {
     return Effect.sync(() => server.off("error", onError));
   });
   if (platform !== "win32") yield* io(() => NodeFSP.chmod(owned.endpoint, 0o600));
-  return { endpoint: owned.endpoint, awaitIdle: FiberSet.awaitEmpty(jobs) };
+  return { endpoint: owned.endpoint, authSecret, awaitIdle: FiberSet.awaitEmpty(jobs) };
 });
 const make = Effect.gen(function* () {
   const scope = yield* Scope.fork(yield* Effect.scope);
@@ -214,11 +232,13 @@ const make = Effect.gen(function* () {
     yield* Scope.close(scope, Exit.fail(acquired.failure));
     return CodexManagedTokenBroker.of({
       endpoint: Effect.fail(acquired.failure),
+      authSecret: Effect.fail(acquired.failure),
       awaitIdle: Effect.void,
     });
   }
   return CodexManagedTokenBroker.of({
     endpoint: Effect.succeed(acquired.success.endpoint),
+    authSecret: Effect.succeed(acquired.success.authSecret),
     awaitIdle: acquired.success.awaitIdle,
   });
 });

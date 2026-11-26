@@ -1,11 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { type EnvironmentId, managedPolicyDeniedMessage } from "@prismux/core-contracts";
+import type { EnvironmentId } from "@prismux/core-contracts";
 
-import {
-  clearBrowserProfileData,
-  importFailureReason,
-  importPolicyRefusal,
-} from "./IntegrationsSettings";
+import { clearBrowserProfileData } from "./IntegrationsSettings";
 
 const environmentId = "environment-a" as EnvironmentId;
 const secondEnvironmentId = "environment-b" as EnvironmentId;
@@ -47,40 +43,5 @@ describe("clearBrowserProfileData with server browsers", () => {
       }),
     ).rejects.toBe(failure);
     expect(bridge.clearCookies).toHaveBeenCalledWith(environmentId, "profile-a");
-  });
-});
-
-// Mirrors `BrowserImportFailedError.message`, which IPC flattens to a string
-// before the renderer sees it.
-const failure = (reason: string) => ({
-  message: `Importing cookies from safari failed: ${reason}.`,
-});
-
-describe("importFailureReason", () => {
-  it("recovers the reason token from the flattened message", () => {
-    expect(importFailureReason(failure("needsFullDiskAccess"))).toBe("needsFullDiskAccess");
-    expect(importFailureReason(failure("browserRunning"))).toBe("browserRunning");
-    expect(importFailureReason(failure("readFailed"))).toBe("readFailed");
-    expect(importFailureReason(failure("keychainUnavailable"))).toBe("keychainUnavailable");
-    expect(importFailureReason(failure("profileNotSaved"))).toBe("profileNotSaved");
-    expect(importFailureReason(failure("profileLimitReached"))).toBe("profileLimitReached");
-  });
-});
-
-describe("importPolicyRefusal", () => {
-  it("recovers a managed policy's refusal from the IPC-wrapped message", () => {
-    const denied = managedPolicyDeniedMessage("Example Corp", "importing browser cookies");
-    expect(
-      importPolicyRefusal({
-        message: `Error invoking remote method 'desktop:preview-import-cookies': BrowserImportPolicyError: ${denied}`,
-      }),
-    ).toBe(denied);
-    const unreadable =
-      "The managed policy at C:\\Program Files\\Prismux\\policy.json could not be read, so importing browser cookies is not allowed.";
-    expect(importPolicyRefusal({ message: `Error: ${unreadable}` })).toBe(unreadable);
-  });
-
-  it("leaves other failures to their reason token", () => {
-    expect(importPolicyRefusal(failure("readFailed"))).toBeUndefined();
   });
 });

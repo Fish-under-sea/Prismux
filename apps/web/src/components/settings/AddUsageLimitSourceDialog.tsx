@@ -8,7 +8,7 @@ import {
   type UsageLimitSourceKind,
 } from "@prismux/core-contracts";
 import { useLocale } from "gt-react";
-import { GlobeIcon, LayersIcon, ServerIcon } from "lucide-react";
+import { GlobeIcon, LayersIcon } from "lucide-react";
 import { useId, useState } from "react";
 
 import { useUpdateEnvironmentSettings } from "../../hooks/useSettings";
@@ -42,7 +42,6 @@ export interface EditingUsageLimitSource {
 const PROTOCOL_ICON = {
   newapi: LayersIcon,
   openaiBilling: GlobeIcon,
-  cliproxy: ServerIcon,
 } as const;
 
 /** Send the key once to server secret storage; settings retain only a redaction marker. */
@@ -141,7 +140,7 @@ export function AddUsageLimitSourceDialog({
               <div
                 role="radiogroup"
                 aria-label={copy.protocolLabel}
-                className="grid grid-cols-1 gap-2 sm:grid-cols-3"
+                className="grid grid-cols-1 gap-2 sm:grid-cols-2"
               >
                 {RELAY_PROTOCOL_ORDER.map((candidate) => {
                   const meta = getRelayProtocolMeta(candidate, locale);

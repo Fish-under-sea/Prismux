@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 
 export const Request = Schema.Struct({
   version: Schema.Literal(1),
+  authSecret: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/u)),
   instanceId: Schema.NonEmptyString,
   environmentId: Schema.NonEmptyString,
   profileKey: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/u)),

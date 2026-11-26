@@ -1,5 +1,6 @@
 import * as NodeAssert from "node:assert/strict";
 import * as NodeBuffer from "node:buffer";
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeHttp from "node:http";
 import * as NodeNet from "node:net";
@@ -11,6 +12,7 @@ import * as NodeZlib from "node:zlib";
 
 const assert: typeof NodeAssert = NodeAssert;
 const { Buffer } = NodeBuffer;
+const { createHash } = NodeCrypto;
 const {
   existsSync,
   mkdirSync,
@@ -648,6 +650,9 @@ test("Appearance atomic persistence, restart recovery, corrupt JSON fallback, an
     authToken
   });
   const ready1 = await daemon1.start();
+  cleanups.push(async () => {
+    await daemon1.stop();
+  });
 
   // CORS preflight & origin checks
   const preflightOk = await fetch(`${ready1.httpUrl}/v1/appearance`, {
@@ -664,7 +669,13 @@ test("Appearance atomic persistence, restart recovery, corrupt JSON fallback, an
     headers: { Origin: "file://" }
   });
   assert.equal(fileOriginRes.status, 200);
-  assert.equal(fileOriginRes.headers.get("access-control-allow-origin"), "file://");
+  assert.equal(fileOriginRes.headers.get("access-control-allow-origin"), null);
+
+  const nullOriginRes = await fetch(`${ready1.httpUrl}/health`, {
+    headers: { Origin: "null" }
+  });
+  assert.equal(nullOriginRes.status, 200);
+  assert.equal(nullOriginRes.headers.get("access-control-allow-origin"), null);
 
   const untrustedOriginRes = await fetch(`${ready1.httpUrl}/health`, {
     headers: { Origin: "https://evil.example.com" }
@@ -1057,7 +1068,8 @@ test("Real business HTTP APIs: chief, memory stats/search with qq_group isolatio
     port: 0,
     dataDir,
     authToken: ownerToken,
-    defaultChiefProvider: "codex"
+    defaultChiefProvider: "codex",
+    officialPluginSources: { allowInsecureLoopbackForTesting: true }
   });
   daemon.pairingManager.registerScopedToken(
     qqToken,
@@ -1382,6 +1394,22 @@ export function apply(ctx) {
       })
   );
   const tgzPort = (tgzServer.address() as AddressInfo).port;
+  const tgzSha256 = createHash("sha256").update(tgzBuffer).digest("hex");
+
+  // Unconfirmed install with ignored install scripts must require explicit audit confirmation (409)
+  const unconfirmedInstallRes = await fetch(`${ready.httpUrl}/v1/plugins/install`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${ownerToken}`
+    },
+    body: JSON.stringify({
+      source: "npm",
+      packageNameOrTarball: `http://127.0.0.1:${tgzPort}/prismux-plugin-demo-1.0.0.tgz`,
+      expectedSha256: tgzSha256
+    })
+  });
+  assert.equal(unconfirmedInstallRes.status, 409);
 
   const installRes = await fetch(`${ready.httpUrl}/v1/plugins/install`, {
     method: "POST",
@@ -1391,7 +1419,9 @@ export function apply(ctx) {
     },
     body: JSON.stringify({
       source: "npm",
-      packageNameOrTarball: `http://127.0.0.1:${tgzPort}/prismux-plugin-demo-1.0.0.tgz`
+      packageNameOrTarball: `http://127.0.0.1:${tgzPort}/prismux-plugin-demo-1.0.0.tgz`,
+      expectedSha256: tgzSha256,
+      confirmedAudit: true
     })
   });
   assert.equal(installRes.status, 200);
@@ -2371,12 +2401,13 @@ test("RC.3 Steam scene.pkg /scene-t/ streaming (206), Web 404 vs 403, token fall
   assert.equal(sceneItem.height, 1798);
   assert.equal(sceneItem.orientation, "landscape");
 
-  // /v1/wallpapers/scene-t/<token>/<id>/index.html serves live player HTML
+  // /v1/wallpapers/scene-t/<token>/<id>/index.html serves live player HTML (strict CORS allowlist, never *)
   const sceneHtmlRes = await fetch(
-    `${ready.httpUrl}/v1/wallpapers/scene-t/${encodeURIComponent(authToken)}/2966081148/index.html`
+    `${ready.httpUrl}/v1/wallpapers/scene-t/${encodeURIComponent(authToken)}/2966081148/index.html`,
+    { headers: { Origin: "prismux://app" } }
   );
   assert.equal(sceneHtmlRes.status, 200);
-  assert.equal(sceneHtmlRes.headers.get("access-control-allow-origin"), "*");
+  assert.equal(sceneHtmlRes.headers.get("access-control-allow-origin"), "prismux://app");
   const sceneHtml = await sceneHtmlRes.text();
   assert.match(sceneHtml, /data-pmx-scene-player="1"/);
   assert.match(sceneHtml, /\.\/asset\/0/);
@@ -2384,12 +2415,12 @@ test("RC.3 Steam scene.pkg /scene-t/ streaming (206), Web 404 vs 403, token fall
   // Zero-copy HTTP 206 Partial Content streaming directly from scene.pkg slice
   const sceneRangeRes = await fetch(
     `${ready.httpUrl}/v1/wallpapers/scene-t/${encodeURIComponent(authToken)}/2966081148/asset/0`,
-    { headers: { Range: "bytes=4-19" } }
+    { headers: { Range: "bytes=4-19", Origin: "http://127.0.0.1:5173" } }
   );
   assert.equal(sceneRangeRes.status, 206);
   assert.equal(sceneRangeRes.headers.get("content-type"), "video/mp4");
   assert.equal(sceneRangeRes.headers.get("accept-ranges"), "bytes");
-  assert.equal(sceneRangeRes.headers.get("access-control-allow-origin"), "*");
+  assert.equal(sceneRangeRes.headers.get("access-control-allow-origin"), "http://127.0.0.1:5173");
   assert.equal(sceneRangeRes.headers.get("cross-origin-resource-policy"), "cross-origin");
   assert.equal(
     sceneRangeRes.headers.get("content-range"),
@@ -2456,12 +2487,12 @@ test("RC.3 Steam scene.pkg /scene-t/ streaming (206), Web 404 vs 403, token fall
   const missingBody = (await missingAudioRes.json()) as { error?: { code?: string } };
   assert.equal(missingBody.error?.code, "ASSET_NOT_FOUND");
 
-  // Same-token request without Referer still resolves escaped `assets/...` via lastWebWallpaperIdByToken
+  // Same-token request without Referer still resolves escaped `assets/...` via lastWebWallpaperIdByToken (omits ACAO without Origin)
   const noRefererFallbackRes = await fetch(
     `${ready.httpUrl}/v1/wallpapers/web-t/${encodeURIComponent(authToken)}/assets/8k/CH0334_home.atlas`
   );
   assert.equal(noRefererFallbackRes.status, 200);
-  assert.equal(noRefererFallbackRes.headers.get("access-control-allow-origin"), "*");
+  assert.equal(noRefererFallbackRes.headers.get("access-control-allow-origin"), null);
   assert.match(await noRefererFallbackRes.text(), /CH0334_home\.png/);
 
   // Execute the injected bridgeScript in a minimal VM harness to verify audio master mute,
