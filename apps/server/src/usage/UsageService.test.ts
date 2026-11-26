@@ -3171,4 +3171,81 @@ describe("UsageService", () => {
         assert.isTrue(optInSummary.buckets.some((bucket) => bucket.provider === "opencode"));
       }),
   );
+
+  it.effect(
+    "skips a disabled acpRegistry DSH instance even when another acpRegistry agent is enabled",
+    () =>
+      Effect.gen(function* () {
+        const { settings, home } = yield* setup;
+        const dshSessionDir = NodePath.join(home, ".dsh", "sessions", "--D-Proj--", "dsh-disabled");
+        const ts = Date.parse("2026-08-01T11:00:00.000Z");
+        yield* Effect.promise(async () => {
+          await NodeFSP.mkdir(dshSessionDir, { recursive: true });
+          await NodeFSP.writeFile(
+            NodePath.join(dshSessionDir, "session.v4.jsonl"),
+            [
+              JSON.stringify({
+                type: "session",
+                version: 4,
+                id: "dsh-disabled",
+                createdAt: ts - 1_000,
+                isSeeded: false,
+                delegationDepth: 0,
+              }),
+              JSON.stringify({
+                seq: 1,
+                type: "assistant/message",
+                time: ts,
+                data: {
+                  turn: 1,
+                  step: 1,
+                  usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+                  message: {
+                    source: { provider: "magpie", model: "deepseek-chat" },
+                    content: [{ type: "text", text: "ignored" }],
+                  },
+                },
+              }),
+            ].join("\n") + "\n",
+          );
+        });
+
+        const mixedAcpSettings = {
+          ...settings,
+          providerInstances: {
+            ...settings.providerInstances,
+            [ProviderInstanceId.make("kimi")]: {
+              driver: ProviderDriverKind.make("acpRegistry"),
+              enabled: true,
+              config: {
+                source: "local",
+                commandPath: "kimi",
+                commandArgs: ["acp"],
+              },
+            },
+            [ProviderInstanceId.make("dsh")]: {
+              driver: ProviderDriverKind.make("acpRegistry"),
+              enabled: false,
+              config: {
+                source: "local",
+                commandPath: "dsh",
+                commandArgs: ["acp"],
+              },
+            },
+          },
+        };
+        const service = yield* UsageService.make.pipe(
+          Effect.provide(
+            layerService({
+              prefix: "usage-service-acp-mixed",
+              home,
+              settings: mixedAcpSettings,
+            }),
+          ),
+        );
+        const summary = yield* service.readSummary(WINDOW);
+        assert.isFalse(summary.sources.some((source) => source.fingerprint.provider === "dsh"));
+        assert.isFalse(summary.buckets.some((bucket) => bucket.provider === "dsh"));
+      }),
+  );
 });

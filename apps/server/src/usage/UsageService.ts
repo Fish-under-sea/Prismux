@@ -390,13 +390,17 @@ export const make = Effect.gen(function* () {
     const matchingEntries = Object.entries(settings.providerInstances).filter(
       ([, instance]) => instance.driver === driver.driverKind,
     );
-    const hasEnabledInstance = matchingEntries.some(([, instance]) =>
+    const enabledEntries = matchingEntries.filter(([, instance]) =>
       isProviderInstanceEnabledForUsage(instance),
     );
+    const hasEnabledInstance = enabledEntries.length > 0;
+    // acpRegistry is a multi-agent meta-driver (e.g. kimi + dsh); only pass enabled instances so
+    // enabling one ACP agent never triggers scans for a separate disabled ACP agent.
+    const selectedEntries = driver.driverKind === "acpRegistry" ? enabledEntries : matchingEntries;
     const entries: Array<
       readonly [ProviderInstanceId, Pick<ProviderInstanceConfig, "config" | "environment">, boolean]
     > = hasEnabledInstance
-      ? matchingEntries.map(([id, instance]) => [ProviderInstanceId.make(id), instance, true] as const)
+      ? selectedEntries.map(([id, instance]) => [ProviderInstanceId.make(id), instance, true] as const)
       : [];
 
     if (!hasEnabledInstance) {

@@ -4250,14 +4250,19 @@ it.live(
           browserArtifactsAfterDays: 14,
           logsAfterDays: 14,
         });
-        const { service, fs, config, disable, setSettings } = yield* cleanupFixture().pipe(
-          Effect.provideService(StorageCleanup.StorageCleanupCaps, {
-            ...StorageCleanup.DEFAULT_STORAGE_CLEANUP_CAPS,
-            browserArtifactsMaxBytes: 12,
-            terminalLogsMaxBytes: 12,
-          }),
-        );
+        const { service, fs, config, worktree, disable, setSettings, setThreads } =
+          yield* cleanupFixture().pipe(
+            Effect.provideService(StorageCleanup.StorageCleanupCaps, {
+              ...StorageCleanup.DEFAULT_STORAGE_CLEANUP_CAPS,
+              browserArtifactsMaxBytes: 12,
+              terminalLogsMaxBytes: 12,
+            }),
+          );
         disable();
+        setThreads([
+          shell({ branch: "feature", worktreePath: worktree }),
+          shell({ id: ThreadId.make("archived-thread"), archivedAt: at(-3 * DAY_MS) }),
+        ]);
         setSettings({
           storageCleanup: {
             ...TEST_STORAGE_CLEANUP_DEFAULTS,
@@ -4312,16 +4317,24 @@ it.live(
           yield* fs.utimes(file, nowSec - (3 - index) * 60, nowSec - (3 - index) * 60);
         }
 
-        // 4. Attachments: live thread-1 kept, recent orphan (<1h) kept, pending kept, old orphan (>1h) removed.
+        // 4. Attachments: live thread-1 and archived-thread kept, recent orphan (<1h) kept, pending kept, old orphan (>1h) removed.
         yield* fs.makeDirectory(config.attachmentsDir, { recursive: true });
         const liveAttachment = `${config.attachmentsDir}/thread-1-11111111-1111-4111-8111-111111111111-png.png`;
+        const archivedAttachment = `${config.attachmentsDir}/archived-thread-55555555-5555-4555-8555-555555555555-png.png`;
         const recentOrphan = `${config.attachmentsDir}/deleted-thread-22222222-2222-4222-8222-222222222222-png.png`;
         const staleOrphan = `${config.attachmentsDir}/deleted-thread-33333333-3333-4333-8333-333333333333-png.png`;
         const pendingAttachment = `${config.attachmentsDir}/pending-44444444-4444-4444-8444-444444444444-png.png`;
-        for (const file of [liveAttachment, recentOrphan, staleOrphan, pendingAttachment]) {
+        for (const file of [
+          liveAttachment,
+          archivedAttachment,
+          recentOrphan,
+          staleOrphan,
+          pendingAttachment,
+        ]) {
           yield* fs.writeFileString(file, "img");
         }
         yield* fs.utimes(liveAttachment, nowSec - 3 * daySec, nowSec - 3 * daySec);
+        yield* fs.utimes(archivedAttachment, nowSec - 3 * daySec, nowSec - 3 * daySec);
         yield* fs.utimes(staleOrphan, nowSec - 3 * 60 * 60, nowSec - 3 * 60 * 60);
         yield* fs.utimes(pendingAttachment, nowSec - 3 * 60 * 60, nowSec - 3 * 60 * 60);
 
@@ -4353,6 +4366,7 @@ it.live(
         expect(yield* fs.exists(freshHeaps[2])).toBe(true);
 
         expect(yield* fs.exists(liveAttachment)).toBe(true);
+        expect(yield* fs.exists(archivedAttachment)).toBe(true);
         expect(yield* fs.exists(recentOrphan)).toBe(true);
         expect(yield* fs.exists(pendingAttachment)).toBe(true);
         expect(yield* fs.exists(staleOrphan)).toBe(false);

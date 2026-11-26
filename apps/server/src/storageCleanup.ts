@@ -1989,7 +1989,7 @@ const make = Effect.gen(function* () {
     if (candidates.length === 0) return;
 
     const retainedSegments = new Set<string>();
-    const sqlRows = yield* sql<{ readonly threadId: string }>`
+    const sqlRows = yield* sql<{ readonly threadId: unknown }>`
       WITH RECURSIVE retained_attachment_threads(thread_id) AS (
         SELECT thread_id FROM orchestration_v2_projection_threads WHERE deleted_at IS NULL
         UNION
@@ -1997,6 +1997,7 @@ const make = Effect.gen(function* () {
         FROM orchestration_v2_projection_threads t
         JOIN retained_attachment_threads retained ON retained.thread_id = t.thread_id
         WHERE json_extract(t.payload_json, '$.forkedFrom.type') = 'run'
+          AND json_extract(t.payload_json, '$.forkedFrom.threadId') IS NOT NULL
       )
       SELECT thread_id AS "threadId" FROM retained_attachment_threads
       UNION
@@ -2004,18 +2005,17 @@ const make = Effect.gen(function* () {
       WHERE status IN ('pending', 'running')
     `.pipe(NodeSqliteClient.readOnly);
     for (const row of sqlRows) {
+      if (typeof row.threadId !== "string") continue;
       const seg = toSafeThreadAttachmentSegment(row.threadId);
       if (seg !== null) retainedSegments.add(seg);
     }
-    for (const location of ["active", "archive"] as const) {
-      const snapshot = yield* projections
-        .getShellSnapshot({ location })
-        .pipe(Effect.orElseSucceed(() => null));
-      if (snapshot !== null) {
-        for (const thread of snapshot.threads) {
-          const seg = toSafeThreadAttachmentSegment(thread.id);
-          if (seg !== null) retainedSegments.add(seg);
-        }
+    const snapshot = yield* projections
+      .getShellSnapshot()
+      .pipe(Effect.orElseSucceed(() => null));
+    if (snapshot !== null) {
+      for (const thread of [...snapshot.threads, ...snapshot.archivedThreads]) {
+        const seg = toSafeThreadAttachmentSegment(thread.id);
+        if (seg !== null) retainedSegments.add(seg);
       }
     }
 
