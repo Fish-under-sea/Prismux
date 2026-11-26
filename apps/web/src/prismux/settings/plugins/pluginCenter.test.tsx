@@ -57,23 +57,6 @@ function makeOfficialCatalogFixture(): OfficialCatalogPluginRaw[] {
       previousVersion: "0.1.0-alpha.2",
       distribution: "managed",
     },
-    {
-      id: "fishdock-hook",
-      packageName: "@prismux/plugin-fishdock-hook",
-      version: "0.1.0-alpha.3",
-      description: "Bridge plugin pushing PreToolUse approvals and alerts to FISH-Dock Dynamic Island.",
-      enginesPrismux: ">=0.1.0-0 <2.0.0",
-      realms: ["daemon"],
-      permissions: ["network:outbound", "hooks:subscribe", "notifications:push"],
-      modelVisible: false,
-      modifiesSystemPrompt: false,
-      sha256: "b3fec9a26034ccacc19acd6e36a11179a7ef76c6c749d90756512704a6da06f9",
-      bytes: 36977,
-      status: "verified",
-      installed: false,
-      enabled: false,
-      mounted: false,
-    },
   ];
 }
 
@@ -128,13 +111,13 @@ describe("Plugin Center model: 4-state tabs, category chips, search, and update 
     );
 
     const counts = computePluginCounts(items);
-    expect(counts.all).toBe(4);
+    expect(counts.all).toBe(3);
     expect(counts.installed).toBe(3); // qq + glass-nord-theme + ai-prompt-helper
-    expect(counts.available).toBe(1); // fishdock-hook
+    expect(counts.available).toBe(0);
     expect(counts.updates).toBe(1); // qq: 0.1.0-alpha.3 -> 0.2.0
 
     // Category distribution
-    expect(counts.byCategory.communication).toBe(2); // qq, fishdock-hook
+    expect(counts.byCategory.communication).toBe(1); // qq
     expect(counts.byCategory.pet).toBe(0);
     expect(counts.byCategory.ops).toBe(0);
     expect(counts.byCategory.theme).toBe(1); // glass-nord-theme
@@ -150,9 +133,26 @@ describe("Plugin Center model: 4-state tabs, category chips, search, and update 
       filterPluginCenterItems(items, { tab: "available", category: "all", query: "" }).map(
         (i) => i.id,
       ),
-    ).toEqual(["fishdock-hook"]);
+    ).toEqual([]);
     expect(
       filterPluginCenterItems(items, { tab: "updates", category: "all", query: "" }).map(
+        (i) => i.id,
+      ),
+    ).toEqual(["qq"]);
+
+    // Available tab when official qq plugin is not yet installed
+    const availableItems = mergePluginCenterItems(
+      makeOfficialCatalogFixture().map((entry) => ({
+        ...entry,
+        installed: false,
+        enabled: false,
+        mounted: false,
+      })),
+      [],
+    );
+    expect(computePluginCounts(availableItems).available).toBe(1);
+    expect(
+      filterPluginCenterItems(availableItems, { tab: "available", category: "all", query: "" }).map(
         (i) => i.id,
       ),
     ).toEqual(["qq"]);
@@ -177,14 +177,16 @@ describe("Plugin Center model: 4-state tabs, category chips, search, and update 
       plugins: [
         { id: "qq", version: "0.1.2-preview.1", status: "verified" },
         { id: "pet", version: "0.1.2-preview.1", status: "deprecated" },
+        { id: "fishdock-hook", version: "0.2.3-rc.2", status: "deprecated" },
       ],
     });
     expect(parsedActive.map((item) => item.id)).toEqual(["qq"]);
     const retired = parseRetiredPluginsPayload({});
-    expect(retired.map((item) => item.id)).toEqual(["pet", "ssh"]);
-    expect(retired.every((item) => item.status === "deprecated" && item.replacedByBuiltin)).toBe(
-      true,
-    );
+    expect(retired.map((item) => item.id)).toEqual(["pet", "ssh", "fishdock-hook"]);
+    expect(retired.every((item) => item.status === "deprecated")).toBe(true);
+    expect(retired.find((item) => item.id === "pet")?.replacedByBuiltin).toBe(true);
+    expect(retired.find((item) => item.id === "ssh")?.replacedByBuiltin).toBe(true);
+    expect(retired.find((item) => item.id === "fishdock-hook")?.replacedByBuiltin).toBe(false);
   });
 });
 
@@ -429,9 +431,9 @@ describe("Plugin Detail Drawer & Plugin Center View rendering", () => {
       />,
     );
 
-    // Zero-preinstall mandatory banner (2 active official plugins) + unified SettingsGroup glass
-    expect(mixedHtml).toContain("两大官方插件默认零预装声明");
-    expect(mixedHtml).toContain("fishdock-hook");
+    // Zero-preinstall mandatory banner (active official plugin qq only) + unified SettingsGroup glass
+    expect(mixedHtml).toContain("官方插件默认零预装声明");
+    expect(mixedHtml).not.toContain("fishdock-hook");
     expect(mixedHtml).toContain('data-slot="settings-group"');
     expect(mixedHtml).toContain("bg-card/40");
     expect(mixedHtml).not.toContain("bg-card/80");
@@ -443,9 +445,11 @@ describe("Plugin Detail Drawer & Plugin Center View rendering", () => {
     expect(mixedHtml).not.toContain('data-testid="plugin-retired-section"');
     expect(mixedHtml).not.toContain('data-testid="plugin-retired-pet"');
     expect(mixedHtml).not.toContain('data-testid="plugin-retired-ssh"');
+    expect(mixedHtml).not.toContain('data-testid="plugin-retired-fishdock-hook"');
     expect(mixedHtml).not.toContain("已停用插件说明");
     expect(mixedHtml).not.toContain('data-testid="plugin-card-pet"');
     expect(mixedHtml).not.toContain('data-testid="plugin-card-ssh"');
+    expect(mixedHtml).not.toContain('data-testid="plugin-card-fishdock-hook"');
 
     // Four-state segmented tabs with live counts
     expect(mixedHtml).toContain('data-slot="toggle-group"');
@@ -508,7 +512,7 @@ describe("Plugin Detail Drawer & Plugin Center View rendering", () => {
     );
     expect(officialOnlyHtml).not.toContain('data-testid="plugin-category-');
     expect(officialOnlyHtml).toContain('data-testid="plugin-card-qq"');
-    expect(officialOnlyHtml).toContain('data-testid="plugin-card-fishdock-hook"');
+    expect(officialOnlyHtml).not.toContain('data-testid="plugin-card-fishdock-hook"');
   });
 
   it("renders PluginCreatorGuideModal with both official doc links and builds Agent prompt with placeholder or custom requirement", () => {

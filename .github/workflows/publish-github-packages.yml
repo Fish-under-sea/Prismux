@@ -40,11 +40,11 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build official plugin dependencies and plugins
-        run: pnpm --filter @prismux/protocol --filter @prismux/plugin-qq --filter @prismux/plugin-fishdock-hook build
+        run: pnpm --filter @prismux/protocol --filter @prismux/plugin-qq build
 
       - name: Pack deterministic .wb-plugin archives
         run: |
-          for id in qq fishdock-hook; do
+          for id in qq; do
             node scripts/pack-plugin.ts --plugin "plugins-official/plugin-${id}" --out ".work/release-out"
           done
 
@@ -70,7 +70,7 @@ jobs:
             }
           ")
           echo "Resolved npm dist-tag: ${DIST_TAG}"
-          for id in qq fishdock-hook; do
+          for id in qq; do
             PKG_DIR=".work/npm-packages/${id}"
             PKG_NAME=$(node -e "console.log(JSON.parse(require('fs').readFileSync('${PKG_DIR}/package.json', 'utf8')).name)")
             PKG_VERSION=$(node -e "console.log(JSON.parse(require('fs').readFileSync('${PKG_DIR}/package.json', 'utf8')).version)")
@@ -86,7 +86,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           OWNER="${{ github.repository_owner }}"
-          for pkg in prismux-plugin-ssh prismux-plugin-pet; do
+          for pkg in prismux-plugin-ssh prismux-plugin-pet prismux-plugin-fishdock-hook; do
             HTTP_CODE=$(curl -sS -o /tmp/gh-pkg-del.txt -w "%{http_code}" -X DELETE \
               -H "Authorization: Bearer ${GH_TOKEN}" \
               -H "Accept: application/vnd.github+json" \

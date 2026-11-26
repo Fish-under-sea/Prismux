@@ -31,7 +31,7 @@ Prismux 是一个「纯本地零遥测的 8 分区液态玻璃 AI 超级工作�
 | `PLUGIN_PREFIX` | `prismux-plugin-` | 第三方社区插件标准包名前缀（GitHub Topic：`prismux-plugin`） |
 | 远端仓库 | `https://github.com/Fish-under-sea/Prismux.git` | Prismux 官方上游仓库地址 |
 
-> 约束：代码中禁止残留 `<APP_NAME>`、`<APP_SLUG>`、`<NPM_SCOPE>`、`<PLUGIN_PREFIX>` 等占位符；品牌级命名严禁混入 `fish` 词根（`plugins-official/plugin-fishdock-hook` 为专指外部 FISH-Dock 宿主桥接的官方插件，属唯一合法命名例外）。
+> 约束：代码中禁止残留 `<APP_NAME>`、`<APP_SLUG>`、`<NPM_SCOPE>`、`<PLUGIN_PREFIX>` 等占位符；品牌级命名严禁混入 `fish` 词根。
 
 ### 统一 Monorepo 目录树与职责边界
 
@@ -78,10 +78,9 @@ prismux/
 │   ├── secret-provider-*/             # @prismux/secret-provider-*：凭据提供方抽象与 1Password 集成
 │   ├── ssh/                           # @prismux/ssh：原生 SSH 隧道与远程宿主机运行时
 │   └── tailscale/                     # @prismux/tailscale：Tailscale 私网发现与局域网/私网纯二维码远控支持
-├── plugins-official/                  # 官方认证独立插件源码与索引（活跃 2 款默认全部不预装；pet / ssh 已停用：已被内置功能取代）
-│   ├── catalog/official.json          # 官方插件权威索引（活跃 qq / fishdock-hook + retiredPlugins 停用说明）
-│   ├── plugin-qq/                     # @prismux/plugin-qq：OneBot v11 私聊主秘书 + 群聊隔离陪聊插件
-│   └── plugin-fishdock-hook/          # @prismux/plugin-fishdock-hook：FISH-Dock 灵动岛审批与回执桥接插件
+├── plugins-official/                  # 官方认证独立插件源码与索引（活跃 1 款 `qq` 默认不预装；pet / ssh / fishdock-hook 已停用并移除）
+│   ├── catalog/official.json          # 官方插件权威索引（活跃 qq + retiredPlugins 停用说明）
+│   └── plugin-qq/                     # @prismux/plugin-qq：OneBot v11 私聊主秘书 + 群聊隔离陪聊插件
 ├── native/                            # 原生二进制源码（Rust resource-monitor / Hyprland / KDE 截屏与浏览器密钥助手）
 ├── packaging/                         # Linux AUR 等平台打包清单
 ├── patches/                           # pnpm patchedDependencies 维护补丁
@@ -126,9 +125,9 @@ prismux/
    - **统一鉴权模式探针**：通过 `apps/daemon/src/system/PrismuxProviderProbeService.ts`（`GET /v1/providers/probe`）无侵入识别各 Provider 鉴权模式（`api_or_custom` / `local` / `subscription_oauth` / `unknown`），严禁将 CCS / Magpie / 自定义端点 / API Key / Cloud IAM / `unknown` 误判为 `subscription_oauth`，且零读取 OAuth 令牌正文或系统密钥链。
    - **统一订阅风控免责护栏**：通过 `SubscriptionWaiverStore` + `SubscriptionOrchestrationGuard` 对个人 AGY 及外部 `subscription_oauth` 的跨代理 / Swarm 编排统一返回 HTTP 403 `ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED`（需用户在 `/settings/providers#subscription-risk-waiver` 明确签署免责后方可手动解锁）；`cron` / `overnight_factory` 无人值守路径对个人 AGY 永久硬拦截（`AGY_UNATTENDED_FORBIDDEN`），`api_or_custom` 与 `local` 100% 免签直通。
    - **统一订阅风控免责弹窗交互红线**：免责签署弹窗须提供双层磨砂模糊（遮罩层 + 弹窗卡片）、5 秒强制阅读倒计时门禁，倒计时结束后展示单行完整文本确认输入框（须完整匹配免责声明原文方可解锁签署按钮）；严禁提供一键复制按钮，严禁出现「可复制」「粘贴」等提示文案，仅保留自然文本选中（`select-text`）。
-5. **官方独立插件默认绝不预装（活跃 2 款；`pet` / `ssh` 已停用）**
-   - 活跃官方插件 `qq` 与 `fishdock-hook` 全部独立存放在 `plugins-official/`，通过独立 `.wb-plugin` 归档或 `@prismux/plugin-*` 按需安装；核心主程序、Electron 安装包与默认守护进程启动链路保持极简，严禁捆绑预装。
-   - 原 `pet`（桌宠联动）与 `ssh`（SSH 远程主机终端）插件已彻底移除并标注为「已停用：已被 Prismux 内置功能取代」，不再打包或上架安装。
+5. **官方独立插件默认绝不预装（活跃 1 款 `qq`；`pet` / `ssh` / `fishdock-hook` 已停用）**
+   - 活跃官方插件 `qq` 独立存放在 `plugins-official/`，通过独立 `.wb-plugin` 归档或 `@prismux/plugin-qq` 按需安装；核心主程序、Electron 安装包与默认守护进程启动链路保持极简，严禁捆绑预装。
+   - 原 `pet`（桌宠联动）与 `ssh`（SSH 远程主机终端）插件已彻底移除并标注为「已停用：已被 Prismux 内置功能取代」，原 `fishdock-hook`（FISH-Dock 灵动岛桥接）插件已彻底移除并标注为「已停用：已从 Prismux 官方插件目录移除」，均不再打包或上架安装。
 6. **视觉层对模型 0 Token 开销、液态玻璃一致性与动态壁纸引擎红线**
    - **纯宿主 0 Token 开销**：`WebWallGL` 动态壁纸、8 分区 360° Fresnel 液态玻璃、24 小时动态天穹、6 款诗意液态玻璃主题基底、字体调色、系统音频律动、思考强度滑条与安装包向导均属于纯宿主视觉层，**严禁**向任何大模型或 Coding Agent 注入工具定义（Tool Schema）或 System Prompt，保持对模型 **0 Token 开销**。
    - **设计宪法与无障碍基线**：`@prismux/appearance`、`@prismux/wallpaper`、桌面端 / 前端界面、安装包向导与 UI 域插件必须严格遵守 [`docs/specs/ui-ux-design-mandate.md`](./docs/specs/ui-ux-design-mandate.md) 的视觉、动效、主题同步、≥ 4.5:1 无障碍对比度及降级兜底红线。
@@ -149,7 +148,7 @@ prismux/
 | **M2：内生三域记忆库与五大标杆原语** | 实现 `packages/memory-core`（SQLite WAL + FTS5 + `sqlite-vec` + Obsidian 导入）；实现 `forwardIdentity` 作用域硬隔离与 60 s 熔断、`LifecycleHookBus`（6 类事件、退出码 `2` 拦截、安全钩子默认 `onFailure: "block"`、四档权限）、`HandoffEngine`（`/handoff` + 三档拨盘）与 `WorktreeSandbox`（OS 级写隔离 + 域名白名单网关） | 越权单测验证 `qq_group:<gid>` 查询 `private/chief` 与 `workspace/*` **100% 返回空集**；安全 Hook 超时或抛错时必定阻断执行；`/handoff` 可无损提纯 `{ goal, decisions, touchedFiles, openQuestions }` 并续跑新线程 |
 | **M3：Cordis 双轨插件商城与 Magpie 同步** | 实现 `packages/cordis-kernel`（顶层 `engines.prismux` SemVer 校验、`ctx.effect()` 卸载零残留、官方 SHA-256 校验、免 Git 无脚本 `npm` Tarball 安装器 + `distribution: "managed"` 锁）；实现 `packages/sync-vault`（Argon2id + AEAD 密封、WebDAV/S3/Git 独立开关、`If-Match` 乐观锁、60 s 停滞看门狗与 `data/` 便携模式） | 慢速流模拟测试 3 分钟持续低速传输不断连、连续 60 s 零字节准时触发停滞报错；双机并发上传验证 `If-Match`（及降级 `HEAD ETag`）拦截覆盖；`npm` 插件启停与卸载无残留监听、路由或 DOM |
 | **M4：Electron 44 融合桌面端、8 分区液态玻璃与壁纸引擎** | 完成 `@prismux/appearance`（1:1 FISH-Dock 天体三态胶囊、8 分区液态玻璃、≥ 4.5:1 对比度钳制与玻璃桥接）与 `@prismux/wallpaper`（右侧壁纸边栏、完整设置页、Z-0 多源渲染舞台与 Steam `431960` 扫描器），与 `apps/{desktop,server,web}` 统一融合构建并交付 NSIS 安装包 | `@prismux/appearance`、`@prismux/wallpaper` 与 `apps/{desktop,server,web}` 编译及单测全绿；对照 `docs/specs/ui-ux-design-mandate.md` 完成八态、对比度、`prefers-reduced-motion` 与无 GPU 兜底核验；真实桌面二进制冷启动直达工作台、窗口拖拽区与三键 100% 可用，并完成多场景实机截屏自审 |
-| **M5：夜间全自动工场、统一合规护栏与官方独立插件** | 完成 `OvernightFactory`、`PrismuxProviderProbeService` + `SubscriptionOrchestrationGuard` 统一风控门禁；维护 `plugins-official/` 下活跃官方插件 `plugin-qq` 与 `plugin-fishdock-hook`（原 `plugin-pet` 与 `plugin-ssh` 已停用并移除） | 跑通端到端模拟邮件入站 → Worktree 编码 → Oracle 只读评审 → HTML 完工早报；合规静态守卫与订阅风控单测全绿；使用 `pnpm plugin:pack` 生成官方插件 `.wb-plugin` 与 `.sha256` 并通过市场导入验签 |
+| **M5：夜间全自动工场、统一合规护栏与官方独立插件** | 完成 `OvernightFactory`、`PrismuxProviderProbeService` + `SubscriptionOrchestrationGuard` 统一风控门禁；维护 `plugins-official/` 下活跃官方插件 `plugin-qq`（原 `plugin-pet`、`plugin-ssh` 与 `plugin-fishdock-hook` 已停用并移除） | 跑通端到端模拟邮件入站 → Worktree 编码 → Oracle 只读评审 → HTML 完工早报；合规静态守卫与订阅风控单测全绿；使用 `pnpm plugin:pack` 生成官方插件 `.wb-plugin` 与 `.sha256` 并通过市场导入验签 |
 
 ## 四、核心工具脚本与插件打包契约
 
@@ -171,7 +170,7 @@ prismux/
 ### 3. `scripts/build-prismux-desktop.ts` 与 `scripts/release-all.ts`
 
 - **`pnpm desktop:build` / `pnpm desktop:installer`**：统一编排 7 个核心依赖包构建 → 非 `.asar` `sqlite-vec`（`vec0.dll`）落地 → Rust `native/resource-monitor`（`-j 1` 防 MSVC 冲突）→ `pnpm exec vp run build:desktop` → 可选 Windows NSIS 安装包生成、7-Zip 完整性校验与合并 `SHA256SUMS`。
-- **`pnpm release:build`**：汇总桌面安装包、2 款活跃官方插件 `.wb-plugin`、无脚本 npm 单包与校验清单，并强制断言桌面产物零包含任何官方插件。
+- **`pnpm release:build`**：汇总桌面安装包、1 款活跃官方插件（`qq`）`.wb-plugin`、无脚本 npm 单包与校验清单，并强制断言桌面产物零包含任何官方插件。
 
 ### 4. 插件打包、安装与运行安全契约
 
@@ -208,7 +207,7 @@ prismux/
 
 1. **RC / SemVer 命名约定、版本同步与 README 资产重绘**：
    - **RC / SemVer 命名约定**：Release 标题、UI 展示与文档统一使用大写 `RC`（如 `Prismux v0.2.2-RC.1`，GitHub 发布使用 `--latest` 且 `isPrerelease: false`，Gitee 发布设置 `prerelease: false`）；SemVer 版本号、Git Tag、`package.json` 与 npm 包版本统一使用小写 `rc`（如 `0.2.2-rc.1`、`v0.2.2-rc.1`，npm RC 通道使用 `--tag rc`，预览构建使用 `--tag preview`）。
-   - 全仓统一升级版本号（根 `package.json`、`apps/{daemon,desktop,server,web}/package.json`、`packages/*/package.json`、`packages/protocol/src/brand.ts`、活跃官方插件 `plugins-official/plugin-{qq,fishdock-hook}/{package.json,plugin.manifest.json,src/index.ts}`、`plugins-official/catalog/official.json`、`README.md` 与 `README.en.md`）。
+   - 全仓统一升级版本号（根 `package.json`、`apps/{daemon,desktop,server,web}/package.json`、`packages/*/package.json`、`packages/protocol/src/brand.ts`、活跃官方插件 `plugins-official/plugin-qq/{package.json,plugin.manifest.json,src/index.ts}`、`plugins-official/catalog/official.json`、`README.md` 与 `README.en.md`）。
    - 执行 `node scripts/render-readme.mjs` 全量重绘 `assets/readme/*.png` 与 `header-metadata.json`，并肉眼核验版本仪表卡图片。
 2. **全量质量门禁与实机截屏自审**：
    - 清空代理环境变量后跑绿：核心自研包 `build`、`vp run --filter '!prismux-monorepo' typecheck`、各包单测（`daemon`、`appearance`、`wallpaper`、`plugin-qq`、`memory-core`、`cordis-kernel`、`sync-vault`、`web`、`server`、`desktop`、`provider-acp-registry`、`core-shared`、`pnpm test:scripts`）及 `vp run build:desktop`。
@@ -216,12 +215,12 @@ prismux/
    - 启动真实 Electron 44 桌面端截屏自审关键界面改动，核验后清理 `.work/` 临时目录并确保零残留 `electron.exe`。
 3. **打包产物与安装包红线核验（`node scripts/release-all.ts`）**：
    - Windows NSIS 必须为 `perMachine: false`、默认安装至 `$LOCALAPPDATA\Programs\Prismux`、提供双语可选桌面快捷方式页、非 `.asar` 解包 `vec0.dll` 与随包 `7za.exe`，且严格零预装任何官方插件。
-   - 仅打包活跃官方插件 `qq` 与 `fishdock-hook`（严禁打包已停用的 `pet` 与 `ssh`）。
+   - 仅打包活跃官方插件 `qq`（严禁打包已停用的 `pet`、`ssh` 与 `fishdock-hook`）。
 4. **原子提交、打 Annotated Tag 并双远端推送**：
    - 按职责拆分中文 Conventional Commits 并严格使用精确路径暂存；遵循 [`docs/agents/README.md`](./docs/agents/README.md)，个人本机环境档案（`docs/agents/local/<规范化用户名>.md`）的提交须与功能 / 发版提交严格分离（按精确路径单独提交）。
    - 打 Annotated Tag `v<version>`（如 `v0.2.2-rc.1`），推送 `main` 与 `v<version>` 至 `origin`（GitHub）与 `gitee`。
 5. **四端发布与自动清理核验**：
    - **GitHub Release**：标题使用大写 `RC`（如 `Prismux v0.2.2-RC.1`），发布为 `--latest`（`isPrerelease: false`），上传全部完整安装包与活跃插件归档并校验服务器 SHA-256 摘要；**严禁删除 GitHub 历史 Release 或历史附件**。
    - **Gitee Release**：通过 `scripts/publish-gitee-release.ts` 创建新版本 Release（标题使用大写 `RC`，`prerelease: false`），上传 80 MB `.7z.001..003` 分卷压缩包与活跃插件附件，校验匿名 `HEAD 200` 字节数与匿名下载 SHA-256；**自动清理旧版本 Gitee Release 附件（保留历史 Release 说明页），仅保留最新版本的 Gitee 附件以节约配额**。
-   - **GitHub Packages（`@fish-under-sea/prismux-plugin-*`）**：确认 `.github/workflows/publish-github-packages.yml` 自动发布活跃插件 `prismux-plugin-qq` 与 `prismux-plugin-fishdock-hook` 成功，并**确保已停用的废弃包（如 `prismux-plugin-ssh`、`prismux-plugin-pet`）已从 GitHub Packages 彻底清理（仅保留活跃官方插件包）**；如 `GITHUB_TOKEN` 权限受限于个人包删除作用域，须使用含 `delete:packages` 权限的 `gh` / 网页端完成清理并复核仓库右侧 `Packages` 计数严格等于活跃插件数。
-   - **npm（`npmjs.org`）**：切换至本机档案记录的 Node 22 LTS（避开 Node 24 zlib 大包异常），发布 `prismux-plugin-qq` 与 `prismux-plugin-fishdock-hook`（RC 通道带 `--tag rc`，预览构建带 `--tag preview`），并确保已停用的 `prismux-plugin-ssh` / `prismux-plugin-pet` 已标注废弃（`npm deprecate`），最后通过 `npm view` 核验线上最新版本号。
+   - **GitHub Packages（`@fish-under-sea/prismux-plugin-*`）**：确认 `.github/workflows/publish-github-packages.yml` 自动发布活跃插件 `prismux-plugin-qq` 成功，并**确保已停用的废弃包（如 `prismux-plugin-ssh`、`prismux-plugin-pet`、`prismux-plugin-fishdock-hook`）已从 GitHub Packages 彻底清理（仅保留活跃官方插件包）**；如 `GITHUB_TOKEN` 权限受限于个人包删除作用域，须使用含 `delete:packages` 权限的 `gh` / 网页端完成清理并复核仓库右侧 `Packages` 计数严格等于活跃插件数。
+   - **npm（`npmjs.org`）**：切换至本机档案记录的 Node 22 LTS（避开 Node 24 zlib 大包异常），发布 `prismux-plugin-qq`（RC 通道带 `--tag rc`，预览构建带 `--tag preview`），并确保已停用的 `prismux-plugin-ssh` / `prismux-plugin-pet` / `prismux-plugin-fishdock-hook` 已标注废弃（`npm deprecate`），最后通过 `npm view` 核验线上最新版本号。

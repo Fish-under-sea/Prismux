@@ -4,11 +4,15 @@ import type {
   LifecycleHookEvent
 } from "./hooks.js";
 
-export const OFFICIAL_PLUGIN_IDS = ["qq", "fishdock-hook"] as const;
+export const OFFICIAL_PLUGIN_IDS = ["qq"] as const;
 
 export type OfficialPluginId = (typeof OFFICIAL_PLUGIN_IDS)[number];
 
-export const RETIRED_OFFICIAL_PLUGIN_IDS = ["pet", "ssh"] as const;
+export const RETIRED_OFFICIAL_PLUGIN_IDS = [
+  "pet",
+  "ssh",
+  "fishdock-hook"
+] as const;
 
 export type RetiredOfficialPluginId =
   (typeof RETIRED_OFFICIAL_PLUGIN_IDS)[number];
@@ -80,7 +84,7 @@ export interface RetiredOfficialPluginEntry {
   titleZh?: string;
   titleEn?: string;
   status: "deprecated";
-  replacedByBuiltin: true;
+  replacedByBuiltin: boolean;
   noticeZh: string;
   noticeEn: string;
   detailZh?: string;

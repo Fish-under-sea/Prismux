@@ -15,7 +15,7 @@
   <a href="https://github.com/Fish-under-sea/Prismux/releases/tag/v0.2.3-rc.2"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/stat-version-zh-dark.png"><img src="assets/readme/stat-version-zh-light.png" alt="VERSION：v0.2.3-RC.2（纯本地零遥测 · Win x64）" width="23%"></picture></a>
   <a href="#preview"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/stat-visual-zh-dark.png"><img src="assets/readme/stat-visual-zh-light.png" alt="VISUAL：0 TOKEN（8 分区液态玻璃）" width="23%"></picture></a>
   <a href="#features"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/stat-memory-zh-dark.png"><img src="assets/readme/stat-memory-zh-light.png" alt="MEMORY：SQLITE VEC（单文件物理隔离）" width="23%"></picture></a>
-  <a href="#plugins"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/stat-plugins-zh-dark.png"><img src="assets/readme/stat-plugins-zh-light.png" alt="PLUGINS：2 PLUGINS（默认不预装）" width="23%"></picture></a>
+  <a href="#plugins"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/stat-plugins-zh-dark.png"><img src="assets/readme/stat-plugins-zh-light.png" alt="PLUGINS：1 PLUGIN（默认不预装）" width="23%"></picture></a>
 </p>
 
 <p>
@@ -51,11 +51,11 @@
 
 **Prismux** 是基于统一第一方 **Electron 44 + Effect + TypeScript + React 19** 桌面运行时、搭配独立 **0 Token 视觉壳** 与 **按需双域插件内核** 打造的纯本地 AI 超级工作台与 24 小时常驻秘书系统。无论你同时在跑哪几家 Coding Agent，Prismux 都能把多端会话、原生协作、长期记忆、系统状态与桌面美学收束进一处冷静而顺手的工作空间：
 
-- **纯本地、零遥测与纯扫码远控**：彻底切断全部静默遥测、账号指纹与冷启动外联，全面清理 T3 品牌痕迹与云端账号绑定，手机远控仅保留兼容手机 App 与浏览器的**局域网 / Tailscale 纯二维码配对**；所有运行态数据与记忆默认 100% 留驻本机。
+- **纯本地、零遥测与纯扫码远控**：彻底切断全部静默遥测、账号指纹与冷启动外联，保持纯净第一方原生品牌与零云端账号绑定，手机远控仅保留兼容手机 App 与浏览器的**局域网 / Tailscale 纯二维码配对**；所有运行态数据与记忆默认 100% 留驻本机。
 - **多 Agent 统一驾驭、Windows 原生 `dsh` 实连与订阅风控护栏**：Claude Code、Codex、Antigravity（官方 `agy acp` + 事件驱动按需额度刷新）、原生实机直连的 **`DeepSeek Harness (dsh)`** 与 OpenCode 同台并行（已彻底清理冗余 `omp`）；内置 `PrismuxProviderProbeService`（CCS / Magpie 中转与自定义端点零误判）与统一订阅编排风险免责中心。
 - **0 Token 8 分区液态玻璃与多源动态壁纸**：全宽 1:1 光学天体三态胶囊一键切换浅色、深色与玻璃态，**8 大工作台分区**（含独立方向性 Fresnel 微光「用户消息气泡」与通透「概览面板」）实时微调通透与模糊并保持 ≥ 4.5:1 对比度；行内文件链接像素级跟随 `--pmx-accent` 强调色；Z-0 多源壁纸舞台支持图片、视频、网页、WebWallGL 与 Steam Wallpaper Engine（`431960`），对大模型严格保持 **0 Token** 开销。
 - **Orca 紧凑侧边栏、全要素任意分屏与标杆级展开工作步骤**：源码级对标 Orca 树状侧边栏与 **Split Anything** 递归任意网格分屏（顶栏分屏收敛至 `⋯` 菜单，内部零圆角 + `1 px` 可拖分割线）；对标 DSH / Claude Code / Codex 重做展开工作步骤与 GPT 推理摘要（严格单向箭头、`pwsh.exe` 壳噪音剥离、磨砂详情卡片与树形导轨、语法高亮 Diff）及 17 页低密度分段设置中心。
-- **单文件混合记忆、夜间全自动工场与零预装插件生态**：全部记忆收敛于单文件 `~/.prismux/data/memory.db`（SQLite WAL + FTS5 + `sqlite-vec`）并由传输层物理隔离群聊作用域；`夜间工场与邮箱` 置入左侧主导航一键开关；官方仅维护 `qq` 与 `fishdock-hook` 两款按需独立插件（默认零预装，卸载零残留），配套 Argon2id + AEAD 端到端加密同步与 GitHub / Gitee 双源测速自动更新。
+- **单文件混合记忆、夜间全自动工场与零预装插件生态**：全部记忆收敛于单文件 `~/.prismux/data/memory.db`（SQLite WAL + FTS5 + `sqlite-vec`）并由传输层物理隔离群聊作用域；`夜间工场与邮箱` 置入左侧主导航一键开关；官方仅维护 `qq` 一款按需独立插件（默认零预装，卸载零残留），配套 Argon2id + AEAD 端到端加密同步与 GitHub / Gitee 双源测速自动更新。
 
 > [!TIP]
 > **`Prismux v0.2.3-RC.2` 核心升级亮点**
@@ -104,7 +104,7 @@
     <td width="50%" align="center" valign="top">
       <img src="assets/readme/06-settings-appearance-v02.png" width="100%" alt="Prismux 精简 4 分组设置导航、prismux 终端字体预览与 DSH 工作步骤 3 项原生控制">
       <br>
-      <sub><strong>4 分组精简设置导航 + DSH 完整思考与工具步骤控制</strong>：设置侧栏瘦身并彻底清除 T3 Connect 与重复项，终端字体预览统一品牌为 <code>prismux git:(main)</code>，界面区原生收编工作步骤展示、收起时机与收起后显示回复 3 项控制并默认开启条形强度与 KaTeX。</sub>
+      <sub><strong>4 分组精简设置导航 + DSH 完整思考与工具步骤控制</strong>：设置侧栏瘦身并彻底清除云端账号连接与重复项，终端字体预览统一品牌为 <code>prismux git:(main)</code>，界面区原生收编工作步骤展示、收起时机与收起后显示回复 3 项控制并默认开启条形强度与 KaTeX。</sub>
     </td>
   </tr>
 </table>
@@ -160,14 +160,13 @@
 <h2 id="plugins"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/section-plugins-zh-dark.png"><img src="assets/readme/section-plugins-zh-light.png" alt="PLUGINS · 官方独立插件" width="100%"></picture></h2>
 
 > [!NOTE]
-> **官方插件严格默认零预装**：`Prismux-Setup-0.2.3-rc.2-win-x64.exe` 安装包及解压态目录**绝不包含**任何 `plugins-official/` 插件（发布前通过全目录 0 命中扫描校验）。以下 2 款活跃官方插件（`qq`、`fishdock-hook`）均以独立 `.wb-plugin` 归档（配套 `prismux-plugins-official.json` 与 `prismux-plugins-0.2.3-rc.2-SHA256SUMS.txt`）及无脚本 npm 单包分发，按需安装并支持 `ctx.effect()` 零残留卸载。
+> **官方插件严格默认零预装**：`Prismux-Setup-0.2.3-rc.2-win-x64.exe` 安装包及解压态目录**绝不包含**任何 `plugins-official/` 插件（发布前通过全目录 0 命中扫描校验）。以下 1 款官方独立插件（`qq`）以独立 `.wb-plugin` 归档（配套 `prismux-plugins-official.json` 与 `prismux-plugins-0.2.3-rc.2-SHA256SUMS.txt`）及无脚本 npm 单包分发，按需安装并支持 `ctx.effect()` 零残留卸载。
 >
-> **已停用插件说明**：原 `pet`（`@prismux/plugin-pet`，桌宠联动）与 `ssh`（`@prismux/plugin-ssh`，SSH 远程主机终端）已彻底移出官方目录与发布链路——**已停用：已被 Prismux 内置功能取代**。
+> **已停用插件说明**：原 `pet`（`@prismux/plugin-pet`，桌宠联动）与 `ssh`（`@prismux/plugin-ssh`，SSH 远程主机终端）已停用（已被 Prismux 内置功能取代）；原 `fishdock-hook`（`@prismux/plugin-fishdock-hook`，FISH-Dock 灵动岛桥接）已停用并彻底移出官方插件目录与发布链路。
 
 | 插件 ID | 独立归档包（`.wb-plugin`） | npm 包名（无作用域 / GitHub Packages） | 运行域（`realms`） | 核心能力与隔离边界 |
 | :--- | :--- | :--- | :--- | :--- |
 | `qq` | `prismux-plugin-qq-0.2.3-rc.2.wb-plugin`<br>（`88,739 bytes` · SHA-256：`088c172e556213e67487fe79b0c229be433b48b7160bdae2499c324ff562baf4`） | `prismux-plugin-qq`<br><code>@fish-under-sea/prismux-plugin-qq</code> | `daemon`、`ui` | OneBot v11 正 / 反向 WebSocket 自动探测（NapCatQQ / Lagrange.Core）；私聊主人直连主秘书，群聊启用防刷屏节奏器并硬隔离至 <code>social/qq-group-&lt;gid&gt;</code> |
-| `fishdock-hook` | `prismux-plugin-fishdock-hook-0.2.3-rc.2.wb-plugin`<br>（`37,458 bytes` · SHA-256：`ac19befedc8b852efa444ac7c08773036091cc54863e32f39428686d78678766`） | `prismux-plugin-fishdock-hook`<br><code>@fish-under-sea/prismux-plugin-fishdock-hook</code> | `daemon` | FISH-Dock 灵动岛桥接插件；将 `PreToolUse` 中文风险审批、重要邮件提醒与夜间工场完工回执推送至灵动岛卡片并支持快捷放行或驳回 |
 
 ### 插件创作与官方文档
 
@@ -190,15 +189,15 @@
 
 | 平台 / 发行资产 | 文件名 / 状态 | 说明与隔离策略 |
 | :--- | :--- | :--- |
-| **Windows x64 安装包（Electron 44 NSIS）** | `Prismux-Setup-0.2.3-rc.2-win-x64.exe`<br>（`197.63 MB` · `207,235,058 bytes` · Gitee 同步提供 3 卷 80 MB `.7z` 分卷） | SHA-256：`f288fa272fd7eab9e5671f5643e3bfedf0dcae3ab812bf3013d9dd476b4287e4`；内含完整 Electron 44 桌面端、内置 `resources/prismux-daemon/`、非 `.asar` `resources/native/sqlite-vec/vec0.dll`、`resources/tools/7za.exe` 与 8× 提速任务管理器级 `t3-resource-monitor.exe`；升级自动清扫旧版与历史残留文件且严守 `~/.prismux/` 核心数据零丢失；默认安装至 `%LOCALAPPDATA%\Programs\Prismux`（支持界面改路径与 `/D=<目录>`）；**官方独立插件零预装** |
+| **Windows x64 安装包（Electron 44 NSIS）** | `Prismux-Setup-0.2.3-rc.2-win-x64.exe`<br>（`197.63 MB` · `207,235,058 bytes` · Gitee 同步提供 3 卷 80 MB `.7z` 分卷） | SHA-256：`f288fa272fd7eab9e5671f5643e3bfedf0dcae3ab812bf3013d9dd476b4287e4`；内含完整 Electron 44 桌面端、内置 `resources/prismux-daemon/`、非 `.asar` `resources/native/sqlite-vec/vec0.dll`、`resources/tools/7za.exe` 与 8× 提速任务管理器级 `prismux-resource-monitor.exe`；升级自动清扫旧版与历史残留文件且严守 `~/.prismux/` 核心数据零丢失；默认安装至 `%LOCALAPPDATA%\Programs\Prismux`（支持界面改路径与 `/D=<目录>`）；**官方独立插件零预装** |
 | **macOS（Apple Silicon / Intel）** | `暂未发布（已预留通道）` | 后续版本将提供 `.dmg` 安装镜像，遵循同一套 `0-Token` 视觉与 `~/.prismux/` 隔离规范 |
 | **Linux（x86_64 / arm64）** | `暂未发布（已预留通道）` | 后续版本将提供 `.AppImage` / `.deb` 发行包，同样支持双源更新与独立插件验签导入 |
-| **2 款官方独立插件包** | `prismux-plugin-{qq,fishdock-hook}-0.2.3-rc.2.wb-plugin` 与 `prismux-plugins-official.json` | 确定性 ustar + gzip 归档，下载后在 **设置 → 插件中心**（`/settings/plugins`）按需验签导入（`pet` / `ssh` 已停用：已被内置功能取代） |
+| **1 款官方独立插件包** | `prismux-plugin-qq-0.2.3-rc.2.wb-plugin` 与 `prismux-plugins-official.json` | 确定性 ustar + gzip 归档，下载后在 **设置 → 插件中心**（`/settings/plugins`）按需验签导入（`pet` / `ssh` / `fishdock-hook` 已停用并移除） |
 | **分离式合并校验清单** | `Prismux-0.2.3-rc.2-SHA256SUMS.txt` 与 `prismux-plugins-0.2.3-rc.2-SHA256SUMS.txt` | 手动下载后可通过 `Get-FileHash Prismux-Setup-0.2.3-rc.2-win-x64.exe -Algorithm SHA256` 或 `7z t` 核对完整性 |
 
 <h2 id="packages"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/section-packages-zh-dark.png"><img src="assets/readme/section-packages-zh-light.png" alt="PACKAGES · npm 与国内镜像" width="100%"></picture></h2>
 
-每款活跃官方插件均额外发布为**零 `preinstall / install / postinstall` 脚本**的独立 npm 单包，内置通过 SHA-256 核验的 `prismux-plugin-<id>-0.2.3-rc.2.wb-plugin` 归档与防覆盖导出命令（`prismux-plugin-<id>`）；软件内插件市场支持在 **`registry.npmjs.org` ↔ `registry.npmmirror.com`** 间免本机 Git 纯流式拉取与自动故障回退。
+官方独立插件（`qq`）额外发布为**零 `preinstall / install / postinstall` 脚本**的独立 npm 单包，内置通过 SHA-256 核验的 `prismux-plugin-qq-0.2.3-rc.2.wb-plugin` 归档与防覆盖导出命令（`prismux-plugin-qq`）；软件内插件市场支持在 **`registry.npmjs.org` ↔ `registry.npmmirror.com`** 间免本机 Git 纯流式拉取与自动故障回退。
 
 ```powershell
 # 1. 从 npm 官方源安装并提取 .wb-plugin 归档（内置 SHA-256 核对，目标文件已存在时不覆盖）
@@ -210,8 +209,8 @@ npm install prismux-plugin-qq@0.2.3-rc.2 --registry=https://registry.npmmirror.c
 npx prismux-plugin-qq --out ./plugins-stage
 ```
 
-- **切换另一款官方插件**：将上方命令中的 `qq` 替换为 `fishdock-hook` 即可导出对应归档，随后在 **设置 → 插件中心**（`/settings/plugins`）选择「导入本地 `.wb-plugin`」（原 `pet` / `ssh` 已停用：已被 Prismux 内置功能取代）。
-- **GitHub Packages 同步包**：发版流水线同步推送 `@fish-under-sea/prismux-plugin-{qq,fishdock-hook}` 至 `https://npm.pkg.github.com`，便于企业内网或 CI 环境拉取校验。
+- **导入本地归档**：执行上方命令导出 `.wb-plugin` 归档后，在 **设置 → 插件中心**（`/settings/plugins`）选择「导入本地 `.wb-plugin`」即可验签安装（原 `pet` / `ssh` / `fishdock-hook` 已停用并移除）。
+- **GitHub Packages 同步包**：发版流水线同步推送 `@fish-under-sea/prismux-plugin-qq` 至 `https://npm.pkg.github.com`，便于企业内网或 CI 环境拉取校验。
 
 <h2 id="develop"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/section-develop-zh-dark.png"><img src="assets/readme/section-develop-zh-light.png" alt="DEVELOP · 开发与验收" width="100%"></picture></h2>
 
@@ -223,7 +222,7 @@ $env:VP_GIT_HOOKS = "0"
 pnpm install
 
 # 2. 全仓构建、统一类型检查与脚本回归测试
-pnpm --filter @prismux/protocol --filter @prismux/memory-core --filter @prismux/cordis-kernel --filter @prismux/sync-vault --filter @prismux/appearance --filter @prismux/wallpaper --filter @prismux/daemon --filter @prismux/plugin-qq --filter @prismux/plugin-fishdock-hook build
+pnpm --filter @prismux/protocol --filter @prismux/memory-core --filter @prismux/cordis-kernel --filter @prismux/sync-vault --filter @prismux/appearance --filter @prismux/wallpaper --filter @prismux/daemon --filter @prismux/plugin-qq build
 vp run --filter '!prismux-monorepo' typecheck
 pnpm test:scripts
 
@@ -269,10 +268,9 @@ prismux/
 │   ├── contracts/ / shared/ / client-runtime/ # @prismux/core-contracts、@prismux/core-shared、@prismux/client-runtime
 │   ├── provider-*/ / effect-*/          # Provider 协议、ACP / dsh 探测、OpenCode / Pi 与回放测试包
 │   └── source-control-*/ / ssh/ / tailscale/  # Git 托管平台、原生 SSH 与 Tailscale 私网远控支持
-├── plugins-official/                    # 2 款活跃官方独立插件（workspace 包）与权威索引（pet / ssh 已停用）
-│   ├── catalog/official.json            # 官方插件权威发布索引（活跃 qq / fishdock-hook + retiredPlugins 停用说明）
-│   ├── plugin-qq/                       # @prismux/plugin-qq
-│   └── plugin-fishdock-hook/            # @prismux/plugin-fishdock-hook
+├── plugins-official/                    # 1 款活跃官方独立插件（workspace 包）与权威索引（pet / ssh / fishdock-hook 已停用）
+│   ├── catalog/official.json            # 官方插件权威发布索引（活跃 qq + retiredPlugins 停用说明）
+│   └── plugin-qq/                       # @prismux/plugin-qq
 ├── native/                              # Rust 原生资源监控与 Linux 窗口截屏辅助工具
 ├── packaging/ / patches/                # 平台打包清单与 pnpm 依赖维护补丁
 ├── oxlint-plugin-prismux/               # Prismux 专属 Oxlint 静态规则插件（`prismux/*`）
@@ -296,7 +294,7 @@ prismux/
 2. **严禁混入已砍掉的 4 项冗余模块（保留原生轻量线程归档与 Orca 轻量工作区 / 任务视图）**：禁止实现脱离会话体系的重型项目看板（Task Board）、AgentTeam DAG、Skill Lens、Visual Companion 及自建重型会话归档系统，统一由五大内化原语替代；原生轻量 `/settings/archived` 与 Orca 轻量工作区板 / 任务面板按项目决策予以保留。
 3. **内生单文件记忆中枢与物理防泄密**：记忆引擎固定为 `~/.prismux/data/memory.db`（SQLite WAL + FTS5 + `sqlite-vec`），零 PostgreSQL / Qdrant / MinIO / Obsidian 客户端依赖；查询层强制绑定 `_callerScope` 物理隔离。
 4. **Antigravity 纯官方合规与统一订阅编排护栏**：Antigravity 严格且唯一通过官方 `agy` CLI / `agy acp` 接入，零凭据窃读与私密端点；`PrismuxProviderProbeService` + `SubscriptionOrchestrationGuard` 统一识别鉴权模式并对 `subscription_oauth` 跨代理编排执行免责门禁拦截。
-5. **官方独立插件默认绝不预装**：活跃官方插件 `qq`、`fishdock-hook` 全部作为独立包存放于 `plugins-official/`，主程序与安装包均不含插件包，按需从市场安装（原 `pet`、`ssh` 已停用：已被 Prismux 内置功能取代）。
+5. **官方独立插件默认绝不预装**：活跃官方插件 `qq` 作为独立包存放于 `plugins-official/`，主程序与安装包均不含插件包，按需从市场安装（原 `pet`、`ssh`、`fishdock-hook` 已停用并移除）。
 6. **视觉层对模型 0 Token 开销与强制设计规范**：壁纸、8 分区 360° Fresnel 液态玻璃、24 小时动态天穹、模型识别动态思考条、字体调色、系统音频律动与安装引导均不向任何大模型注入工具定义或提示词。
 
 </details>
@@ -310,7 +308,7 @@ prismux/
 | **M2** | 单文件 SQLite WAL + FTS5 + `sqlite-vec` 混合记忆（非 `.asar` `vec0.dll` 开箱即用）、Mnemopi 召回与分域缓存、`forwardIdentity` 隔离、`LifecycleHookBus`、`HandoffEngine` 与 `WorktreeSandbox` | 已完成并通过门禁 |
 | **M3** | `cordis-kernel`（预发布兼容 SemVer 校验、`ctx.effect()` 零残留、多源验签与免 Git 流式安装、声明式液态玻璃 UI）与 `sync-vault`（Argon2id + AEAD、`If-Match` 乐观锁、`60 s` 看门狗、便携 `data/` 模式） | 已完成并通过门禁 |
 | **M4 / v0.1.0–v0.1.2** | `@prismux/appearance` 与 `@prismux/wallpaper` 外置沉淀、Electron 44 桌面运行时融合、全宽天体胶囊、`dsh-fish` 思考条、Windows Codex 零壳直启、官方 `agy acp` 额度联动、NSIS 用户目录安装包与插件中心重设计 | 已完成并通过实机签收 |
-| **M5** | `OvernightFactory` 夜间全自动工场前后端闭环、两大活跃官方独立插件（`qq`、`fishdock-hook`）确定性打包验签与双源分卷自动更新体系（`pet` / `ssh` 已停用并移除） | 已完成并通过门禁 |
+| **M5** | `OvernightFactory` 夜间全自动工场前后端闭环、官方独立插件（`qq`）确定性打包验签与双源分卷自动更新体系（`pet` / `ssh` / `fishdock-hook` 已停用并移除） | 已完成并通过门禁 |
 | **v0.1.3-Preview.1~3** | 全栈零静默遥测硬切断、AGY 蜂群与 Claude/Codex 只读协作侧边栏、右侧栏 7 项精简与双向拖拽、1:1 原生 `/btw` 旁路提问、24 小时 288 帧动态天穹、常驻纯 Logo 切代理与双语图标 `/` 面板、`54 px` 图标导轨、`20 px` 多窗口额度状态栏与 Electron 44 BoringSSL 端到端加密同步加固 | 已完成并通过实机签收 |
 | **v0.2.0-RC.1** | Orca 紧凑树状侧边栏与模型简称规范化、中文每轮自动总结命名、**2×2+ Orca 全要素任意分屏（内部零圆角 + 1 px 拖拽分割线）**、**8 分区液态玻璃（独立 Fresnel 微光用户气泡与通透概览）**、24h 天穹右缘渐弱虚化与昼夜发送箭头自适应、DSH 完整思考与工具步骤 3 项设置、原生一级接入 `dsh` 与提供方/模型拖拽排序、Claude/Codex 加速参数精简大写与 7 档零截断标签、全面去云端独立化纯二维码远控与设置瘦身、真实 OS 用户名问候、统一 Monorepo 收编与 NSIS 升级残留清扫 | 已完成并通过实机签收 |
 | **v0.2.0-RC.2** | **统一第一方 `@prismux/*` Monorepo 物理收编与彻底去 T3 / `omp` 化**、**`PrismuxProviderProbeService`（CCS / Magpie 零误判）+ 合并订阅编排风险免责中心**、**DSH / CC / Codex 标杆级展开工作步骤（单向箭头、`pwsh.exe` 剥离、磨砂详情卡与 Diff）与 GPT 推理摘要**、跟随 `--pmx-accent` 的行内文件链接、Antigravity 事件驱动按需额度刷新、Windows `dsh` 实机直连与 Electron IPC 真 UI 调度双后门、**17 页低密度分段设置中心重构**、精简顶栏 `⋯` 分屏菜单与模态框取色器焦点隔离修复 | 已完成并通过实机签收 |
@@ -346,11 +344,11 @@ prismux/
 - `dsh-better-reasoning-effort-fish`（[HanaAyane/dsh-reasoning-effort](https://github.com/HanaAyane/dsh-reasoning-effort) PR #9 + [HaoyueQin/dsh-better-reasoning-effort](https://github.com/HaoyueQin/dsh-better-reasoning-effort)，MIT）与 `DeepSeek Harness (dsh)`：提供模型自动识别动态思考强度滑条（`<PrismuxReasoningEffortSlider />`、8 大家族主题与 RGBA WebP 奔跑小人）及对话思考与工具调用工作步骤展示参考。
 - [yetone/magpie](https://github.com/yetone/magpie)：启发口令密封 AEAD 加密同步、`If-Match` 乐观锁、60 秒停滞看门狗与便携模式设计规范。
 - [Amp](https://ampcode.com/)：启发 `/handoff` 上下文提纯交接与 `agent / oracle / review` 三档角色拨盘工作流。
-- [FISH-Dock](https://github.com/Fish-under-sea/FISH-Dock)：提供 Warm Paper / Dark Olive 立体像素视觉体系、1:1 光学天体胶囊与 360° Fresnel 液态玻璃主题规范及灵动岛审批回执联动灵感。
+- [FISH-Dock](https://github.com/Fish-under-sea/FISH-Dock)：提供 Warm Paper / Dark Olive 立体像素视觉体系、1:1 光学天体胶囊与 360° Fresnel 液态玻璃主题规范。
 - 更多历史开源基础归属及全部核心依赖许可清单详见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
 
 ### 许可边界
 
 Prismux 本仓核心代码与排版工具链遵循 **MIT License**（见仓库根 [`LICENSE`](LICENSE)）；随视觉资产分发的像素字体 `Jersey20-Regular.ttf` 遵循 [SIL Open Font License 1.1](assets/readme/OFL-Jersey20.txt)；所有开源基础与参考组件均在 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) 中严格保留各自原始许可证与版权归属声明。
 
-<p align="center"><sub>Prismux v0.2.3-RC.2 · Electron 44 + TypeScript + React 19 · 纯本地零遥测 · 8 分区液态玻璃 · Orca 任意分屏 · 2 款按需官方插件</sub></p>
+<p align="center"><sub>Prismux v0.2.3-RC.2 · Electron 44 + TypeScript + React 19 · 纯本地零遥测 · 8 分区液态玻璃 · Orca 任意分屏 · 1 款按需官方插件</sub></p>

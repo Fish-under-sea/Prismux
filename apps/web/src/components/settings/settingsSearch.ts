@@ -1505,9 +1505,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: msg("Plugin Center"),
     to: "/settings/plugins",
     searchTerms: [
-      msg(
-        "plugins extensions qq pet ssh fishdock cordis npm marketplace official zero preinstalled",
-      ),
+      msg("plugins extensions qq cordis npm marketplace official zero preinstalled"),
     ],
   },
   {

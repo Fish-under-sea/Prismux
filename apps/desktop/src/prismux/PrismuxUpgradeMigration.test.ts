@@ -8,6 +8,7 @@ import { afterEach, assert, describe, it } from "@effect/vitest";
 import {
   isProtectedUserDataPath,
   PRISMUX_UPGRADE_MIGRATION_VERSION,
+  RETIRE_FISHDOCK_HOOK_MIGRATION_VERSION,
   resolvePrismuxUpgradeMigrationPaths,
   runPrismuxStartupUpgradeMigration,
   runPrismuxUpgradeMigrations,
@@ -49,7 +50,7 @@ afterEach(() => {
 });
 
 describe("PrismuxUpgradeMigration", () => {
-  it("cleans obsolete caches, retired pet/ssh plugins, and deprecated settings keys while strictly preserving user data", () => {
+  it("cleans obsolete caches, retired pet/ssh/fishdock-hook plugins, and deprecated settings keys while strictly preserving user data", () => {
     const sandbox = makeTempSandbox();
 
     // --- Seed protected user data (MUST remain 100% untouched) ---
@@ -59,13 +60,6 @@ describe("PrismuxUpgradeMigration", () => {
     const syncCred = NodePath.join(sandbox.baseDir, "credentials", "sync-vault.enc");
     const wallpaperFile = NodePath.join(sandbox.baseDir, "wallpapers", "aurora.mp4");
     const activeQqPlugin = NodePath.join(sandbox.baseDir, "plugins", "qq", "dist", "index.js");
-    const activeFishdockPlugin = NodePath.join(
-      sandbox.baseDir,
-      "plugins",
-      "fishdock-hook",
-      "dist",
-      "index.js",
-    );
     const customCommunityPlugin = NodePath.join(
       sandbox.baseDir,
       "plugins",
@@ -95,7 +89,6 @@ describe("PrismuxUpgradeMigration", () => {
     writeFile(syncCred, "ENCRYPTED_SYNC_CRED");
     writeFile(wallpaperFile, "MP4_WALLPAPER_BYTES");
     writeFile(activeQqPlugin, "export const id = 'qq';");
-    writeFile(activeFishdockPlugin, "export const id = 'fishdock-hook';");
     writeFile(customCommunityPlugin, "export const id = 'custom';");
     writeFile(sessionDb, "SESSION_STATE_PROTECTED");
     writeFile(savedEnvs, JSON.stringify({ version: 1, records: [{ environmentId: "env-1" }] }));
@@ -139,6 +132,13 @@ describe("PrismuxUpgradeMigration", () => {
       "prismux-plugin-ssh",
       "index.js",
     );
+    const retiredFishdockDir = NodePath.join(
+      sandbox.baseDir,
+      "plugins",
+      "fishdock-hook",
+      "dist",
+      "index.js",
+    );
     const clerkTokens = NodePath.join(sandbox.stateDir, "clerk", "clerk-tokens.json");
     const legacyClerkTokens = NodePath.join(sandbox.stateDir, "clerk-tokens.json");
     const relayClients = NodePath.join(sandbox.stateDir, "relay-clients", "1234.json");
@@ -153,6 +153,7 @@ describe("PrismuxUpgradeMigration", () => {
     writeFile(updaterPending, "stale-installer");
     writeFile(retiredPetDir, "retired-pet");
     writeFile(retiredSshDir, "retired-ssh");
+    writeFile(retiredFishdockDir, "retired-fishdock-hook");
     writeFile(clerkTokens, '{"token":"old"}');
     writeFile(legacyClerkTokens, '{"token":"legacy"}');
     writeFile(relayClients, '{"pid":1234}');
@@ -205,7 +206,11 @@ describe("PrismuxUpgradeMigration", () => {
     assert.equal(result.migrationId, PRISMUX_UPGRADE_MIGRATION_VERSION);
     assert.equal(result.skipped, false);
     assert.deepEqual(result.errors, []);
-    assert.deepEqual([...result.removedRetiredPlugins].sort(), ["pet", "prismux-plugin-ssh"]);
+    assert.deepEqual([...result.removedRetiredPlugins].sort(), [
+      "fishdock-hook",
+      "pet",
+      "prismux-plugin-ssh",
+    ]);
     assert.deepEqual([...result.strippedSettingsKeys].sort(), [
       "appearanceContrast",
       "chatWidth",
@@ -245,6 +250,10 @@ describe("PrismuxUpgradeMigration", () => {
       NodeFS.existsSync(NodePath.join(sandbox.baseDir, "plugins", "prismux-plugin-ssh")),
       false,
     );
+    assert.equal(
+      NodeFS.existsSync(NodePath.join(sandbox.baseDir, "plugins", "fishdock-hook")),
+      false,
+    );
     assert.equal(NodeFS.existsSync(clerkTokens), false);
     assert.equal(NodeFS.existsSync(legacyClerkTokens), false);
     assert.equal(NodeFS.existsSync(NodePath.join(sandbox.stateDir, "relay-clients")), false);
@@ -274,10 +283,6 @@ describe("PrismuxUpgradeMigration", () => {
     assert.equal(NodeFS.readFileSync(syncCred, "utf8"), "ENCRYPTED_SYNC_CRED");
     assert.equal(NodeFS.readFileSync(wallpaperFile, "utf8"), "MP4_WALLPAPER_BYTES");
     assert.equal(NodeFS.readFileSync(activeQqPlugin, "utf8"), "export const id = 'qq';");
-    assert.equal(
-      NodeFS.readFileSync(activeFishdockPlugin, "utf8"),
-      "export const id = 'fishdock-hook';",
-    );
     assert.equal(NodeFS.readFileSync(customCommunityPlugin, "utf8"), "export const id = 'custom';");
     assert.equal(NodeFS.readFileSync(sessionDb, "utf8"), "SESSION_STATE_PROTECTED");
     assert.equal(
@@ -413,7 +418,7 @@ describe("PrismuxUpgradeMigration", () => {
     );
     assert.equal(
       isProtectedUserDataPath(NodePath.join(sandbox.baseDir, "plugins", "fishdock-hook"), resolved),
-      true,
+      false,
     );
     assert.equal(
       isProtectedUserDataPath(NodePath.join(sandbox.baseDir, "plugins", "pet"), resolved),
@@ -427,5 +432,65 @@ describe("PrismuxUpgradeMigration", () => {
       isProtectedUserDataPath(NodePath.join(sandbox.appDataDir, "Prismux", "Cache"), resolved),
       false,
     );
+  });
+
+  it("incrementally sweeps legacy fishdock-hook leftovers for existing 0.2.0+ users without touching fresh caches or qq", () => {
+    const sandbox = makeTempSandbox();
+    const markerPath = NodePath.join(sandbox.stateDir, UPGRADE_MIGRATIONS_STATE_FILENAME);
+    writeFile(
+      markerPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        completed: {
+          [PRISMUX_UPGRADE_MIGRATION_VERSION]: {
+            completedAt: "2026-11-25T00:00:00.000Z",
+            removedPathsCount: 0,
+            removedRetiredPlugins: [],
+            strippedSettingsKeys: [],
+          },
+        },
+      }),
+    );
+
+    const freshCache = NodePath.join(sandbox.appDataDir, "Prismux", "Cache", "fresh.bin");
+    const activeQq = NodePath.join(sandbox.baseDir, "plugins", "qq", "dist", "index.js");
+    const legacyFishdock = NodePath.join(
+      sandbox.baseDir,
+      "plugins",
+      "fishdock-hook",
+      "dist",
+      "index.js",
+    );
+    writeFile(freshCache, "FRESH_RUNTIME_CACHE");
+    writeFile(activeQq, "export const id = 'qq';");
+    writeFile(legacyFishdock, "export const id = 'fishdock-hook';");
+
+    const incremental = runPrismuxUpgradeMigrations({
+      platform: "win32",
+      homeDir: sandbox.homeDir,
+      baseDir: sandbox.baseDir,
+      stateDir: sandbox.stateDir,
+      appDataDir: sandbox.appDataDir,
+      localAppDataDir: sandbox.localAppDataDir,
+    });
+    assert.equal(incremental.migrationId, RETIRE_FISHDOCK_HOOK_MIGRATION_VERSION);
+    assert.equal(incremental.skipped, false);
+    assert.deepEqual(incremental.removedRetiredPlugins, ["fishdock-hook"]);
+    assert.equal(
+      NodeFS.existsSync(NodePath.join(sandbox.baseDir, "plugins", "fishdock-hook")),
+      false,
+    );
+    assert.equal(NodeFS.readFileSync(activeQq, "utf8"), "export const id = 'qq';");
+    assert.equal(NodeFS.readFileSync(freshCache, "utf8"), "FRESH_RUNTIME_CACHE");
+
+    const subsequent = runPrismuxUpgradeMigrations({
+      platform: "win32",
+      homeDir: sandbox.homeDir,
+      baseDir: sandbox.baseDir,
+      stateDir: sandbox.stateDir,
+      appDataDir: sandbox.appDataDir,
+      localAppDataDir: sandbox.localAppDataDir,
+    });
+    assert.equal(subsequent.skipped, true);
   });
 });

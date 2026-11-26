@@ -1,7 +1,7 @@
 ; Prismux Windows NSIS Installer Customization (Mount Point 6)
 ; Note: Prismux ships with ZERO preinstalled official plugins.
-; Active official plugins (qq / fishdock-hook) are installed on demand via the Prismux Plugin Center.
-; Retired plugins (pet / ssh) have been replaced by Prismux built-in capabilities.
+; Active official plugins (qq) are installed on demand via the Prismux Plugin Center.
+; Retired plugins (pet / ssh / fishdock-hook) have been removed from the official catalog.
 ; SAFETY INVARIANT: This script NEVER modifies or deletes %USERPROFILE%\.prismux
 ; (memory.db, credentials, wallpapers, active plugins, threads) or portable data\ folders.
 
@@ -122,6 +122,7 @@
     RMDir /r "$INSTDIR\resources\plugins"
     RMDir /r "$INSTDIR\resources\plugin-pet"
     RMDir /r "$INSTDIR\resources\plugin-ssh"
+    RMDir /r "$INSTDIR\resources\plugin-fishdock-hook"
     RMDir "$INSTDIR\resources"
 
     ; 3. Obsolete / version-specific Electron runtime DLLs, paks, snapshots & renamed executables.
@@ -467,7 +468,7 @@
 !endif
 
 !macro customInstall
-  DetailPrint "Prismux core installed (2 active official plugins: qq / fishdock-hook are NOT preinstalled by default)."
+  DetailPrint "Prismux core installed (official plugin qq is NOT preinstalled by default)."
   !ifndef DO_NOT_CREATE_START_MENU_SHORTCUT
     ${IfNot} ${FileExists} "$newStartMenuLink"
       !insertmacro createMenuDirectory

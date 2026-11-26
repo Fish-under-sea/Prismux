@@ -50,7 +50,6 @@ export interface FourRegionGlassSettings {
   preset: GlassPresetKind;
   glassTint?: string;
   fresnelRimOpacity: number;
-  followFishDockTheme: boolean;
 }
 
 export interface WallpaperSettings {
@@ -81,8 +80,7 @@ export const DEFAULT_FOUR_REGION_GLASS_SETTINGS: FourRegionGlassSettings = {
   overlay: { fill: 92, blur: 20 },
   control: { fill: 76, blur: 14 },
   preset: "balanced",
-  fresnelRimOpacity: 0.45,
-  followFishDockTheme: false
+  fresnelRimOpacity: 0.45
 };
 
 export const DEFAULT_WALLPAPER_SETTINGS: WallpaperSettings = {
@@ -108,7 +106,6 @@ export interface LiquidGlassSettings {
   refractionBlurPx: number;
   fresnelRimOpacity: number;
   vignetteStrength: number;
-  followFishDockTheme: boolean;
   lightFontColor?: string;
   darkFontColor?: string;
   fontFamily?: string;
@@ -123,7 +120,6 @@ export const DEFAULT_LIQUID_GLASS_SETTINGS: LiquidGlassSettings = {
   refractionBlurPx: 18,
   fresnelRimOpacity: 0.45,
   vignetteStrength: 0.2,
-  followFishDockTheme: false,
   regions: DEFAULT_FOUR_REGION_GLASS_SETTINGS,
   wallpaper: DEFAULT_WALLPAPER_SETTINGS,
   typography: DEFAULT_TYPOGRAPHY_COLOR_SETTINGS

@@ -14,7 +14,6 @@ import { fileURLToPath } from 'node:url';
 
 export const OFFICIAL_PLUGIN_IDS = [
   'qq',
-  'fishdock-hook',
 ] as const;
 
 export const RELEASE_CATALOG_FILENAME = 'prismux-plugins-official.json' as const;
@@ -31,7 +30,6 @@ const FORBIDDEN_STAGE_SEGMENTS = [
   'plugins-official',
   'plugin-qq',
   'plugin-pet',
-  'plugin-fishdock-hook',
   'plugin-ssh',
 ];
 

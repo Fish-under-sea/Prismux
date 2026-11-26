@@ -24,27 +24,6 @@
       "sha256": "088c172e556213e67487fe79b0c229be433b48b7160bdae2499c324ff562baf4",
       "bytes": 88739,
       "status": "verified"
-    },
-    {
-      "id": "fishdock-hook",
-      "packageName": "@prismux/plugin-fishdock-hook",
-      "version": "0.2.3-rc.2",
-      "description": "Bridge plugin pushing PreToolUse approvals, email alerts, and factory completions to FISH-Dock Dynamic Island.",
-      "engines": {
-        "prismux": ">=0.1.2-0 <2.0.0 || >=0.1.1-0 <2.0.0 || >=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0"
-      },
-      "realms": [
-        "daemon"
-      ],
-      "permissions": [
-        "network:outbound",
-        "hooks:subscribe",
-        "notifications:push"
-      ],
-      "modelVisible": false,
-      "sha256": "ac19befedc8b852efa444ac7c08773036091cc54863e32f39428686d78678766",
-      "bytes": 37458,
-      "status": "verified"
     }
   ],
   "retiredPlugins": [
@@ -71,6 +50,18 @@
       "noticeEn": "Deprecated: Replaced by Prismux built-in capabilities",
       "detailZh": "原 SSH 插件已从官方目录与构建链路移除，远程终端与主机连接由 Prismux 内置终端与工作区能力取代，不再提供独立安装包。",
       "detailEn": "The standalone SSH plugin has been retired from the official catalog and release pipeline; remote terminal workflows are superseded by built-in Prismux terminal and workspace capabilities."
+    },
+    {
+      "id": "fishdock-hook",
+      "packageName": "@prismux/plugin-fishdock-hook",
+      "titleZh": "FISH-Dock 灵动岛桥接（fishdock-hook）",
+      "titleEn": "FISH-Dock Dynamic Island Bridge (fishdock-hook)",
+      "status": "deprecated",
+      "replacedByBuiltin": false,
+      "noticeZh": "已停用：已从 Prismux 官方插件目录移除",
+      "noticeEn": "Deprecated: Removed from the Prismux official plugin catalog",
+      "detailZh": "原 FISH-Dock 灵动岛桥接插件已从 Prismux 官方插件目录与构建链路彻底移除，不再提供独立安装包或官方维护。",
+      "detailEn": "The standalone FISH-Dock Dynamic Island bridge plugin has been removed from the Prismux official plugin catalog and release pipeline."
     }
   ]
 }

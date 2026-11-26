@@ -164,7 +164,7 @@ describe("Obsidian Agent-Curated Import Plan & Commit", () => {
                 items: [
                   {
                     title: "官方插件默认零预装原则",
-                    summary: "四大官方插件 qq / pet / fishdock-hook / ssh 全部独立按需安装，绝不预装。",
+                    summary: "官方独立插件 qq 按需安装，绝不预装。",
                     kind: "decision",
                     tags: ["plugins", "architecture"],
                     sourceFile: "notes.md"
