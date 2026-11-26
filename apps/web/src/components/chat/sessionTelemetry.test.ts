@@ -1411,4 +1411,77 @@ describe("Session telemetry aggregation, strict active-thread isolation & 3 inde
     expect(getPublishedComposerContextWindow("lru-ctx-12")).toBeNull();
     expect(getPublishedComposerContextWindowCount()).toBe(MAX_PUBLISHED_CONTEXT_WINDOWS - 1);
   });
+
+  it("guards micro-burst decodeMs in deriveSessionTelemetryFromProjection and deriveSessionTelemetryDetail timedGenMsSum", () => {
+    const burstRow2 = makeProviderTurn({
+      id: "turn-dsh-burst-row2" as OrchestrationV2ProviderTurn["id"],
+      model: "group/deepseek",
+      startedAt: "2026-11-26T10:00:00.000Z" as unknown as OrchestrationV2ProviderTurn["startedAt"],
+      completedAt:
+        "2026-11-26T10:00:06.660Z" as unknown as OrchestrationV2ProviderTurn["completedAt"],
+      turnTokenUsage: {
+        usageScope: "main_agent",
+        hasSubagents: false,
+        usageStatus: "complete",
+        inputTokens: 1_200,
+        cachedInputTokens: 20_000,
+        cacheCreationTokens: 0,
+        outputTokens: 128,
+        ttftMs: 6_660,
+        decodeMs: 1,
+        modelDurationMs: 6_660,
+      },
+    });
+    const burstRow1 = makeProviderTurn({
+      id: "turn-dsh-burst-row1" as OrchestrationV2ProviderTurn["id"],
+      model: "group/deepseek",
+      startedAt: "2026-11-26T10:01:00.000Z" as unknown as OrchestrationV2ProviderTurn["startedAt"],
+      completedAt:
+        "2026-11-26T10:01:07.370Z" as unknown as OrchestrationV2ProviderTurn["completedAt"],
+      turnTokenUsage: {
+        usageScope: "main_agent",
+        hasSubagents: false,
+        usageStatus: "complete",
+        inputTokens: 1_400,
+        cachedInputTokens: 22_000,
+        cacheCreationTokens: 0,
+        outputTokens: 242,
+        ttftMs: 3_540,
+        decodeMs: 1,
+        modelDurationMs: 7_370,
+      },
+    });
+
+    // Single-turn Row 2: 128 tok / 6.66s (~19.22 tok/s), never 128000 tok/s
+    const projRow2 = deriveSessionTelemetryFromProjection({
+      serverProjection: { providerTurns: [burstRow2], messages: [] },
+      activeContextWindow: null,
+    });
+    expect(projRow2.latestTps).toBeCloseTo(128 / 6.66, 4);
+
+    // Multi-turn projection & detail: Row 1 falls back to post-TTFT 3.83s (~63.19 tok/s),
+    // and timedGenMsSum uses 6660 + 3830 = 10490ms -> sessionTps ~35.27 tok/s.
+    const projBoth = deriveSessionTelemetryFromProjection({
+      serverProjection: { providerTurns: [burstRow2, burstRow1], messages: [] },
+      activeContextWindow: null,
+    });
+    expect(projBoth.latestTps).toBeCloseTo(242 / 3.83, 4);
+
+    const detail = deriveSessionTelemetryDetail({
+      threadId: "thread-dsh-burst",
+      serverProjection: {
+        runs: [makeRun("run-b1", 1), makeRun("run-b2", 2)],
+        providerTurns: [burstRow2, burstRow1],
+        turnItems: [],
+        messages: [],
+        subagents: [],
+        nodes: [],
+      },
+      activeContextWindow: null,
+      activeProvider: "dsh",
+      activeModel: "group/deepseek",
+    });
+    expect(detail.latestRequestTps).toBeCloseTo(242 / 3.83, 4);
+    expect(detail.sessionTps).toBeCloseTo((128 + 242) / ((6_660 + 3_830) / 1_000), 4);
+  });
 });

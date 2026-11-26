@@ -340,23 +340,27 @@ export function deriveSessionTelemetryFromProjection(input: {
     }
     if (turn.status !== "running" && turn.status !== "pending" && counts.outputTokens > 0) {
       const extracted = extractTurnUsageDetail(turn);
-      if (extracted.decodeMs !== null && extracted.decodeMs > 0) {
-        const exactTps = counts.outputTokens / (extracted.decodeMs / 1_000);
-        if (Number.isFinite(exactTps) && exactTps > 0) {
-          latestTps = exactTps;
-        }
-      } else {
-        const startedMs = parseTelemetryTimestampMs(turn.startedAt);
-        const completedMs = parseTelemetryTimestampMs(turn.completedAt);
-        const durationMs =
-          startedMs !== null && completedMs !== null && completedMs > startedMs
-            ? completedMs - startedMs
-            : readExplicitTurnDurationMs(turn);
-        const clampedTtftMs = clampTtftToDuration(extracted.ttftMs, durationMs);
-        const computed = computeOutputTps(counts.outputTokens, durationMs, clampedTtftMs);
-        if (computed !== null) {
-          latestTps = computed;
-        }
+      const startedMs = parseTelemetryTimestampMs(turn.startedAt);
+      const completedMs = parseTelemetryTimestampMs(turn.completedAt);
+      const wallDurationMs =
+        startedMs !== null && completedMs !== null && completedMs > startedMs
+          ? completedMs - startedMs
+          : null;
+      const durationMs =
+        (extracted.modelDurationMs !== null && extracted.modelDurationMs > 0
+          ? extracted.modelDurationMs
+          : null) ??
+        wallDurationMs ??
+        readExplicitTurnDurationMs(turn);
+      const clampedTtftMs = clampTtftToDuration(extracted.ttftMs, durationMs);
+      const computed = computeOutputTps(
+        counts.outputTokens,
+        durationMs,
+        clampedTtftMs,
+        extracted.decodeMs,
+      );
+      if (computed !== null) {
+        latestTps = computed;
       }
     }
   }
@@ -688,14 +692,7 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
         rawTurnModel && rawTurnModel !== "unknown"
           ? formatUsageModelDisplayName(rawTurnModel, providerStatuses, turnProvider)
           : "unknown";
-      const exactDecodeTps =
-        counts.outputTokens > 0 && counts.decodeMs !== null && counts.decodeMs > 0
-          ? counts.outputTokens / (counts.decodeMs / 1_000)
-          : null;
-      const turnTps =
-        exactDecodeTps !== null && Number.isFinite(exactDecodeTps) && exactDecodeTps > 0
-          ? exactDecodeTps
-          : computeOutputTps(counts.outputTokens, durationMs, ttftMs);
+      const turnTps = computeOutputTps(counts.outputTokens, durationMs, ttftMs, counts.decodeMs);
 
       const fingerprint = [
         turn.status,
@@ -791,24 +788,17 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
             : null))
         : latestCompletedTtftMs;
     const streamingElapsedMs = tracker ? Math.max(0, now - tracker.turnStartedAt) : null;
-    const exactStreamingDecodeTps =
-      tracker !== null &&
-      derived.latestTokens.outputTokens > 0 &&
-      latestTurnExtracted.decodeMs !== null &&
-      latestTurnExtracted.decodeMs > 0
-        ? derived.latestTokens.outputTokens / (latestTurnExtracted.decodeMs / 1_000)
-        : null;
     const streamingTps =
-      exactStreamingDecodeTps !== null &&
-      Number.isFinite(exactStreamingDecodeTps) &&
-      exactStreamingDecodeTps > 0
-        ? exactStreamingDecodeTps
-        : tracker &&
-            derived.latestTokens.outputTokens > 0 &&
-            streamingElapsedMs !== null &&
-            streamingElapsedMs >= MIN_STREAMING_TPS_ELAPSED_MS
-          ? computeOutputTps(derived.latestTokens.outputTokens, streamingElapsedMs, liveTtftMs)
-          : null;
+      tracker !== null && derived.latestTokens.outputTokens > 0
+        ? computeOutputTps(
+            derived.latestTokens.outputTokens,
+            streamingElapsedMs !== null && streamingElapsedMs >= MIN_STREAMING_TPS_ELAPSED_MS
+              ? streamingElapsedMs
+              : null,
+            liveTtftMs,
+            latestTurnExtracted.decodeMs,
+          )
+        : null;
     let latestCompletedTps = derived.latestTps;
     if (
       streamingTps === null &&
@@ -817,19 +807,13 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
       derived.latestTurn.status !== "pending" &&
       derived.latestTokens.outputTokens > 0
     ) {
-      if (latestTurnExtracted.decodeMs !== null && latestTurnExtracted.decodeMs > 0) {
-        const exactTps = derived.latestTokens.outputTokens / (latestTurnExtracted.decodeMs / 1_000);
-        if (Number.isFinite(exactTps) && exactTps > 0) {
-          latestCompletedTps = exactTps;
-        }
-      } else if (latestCompletedTtftMs !== null) {
-        latestCompletedTps =
-          computeOutputTps(
-            derived.latestTokens.outputTokens,
-            latestTurnDurationMs,
-            latestCompletedTtftMs,
-          ) ?? derived.latestTps;
-      }
+      latestCompletedTps =
+        computeOutputTps(
+          derived.latestTokens.outputTokens,
+          latestTurnDurationMs,
+          latestCompletedTtftMs,
+          latestTurnExtracted.decodeMs,
+        ) ?? derived.latestTps;
     }
     const effectiveTps = streamingTps ?? latestCompletedTps;
 

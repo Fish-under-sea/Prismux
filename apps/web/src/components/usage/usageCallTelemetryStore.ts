@@ -362,33 +362,85 @@ export function computeCacheHitRate(
 
 const MIN_USAGE_DURATION_MS = 10;
 const MIN_POST_TTFT_DECODE_MS = 50;
-const MAX_POST_TTFT_TPS = 2_000;
+export const MAX_POST_TTFT_TPS = 2_000;
+const MAX_DECODE_TO_DURATION_RATIO = 1.1;
 
 /**
- * Compute real output generation throughput (`tok/s`), or `null` when real timing or output
- * token count is missing. Uses post-TTFT generation window when `durationMs > ttftMs`, falling
- * back to full `durationMs` when the post-TTFT window is a buffered micro-burst.
+ * Resolves the guarded generation duration (`ms`) for `outputTokens`: prefers `decodeMs`
+ * when `>= 50ms`, within `1.1x` of `durationMs`, and `<= 2,000 tok/s`, then `durationMs - ttftMs`,
+ * then full `durationMs` (rejecting implausible micro-burst windows).
  */
-export function computeOutputTps(
+export function resolveEffectiveDecodeDurationMs(
   outputTokens: number,
   durationMs: number | null | undefined,
   ttftMs?: number | null | undefined,
+  decodeMs?: number | null | undefined,
 ): number | null {
   const out = nonNegativeFinite(outputTokens);
+  if (out <= 0) return null;
   const dur = positiveNullable(durationMs);
-  if (out <= 0 || dur === null || dur < MIN_USAGE_DURATION_MS) return null;
+  const explicitDecode = positiveNullable(decodeMs);
+  if (
+    explicitDecode !== null &&
+    explicitDecode >= MIN_POST_TTFT_DECODE_MS &&
+    (dur === null || explicitDecode <= dur * MAX_DECODE_TO_DURATION_RATIO)
+  ) {
+    const decodeTps = out / (explicitDecode / 1000);
+    if (Number.isFinite(decodeTps) && decodeTps <= MAX_POST_TTFT_TPS) {
+      return explicitDecode;
+    }
+  }
+  if (dur === null || dur < MIN_USAGE_DURATION_MS) return null;
   const ttft = positiveOrZeroNullable(ttftMs);
   if (ttft !== null && dur > ttft) {
     const postTtftMs = dur - ttft;
     if (postTtftMs >= MIN_POST_TTFT_DECODE_MS) {
       const postTtftTps = out / (postTtftMs / 1000);
       if (Number.isFinite(postTtftTps) && postTtftTps <= MAX_POST_TTFT_TPS) {
-        return postTtftTps;
+        return postTtftMs;
       }
     }
   }
   const totalTps = out / (dur / 1000);
-  return Number.isFinite(totalTps) && totalTps > 0 ? totalTps : null;
+  if (Number.isFinite(totalTps) && totalTps > 0 && totalTps <= MAX_POST_TTFT_TPS) {
+    return dur;
+  }
+  return null;
+}
+
+/**
+ * Compute real output generation throughput (`tok/s`), or `null` when real timing or output
+ * token count is missing or implies an implausible buffered micro-burst (`> 2,000 tok/s`).
+ */
+export function computeOutputTps(
+  outputTokens: number,
+  durationMs: number | null | undefined,
+  ttftMs?: number | null | undefined,
+  decodeMs?: number | null | undefined,
+): number | null {
+  const out = nonNegativeFinite(outputTokens);
+  const effectiveMs = resolveEffectiveDecodeDurationMs(out, durationMs, ttftMs, decodeMs);
+  if (effectiveMs === null) return null;
+  const tps = out / (effectiveMs / 1000);
+  return Number.isFinite(tps) && tps > 0 ? tps : null;
+}
+
+/**
+ * Accepts an explicit/persisted `tps` only when `<= MAX_POST_TTFT_TPS`; otherwise self-heals
+ * by recomputing from real `outputTokens` and guarded timing windows.
+ */
+export function sanitizeOutputTps(
+  rawTps: number | null | undefined,
+  outputTokens: number,
+  durationMs: number | null | undefined,
+  ttftMs?: number | null | undefined,
+  decodeMs?: number | null | undefined,
+): number | null {
+  const candidate = positiveNullable(rawTps);
+  if (candidate !== null && candidate <= MAX_POST_TTFT_TPS) {
+    return candidate;
+  }
+  return computeOutputTps(outputTokens, durationMs, ttftMs, decodeMs);
 }
 
 export function formatTtft(ms: number | null | undefined): string {
@@ -514,6 +566,7 @@ function loadFromStorage(): readonly UsageCallLogRecord[] {
       if (!isValidPersistedRecord(item)) continue;
       const durationMs = positiveOrZeroNullable(item.durationMs);
       const ttftMs = clampTtftToDuration(item.ttftMs, durationMs);
+      const outputTokens = nonNegativeFinite(item.outputTokens);
       valid.push({
         id: item.id,
         timestamp: item.timestamp,
@@ -523,11 +576,11 @@ function loadFromStorage(): readonly UsageCallLogRecord[] {
         turnId: typeof item.turnId === "string" ? item.turnId : undefined,
         ttftMs,
         durationMs,
-        tps: positiveNullable(item.tps),
+        tps: sanitizeOutputTps(item.tps, outputTokens, durationMs, ttftMs),
         inputTokens: nonNegativeFinite(item.inputTokens),
         cachedInputTokens: nonNegativeFinite(item.cachedInputTokens),
         cacheCreationTokens: nonNegativeFinite(item.cacheCreationTokens),
-        outputTokens: nonNegativeFinite(item.outputTokens),
+        outputTokens,
         ...(typeof item.reasoningTokens === "number" &&
         Number.isFinite(item.reasoningTokens) &&
         item.reasoningTokens > 0
@@ -718,13 +771,13 @@ export function recordModelCallTelemetry(input: RecordModelCallTelemetryInput): 
   const computedTotal = inputTokens + cachedInputTokens + cacheCreationTokens + outputTokens;
   const totalTokens = Math.max(nonNegativeFinite(input.totalTokens), computedTotal);
 
-  const authoritativeDecodeMs = positiveNullable(input.decodeMs);
-  const derivedTps =
-    input.tps !== undefined
-      ? positiveNullable(input.tps)
-      : authoritativeDecodeMs !== null && outputTokens > 0
-        ? positiveNullable(outputTokens / (authoritativeDecodeMs / 1000))
-        : computeOutputTps(outputTokens, derivedDurationMs, derivedTtftMs);
+  const derivedTps = sanitizeOutputTps(
+    input.tps,
+    outputTokens,
+    derivedDurationMs,
+    derivedTtftMs,
+    input.decodeMs,
+  );
 
   const derivedCacheHitRate =
     input.cacheHitRate !== undefined
@@ -860,7 +913,13 @@ export function updateSessionLiveTelemetry(
         ? firstTokenAt - turnStartedAt
         : (prev?.ttftMs ?? null);
 
-  const tps = patch.tps !== undefined ? positiveNullable(patch.tps) : (prev?.tps ?? null);
+  const candidateLiveTps = patch.tps !== undefined ? positiveNullable(patch.tps) : null;
+  const tps =
+    patch.tps !== undefined
+      ? candidateLiveTps !== null && candidateLiveTps <= MAX_POST_TTFT_TPS
+        ? candidateLiveTps
+        : null
+      : (prev?.tps ?? null);
 
   const cacheHitRate =
     patch.cacheHitRate !== undefined
@@ -969,12 +1028,7 @@ export function normalizeBackendUsageCallLog(raw: BackendUsageCallLogLike): Usag
   const ttftMs = clampTtftToDuration(raw.ttftMs ?? raw.ttft_ms, durationMs);
   const decodeMs = positiveNullable(raw.decodeMs ?? raw.decode_ms);
   const rawTps = raw.tps ?? raw.tokensPerSecond ?? raw.tokens_per_second;
-  const tps =
-    rawTps !== undefined && rawTps !== null
-      ? positiveNullable(rawTps)
-      : decodeMs !== null && outputTokens > 0
-        ? positiveNullable(outputTokens / (decodeMs / 1000))
-        : computeOutputTps(outputTokens, durationMs, ttftMs);
+  const tps = sanitizeOutputTps(rawTps, outputTokens, durationMs, ttftMs, decodeMs);
   const cacheHitRate =
     raw.cacheHitRate !== undefined && raw.cacheHitRate !== null
       ? normalizeCacheHitRateValue(raw.cacheHitRate)
@@ -1064,10 +1118,12 @@ export function mergeUsageCallLogs(
           mergedDurationMs,
         );
         const mergedOutputTokens = Math.max(existing.outputTokens, normalized.outputTokens);
-        const mergedTps =
-          existing.tps ??
-          normalized.tps ??
-          computeOutputTps(mergedOutputTokens, mergedDurationMs, mergedTtftMs);
+        const mergedTps = sanitizeOutputTps(
+          existing.tps ?? normalized.tps,
+          mergedOutputTokens,
+          mergedDurationMs,
+          mergedTtftMs,
+        );
         byId.set(normalized.id, {
           ...normalized,
           ttftMs: mergedTtftMs,
@@ -1111,10 +1167,12 @@ export function mergeUsageCallLogs(
           mergedDurationMs,
         );
         const mergedOutputTokens = Math.max(live.outputTokens, normalized.outputTokens);
-        const mergedTps =
-          live.tps ??
-          normalized.tps ??
-          computeOutputTps(mergedOutputTokens, mergedDurationMs, mergedTtftMs);
+        const mergedTps = sanitizeOutputTps(
+          live.tps ?? normalized.tps,
+          mergedOutputTokens,
+          mergedDurationMs,
+          mergedTtftMs,
+        );
         byId.set(matchedKey, {
           ...live,
           ttftMs: mergedTtftMs,

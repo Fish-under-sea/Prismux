@@ -10,6 +10,7 @@ import {
   computeCacheHitRate,
   computeOutputTps,
   formatUsageModelDisplayName,
+  resolveEffectiveDecodeDurationMs,
   unwrapUsageModelSlug,
   type SessionLiveTelemetrySnapshot,
   type UsageCallLogRecord,
@@ -1636,26 +1637,20 @@ export function deriveSessionTelemetryDetail(
     }
 
     if (turn.status !== "running" && turn.status !== "pending" && extracted.outputTokens > 0) {
-      if (extracted.decodeMs !== null && extracted.decodeMs > 0) {
-        const turnTps = extracted.outputTokens / (extracted.decodeMs / 1_000);
+      const effectiveGenMs = resolveEffectiveDecodeDurationMs(
+        extracted.outputTokens,
+        durationMs,
+        ttftMs,
+        extracted.decodeMs,
+      );
+      if (effectiveGenMs !== null) {
+        const turnTps = extracted.outputTokens / (effectiveGenMs / 1_000);
         if (Number.isFinite(turnTps) && turnTps > 0) {
           latestRequestTps = turnTps;
           tpsSum += turnTps;
           tpsSampleCount += 1;
           timedOutputSum += extracted.outputTokens;
-          timedGenMsSum += extracted.decodeMs;
-        }
-      } else if (durationMs !== null && durationMs > 0) {
-        const turnTps = computeOutputTps(extracted.outputTokens, durationMs, ttftMs);
-        if (turnTps !== null) {
-          latestRequestTps = turnTps;
-          tpsSum += turnTps;
-          tpsSampleCount += 1;
-          const genMs = ttftMs !== null && durationMs > ttftMs ? durationMs - ttftMs : durationMs;
-          if (genMs > 0) {
-            timedOutputSum += extracted.outputTokens;
-            timedGenMsSum += genMs;
-          }
+          timedGenMsSum += effectiveGenMs;
         }
       }
     }

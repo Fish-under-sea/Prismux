@@ -662,4 +662,142 @@ describe("usageCallTelemetryStore", () => {
     expect(third).not.toBe(first);
     expect(third).toEqual(first);
   });
+
+  it("guards micro-burst decodeMs across all TPS entrypoints and self-heals persisted >2000 tok/s spikes", () => {
+    // 1. User screenshot Row 2: 128 tok, TTFT 6.66s, duration 6.66s, decodeMs 1ms -> ~19.22 tok/s (never 128000)
+    expect(computeOutputTps(128, 6_660, 6_660, 1)).toBeCloseTo(128 / 6.66, 4);
+
+    // 2. User screenshot Row 1: 242 tok, TTFT 3.54s, duration 7.37s, decodeMs 1ms -> ~63.19 tok/s (242 / 3.83s)
+    expect(computeOutputTps(242, 7_370, 3_540, 1)).toBeCloseTo(242 / 3.83, 4);
+
+    // 3. decodeMs > 1.1x durationMs or implying > 2000 tok/s falls back to guarded post-TTFT/wall window
+    expect(computeOutputTps(300, 5_000, 1_000, 100)).toBeCloseTo(300 / 4, 4);
+    expect(computeOutputTps(100, 2_000, 500, 5_000)).toBeCloseTo(100 / 1.5, 4);
+
+    // 4. recordModelCallTelemetry & normalizeBackendUsageCallLog guard decodeMs and sanitize explicit > 2000 tps
+    const liveRow = recordModelCallTelemetry({
+      id: "turn:dsh-burst-row2",
+      provider: "dsh",
+      model: "group/deepseek",
+      ttftMs: 6_660,
+      durationMs: 6_660,
+      decodeMs: 1,
+      inputTokens: 1_200,
+      outputTokens: 128,
+    });
+    expect(liveRow.tps).toBeCloseTo(128 / 6.66, 4);
+
+    const explicitBadLive = recordModelCallTelemetry({
+      id: "turn:dsh-bad-explicit-tps",
+      provider: "dsh",
+      model: "group/deepseek",
+      ttftMs: 3_540,
+      durationMs: 7_370,
+      decodeMs: 1,
+      tps: 128_000,
+      inputTokens: 1_200,
+      outputTokens: 242,
+    });
+    expect(explicitBadLive.tps).toBeCloseTo(242 / 3.83, 4);
+
+    const backendHealed = normalizeBackendUsageCallLog({
+      id: "backend-dsh-burst",
+      timestamp: 800_000,
+      provider: "dsh",
+      model: "group/deepseek",
+      ttft_ms: 6_660,
+      duration_ms: 6_660,
+      decode_ms: 1,
+      tps: 128_000,
+      inputTokens: 1_000,
+      outputTokens: 128,
+    });
+    expect(backendHealed.tps).toBeCloseTo(128 / 6.66, 4);
+
+    const backendNoTimingBadTps = normalizeBackendUsageCallLog({
+      id: "backend-dsh-no-timing-bad-tps",
+      timestamp: 801_000,
+      provider: "dsh",
+      model: "group/deepseek",
+      tps: 128_000,
+      inputTokens: 1_000,
+      outputTokens: 128,
+    });
+    expect(backendNoTimingBadTps.tps).toBeNull();
+
+    // 5. updateSessionLiveTelemetry rejects > 2000 tok/s spikes
+    updateSessionLiveTelemetry("thread-dsh-spike", {
+      provider: "dsh",
+      model: "group/deepseek",
+      tps: 128_000,
+      outputTokens: 128,
+    });
+    expect(getSessionLiveTelemetry("thread-dsh-spike")?.tps).toBeNull();
+
+    // 6. Persisted localStorage hydration self-heals stale 128000 tok/s rows
+    const previousStorage = globalThis.localStorage;
+    const backing = new Map<string, string>();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (key: string) => backing.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          backing.set(key, value);
+        },
+        removeItem: (key: string) => {
+          backing.delete(key);
+        },
+      },
+    });
+    try {
+      backing.set(
+        USAGE_CALL_TELEMETRY_STORAGE_KEY,
+        JSON.stringify([
+          {
+            id: "persisted-dsh-128000",
+            timestamp: 900_000,
+            provider: "dsh",
+            model: "group/deepseek",
+            ttftMs: 6_660,
+            durationMs: 6_660,
+            tps: 128_000,
+            inputTokens: 1_000,
+            cachedInputTokens: 9_000,
+            cacheCreationTokens: 0,
+            outputTokens: 128,
+            totalTokens: 10_128,
+            cacheHitRate: 0.9,
+            status: "completed",
+            source: "live",
+          },
+          {
+            id: "persisted-dsh-no-dur",
+            timestamp: 899_000,
+            provider: "dsh",
+            model: "group/deepseek",
+            ttftMs: null,
+            durationMs: null,
+            tps: 128_000,
+            inputTokens: 500,
+            cachedInputTokens: 0,
+            cacheCreationTokens: 0,
+            outputTokens: 128,
+            totalTokens: 628,
+            cacheHitRate: 0,
+            status: "completed",
+            source: "live",
+          },
+        ]),
+      );
+      const healed = reloadUsageCallLogsFromStorage();
+      expect(healed).toHaveLength(2);
+      expect(healed[0]?.tps).toBeCloseTo(128 / 6.66, 4);
+      expect(healed[1]?.tps).toBeNull();
+    } finally {
+      Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        value: previousStorage,
+      });
+    }
+  });
 });
