@@ -1,7 +1,10 @@
 import {
+  AlertTriangleIcon,
   ArrowLeftIcon,
   ArrowRightIcon,
   ChartNoAxesColumnIcon,
+  CheckCircle2Icon,
+  CircleArrowUpIcon,
   Code2Icon,
   Columns3Icon,
   CrosshairIcon,
@@ -19,7 +22,7 @@ import {
   SquarePenIcon,
 } from "lucide-react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
-import { T, useGT } from "gt-react";
+import { T, useGT, useLocale } from "gt-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 
@@ -35,6 +38,7 @@ import {
   type ServerProvider,
   type ServerSettings,
 } from "@prismux/core-contracts";
+import { APP_VERSION } from "../../branding";
 import { openCommandPalette } from "../../commandPaletteBus";
 import { isElectron as IS_ELECTRON_RUNTIME } from "../../env";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
@@ -53,16 +57,27 @@ import { useProjects } from "../../state/entities";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../../state/server";
 import { cn, isMacPlatform } from "../../lib/utils";
+import { prismuxDaemonClient } from "../../prismux/daemonClient";
 import { useOptionalPrismuxRuntime } from "../../prismux/PrismuxRuntimeProvider";
-import { PrismuxAutoUpdateHost } from "../../prismux/updates/PrismuxAutoUpdateHost";
+import { resolveRuntimeVersion } from "../../prismux/settings/prismuxUpdates.logic";
+import {
+  PrismuxAutoUpdateHost,
+  runPrismuxManualUpdateCheck,
+} from "../../prismux/updates/PrismuxAutoUpdateHost";
 import { PrismuxSidebarUpdateCapsule } from "../../prismux/updates/PrismuxSidebarUpdateCapsule";
-import { useUpdateNotifierState } from "../../prismux/updates/updateNotifierStore";
+import {
+  formatVersionBadge,
+  getInlineUpdateMenuCopy,
+  INITIAL_INLINE_UPDATE_CHECK_STATE,
+  INLINE_UPDATE_FOUND_CLOSE_DELAY_MS,
+  INLINE_UPDATE_UP_TO_DATE_RESET_MS,
+  prismuxUpdateNotifierStore,
+  useUpdateNotifierState,
+  type InlineUpdateCheckState,
+} from "../../prismux/updates/updateNotifierStore";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { resolveDesktopUpdateButtonAction } from "../desktopUpdate.logic";
-import {
-  resolveSidebarStageBackdropVariant,
-  SidebarStageBackdrop,
-} from "../SidebarStageBackdrop";
+import { resolveSidebarStageBackdropVariant, SidebarStageBackdrop } from "../SidebarStageBackdrop";
 import {
   SidebarFooter,
   SidebarMenu,
@@ -98,7 +113,11 @@ import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUp
 import { useUpdateEverythingRun } from "./updateEverythingRun";
 import { observeResize } from "~/lib/observeResize";
 
-export const SIDEBAR_HEADER_CONTROL_ORDER = ["brand-menu", "sidebar-toggle", "history-nav"] as const;
+export const SIDEBAR_HEADER_CONTROL_ORDER = [
+  "brand-menu",
+  "sidebar-toggle",
+  "history-nav",
+] as const;
 
 export const SIDEBAR_APP_MENU_ITEM_IDS = [
   "new-thread",
@@ -202,9 +221,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
       data-sidebar-rail-compact={railCompact ? "true" : "false"}
       className={cn(
         "relative flex h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center",
-        railCompact
-          ? "justify-center px-0"
-          : "gap-1.5 pl-[var(--workspace-controls-left)] pr-2.5",
+        railCompact ? "justify-center px-0" : "gap-1.5 pl-[var(--workspace-controls-left)] pr-2.5",
         isElectron && "drag-region",
       )}
     >
@@ -449,6 +466,7 @@ export interface SidebarBrandMenuItemsProps {
   readonly commandPaletteShortcut: string | null;
   readonly developerShortcuts: BrandMenuDeveloperShortcuts;
   readonly showDevToolsItem: boolean;
+  readonly updateCheckState?: InlineUpdateCheckState | undefined;
   readonly onNewThread: () => void;
   readonly onAddProject: () => void;
   readonly onOpenCommandPalette: () => void;
@@ -462,10 +480,12 @@ export interface SidebarBrandMenuItemsProps {
 
 export function SidebarBrandMenuItems(props: SidebarBrandMenuItemsProps) {
   const gt = useGT();
+  const locale = useLocale();
   const {
     commandPaletteShortcut,
     developerShortcuts,
     showDevToolsItem,
+    updateCheckState = INITIAL_INLINE_UPDATE_CHECK_STATE,
     onNewThread,
     onAddProject,
     onOpenCommandPalette,
@@ -476,6 +496,9 @@ export function SidebarBrandMenuItems(props: SidebarBrandMenuItemsProps) {
     onForceReload,
     onToggleDevTools,
   } = props;
+  const inlineCopy = getInlineUpdateMenuCopy(locale);
+  const currentVersionBadge = formatVersionBadge(updateCheckState.currentVersion);
+  const latestVersionBadge = formatVersionBadge(updateCheckState.latestVersion);
 
   return (
     <>
@@ -507,9 +530,68 @@ export function SidebarBrandMenuItems(props: SidebarBrandMenuItemsProps) {
           <T>Keyboard shortcuts</T>
         </span>
       </MenuItem>
-      <MenuItem data-sidebar-app-menu-item="check-updates" onClick={onCheckUpdates}>
-        <RefreshCwIcon className="size-3.5" aria-hidden="true" />
-        <span>{gt("Check for updates")}</span>
+      <MenuItem
+        data-sidebar-app-menu-item="check-updates"
+        data-check-updates-state={updateCheckState.phase}
+        closeOnClick={false}
+        aria-busy={updateCheckState.phase === "checking" || undefined}
+        onClick={onCheckUpdates}
+      >
+        {updateCheckState.phase === "checking" ? (
+          <RefreshCwIcon
+            className="size-3.5 animate-spin text-primary opacity-100 motion-reduce:animate-none"
+            aria-hidden="true"
+          />
+        ) : updateCheckState.phase === "up-to-date" ? (
+          <CheckCircle2Icon
+            className="size-3.5 text-success-foreground opacity-100 transition-transform duration-200 motion-reduce:transition-none"
+            aria-hidden="true"
+          />
+        ) : updateCheckState.phase === "update-available" ? (
+          <CircleArrowUpIcon
+            className="size-3.5 text-primary opacity-100 transition-transform duration-200 motion-reduce:transition-none"
+            aria-hidden="true"
+          />
+        ) : updateCheckState.phase === "error" ? (
+          <AlertTriangleIcon
+            className="size-3.5 text-destructive-foreground opacity-100 transition-transform duration-200 motion-reduce:transition-none"
+            aria-hidden="true"
+          />
+        ) : (
+          <RefreshCwIcon
+            className="size-3.5 transition-transform duration-200 motion-reduce:transition-none"
+            aria-hidden="true"
+          />
+        )}
+        <span
+          aria-live="polite"
+          className={cn(
+            "flex-1 truncate transition-colors duration-200 motion-reduce:transition-none",
+            updateCheckState.phase === "up-to-date" && "font-medium text-success-foreground",
+            updateCheckState.phase === "update-available" && "font-medium text-primary",
+            updateCheckState.phase === "error" && "font-medium text-destructive-foreground",
+          )}
+        >
+          {updateCheckState.phase === "checking"
+            ? gt("Checking for updates…")
+            : updateCheckState.phase === "up-to-date"
+              ? gt("Up to date")
+              : updateCheckState.phase === "update-available"
+                ? latestVersionBadge
+                  ? `${inlineCopy.foundPrefix} ${latestVersionBadge}`
+                  : inlineCopy.foundPrefix
+                : updateCheckState.phase === "error"
+                  ? inlineCopy.retryPrompt
+                  : gt("Check for updates")}
+        </span>
+        {updateCheckState.phase === "up-to-date" && currentVersionBadge ? (
+          <span
+            data-testid="sidebar-check-updates-version"
+            className="ml-2 shrink-0 rounded-full border border-success/35 bg-success/12 px-1.5 py-0.5 font-mono text-3xs leading-none font-medium text-success-foreground tabular-nums dark:border-success/40 dark:bg-success/18"
+          >
+            {currentVersionBadge}
+          </span>
+        ) : null}
       </MenuItem>
       <MenuSeparator />
       <MenuItem data-sidebar-app-menu-item="reload-window" onClick={onReload}>
@@ -551,9 +633,18 @@ export function SidebarBrandMenu({
 }) {
   const gt = useGT();
   const navigate = useNavigate();
+  const runtime = useOptionalPrismuxRuntime();
+  const daemon = runtime?.daemon ?? prismuxDaemonClient;
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { isMobile, setOpenMobile } = useSidebar();
   const handleCreateDirectNewThread = useDirectNewThreadCreator();
+  const [menuOpen, setMenuOpen] = useState<boolean>(Boolean(defaultOpen));
+  const [updateCheckState, setUpdateCheckState] = useState<InlineUpdateCheckState>(
+    INITIAL_INLINE_UPDATE_CHECK_STATE,
+  );
+  const checkRequestIdRef = useRef<number>(0);
+  const inFlightRequestIdRef = useRef<number>(0);
+  const inlineTimerRef = useRef<number | null>(null);
   const commandPaletteShortcut = shortcutLabelForCommand(keybindings, "commandPalette.toggle");
   const platform = typeof navigator !== "undefined" ? navigator.platform : "";
   const developerShortcuts = resolveBrandMenuDeveloperShortcuts(platform);
@@ -562,13 +653,130 @@ export function SidebarBrandMenu({
   const showDevToolsItem =
     isElectron ?? (IS_ELECTRON_RUNTIME || typeof prismuxBridge?.toggleDevTools === "function");
 
+  const clearInlineUpdateTimer = () => {
+    if (inlineTimerRef.current !== null && typeof window !== "undefined") {
+      window.clearTimeout(inlineTimerRef.current);
+      inlineTimerRef.current = null;
+    }
+  };
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- cancels pending inline update check timers and invalidates callbacks on unmount
+  useEffect(() => {
+    return () => {
+      checkRequestIdRef.current += 1;
+      inFlightRequestIdRef.current = 0;
+      if (inlineTimerRef.current !== null && typeof window !== "undefined") {
+        window.clearTimeout(inlineTimerRef.current);
+        inlineTimerRef.current = null;
+      }
+    };
+  }, []);
+
   const closeAfterAction = () => {
     if (isMobile) setOpenMobile(false);
     onAction?.();
   };
 
+  const handleMenuOpenChange = (nextOpen: boolean) => {
+    setMenuOpen(nextOpen);
+    if (!nextOpen) {
+      clearInlineUpdateTimer();
+      checkRequestIdRef.current += 1;
+      setUpdateCheckState(INITIAL_INLINE_UPDATE_CHECK_STATE);
+    }
+    onOpenChange?.(nextOpen);
+  };
+
+  const handleInlineCheckUpdates = async () => {
+    if (
+      inFlightRequestIdRef.current !== 0 &&
+      inFlightRequestIdRef.current === checkRequestIdRef.current
+    ) {
+      return;
+    }
+    clearInlineUpdateTimer();
+    const requestId = checkRequestIdRef.current + 1;
+    checkRequestIdRef.current = requestId;
+    inFlightRequestIdRef.current = requestId;
+
+    const currentFallback =
+      resolveRuntimeVersion(
+        prismuxUpdateNotifierStore.getState().updaterStatus?.currentVersion,
+        APP_VERSION,
+      ) || null;
+    setUpdateCheckState({
+      phase: "checking",
+      currentVersion: currentFallback,
+      latestVersion: null,
+      errorMessage: null,
+    });
+
+    const outcome = await runPrismuxManualUpdateCheck({
+      daemon,
+      store: prismuxUpdateNotifierStore,
+      appVersionFallback: APP_VERSION,
+    });
+
+    if (inFlightRequestIdRef.current === requestId) {
+      inFlightRequestIdRef.current = 0;
+    }
+    if (checkRequestIdRef.current !== requestId) {
+      return;
+    }
+
+    if (outcome.status === "up-to-date") {
+      setUpdateCheckState({
+        phase: "up-to-date",
+        currentVersion: outcome.currentVersion,
+        latestVersion: null,
+        errorMessage: null,
+      });
+      if (typeof window !== "undefined") {
+        inlineTimerRef.current = window.setTimeout(() => {
+          inlineTimerRef.current = null;
+          if (checkRequestIdRef.current !== requestId) return;
+          setUpdateCheckState(INITIAL_INLINE_UPDATE_CHECK_STATE);
+        }, INLINE_UPDATE_UP_TO_DATE_RESET_MS);
+      }
+      return;
+    }
+
+    if (outcome.status === "update-available") {
+      setUpdateCheckState({
+        phase: "update-available",
+        currentVersion: outcome.currentVersion,
+        latestVersion: outcome.latestVersion,
+        errorMessage: null,
+      });
+      const reducedMotion =
+        typeof window !== "undefined" &&
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const closeDelayMs = reducedMotion ? 120 : INLINE_UPDATE_FOUND_CLOSE_DELAY_MS;
+      if (typeof window !== "undefined") {
+        inlineTimerRef.current = window.setTimeout(() => {
+          inlineTimerRef.current = null;
+          if (checkRequestIdRef.current !== requestId) return;
+          handleMenuOpenChange(false);
+          closeAfterAction();
+        }, closeDelayMs);
+      } else {
+        handleMenuOpenChange(false);
+        closeAfterAction();
+      }
+      return;
+    }
+
+    setUpdateCheckState({
+      phase: "error",
+      currentVersion: null,
+      latestVersion: null,
+      errorMessage: outcome.errorMessage,
+    });
+  };
+
   return (
-    <Menu defaultOpen={defaultOpen} onOpenChange={onOpenChange}>
+    <Menu open={menuOpen} onOpenChange={handleMenuOpenChange}>
       <MenuTrigger
         render={
           <button
@@ -598,6 +806,7 @@ export function SidebarBrandMenu({
           commandPaletteShortcut={commandPaletteShortcut}
           developerShortcuts={developerShortcuts}
           showDevToolsItem={showDevToolsItem}
+          updateCheckState={updateCheckState}
           onNewThread={() => {
             closeAfterAction();
             void handleCreateDirectNewThread();
@@ -619,8 +828,7 @@ export function SidebarBrandMenu({
             void navigate({ to: "/settings/keybindings" });
           }}
           onCheckUpdates={() => {
-            closeAfterAction();
-            void navigate({ to: "/settings/about" });
+            void handleInlineCheckUpdates();
           }}
           onReload={() => {
             closeAfterAction();
@@ -657,9 +865,7 @@ function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
       <span
         className={cn(
           "truncate [text-box:trim-both_cap_alphabetic] supports-[text-box:trim-both_cap_alphabetic]:py-1",
-          onBackdrop
-            ? "text-white drop-shadow-[0_1px_2.5px_rgb(4_12_28/82%)]"
-            : "text-foreground",
+          onBackdrop ? "text-white drop-shadow-[0_1px_2.5px_rgb(4_12_28/82%)]" : "text-foreground",
         )}
       >
         {/* oxlint-disable-next-line prismux/no-untranslated-copy -- product wordmark */}
@@ -798,12 +1004,7 @@ export function SidebarUtilityItem({
   );
 }
 
-export type SidebarUtilityNavId =
-  | "settings"
-  | "usage"
-  | "locate"
-  | "tasks"
-  | "workspace-board";
+export type SidebarUtilityNavId = "settings" | "usage" | "locate" | "tasks" | "workspace-board";
 type SidebarUtilityFocusId = SidebarUtilityNavId | "more";
 
 /**
@@ -834,8 +1035,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   });
   // Keep bottom utility icons (including Tasks & Workspace Board) visible on toggleable panel pages
   // so clicking an active Tasks / Workspace Board icon closes it and returns to the prior session.
-  const isOnUtilityPage =
-    isSidebarUtilityPage(pathname) && !isSidebarToggleablePanelPage(pathname);
+  const isOnUtilityPage = isSidebarUtilityPage(pathname) && !isSidebarToggleablePanelPage(pathname);
   const tasksActive = isSidebarPanelPathActive(pathname, PRISMUX_SIDEBAR_TOGGLE_PANEL_PATHS.tasks);
   const workspaceBoardActive = isSidebarPanelPathActive(
     pathname,
@@ -1054,9 +1254,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 
     const nextId = visibleFocusOrder[nextIndex];
     if (!nextId) return;
-    const nextEl = toolbar.querySelector<HTMLElement>(
-      `[${SIDEBAR_UTILITY_ITEM_ATTR}="${nextId}"]`,
-    );
+    const nextEl = toolbar.querySelector<HTMLElement>(`[${SIDEBAR_UTILITY_ITEM_ATTR}="${nextId}"]`);
     if (!nextEl) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1087,9 +1285,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
       data-sidebar-footer-partition="orca"
       className={cn(
         "border-t border-sidebar-border/45",
-        railCompact
-          ? "flex-col items-center gap-1 pt-1.5"
-          : "flex-row items-center gap-1 pt-1",
+        railCompact ? "flex-col items-center gap-1 pt-1.5" : "flex-row items-center gap-1 pt-1",
       )}
     >
       {isOnUtilityPage ? (
@@ -1125,15 +1321,35 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
       ) : (
         <>
           {/* Keep every utility node mounted via CSS hiding so folding never tears down mounted controllers/popups. */}
-          {railCompact
-            ? orderedRailItems.map((item) => (
+          {railCompact ? (
+            orderedRailItems.map((item) => (
+              <SidebarUtilityItem
+                key={item.id}
+                itemId={item.id}
+                icon={item.icon}
+                label={item.label}
+                tooltip={item.tooltip}
+                tooltipSide="right"
+                active={item.active}
+                hidden={!overflowState.visibleIds.has(item.id)}
+                isTabStop={effectiveTabStopId === item.id}
+                onFocusItem={(id) => {
+                  setActiveTabStopId(id);
+                  lastFocusedItemRef.current = id;
+                }}
+                onClick={item.onClick}
+              />
+            ))
+          ) : (
+            <>
+              {leftUtilityItems.map((item) => (
                 <SidebarUtilityItem
                   key={item.id}
                   itemId={item.id}
                   icon={item.icon}
                   label={item.label}
                   tooltip={item.tooltip}
-                  tooltipSide="right"
+                  tooltipSide="top"
                   active={item.active}
                   hidden={!overflowState.visibleIds.has(item.id)}
                   isTabStop={effectiveTabStopId === item.id}
@@ -1143,48 +1359,28 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
                   }}
                   onClick={item.onClick}
                 />
-              ))
-            : (
-              <>
-                {leftUtilityItems.map((item) => (
-                  <SidebarUtilityItem
-                    key={item.id}
-                    itemId={item.id}
-                    icon={item.icon}
-                    label={item.label}
-                    tooltip={item.tooltip}
-                    tooltipSide="top"
-                    active={item.active}
-                    hidden={!overflowState.visibleIds.has(item.id)}
-                    isTabStop={effectiveTabStopId === item.id}
-                    onFocusItem={(id) => {
-                      setActiveTabStopId(id);
-                      lastFocusedItemRef.current = id;
-                    }}
-                    onClick={item.onClick}
-                  />
-                ))}
-                {rightUtilityItems.map((item) => (
-                  <SidebarUtilityItem
-                    key={item.id}
-                    itemId={item.id}
-                    icon={item.icon}
-                    label={item.label}
-                    tooltip={item.tooltip}
-                    tooltipSide="top"
-                    active={item.active}
-                    className={item.id === firstVisibleRightId ? "ml-auto" : undefined}
-                    hidden={!overflowState.visibleIds.has(item.id)}
-                    isTabStop={effectiveTabStopId === item.id}
-                    onFocusItem={(id) => {
-                      setActiveTabStopId(id);
-                      lastFocusedItemRef.current = id;
-                    }}
-                    onClick={item.onClick}
-                  />
-                ))}
-              </>
-            )}
+              ))}
+              {rightUtilityItems.map((item) => (
+                <SidebarUtilityItem
+                  key={item.id}
+                  itemId={item.id}
+                  icon={item.icon}
+                  label={item.label}
+                  tooltip={item.tooltip}
+                  tooltipSide="top"
+                  active={item.active}
+                  className={item.id === firstVisibleRightId ? "ml-auto" : undefined}
+                  hidden={!overflowState.visibleIds.has(item.id)}
+                  isTabStop={effectiveTabStopId === item.id}
+                  onFocusItem={(id) => {
+                    setActiveTabStopId(id);
+                    lastFocusedItemRef.current = id;
+                  }}
+                  onClick={item.onClick}
+                />
+              ))}
+            </>
+          )}
 
           <SidebarMenuItem
             className={cn(
@@ -1205,11 +1401,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
                           aria-label={gt("More navigation items")}
                           data-testid="sidebar-utility-more-trigger"
                           tabIndex={
-                            overflowItems.length === 0
-                              ? -1
-                              : effectiveTabStopId === "more"
-                                ? 0
-                                : -1
+                            overflowItems.length === 0 ? -1 : effectiveTabStopId === "more" ? 0 : -1
                           }
                           onFocus={() => {
                             setActiveTabStopId("more");
@@ -1261,23 +1453,25 @@ const SidebarActiveUpdateBanner = memo(function SidebarActiveUpdateBanner() {
   // suppress the legacy duplicate badge here so only one clean capsule appears above Settings.
   const notifierOwnsPrismuxUpdate =
     notifierState.presentation !== "hidden" &&
-    Boolean(notifierState.availableUpdate?.hasUpdate || notifierState.updaterStatus?.downloadedFilePath);
+    Boolean(
+      notifierState.availableUpdate?.hasUpdate || notifierState.updaterStatus?.downloadedFilePath,
+    );
 
   const hasPrismuxBadge =
     !notifierOwnsPrismuxUpdate &&
     Boolean(
       badge &&
-        (badge.hasUpdate ||
-          badge.installState === "downloading" ||
-          badge.installState === "extracting" ||
-          badge.installState === "verifying" ||
-          badge.installState === "ready"),
+      (badge.hasUpdate ||
+        badge.installState === "downloading" ||
+        badge.installState === "extracting" ||
+        badge.installState === "verifying" ||
+        badge.installState === "ready"),
     );
   const hasActionableDesktopUpdate = Boolean(
     updateRun !== null ||
-      (desktopUpdateState &&
-        (desktopUpdateState.status === "downloading" ||
-          resolveDesktopUpdateButtonAction(desktopUpdateState) !== "none")),
+    (desktopUpdateState &&
+      (desktopUpdateState.status === "downloading" ||
+        resolveDesktopUpdateButtonAction(desktopUpdateState) !== "none")),
   );
 
   // Never render an idle / unavailable placeholder that clutters the footer or steals space.

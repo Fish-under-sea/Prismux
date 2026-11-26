@@ -1,4 +1,5 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+/* oxlint-disable prismux/no-untranslated-copy -- Prismux-native Chinese updater toast and flight overlay copy */
+import { memo, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { ArrowUpIcon, XIcon } from "lucide-react";
 
@@ -6,12 +7,14 @@ import { APP_VERSION } from "../../branding";
 import { T3AppIcon } from "../../components/T3AppIcon";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { useStableCallback } from "../../hooks/useStableCallback";
 import { cn } from "../../lib/utils";
-import { prismuxDaemonClient } from "../daemonClient";
+import { prismuxDaemonClient, type PrismuxDaemonClient } from "../daemonClient";
 import { useOptionalPrismuxRuntime } from "../PrismuxRuntimeProvider";
 import {
   parseCheckResult,
   parseUpdaterStatusPayload,
+  resolveRuntimeVersion,
   type UpdateCheckView,
 } from "../settings/prismuxUpdates.logic";
 import { PrismuxUpdateReleaseModal } from "./PrismuxUpdateReleaseModal";
@@ -19,6 +22,7 @@ import {
   extractReleaseNotesPreview,
   formatVersionBadge,
   isUpdateTransferActive,
+  normalizeVersionString,
   PRISMUX_UPDATE_AVAILABLE_EVENT,
   prismuxUpdateNotifierStore,
   startUpdaterStatusFallbackPoller,
@@ -27,6 +31,7 @@ import {
   useUpdateNotifierState,
   type RectSnapshot,
   type UpdateFlyTransition,
+  type UpdateNotifierStore,
 } from "./updateNotifierStore";
 
 const STARTUP_CHECK_DELAY_MS = 4_000;
@@ -35,6 +40,108 @@ const FLY_DURATION_MS = 460;
 
 let activeHostOwnerId = 0;
 let nextHostOwnerSeq = 1;
+const primaryHostListeners = new Set<() => void>();
+
+function emitPrimaryHostChange(): void {
+  for (const listener of primaryHostListeners) {
+    listener();
+  }
+}
+
+function subscribePrimaryHost(listener: () => void): () => void {
+  primaryHostListeners.add(listener);
+  return () => {
+    primaryHostListeners.delete(listener);
+  };
+}
+
+function getPrimaryHostOwnerId(): number {
+  return activeHostOwnerId;
+}
+
+export type ManualUpdateCheckOutcome =
+  | {
+      readonly status: "up-to-date";
+      readonly currentVersion: string | null;
+      readonly check: UpdateCheckView;
+    }
+  | {
+      readonly status: "update-available";
+      readonly currentVersion: string | null;
+      readonly latestVersion: string;
+      readonly check: UpdateCheckView;
+    }
+  | {
+      readonly status: "error";
+      readonly errorMessage: string;
+    };
+
+export interface RunPrismuxManualUpdateCheckOptions {
+  readonly daemon?: Pick<PrismuxDaemonClient, "checkForUpdates">;
+  readonly store?: UpdateNotifierStore;
+  readonly appVersionFallback?: string;
+}
+
+/**
+ * Executes an explicit user-initiated update check for the inline brand menu:
+ * - Never opens the centered release modal or navigates to settings.
+ * - When an update exists, immediately presents the bottom-right liquid glass toast
+ *   even if that version was previously collapsed into the sidebar capsule.
+ */
+export async function runPrismuxManualUpdateCheck(
+  options: RunPrismuxManualUpdateCheckOptions = {},
+): Promise<ManualUpdateCheckOutcome> {
+  const daemon = options.daemon ?? prismuxDaemonClient;
+  const store = options.store ?? prismuxUpdateNotifierStore;
+  const appVersionFallback = options.appVersionFallback ?? APP_VERSION;
+  const current = store.getState();
+
+  store.setChecking(true);
+  try {
+    const channel = current.updaterStatus?.policy.channel ?? "prerelease";
+    const raw = await daemon.checkForUpdates<unknown>({
+      channel,
+      includePrerelease: channel === "prerelease",
+    });
+    const fallbackVersion = resolveRuntimeVersion(
+      current.updaterStatus?.currentVersion,
+      appVersionFallback,
+    );
+    const parsed = parseCheckResult(raw, fallbackVersion);
+    if (!parsed) {
+      return {
+        status: "error",
+        errorMessage: "无法解析更新检查响应",
+      };
+    }
+
+    const resolvedCurrent = resolveRuntimeVersion(parsed.currentVersion, fallbackVersion) || null;
+    const latestNorm = normalizeVersionString(parsed.latestVersion);
+    if (parsed.hasUpdate && latestNorm) {
+      store.openToastForAvailableUpdate(parsed);
+      return {
+        status: "update-available",
+        currentVersion: resolvedCurrent,
+        latestVersion: latestNorm,
+        check: parsed,
+      };
+    }
+
+    store.reportUpdateAvailable(parsed);
+    return {
+      status: "up-to-date",
+      currentVersion: resolvedCurrent,
+      check: parsed,
+    };
+  } catch (err) {
+    return {
+      status: "error",
+      errorMessage: err instanceof Error ? err.message : String(err),
+    };
+  } finally {
+    store.setChecking(false);
+  }
+}
 
 export interface PrismuxUpdateNoticeTriggerPayload {
   readonly latestVersion?: string;
@@ -127,6 +234,7 @@ function measureRect(el: HTMLElement | null): RectSnapshot | null {
 function PrismuxUpdateFlyOverlay({ transition }: { readonly transition: UpdateFlyTransition }) {
   const ghostRef = useRef<HTMLDivElement>(null);
 
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- drives Web Animations API FLIP flight on DOM portal node
   useLayoutEffect(() => {
     const ghost = ghostRef.current;
     if (!ghost || typeof document === "undefined") {
@@ -147,10 +255,7 @@ function PrismuxUpdateFlyOverlay({ transition }: { readonly transition: UpdateFl
 
     const from = transition.fromRect;
     const midLeft = from.left + (toRect.left - from.left) * 0.45;
-    const midTop = Math.min(
-      window.innerHeight - 40,
-      Math.max(from.top, toRect.top) + 18,
-    );
+    const midTop = Math.min(window.innerHeight - 40, Math.max(from.top, toRect.top) + 18);
     const midWidth = Math.max(toRect.width, Math.min(from.width, 196));
     const midHeight = Math.max(toRect.height, 34);
 
@@ -214,7 +319,7 @@ function PrismuxUpdateFlyOverlay({ transition }: { readonly transition: UpdateFl
       aria-hidden="true"
       data-testid="prismux-update-fly-ghost"
       data-pmx-glass-zone="overlays"
-      className="dialog-glass pointer-events-none fixed top-0 left-0 z-[72] flex items-center gap-1.5 overflow-hidden border border-primary/40 px-3 text-[11.5px] font-medium text-foreground shadow-xl will-change-transform"
+      className="dialog-glass pointer-events-none fixed top-0 left-0 z-[72] flex items-center gap-1.5 overflow-hidden border border-primary/40 px-3 text-xs font-medium text-foreground shadow-xl will-change-transform"
       style={{
         transform: `translate3d(${transition.fromRect.left}px, ${transition.fromRect.top}px, 0)`,
         width: `${transition.fromRect.width}px`,
@@ -230,32 +335,16 @@ function PrismuxUpdateFlyOverlay({ transition }: { readonly transition: UpdateFl
   );
 }
 
-/**
- * Bottom-right liquid glass notification card hovering cleanly above the 20px status bar.
- */
-function PrismuxUpdateToastCard() {
-  const state = useUpdateNotifierState();
+function PrismuxUpdateToastCardPortal({ update }: { readonly update: UpdateCheckView }) {
   const toastRef = useRef<HTMLDivElement>(null);
   const [entered, setEntered] = useState(false);
 
-  const visible =
-    state.presentation === "toast" &&
-    Boolean(state.availableUpdate?.hasUpdate && state.availableUpdate.latestVersion);
-
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- schedules one requestAnimationFrame tick to trigger CSS entrance transition on mounted portal
   useEffect(() => {
-    if (!visible) {
-      setEntered(false);
-      return;
-    }
     const raf = window.requestAnimationFrame(() => setEntered(true));
     return () => window.cancelAnimationFrame(raf);
-  }, [visible]);
+  }, []);
 
-  if (!visible || !state.availableUpdate || typeof document === "undefined") {
-    return null;
-  }
-
-  const update = state.availableUpdate;
   const versionBadge = formatVersionBadge(update.latestVersion);
   const preview = extractReleaseNotesPreview(update.releaseNotes);
   const sourceBadge = update.sourceUsed === "gitee" ? "Gitee" : "GitHub";
@@ -278,29 +367,24 @@ function PrismuxUpdateToastCard() {
       data-testid="prismux-update-toast"
       data-pmx-glass-zone="overlays"
       className={cn(
-        "dialog-glass fixed right-4 bottom-[calc(var(--pmx-status-bar-height,20px)+12px)] z-[65] w-[328px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border p-3.5 text-popover-foreground shadow-2xl/45 transition-[opacity,transform] duration-260 ease-[cubic-bezier(0.22,1,0.36,1)] [-webkit-app-region:no-drag] motion-reduce:transition-none",
+        "dialog-glass fixed right-4 bottom-[calc(var(--pmx-status-bar-height,20px)+12px)] z-[65] w-[328px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border p-3.5 text-popover-foreground shadow-2xl/45 transition-[opacity,transform] duration-260 ease-out [-webkit-app-region:no-drag] motion-reduce:transition-none",
         entered ? "translate-y-0 scale-100 opacity-100" : "translate-y-3 scale-[0.97] opacity-0",
       )}
     >
       <div className="flex items-start gap-2.5">
         <T3AppIcon className="mt-0.5 size-7 shrink-0 rounded-lg object-contain ring-1 ring-border/35 [[data-pmx-glass='1']_&]:ring-foreground/15" />
 
-        <div
-          className="min-w-0 flex-1 cursor-pointer space-y-1"
-          onClick={handleOpen}
-        >
+        <div className="min-w-0 flex-1 cursor-pointer space-y-1" onClick={handleOpen}>
           <div className="flex flex-wrap items-center gap-1.5 pr-6">
-            <span className="text-[13px] font-semibold tracking-tight text-foreground">
+            <span className="text-sm font-semibold tracking-tight text-foreground">
               发现新版本 {versionBadge}
             </span>
-            <Badge variant="outline" size="sm" className="h-4 px-1.5 text-[10px]">
+            <Badge variant="outline" size="sm">
               {sourceBadge}
             </Badge>
           </div>
 
-          <p className="line-clamp-2 text-[11.5px] leading-relaxed text-muted-foreground">
-            {preview}
-          </p>
+          <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">{preview}</p>
         </div>
 
         <button
@@ -308,22 +392,23 @@ function PrismuxUpdateToastCard() {
           data-testid="prismux-update-toast-close"
           aria-label="关闭更新提醒并收拢至侧边栏"
           onClick={handleDismiss}
-          className="absolute top-2.5 right-2.5 inline-flex size-6 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-foreground/[0.08] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring dark:hover:bg-white/[0.1]"
+          className="absolute top-2.5 right-2.5 inline-flex size-6 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-foreground/[0.08] hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring dark:hover:bg-white/[0.1]"
         >
           <XIcon className="size-3.5" aria-hidden="true" />
         </button>
       </div>
 
       <div className="mt-3 flex items-center justify-between gap-2 border-t border-border/50 pt-2.5">
-        <span className="truncate font-mono text-[10.5px] tabular-nums text-muted-foreground">
-          {update.currentVersion ? `当前 ${formatVersionBadge(update.currentVersion)}` : "软件内直连升级"}
+        <span className="truncate font-mono text-2xs tabular-nums text-muted-foreground">
+          {update.currentVersion
+            ? `当前 ${formatVersionBadge(update.currentVersion)}`
+            : "软件内直连升级"}
         </span>
         <Button
           type="button"
           size="xs"
           data-testid="prismux-update-toast-open"
           onClick={handleOpen}
-          className="h-7 rounded-lg px-3 text-[11.5px] font-medium"
         >
           查看更新
         </Button>
@@ -334,35 +419,57 @@ function PrismuxUpdateToastCard() {
 }
 
 /**
+ * Bottom-right liquid glass notification card hovering cleanly above the 20px status bar.
+ */
+export function PrismuxUpdateToastCard() {
+  const state = useUpdateNotifierState();
+
+  const visible =
+    state.presentation === "toast" &&
+    Boolean(state.availableUpdate?.hasUpdate && state.availableUpdate.latestVersion);
+
+  if (!visible || !state.availableUpdate || typeof document === "undefined") {
+    return null;
+  }
+
+  return <PrismuxUpdateToastCardPortal update={state.availableUpdate} />;
+}
+
+/**
  * Global auto-update controller & portal host mounted once inside SidebarChromeFooter.
  * Owns background auto-check timers, Daemon SSE subscription, bottom-right toast,
- * curved FLIP flight animation, and centered release notes modal without touching
- * PrismuxRuntimeProvider.tsx.
+ * curved FLIP flight animation, and centered release notes modal.
  */
 export const PrismuxAutoUpdateHost = memo(function PrismuxAutoUpdateHost() {
   const runtime = useOptionalPrismuxRuntime();
   const daemon = runtime?.daemon ?? prismuxDaemonClient;
   const daemonReady = runtime?.daemonInfo.ready ?? false;
   const state = useUpdateNotifierState();
-  const ownerIdRef = useRef<number>(nextHostOwnerSeq++);
+  const [ownerId] = useState<number>(() => nextHostOwnerSeq++);
   const daemonManagesScheduleRef = useRef<boolean>(false);
-  const [isPrimaryHost, setIsPrimaryHost] = useState(false);
+  const primaryOwnerId = useSyncExternalStore(
+    subscribePrimaryHost,
+    getPrimaryHostOwnerId,
+    getPrimaryHostOwnerId,
+  );
+  const isPrimaryHost = primaryOwnerId === ownerId;
 
   // Claim single-instance host ownership so portals & timers never duplicate across sidebars.
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- registers and releases module-level singleton host ownership across sidebar mounts
   useEffect(() => {
-    const id = ownerIdRef.current;
     if (activeHostOwnerId === 0) {
-      activeHostOwnerId = id;
-      setIsPrimaryHost(true);
+      activeHostOwnerId = ownerId;
+      emitPrimaryHostChange();
     }
     return () => {
-      if (activeHostOwnerId === id) {
+      if (activeHostOwnerId === ownerId) {
         activeHostOwnerId = 0;
+        emitPrimaryHostChange();
       }
     };
-  }, []);
+  }, [ownerId]);
 
-  const runSilentUpdateCheck = useCallback(async () => {
+  const runSilentUpdateCheck = useStableCallback(async () => {
     const current = prismuxUpdateNotifierStore.getState();
     if (!current.autoCheckEnabled || current.checking || current.downloading) {
       return;
@@ -374,10 +481,7 @@ export const PrismuxAutoUpdateHost = memo(function PrismuxAutoUpdateHost() {
         channel,
         includePrerelease: channel === "prerelease",
       });
-      const parsed = parseCheckResult(
-        res,
-        current.updaterStatus?.currentVersion ?? APP_VERSION,
-      );
+      const parsed = parseCheckResult(res, current.updaterStatus?.currentVersion ?? APP_VERSION);
       if (parsed) {
         prismuxUpdateNotifierStore.reportUpdateAvailable(parsed);
       }
@@ -386,9 +490,10 @@ export const PrismuxAutoUpdateHost = memo(function PrismuxAutoUpdateHost() {
     } finally {
       prismuxUpdateNotifierStore.setChecking(false);
     }
-  }, [daemon]);
+  });
 
   // Hydrate initial updater status + subscribe to real-time SSE events when daemon is ready.
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- subscribes to Daemon updater SSE stream and hydrates initial updater status while mounted
   useEffect(() => {
     if (!isPrimaryHost || !daemonReady) return;
     let cancelled = false;
@@ -461,6 +566,7 @@ export const PrismuxAutoUpdateHost = memo(function PrismuxAutoUpdateHost() {
 
   // Fallback status poller while download / extraction / verification is active:
   // If SSE goes silent > 700ms, poll GET /v1/updater/status every 500ms so progress never freezes.
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- manages interval fallback poller lifecycle during active updater transfer
   useEffect(() => {
     if (!isPrimaryHost || !daemonReady || !isTransferActive) return;
     return startUpdaterStatusFallbackPoller({
@@ -475,6 +581,7 @@ export const PrismuxAutoUpdateHost = memo(function PrismuxAutoUpdateHost() {
   // Daemon owns scheduled background update checks and broadcasts results over SSE.
   // Eliminate redundant 4-hour browser polling; only run a single fallback startup check if Daemon
   // has neither reported a recent check nor scheduled its own `nextAutoCheckAt`.
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- schedules one fallback startup update check timer when daemon schedule is absent
   useEffect(() => {
     if (!isPrimaryHost || !daemonReady || !state.autoCheckEnabled) return;
 
@@ -496,6 +603,7 @@ export const PrismuxAutoUpdateHost = memo(function PrismuxAutoUpdateHost() {
   }, [daemonReady, isPrimaryHost, runSilentUpdateCheck, state.autoCheckEnabled]);
 
   // Lightweight event & test hook for verification (zero mock data fired on startup in production).
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- registers window update notice event listener and verification bridge while mounted
   useEffect(() => {
     if (!isPrimaryHost || typeof window === "undefined") return;
 

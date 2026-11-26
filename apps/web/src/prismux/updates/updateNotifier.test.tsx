@@ -16,11 +16,13 @@ import type { UpdateCheckView } from "../settings/prismuxUpdates.logic";
 import { PrismuxReleaseNotesMarkdown } from "./PrismuxReleaseNotesMarkdown";
 import { PrismuxSidebarUpdateCapsule } from "./PrismuxSidebarUpdateCapsule";
 import { PrismuxUpdateReleaseModal } from "./PrismuxUpdateReleaseModal";
+import { runPrismuxManualUpdateCheck } from "./PrismuxAutoUpdateHost";
 import {
   AUTO_CHECK_UPDATES_STORAGE_KEY,
   COLLAPSED_UPDATE_VERSIONS_STORAGE_KEY,
   createUpdateNotifierStore,
   extractReleaseNotesPreview,
+  getInlineUpdateMenuCopy,
   parseReleaseNotesBlocks,
   prismuxUpdateNotifierStore,
   shouldPollUpdaterStatusFallback,
@@ -69,7 +71,8 @@ function makeUpdateCheck(overrides: Partial<UpdateCheckView> = {}): UpdateCheckV
     recommendedAsset: {
       name: "Prismux-Setup-0.2.0.exe",
       kind: "setup-exe",
-      effectiveUrl: "https://github.com/Fish-under-sea/Prismux/releases/download/v0.2.0/Prismux-Setup-0.2.0.exe",
+      effectiveUrl:
+        "https://github.com/Fish-under-sea/Prismux/releases/download/v0.2.0/Prismux-Setup-0.2.0.exe",
       sizeBytes: 86_400_000,
       sha256: "a".repeat(64),
       expectedExeName: null,
@@ -239,7 +242,13 @@ describe("updateNotifierStore state machine & persistence", () => {
         installState: "ready",
         downloadedFilePath: "C:\\Users\\Fish\\.prismux\\updates\\Prismux-Setup-0.2.0.exe",
         downloadedSha256: "f".repeat(64),
-        progress: { stage: "ready", percent: 100, bytesDownloaded: 10_000_000, totalBytes: 10_000_000, updatedAt: 3000 },
+        progress: {
+          stage: "ready",
+          percent: 100,
+          bytesDownloaded: 10_000_000,
+          totalBytes: 10_000_000,
+          updatedAt: 3000,
+        },
       },
       rawData: "",
       receivedAt: 3000,
@@ -301,15 +310,136 @@ describe("updateNotifierStore state machine & persistence", () => {
       "> [!WARNING]",
       "> > - [x] **嵌套引用与任务列表**均可干净提取",
     ].join("\n");
-    expect(extractReleaseNotesPreview(nestedAndFenceNotes)).toBe(
-      "嵌套引用与任务列表均可干净提取",
-    );
+    expect(extractReleaseNotesPreview(nestedAndFenceNotes)).toBe("嵌套引用与任务列表均可干净提取");
 
     const parsedBlocks = parseReleaseNotesBlocks(alertMultiLineNotes);
     expect(parsedBlocks).toEqual([
       { type: "heading", level: 1, text: "Release v0.2.0" },
       { type: "paragraph", text: "**官方插件默认零预装**，请按需在插件中心安装。" },
     ]);
+  });
+
+  it("re-opens the bottom-right toast via openToastForAvailableUpdate even for a previously collapsed version without opening the modal", () => {
+    const storage = createMemoryStorage();
+    const store = createUpdateNotifierStore({ storage });
+    const check = makeUpdateCheck({ currentVersion: "0.2.2-rc.2", latestVersion: "0.2.3-rc.1" });
+
+    store.reportUpdateAvailable(check);
+    expect(store.getState().presentation).toBe("toast");
+
+    store.collapseToCapsule({ left: 900, top: 600, width: 328, height: 120 }, false);
+    expect(store.getState().presentation).toBe("capsule");
+    expect(store.getState().collapsedVersions).toContain("0.2.3-rc.1");
+
+    // Background check for same collapsed version keeps it calmly in the capsule.
+    store.reportUpdateAvailable(check);
+    expect(store.getState().presentation).toBe("capsule");
+
+    // Explicit manual check re-opens the bottom-right toast immediately (never modal) and clears flight ghost.
+    const opened = store.openToastForAvailableUpdate(check);
+    expect(opened).toBe(true);
+    expect(store.getState().presentation).toBe("toast");
+    expect(store.getState().flyTransition).toBeNull();
+    expect(store.getState().availableUpdate?.latestVersion).toBe("0.2.3-rc.1");
+
+    // Passing a no-update result returns false and clears stale non-transferring visibility.
+    const noUpdate = makeUpdateCheck({
+      hasUpdate: false,
+      currentVersion: "0.2.3-rc.1",
+      latestVersion: "0.2.3-rc.1",
+    });
+    expect(store.openToastForAvailableUpdate(noUpdate)).toBe(false);
+    expect(store.getState().presentation).toBe("hidden");
+    expect(store.getState().availableUpdate).toBeNull();
+  });
+
+  it("runs manual inline update checks for up-to-date, update-available (toast-only), and error->retry flows", async () => {
+    const storage = createMemoryStorage();
+    const store = createUpdateNotifierStore({ storage });
+    // Manual checks must still run when background auto-check is turned off.
+    store.setAutoCheckEnabled(false);
+
+    // 1. Up-to-date outcome: no modal, no toast, returns resolved currentVersion.
+    const upToDateOutcome = await runPrismuxManualUpdateCheck({
+      store,
+      appVersionFallback: "0.2.2-rc.2",
+      daemon: {
+        checkForUpdates: async () =>
+          ({
+            checkedAt: 1_764_000_000_000,
+            currentVersion: "0.2.2-rc.2",
+            hasUpdate: false,
+            latestVersion: "0.2.2-rc.2",
+            sourceUsed: "github",
+          }) as never,
+      },
+    });
+    expect(upToDateOutcome.status).toBe("up-to-date");
+    if (upToDateOutcome.status === "up-to-date") {
+      expect(upToDateOutcome.currentVersion).toBe("0.2.2-rc.2");
+    }
+    expect(store.getState().checking).toBe(false);
+    expect(store.getState().presentation).toBe("hidden");
+
+    // 2. Collapse v0.2.3-rc.1 to capsule first, then manual check finds v0.2.3-rc.1 -> opens bottom-right toast (NOT modal).
+    const availableCheck = makeUpdateCheck({
+      currentVersion: "0.2.2-rc.2",
+      latestVersion: "0.2.3-rc.1",
+      tagName: "v0.2.3-rc.1",
+    });
+    store.reportUpdateAvailable(availableCheck);
+    store.collapseToCapsule(null, true);
+    expect(store.getState().presentation).toBe("capsule");
+
+    const availableOutcome = await runPrismuxManualUpdateCheck({
+      store,
+      appVersionFallback: "0.2.2-rc.2",
+      daemon: {
+        checkForUpdates: async () => availableCheck as never,
+      },
+    });
+    expect(availableOutcome.status).toBe("update-available");
+    if (availableOutcome.status === "update-available") {
+      expect(availableOutcome.latestVersion).toBe("0.2.3-rc.1");
+    }
+    expect(store.getState().checking).toBe(false);
+    expect(store.getState().presentation).toBe("toast");
+
+    // 3. Error outcome on network failure -> no modal opened, checking resets cleanly for retry.
+    store.dismissAllForReset();
+    const errorOutcome = await runPrismuxManualUpdateCheck({
+      store,
+      appVersionFallback: "0.2.2-rc.2",
+      daemon: {
+        checkForUpdates: async () => {
+          throw new Error("network timeout");
+        },
+      },
+    });
+    expect(errorOutcome).toEqual({ status: "error", errorMessage: "network timeout" });
+    expect(store.getState().checking).toBe(false);
+    expect(store.getState().presentation).toBe("hidden");
+
+    // 4. Malformed payload returns error instead of falsely reporting up-to-date.
+    const invalidOutcome = await runPrismuxManualUpdateCheck({
+      store,
+      appVersionFallback: "0.2.2-rc.2",
+      daemon: {
+        checkForUpdates: async () => null as never,
+      },
+    });
+    expect(invalidOutcome.status).toBe("error");
+    expect(store.getState().presentation).toBe("hidden");
+
+    // 5. Inline menu copy resolves cleanly for zh & en locales.
+    expect(getInlineUpdateMenuCopy("zh-CN")).toEqual({
+      foundPrefix: "发现新版本",
+      retryPrompt: "检查失败，点击重试",
+    });
+    expect(getInlineUpdateMenuCopy("en")).toEqual({
+      foundPrefix: "New version",
+      retryPrompt: "Check failed, click to retry",
+    });
   });
 });
 
@@ -528,9 +658,13 @@ describe("Sidebar update capsule & release modal rendering", () => {
     expect(modalHtml).toContain("1. 1:1 还原 AGY 蜂群侧边栏 &amp; 多 Agent 原生只读协作视图</h3>");
     expect(modalHtml).toContain("2. <code");
     expect(modalHtml).toContain("斜杠命令前缀图标双语汉化");
-    expect(modalHtml).toContain("3. 侧栏液态玻璃卡片、RGB 呼吸态、AGY 胶囊气泡 &amp; Orca 详细配额</h3>");
+    expect(modalHtml).toContain(
+      "3. 侧栏液态玻璃卡片、RGB 呼吸态、AGY 胶囊气泡 &amp; Orca 详细配额</h3>",
+    );
     expect(modalHtml).toContain("4. 空白新会话硬单例、概览面板解耦防遮挡 &amp; 壁纸侧栏精简</h3>");
-    expect(modalHtml).toContain("5. 宿主机时区自动语言识别、全宽无白框天体胶囊 &amp; 升级/体检重设计</h3>");
+    expect(modalHtml).toContain(
+      "5. 宿主机时区自动语言识别、全宽无白框天体胶囊 &amp; 升级/体检重设计</h3>",
+    );
 
     // Bold lead-ins and inline code pills rendered cleanly with zero raw markdown leakage
     expect(modalHtml).toContain("<strong");
@@ -590,14 +724,27 @@ describe("Sidebar update capsule & release modal rendering", () => {
       recommendedAsset: {
         name: "Prismux-Setup-0.2.0.exe",
         kind: "split-7z-exe",
-        effectiveUrl: "https://gitee.com/Fish-under-sea/Prismux/releases/download/v0.2.0/Prismux-Setup-0.2.0.exe.7z.001",
+        effectiveUrl:
+          "https://gitee.com/Fish-under-sea/Prismux/releases/download/v0.2.0/Prismux-Setup-0.2.0.exe.7z.001",
         sizeBytes: 218_000_000,
         sha256: "a".repeat(64),
         expectedExeName: "Prismux-Setup-0.2.0.exe",
         parts: [
-          { name: "Prismux-Setup-0.2.0.exe.7z.001", url: "https://gitee.com/a/1", size: 95_000_000 },
-          { name: "Prismux-Setup-0.2.0.exe.7z.002", url: "https://gitee.com/a/2", size: 95_000_000 },
-          { name: "Prismux-Setup-0.2.0.exe.7z.003", url: "https://gitee.com/a/3", size: 28_000_000 },
+          {
+            name: "Prismux-Setup-0.2.0.exe.7z.001",
+            url: "https://gitee.com/a/1",
+            size: 95_000_000,
+          },
+          {
+            name: "Prismux-Setup-0.2.0.exe.7z.002",
+            url: "https://gitee.com/a/2",
+            size: 95_000_000,
+          },
+          {
+            name: "Prismux-Setup-0.2.0.exe.7z.003",
+            url: "https://gitee.com/a/3",
+            size: 28_000_000,
+          },
         ],
         source: "gitee",
       },
@@ -964,12 +1111,9 @@ describe("Global modal backdrop dismissal & centering guardrails", () => {
       fakeDocNoOverlay,
     );
     expect(
-      shouldDismissOnBackdropClick(
-        guard1,
-        { target: backdrop, currentTarget: backdrop },
-        null,
-        { doc: fakeDocNoOverlay },
-      ),
+      shouldDismissOnBackdropClick(guard1, { target: backdrop, currentTarget: backdrop }, null, {
+        doc: fakeDocNoOverlay,
+      }),
     ).toBe(true);
 
     // 2. Dragging text from inside modal onto backdrop must NOT dismiss.
@@ -981,12 +1125,9 @@ describe("Global modal backdrop dismissal & centering guardrails", () => {
       fakeDocNoOverlay,
     );
     expect(
-      shouldDismissOnBackdropClick(
-        guard2,
-        { target: backdrop, currentTarget: backdrop },
-        null,
-        { doc: fakeDocNoOverlay },
-      ),
+      shouldDismissOnBackdropClick(guard2, { target: backdrop, currentTarget: backdrop }, null, {
+        doc: fakeDocNoOverlay,
+      }),
     ).toBe(false);
 
     // 3. Right click on backdrop must NOT dismiss.
@@ -998,12 +1139,9 @@ describe("Global modal backdrop dismissal & centering guardrails", () => {
       fakeDocNoOverlay,
     );
     expect(
-      shouldDismissOnBackdropClick(
-        guard3,
-        { target: backdrop, currentTarget: backdrop },
-        null,
-        { doc: fakeDocNoOverlay },
-      ),
+      shouldDismissOnBackdropClick(guard3, { target: backdrop, currentTarget: backdrop }, null, {
+        doc: fakeDocNoOverlay,
+      }),
     ).toBe(false);
 
     // 4. Busy/deleting/installing state blocks backdrop dismissal.
@@ -1015,12 +1153,10 @@ describe("Global modal backdrop dismissal & centering guardrails", () => {
       fakeDocNoOverlay,
     );
     expect(
-      shouldDismissOnBackdropClick(
-        guard4,
-        { target: backdrop, currentTarget: backdrop },
-        null,
-        { disabled: true, doc: fakeDocNoOverlay },
-      ),
+      shouldDismissOnBackdropClick(guard4, { target: backdrop, currentTarget: backdrop }, null, {
+        disabled: true,
+        doc: fakeDocNoOverlay,
+      }),
     ).toBe(false);
 
     // 5. Open Select/Popover inside Settings blocks closing Settings when dismissing that inner popup.
@@ -1041,12 +1177,9 @@ describe("Global modal backdrop dismissal & centering guardrails", () => {
     );
     // Even after Select closes before click fires, the pointerdown guard prevents closing Settings.
     expect(
-      shouldDismissOnBackdropClick(
-        guard5,
-        { target: backdrop, currentTarget: backdrop },
-        null,
-        { doc: fakeDocNoOverlay },
-      ),
+      shouldDismissOnBackdropClick(guard5, { target: backdrop, currentTarget: backdrop }, null, {
+        doc: fakeDocNoOverlay,
+      }),
     ).toBe(false);
 
     // 6. Stacked modals: AlertDialog (e.g. ProviderDeleteDialog) rendered AFTER underlying Settings
