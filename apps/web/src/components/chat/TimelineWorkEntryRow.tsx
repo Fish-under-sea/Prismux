@@ -61,12 +61,13 @@ import { workGroupImageGallery } from "./markdownImageGallery";
 import { McpSignInAction } from "./McpSignInAction";
 import * as DateTime from "effect/DateTime";
 import {
+  AtomIcon,
   CheckIcon,
   ChevronDownIcon,
   CircleAlertIcon,
   CopyIcon,
   FileDiffIcon,
-  FolderIcon,
+  Loader2Icon,
   RotateCcwIcon,
   XIcon,
 } from "lucide-react";
@@ -131,12 +132,12 @@ import {
   workEntryIconName,
 } from "./TimelineWorkEntryRow.logic";
 import {
+  extractContextInjectionData,
   extractReadLineRangeLabel,
   extractReasoningSummaryLine,
+  extractSkillStepData,
   extractWorkStepCollapsedPreview,
   formatFileChangeAction,
-  formatStepOutputHeader,
-  formatThinkingHeaderLabel,
   formatWorkStepElapsedMs,
   getWorkStepCardCopy,
   localizeWorkStepLabel,
@@ -146,14 +147,26 @@ import {
   stripShellCommandWrapper,
   type FileChangeActionKind,
 } from "./dshWorkSteps.logic";
+import { ContextInjectionRow } from "./ContextInjectionRow";
+import { SkillStepRow } from "./SkillStepRow";
+import { SubagentStepRow } from "./SubagentStepRow";
 import type { ToolCallDiffTarget } from "../../diffPanelStore";
 
-const FROSTED_STEP_CARD_CLASS = cn(
-  "mt-1 mb-1 ml-1 overflow-hidden rounded-lg border border-border/55 bg-background/84 text-foreground shadow-xs backdrop-blur-md",
-  "[[data-pmx-glass='1']_&]:border-foreground/15 [[data-pmx-glass='1']_&]:bg-card/76",
-  "[[data-pmx-glass='1']_&]:shadow-sm [[data-pmx-glass='1']_&]:ring-1 [[data-pmx-glass='1']_&]:ring-inset [[data-pmx-glass='1']_&]:ring-foreground/8",
-  "[[data-pmx-glass='1']_&]:backdrop-blur-xl",
-);
+const FROSTED_STEP_CARD_CLASS =
+  "pmx-step-card mt-1 mb-1 ml-1 overflow-hidden rounded-xl text-foreground shadow-xs";
+
+function getInlineStepCopy(locale: string | undefined) {
+  const zh = !locale || locale.toLowerCase().startsWith("zh");
+  return {
+    viewFormatted: zh ? "查看格式" : "View formatted",
+    viewOriginal: zh ? "查看原文" : "View original",
+    copy: zh ? "复制" : "Copy",
+    runCommand: zh ? "运行命令" : "Run command",
+    exitCode: (code: number) => (zh ? `退出码 ${code}` : `Exit ${code}`),
+    reasoningLive: zh ? "正在思考" : "Thinking",
+    reasoningDone: zh ? "思考" : "Thought",
+  };
+}
 
 const STEP_MONO_CLASS =
   "font-mono text-(length:--font-size-code,var(--text-2xs)) leading-relaxed whitespace-pre-wrap break-words select-text";
@@ -483,15 +496,13 @@ function StepCopyButton({
   return (
     <button
       type="button"
+      data-copied={copied ? "true" : undefined}
       onClick={(event: MouseEvent<HTMLButtonElement>) => {
         event.stopPropagation();
         copy(text);
       }}
       aria-label={copied ? copiedLabel : label}
-      className={cn(
-        "inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border/50 bg-background/70 px-1.5 py-0.5 text-2xs font-medium text-muted-foreground transition-colors duration-150 motion-reduce:transition-none hover:border-primary/45 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 [[data-pmx-glass='1']_&]:border-foreground/15 [[data-pmx-glass='1']_&]:bg-card/65",
-        copied && "border-success/35 bg-success/12 text-success-foreground",
-      )}
+      className="pmx-step-copy-btn inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border/50 bg-background/70 px-1.5 py-0.5 text-2xs font-medium text-muted-foreground transition-colors duration-150 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 [[data-pmx-glass='1']_&]:border-foreground/15 [[data-pmx-glass='1']_&]:bg-card/65"
     >
       {copied ? (
         <CheckIcon aria-hidden="true" className="size-3 shrink-0" />
@@ -641,6 +652,7 @@ function DshReasoningWorkEntryRow({
   toggleExpanded,
   handleRowKeyDown,
   stopRowToggle,
+  locale,
 }: {
   readonly workEntry: TimelineWorkEntry;
   readonly expanded: boolean;
@@ -653,12 +665,20 @@ function DshReasoningWorkEntryRow({
   readonly toggleExpanded: () => void;
   readonly handleRowKeyDown: (e: KeyboardEvent<HTMLDivElement>) => void;
   readonly stopRowToggle: (e: MouseEvent<HTMLDivElement>) => void;
+  readonly locale?: string | undefined;
 }) {
+  const [showRawText, setShowRawText] = useState(false);
+  const inlineCopy = getInlineStepCopy(locale);
   const previewTranslation = useReasoningTranslation({
     text: workEntry.detail ?? "",
     running: isReasoningLive,
     enabled: !expanded,
   });
+  const bodyTranslationEnabled = useReasoningTranslation({
+    text: workEntry.detail ?? "",
+    running: isReasoningLive,
+    enabled: expanded,
+  }).enabled;
   const previewSourceText =
     previewTranslation.enabled && previewTranslation.translatedFragmentCount > 0
       ? previewTranslation.displayText
@@ -686,7 +706,12 @@ function DshReasoningWorkEntryRow({
       <div
         data-disclosure-header="true"
         data-open={expanded ? "true" : undefined}
-        className={cn("flex min-w-0 items-center bg-transparent", expanded && "sticky top-0 z-10")}
+        className={cn(
+          "flex min-w-0 items-center",
+          expanded
+            ? "sticky top-0 z-10 bg-background [[data-pmx-glass='1']_&]:bg-card [[data-pmx-glass='1']_&]:backdrop-blur-md"
+            : "bg-transparent",
+        )}
       >
         <div
           data-disclosure-row="true"
@@ -704,24 +729,22 @@ function DshReasoningWorkEntryRow({
         >
           <DshDisclosureLeadingSlot
             icon={
-              <ToolActivityIconView
-                icon={undefined}
-                fallbackName="brain"
-                className="block size-3.5 shrink-0 stroke-2"
-                muted={false}
-              />
+              <AtomIcon aria-hidden="true" strokeWidth={1.8} className="block size-3.5 shrink-0" />
             }
             expandable={canExpandProjectedItem}
             expanded={expanded}
             groupScope="disclosure-row"
-            iconClassName="mr-1.5 text-primary"
-            liveDot={isReasoningLive}
+            iconClassName="mr-1.5 text-muted-foreground group-hover/disclosure-row:text-foreground"
+            liveDot={false}
           />
           <span
             ref={labelRef}
             className="flex min-w-0 flex-1 items-center overflow-hidden text-xs leading-6"
           >
-            <span data-reasoning-title="true" className="shrink-0 font-medium text-primary">
+            <span
+              data-reasoning-title="true"
+              className="shrink-0 font-normal text-muted-foreground transition-colors group-hover/disclosure-row:text-foreground"
+            >
               {reasoningTitleLabel}
             </span>
             {!expanded && reasoningSummaryLine ? (
@@ -764,9 +787,28 @@ function DshReasoningWorkEntryRow({
       >
         <div
           data-reasoning-body="true"
-          className="min-w-0 py-1 pl-5.5 text-xs leading-relaxed text-foreground/85 select-text"
+          className="pmx-reasoning-body min-w-0 py-1 pl-5.5 text-muted-foreground select-text"
         >
-          <ReasoningTraceContent entries={[workEntry]} />
+          {!bodyTranslationEnabled && workEntry.detail?.trim() ? (
+            <button
+              type="button"
+              data-reasoning-raw-toggle="true"
+              onClick={(event) => {
+                event.stopPropagation();
+                setShowRawText((prev) => !prev);
+              }}
+              className="mb-1 -ms-2.5 inline-flex min-h-7 cursor-pointer items-center rounded-md px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
+            >
+              {showRawText ? inlineCopy.viewFormatted : inlineCopy.viewOriginal}
+            </button>
+          ) : null}
+          {showRawText && !bodyTranslationEnabled ? (
+            <pre className="m-0 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-muted-foreground">
+              {workEntry.detail ?? ""}
+            </pre>
+          ) : (
+            <ReasoningTraceContent entries={[workEntry]} />
+          )}
         </div>
       </SmoothDisclosure>
     </div>
@@ -828,6 +870,18 @@ function useResolvedTurnItemDetail(
   };
 }
 
+function resolveWorkspaceBasename(
+  cwd: string | null | undefined,
+  workspaceRoot: string | undefined,
+): string {
+  const candidate = (cwd?.trim() || workspaceRoot?.trim() || "")
+    .replaceAll("\\", "/")
+    .replace(/\/+$/u, "");
+  if (!candidate) return "~";
+  const parts = candidate.split("/").filter(Boolean);
+  return parts.at(-1) ?? "~";
+}
+
 function CommandExecutionDetailCard({
   rawCommand,
   cwd,
@@ -835,7 +889,6 @@ function CommandExecutionDetailCard({
   exitCode,
   isRunning,
   isFailed,
-  elapsedLabel,
   streamsOutput,
   projectedItem,
   environmentId,
@@ -853,7 +906,7 @@ function CommandExecutionDetailCard({
   readonly exitCode?: number | undefined;
   readonly isRunning: boolean;
   readonly isFailed: boolean;
-  readonly elapsedLabel: string | null;
+  readonly elapsedLabel?: string | null | undefined;
   readonly streamsOutput: boolean;
   readonly projectedItem?: OrchestrationV2ProjectedTurnItem | undefined;
   readonly environmentId: EnvironmentId;
@@ -866,32 +919,57 @@ function CommandExecutionDetailCard({
   readonly locale?: string | undefined;
 }) {
   const [showRawCommand, setShowRawCommand] = useState(false);
+  const { copied, copy: copyText } = useCopyTextButton();
   const copy = getWorkStepCardCopy(locale);
+  const inlineCopy = getInlineStepCopy(locale);
   const stripped = stripShellCommandWrapper(rawCommand);
   const commandForDisplay = stripped.displayCommand || rawCommand.trim();
-  const displayCwd = cwd?.trim() ? formatWorkspaceRelativePath(cwd.trim(), workspaceRoot) : null;
-  const outputLinesCount = outputText ? outputText.split(/\r?\n/u).length : 0;
+  const commandLines = commandForDisplay.split(/\r?\n/u);
+  const workspaceBasename = resolveWorkspaceBasename(cwd, workspaceRoot);
+  const stateDotKind: "ongoing" | "error" | "done" = isRunning
+    ? "ongoing"
+    : isFailed || (exitCode !== undefined && exitCode !== 0)
+      ? "error"
+      : "done";
+  const hasOutputArea = Boolean(
+    (streamsOutput && projectedItem) || outputText || pending || error || empty,
+  );
 
   return (
     <div
       data-v2-item-inspector="command_execution"
       data-step-detail-card="command_execution"
-      className={FROSTED_STEP_CARD_CLASS}
+      className="pmx-step-card my-1 ml-1 overflow-hidden rounded-2xl text-foreground shadow-xs"
     >
-      {/* Command bar */}
-      <div className="flex flex-wrap items-start justify-between gap-2 border-b border-border/45 bg-muted/40 px-3 py-2 [[data-pmx-glass='1']_&]:border-foreground/12 [[data-pmx-glass='1']_&]:bg-foreground/[0.04]">
-        <div className="flex min-w-0 flex-1 items-start gap-2">
-          <span
-            aria-hidden="true"
-            className="mt-0.5 shrink-0 select-none font-mono text-xs font-semibold text-primary"
-          >
-            $
-          </span>
-          <code className={cn("min-w-0 flex-1 text-foreground", STEP_MONO_CLASS)}>
-            {commandForDisplay}
-          </code>
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+      {/* 1:1 Fig 4 Header: StateDot gutter + workspaceBasename + `$` multiline + sticky accent copy */}
+      <div
+        data-command-card-header="true"
+        className={cn(
+          "pmx-command-header relative overflow-y-auto py-2.25 pr-3.5 pl-7.5 font-mono text-xs leading-4.5 text-foreground select-text",
+          hasOutputArea && "pmx-hairline-b",
+        )}
+      >
+        <span
+          aria-hidden="true"
+          data-state-dot={stateDotKind}
+          className="pmx-command-dot-gutter pointer-events-none absolute inline-flex items-center justify-center"
+        >
+          {stateDotKind === "ongoing" ? (
+            <Loader2Icon
+              className="size-3.5 animate-spin motion-reduce:animate-none"
+              style={{ color: "var(--pmx-accent-text)" }}
+            />
+          ) : (
+            <span
+              className="pmx-command-dot rounded-full"
+              style={{
+                backgroundColor: stateDotKind === "error" ? "var(--destructive)" : "var(--success)",
+              }}
+            />
+          )}
+        </span>
+
+        <div className="sticky top-0 z-10 float-right ml-2 flex items-center gap-2 pl-2">
           {stripped.wasWrapped ? (
             <button
               type="button"
@@ -899,74 +977,72 @@ function CommandExecutionDetailCard({
                 event.stopPropagation();
                 setShowRawCommand((prev) => !prev);
               }}
-              className={cn(
-                "cursor-pointer rounded-md border border-border/50 bg-background/70 px-1.5 py-0.5 text-2xs font-medium text-muted-foreground transition-colors hover:border-primary/45 hover:text-foreground [[data-pmx-glass='1']_&]:border-foreground/15 [[data-pmx-glass='1']_&]:bg-card/65",
-                showRawCommand && "border-primary/45 text-primary",
-              )}
+              className="cursor-pointer rounded px-1 text-2xs leading-4.5 font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
             >
               {showRawCommand ? copy.hideRawCommand : copy.rawCommand}
             </button>
           ) : null}
-          <StepCopyButton
-            text={showRawCommand ? stripped.rawCommand : commandForDisplay}
-            label={copy.copyCommand}
-            copiedLabel={copy.copied}
-          />
+          <button
+            type="button"
+            data-command-copy-button="true"
+            onClick={(event) => {
+              event.stopPropagation();
+              copyText(showRawCommand ? stripped.rawCommand : commandForDisplay);
+            }}
+            aria-label={copied ? copy.copied : inlineCopy.copy}
+            className="cursor-pointer rounded px-1 text-xs leading-4.5 font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
+            style={{ color: "var(--pmx-accent-text)" }}
+          >
+            {copied ? copy.copied : inlineCopy.copy}
+          </button>
+        </div>
+
+        <div className="min-w-0 whitespace-pre-wrap break-words">
+          {commandLines.map((line, index) => (
+            <div
+              // oxlint-disable-next-line react/no-array-index-key -- command lines are immutable per rendered snapshot
+              key={index}
+            >
+              {index === 0 ? (
+                <span
+                  data-command-workspace="true"
+                  className="mr-2 select-none text-muted-foreground"
+                >
+                  {workspaceBasename}
+                </span>
+              ) : (
+                <span
+                  data-command-continuation-prompt="true"
+                  className="mr-2 select-none text-muted-foreground"
+                >
+                  $
+                </span>
+              )}
+              <span>{line}</span>
+            </div>
+          ))}
         </div>
       </div>
 
       {/* Optional raw shell wrapper disclosure */}
       <SmoothDisclosure open={showRawCommand && stripped.wasWrapped}>
-        <div className="border-b border-border/40 bg-muted/25 px-3 py-1.5 [[data-pmx-glass='1']_&]:border-foreground/10 [[data-pmx-glass='1']_&]:bg-foreground/[0.03]">
-          <div className="mb-0.5 text-3xs font-medium uppercase tracking-wide text-muted-foreground">
+        <div className="pmx-hairline-b px-7.5 py-2 font-mono text-2xs leading-4.25 text-muted-foreground">
+          <div className="mb-0.5 text-3xs font-medium uppercase tracking-wide">
             {copy.rawInvocation}
           </div>
-          <code className={cn("block text-muted-foreground", STEP_MONO_CLASS)}>
+          <code className="block whitespace-pre-wrap break-words select-text">
             {stripped.rawCommand}
           </code>
         </div>
       </SmoothDisclosure>
 
-      {/* Status + cwd metadata bar */}
-      {displayCwd || exitCode !== undefined || elapsedLabel || isRunning ? (
-        <div className="flex flex-wrap items-center gap-2 border-b border-border/35 px-3 py-1.5 text-2xs text-muted-foreground [[data-pmx-glass='1']_&]:border-foreground/10">
-          {isRunning ? (
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/14 px-2 py-0.5 font-medium text-primary">
-              <span className="size-1.5 animate-pulse rounded-full bg-primary" />
-              {copy.executing}
-            </span>
-          ) : exitCode !== undefined ? (
-            <span
-              className={cn(
-                "inline-flex items-center rounded-full border px-2 py-0.5 font-mono font-medium tabular-nums",
-                exitCode === 0
-                  ? "border-success/35 bg-success/12 text-success-foreground"
-                  : "border-destructive/35 bg-destructive/12 text-destructive",
-              )}
-            >
-              {`${copy.exitPrefix}${exitCode}`}
-            </span>
-          ) : isFailed ? (
-            <span className="inline-flex items-center rounded-full border border-destructive/35 bg-destructive/12 px-2 py-0.5 font-medium text-destructive">
-              {copy.failed}
-            </span>
-          ) : null}
-          {elapsedLabel ? (
-            <span className="font-mono tabular-nums text-muted-foreground">{elapsedLabel}</span>
-          ) : null}
-          {displayCwd ? (
-            <span className="inline-flex min-w-0 items-center gap-1 truncate font-mono text-muted-foreground">
-              <FolderIcon aria-hidden="true" className="size-3 shrink-0 opacity-75" />
-              <span className="truncate">{displayCwd}</span>
-            </span>
-          ) : null}
-        </div>
-      ) : null}
-
-      {/* Output region */}
-      <div className="px-3 py-2">
-        {streamsOutput && projectedItem ? (
-          <div className={cn("text-foreground/90", STEP_MONO_CLASS)}>
+      {/* 1:1 Fig 4 Output region (224px max-height monospace output, zero redundant metadata bars) */}
+      {hasOutputArea ? (
+        <div
+          data-command-card-output="true"
+          className="pmx-command-output overflow-auto py-3 pr-3.5 pl-7.5 font-mono text-2xs leading-4.5 whitespace-pre-wrap break-words text-foreground select-text"
+        >
+          {streamsOutput && projectedItem ? (
             <CommandOutputPanel
               onInitialOutputReady={onInitialOutputReady}
               environmentId={environmentId}
@@ -974,31 +1050,19 @@ function CommandExecutionDetailCard({
               itemId={projectedItem.sourceItemId}
               source={source?.commandOutput}
             />
-          </div>
-        ) : outputText ? (
-          isFailed ? (
-            <LocalizedErrorCard error={outputText} compact />
-          ) : (
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between gap-2 text-2xs text-muted-foreground">
-                <span>{formatStepOutputHeader(outputLinesCount, locale)}</span>
-                <StepCopyButton
-                  text={outputText}
-                  label={copy.copyOutput}
-                  copiedLabel={copy.copied}
-                />
-              </div>
-              <ExpandableCodeBlock text={outputText} locale={locale} />
-            </div>
-          )
-        ) : pending ? (
-          <div className="text-xs italic text-muted-foreground">{copy.loadingOutput}</div>
-        ) : error ? (
-          <LocalizedErrorCard error={error} compact />
-        ) : empty ? (
-          <div className="text-xs italic text-muted-foreground">{copy.noOutput}</div>
-        ) : null}
-      </div>
+          ) : outputText ? (
+            <pre className="m-0 font-mono text-2xs leading-4.5 whitespace-pre-wrap break-words text-foreground">
+              {outputText}
+            </pre>
+          ) : pending ? (
+            <div className="italic text-muted-foreground">{copy.loadingOutput}</div>
+          ) : error ? (
+            <LocalizedErrorCard error={error} compact />
+          ) : empty ? (
+            <div className="italic text-muted-foreground">{copy.noOutput}</div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1042,7 +1106,7 @@ function FileChangeDetailCard({
       className={FROSTED_STEP_CARD_CLASS}
     >
       {/* File summary header */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/45 bg-muted/40 px-3 py-2 [[data-pmx-glass='1']_&]:border-foreground/12 [[data-pmx-glass='1']_&]:bg-foreground/[0.04]">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/45 bg-muted/40 px-3 py-2 [[data-pmx-glass='1']_&]:border-foreground/12 [[data-pmx-glass='1']_&]:bg-foreground/5">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
           <span
             className={cn(
@@ -1138,7 +1202,7 @@ function FileChangeDetailCard({
                   line.kind === "add" && "bg-diff-addition/12 text-diff-addition-foreground",
                   line.kind === "del" && "bg-diff-deletion/12 text-diff-deletion-foreground",
                   line.kind === "hunk" &&
-                    "bg-muted/45 font-medium text-primary [[data-pmx-glass='1']_&]:bg-foreground/[0.05]",
+                    "bg-muted/45 font-medium text-primary [[data-pmx-glass='1']_&]:bg-foreground/5",
                   line.kind === "meta" && "italic text-muted-foreground",
                   line.kind === "context" && "text-foreground/85",
                 )}
@@ -1366,7 +1430,7 @@ function FrostedV2StepInspector({
         className={FROSTED_STEP_CARD_CLASS}
       >
         {item.toolName || elapsedLabel ? (
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/45 bg-muted/35 px-4 py-1.5 text-2xs [[data-pmx-glass='1']_&]:border-foreground/12 [[data-pmx-glass='1']_&]:bg-foreground/[0.04]">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/45 bg-muted/35 px-4 py-1.5 text-2xs [[data-pmx-glass='1']_&]:border-foreground/12 [[data-pmx-glass='1']_&]:bg-foreground/5">
             {item.toolName ? (
               <span className="font-mono font-medium text-foreground/90">
                 {formatPrismuxMcpToolDisplayName(item.toolName)}
@@ -1383,7 +1447,7 @@ function FrostedV2StepInspector({
         {hasInputSection ? (
           <div
             data-dsh-io-section="in"
-            className="grid max-h-[150px] grid-cols-[max-content_minmax(0,1fr)] items-baseline gap-x-3.5 overflow-y-auto px-4 py-3"
+            className="pmx-dsh-io-grid items-baseline gap-x-3.5 overflow-y-auto px-4 py-3"
           >
             <span className="sticky top-0 self-start font-mono text-2xs font-medium uppercase tracking-wide text-muted-foreground/80 select-none">
               {copy.ioIn}
@@ -1392,7 +1456,7 @@ function FrostedV2StepInspector({
               {call.args ? (
                 call.args.map(([key, value]) => (
                   <div key={key} className="space-y-0.5">
-                    <span className="inline-block rounded bg-muted/60 px-1.5 py-0.5 font-mono text-2xs font-medium text-muted-foreground [[data-pmx-glass='1']_&]:bg-foreground/[0.07]">
+                    <span className="inline-block rounded bg-muted/60 px-1.5 py-0.5 font-mono text-2xs font-medium text-muted-foreground [[data-pmx-glass='1']_&]:bg-foreground/10">
                       {key}
                     </span>
                     <div className="pl-1">
@@ -1416,17 +1480,13 @@ function FrostedV2StepInspector({
         ) : null}
 
         {hasInputSection && hasOutputSection ? (
-          <div
-            data-dsh-io-divider="true"
-            aria-hidden="true"
-            className="h-[0.5px] w-full shrink-0 bg-border/50 [[data-pmx-glass='1']_&]:bg-foreground/12"
-          />
+          <div data-dsh-io-divider="true" aria-hidden="true" className="pmx-hairline-divider" />
         ) : null}
 
         {hasOutputSection ? (
           <div
             data-dsh-io-section="out"
-            className="grid max-h-[150px] grid-cols-[max-content_minmax(0,1fr)] items-baseline gap-x-3.5 overflow-y-auto px-4 py-3"
+            className="pmx-dsh-io-grid items-baseline gap-x-3.5 overflow-y-auto px-4 py-3"
           >
             <span className="sticky top-0 self-start font-mono text-2xs font-medium uppercase tracking-wide text-muted-foreground/80 select-none">
               {copy.ioOut}
@@ -1563,7 +1623,7 @@ function FrostedReadOutputCard({
   return (
     <div data-step-detail-card="read" className={FROSTED_STEP_CARD_CLASS}>
       {plainOutput ? (
-        <div className="flex items-start justify-between gap-2 border-b border-border/40 bg-muted/35 px-3 py-2 [[data-pmx-glass='1']_&]:border-foreground/10 [[data-pmx-glass='1']_&]:bg-foreground/[0.04]">
+        <div className="flex items-start justify-between gap-2 border-b border-border/40 bg-muted/35 px-3 py-2 [[data-pmx-glass='1']_&]:border-foreground/10 [[data-pmx-glass='1']_&]:bg-foreground/5">
           <pre className={cn("min-w-0 flex-1 text-foreground/90", STEP_MONO_CLASS)}>
             {plainOutput}
           </pre>
@@ -1617,7 +1677,44 @@ type WorkEntryRowProps = {
 
 export const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: WorkEntryRowProps) {
   const ctx = use(TimelineRowCtx);
-  const item = props.workEntry.projectedItem?.item;
+  const contextInjection = extractContextInjectionData(props.workEntry);
+  if (contextInjection) {
+    return (
+      <ContextInjectionRow
+        workEntry={props.workEntry}
+        data={contextInjection}
+        autoExpandDetails={props.autoExpandDetails}
+        onToggleEntry={props.onToggleEntry}
+      />
+    );
+  }
+  const skillStep = extractSkillStepData(props.workEntry);
+  if (skillStep) {
+    return (
+      <SkillStepRow
+        workEntry={props.workEntry}
+        skill={skillStep}
+        workspaceRoot={props.workspaceRoot}
+        autoExpandDetails={props.autoExpandDetails}
+        onToggleEntry={props.onToggleEntry}
+      />
+    );
+  }
+  const item = props.workEntry.projectedItem?.item ?? props.workEntry.structuredPayload;
+  if (
+    item?.type === "subagent" ||
+    props.workEntry.itemType === "subagent" ||
+    ((item?.type === "notification" || props.workEntry.itemType === "notification") &&
+      ctx.workStepsPolicy !== undefined)
+  ) {
+    return (
+      <SubagentStepRow
+        workEntry={props.workEntry}
+        autoExpandDetails={props.autoExpandDetails}
+        onToggleEntry={props.onToggleEntry}
+      />
+    );
+  }
   const childThreadId =
     item?.type === "notification" ? notificationChildThreadId(item.source) : undefined;
   if (item?.type !== "notification" || childThreadId === undefined) {
@@ -1847,11 +1944,8 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
   const elapsedLabel =
     elapsedMs !== null && elapsedMs >= 1 ? formatWorkStepElapsedMs(elapsedMs) : null;
 
-  const reasoningTitleLabel = formatThinkingHeaderLabel({
-    live: isReasoningLive,
-    elapsedMs,
-    locale: ctx.locale,
-  });
+  const inlineCopy = getInlineStepCopy(ctx.locale);
+  const reasoningTitleLabel = isReasoningLive ? inlineCopy.reasoningLive : inlineCopy.reasoningDone;
   const reasoningSummaryLine = isReasoning
     ? extractReasoningSummaryLine(workEntry.detail, {
         live: isReasoningLive,
@@ -2043,7 +2137,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
         ? "text-destructive"
         : entryIconName === "check"
           ? "text-success-foreground"
-          : "text-primary",
+          : "text-muted-foreground group-hover/disclosure-row:text-foreground",
   );
   const headingClass = showWarningIndicator
     ? "font-medium text-warning"
@@ -2080,6 +2174,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
         toggleExpanded={toggleExpanded}
         handleRowKeyDown={handleRowKeyDown}
         stopRowToggle={stopRowToggle}
+        locale={ctx.locale}
       />
     );
   }
@@ -2140,31 +2235,76 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
           />
           <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
             {isCommandEntry && strippedCommand ? (
-              <span
-                ref={labelRef}
-                className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden"
-              >
-                <code
-                  className={cn(
-                    "min-w-0 truncate font-mono text-xs font-normal text-foreground/90",
-                    detailedCollapsedPreview && "max-w-[55%] shrink-0",
-                  )}
-                >
-                  {strippedCommand.displayCommand}
-                </code>
+              <span ref={labelRef} className="flex min-w-0 flex-1 items-center overflow-hidden">
+                {(() => {
+                  const commandDescription =
+                    (typeof toolDataRecord?.description === "string" &&
+                    toolDataRecord.description.trim().length > 0
+                      ? toolDataRecord.description.trim()
+                      : null) ??
+                    (payload?.type === "command_execution" && payload.title?.trim()
+                      ? payload.title.trim()
+                      : null);
+                  if (commandDescription) {
+                    return (
+                      <>
+                        <span className="shrink-0 font-normal">{inlineCopy.runCommand}</span>
+                        <span
+                          aria-hidden="true"
+                          className="mx-2 size-0.5 shrink-0 rounded-full bg-muted-foreground/60"
+                        />
+                        <span
+                          className={cn(
+                            "min-w-0 truncate text-xs font-normal text-muted-foreground/90",
+                            detailedCollapsedPreview && "max-w-1/2 shrink-0",
+                          )}
+                        >
+                          {commandDescription}
+                        </span>
+                      </>
+                    );
+                  }
+                  return (
+                    <code
+                      className={cn(
+                        "min-w-0 truncate font-mono text-xs font-normal text-muted-foreground/90",
+                        detailedCollapsedPreview && "max-w-1/2 shrink-0",
+                      )}
+                    >
+                      {strippedCommand.displayCommand}
+                    </code>
+                  );
+                })()}
                 {isRunning ? (
-                  <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-primary/30 bg-primary/14 px-1.5 py-px text-3xs font-medium leading-tight text-primary">
-                    <span className="size-1.5 animate-pulse rounded-full bg-primary" />
+                  <span
+                    className="ml-2 inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-px text-2xs leading-4.25 font-medium"
+                    style={{
+                      color: "var(--pmx-accent-text)",
+                      backgroundColor: "var(--pmx-accent-soft)",
+                    }}
+                  >
+                    <span
+                      className="size-1 animate-pulse rounded-full motion-reduce:animate-none"
+                      style={{ backgroundColor: "var(--pmx-accent-text)" }}
+                    />
                     {stepCopy.running}
                   </span>
                 ) : commandExitCode !== undefined && commandExitCode !== 0 ? (
-                  <span className="inline-flex shrink-0 items-center rounded-full border border-destructive/35 bg-destructive/12 px-1.5 py-px font-mono text-3xs font-medium leading-tight tabular-nums text-destructive">
-                    {`${stepCopy.exitPrefix}${commandExitCode}`}
-                  </span>
-                ) : null}
-                {elapsedLabel ? (
-                  <span className="shrink-0 font-mono text-2xs tabular-nums text-muted-foreground">
-                    {elapsedLabel}
+                  <span
+                    data-exit-code-badge="true"
+                    className="ml-2 inline-flex shrink-0 items-center gap-1.25 rounded-full px-2 py-px text-2xs leading-4.25 font-medium tabular-nums text-muted-foreground"
+                    style={{
+                      backgroundColor:
+                        "color-mix(in srgb, var(--contrast-foreground) 7%, transparent)",
+                    }}
+                  >
+                    <span
+                      aria-hidden="true"
+                      data-exit-code-dot="true"
+                      className="size-1 shrink-0 rounded-full"
+                      style={{ backgroundColor: "var(--destructive)" }}
+                    />
+                    <span>{inlineCopy.exitCode(commandExitCode)}</span>
                   </span>
                 ) : null}
                 {detailedCollapsedPreview ? (
@@ -2172,7 +2312,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
                     <span
                       aria-hidden="true"
                       data-step-preview-separator="true"
-                      className="size-0.5 shrink-0 rounded-full bg-muted-foreground/60"
+                      className="mx-2 size-0.5 shrink-0 rounded-full bg-muted-foreground/60"
                     />
                     <span
                       data-step-collapsed-preview="true"
@@ -2203,7 +2343,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
                   <span
                     className={cn(
                       "min-w-0 truncate font-mono text-xs text-muted-foreground",
-                      detailedCollapsedPreview && "max-w-[28%] shrink",
+                      detailedCollapsedPreview && "max-w-1/3 shrink",
                     )}
                   >
                     {fileChangeSplit.dirPath}
@@ -2254,7 +2394,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
                 <span
                   className={cn(
                     "min-w-0 truncate",
-                    detailedCollapsedPreview && "max-w-[55%] shrink-0",
+                    detailedCollapsedPreview && "max-w-1/2 shrink-0",
                   )}
                 >
                   {threadLabel ? (

@@ -38,6 +38,7 @@ import { readThreadTurnItems } from "../../state/entities";
 import { useV2ItemSupport } from "../../state/v2ItemSupport";
 import { TimelineRowCtx, TimelineRowActivityCtx, type TimelineRow } from "./timelineRowContext";
 import { MESSAGE_HEADING_LEVEL, MessageAuthorHeading } from "./TimelineRowParts";
+import { TurnUsagePill } from "./TurnUsagePopover";
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { vcsEnvironment } from "../../state/vcs";
@@ -236,12 +237,15 @@ function AssistantMessageMeta({
 }) {
   const ctx = use(TimelineRowCtx);
   const m = useMessages();
+  const runId = projectedItem?.item.runId ?? message.runId ?? null;
+  const turnUsage = !message.streaming && runId ? ctx.turnUsageByRunId?.get(runId) : undefined;
+  const keepVisible = alwaysVisible || turnUsage !== undefined;
 
   return (
     <div
       className={cn(
         "flex items-center gap-2 text-xs tabular-nums transition-opacity duration-200",
-        alwaysVisible
+        keepVisible
           ? "opacity-100"
           : "opacity-0 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100",
         className,
@@ -261,6 +265,7 @@ function AssistantMessageMeta({
       {!message.streaming && projectedItem ? (
         <AssistantReplyButton message={message} itemId={projectedItem.sourceItemId} />
       ) : null}
+      {turnUsage ? <TurnUsagePill usage={turnUsage} locale={ctx.locale} /> : null}
       {!message.streaming && (
         <Tooltip>
           <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>

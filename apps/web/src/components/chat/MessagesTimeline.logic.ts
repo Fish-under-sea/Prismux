@@ -76,12 +76,15 @@ import {
 } from "@prismux/core-contracts/settings";
 import {
   classifyPrimaryStepGroupActivity,
+  dedupeSkillLoadWorkEntries,
   formatDshStepGroupSummary,
   formatDshTurnFoldLabel,
+  isContextInjectionWorkEntry,
   resolveTurnFoldExpanded,
   resolveWorkStepsPolicy,
   shouldGroupWorkStepsForTurn,
   shouldKeepIntermediateAssistantRepliesVisible,
+  shouldProcessGroupDefaultOpen,
   stripShellCommandWrapper,
   type DshActivityCategory,
   type WorkStepsPresentationPolicy,
@@ -91,7 +94,10 @@ import {
   resolvePrismuxMcpToolDefinition,
 } from "@prismux/core-shared/prismuxMcpToolPresentation";
 import { compactDynamicToolOutput } from "@prismux/core-shared/toolOutput";
-import { htmlRenderReferencesEqual, type HtmlRenderReference } from "@prismux/core-shared/htmlRender";
+import {
+  htmlRenderReferencesEqual,
+  type HtmlRenderReference,
+} from "@prismux/core-shared/htmlRender";
 import { mcpAppReferencesEqual, type McpAppReference } from "@prismux/core-shared/mcpApp";
 import { formatDuration } from "@prismux/core-shared/orchestrationTimingCopy";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
@@ -333,6 +339,19 @@ export function workEntryIsVisibleInGroup(
   entry: WorkLogEntry,
   expandedToolGroupEntry = false,
 ): boolean {
+  if (isContextInjectionWorkEntry(entry)) {
+    return true;
+  }
+  if (
+    entry.itemType === "subagent" ||
+    entry.itemType === "notification" ||
+    entry.itemType === "handoff" ||
+    entry.itemType === "system_notice" ||
+    entry.itemType === "todo_list" ||
+    entry.sourceActivityKind === "context-compaction"
+  ) {
+    return true;
+  }
   if (entry.itemType === "reasoning") {
     return Boolean(entry.detail?.trim());
   }
@@ -608,6 +627,10 @@ type MessagesTimelineRowContent =
       createdAt: string | null;
       /** A running compaction owns the working row, so its divider appears only once it ends. */
       compacting?: true;
+      /** DSH bottom RunningStatus displays a crisp 0.5px divider directly above when steps exist above it. */
+      showDividerAbove?: boolean;
+      /** Uses DSH bottom RunningStatus styling & dynamic accent binding when true. */
+      dshStyle?: boolean;
     }
   | {
       kind: "thinking";
@@ -999,8 +1022,109 @@ function liveSubagentCardEntryIds(entries: ReadonlyArray<TimelineEntry>): Readon
   return visible;
 }
 
-function timelineEntryFoldRunId(entry: TimelineEntry, runlessKey: RunId | null): RunId | null {
-  if (entry.kind === "work" && entry.entry.itemType === "system_notice") return null;
+function mapItemStatusToLifecycle(status: string | undefined): WorkLogEntry["toolLifecycleStatus"] {
+  if (status === "pending" || status === "running" || status === "waiting") return "inProgress";
+  if (status === "failed") return "failed";
+  if (status === "cancelled" || status === "interrupted") return "stopped";
+  return "completed";
+}
+
+/**
+ * In DSH work-steps mode, converts `event` subagent/handoff (and defensive `context_injection`)
+ * items into `work` entries so EVERY non-response process item converges inside a single
+ * ProcessGroup drawer and TurnFold without leaking outer cards (Blueprint §2.3 & §3 Leak 2/3).
+ */
+function convergeTimelineEntriesForDsh(
+  entries: ReadonlyArray<TimelineEntry>,
+  resolve: MessageResolver = m,
+): ReadonlyArray<TimelineEntry> {
+  return entries.map((entry): TimelineEntry => {
+    if (entry.kind !== "event") return entry;
+    const item = entry.projectedItem.item;
+    const itemTypeStr = (item as { readonly type?: unknown }).type;
+    if (item.type === "subagent") {
+      const detailText = item.result ?? item.progress ?? undefined;
+      const lifecycle = mapItemStatusToLifecycle(item.status);
+      return {
+        id: entry.id,
+        kind: "work",
+        createdAt: entry.createdAt,
+        ...(entry.attempt !== undefined ? { attempt: entry.attempt } : {}),
+        entry: {
+          id: entry.id,
+          createdAt: entry.createdAt,
+          runId: item.runId,
+          label: item.title ?? item.prompt ?? resolve(msg("Subagent")),
+          ...(detailText !== undefined ? { detail: detailText } : {}),
+          tone: item.status === "failed" ? "error" : "tool",
+          itemType: "subagent",
+          ...(lifecycle !== undefined ? { toolLifecycleStatus: lifecycle } : {}),
+          structuredPayload: item,
+          projectedItem: entry.projectedItem,
+        },
+      };
+    }
+    if (item.type === "handoff") {
+      const lifecycle = mapItemStatusToLifecycle(item.status);
+      return {
+        id: entry.id,
+        kind: "work",
+        createdAt: entry.createdAt,
+        ...(entry.attempt !== undefined ? { attempt: entry.attempt } : {}),
+        entry: {
+          id: entry.id,
+          createdAt: entry.createdAt,
+          runId: item.runId,
+          label: resolve(msg("Handoff")),
+          tone: item.status === "failed" ? "error" : "info",
+          itemType: "handoff",
+          ...(lifecycle !== undefined ? { toolLifecycleStatus: lifecycle } : {}),
+          structuredPayload: item,
+          projectedItem: entry.projectedItem,
+        },
+      };
+    }
+    if (itemTypeStr === "context_injection") {
+      const rec = item as unknown as Record<string, unknown>;
+      const label =
+        typeof rec.label === "string" && rec.label.trim().length > 0
+          ? rec.label.trim()
+          : typeof rec.sourcePath === "string" && rec.sourcePath.trim().length > 0
+            ? rec.sourcePath.trim()
+            : resolve(msg("Context injection"));
+      const detailText = typeof rec.content === "string" ? rec.content : undefined;
+      const lifecycle = mapItemStatusToLifecycle(
+        typeof rec.status === "string" ? rec.status : "completed",
+      );
+      return {
+        id: entry.id,
+        kind: "work",
+        createdAt: entry.createdAt,
+        ...(entry.attempt !== undefined ? { attempt: entry.attempt } : {}),
+        entry: {
+          id: entry.id,
+          createdAt: entry.createdAt,
+          runId: item.runId,
+          label,
+          ...(detailText !== undefined ? { detail: detailText } : {}),
+          tone: "info",
+          sourceActivityKind: "context_injection",
+          ...(lifecycle !== undefined ? { toolLifecycleStatus: lifecycle } : {}),
+          structuredPayload: item,
+          projectedItem: entry.projectedItem,
+        },
+      };
+    }
+    return entry;
+  });
+}
+
+function timelineEntryFoldRunId(
+  entry: TimelineEntry,
+  runlessKey: RunId | null,
+  dshMode = false,
+): RunId | null {
+  if (!dshMode && entry.kind === "work" && entry.entry.itemType === "system_notice") return null;
   if (entry.kind === "message" && entry.message.role === "assistant") {
     return entry.message.runId ?? runlessKey;
   }
@@ -1025,7 +1149,15 @@ function timelineEntryIsSteer(entry: TimelineEntry): boolean {
   );
 }
 
-export function timelineEntryStartsResponse(entry: TimelineEntry): boolean {
+export function timelineEntryStartsResponse(
+  entry: TimelineEntry,
+  options?: { readonly dshMode?: boolean },
+): boolean {
+  if (options?.dshMode) {
+    return (
+      entry.kind === "message" && entry.message.role === "user" && !timelineEntryIsSteer(entry)
+    );
+  }
   return (
     (entry.kind === "message" && entry.message.role === "user" && !timelineEntryIsSteer(entry)) ||
     (entry.kind === "work" && entry.entry.itemType === "notification")
@@ -1047,14 +1179,20 @@ function responseBoundaryRunId(entry: TimelineEntry): RunId | null {
 }
 
 // Group promptless restarts under the initiating prompt until settled.
-function lastResponseBoundaryIndex(timelineEntries: ReadonlyArray<TimelineEntry>): number {
-  return timelineEntries.findLastIndex(timelineEntryStartsResponse);
+function lastResponseBoundaryIndex(
+  timelineEntries: ReadonlyArray<TimelineEntry>,
+  dshMode = false,
+): number {
+  return timelineEntries.findLastIndex((entry) =>
+    timelineEntryStartsResponse(entry, dshMode ? { dshMode: true } : undefined),
+  );
 }
 
 function deriveActiveVisualResponseRunIds(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   unsettledRunId: RunId | null;
   isWorking: boolean;
+  dshMode?: boolean;
 }): ReadonlySet<RunId> {
   const runIds = new Set<RunId>();
   if (input.unsettledRunId === null) {
@@ -1066,7 +1204,10 @@ function deriveActiveVisualResponseRunIds(input: {
     return runIds;
   }
 
-  const latestResponseBoundaryIndex = lastResponseBoundaryIndex(input.timelineEntries);
+  const latestResponseBoundaryIndex = lastResponseBoundaryIndex(
+    input.timelineEntries,
+    input.dshMode === true,
+  );
   for (
     let index = latestResponseBoundaryIndex + 1;
     index < input.timelineEntries.length;
@@ -1139,10 +1280,11 @@ function deriveTurnFolds(input: {
   readonly foldsByAnchorEntryId: ReadonlyMap<string, TurnFold>;
   readonly bottomCompletedTurnRunId: RunId | null;
 } {
+  const dshMode = input.useDshLabels === true;
   const interruptedRunIds = new Set<RunId>();
   const promptIndexByRunId = new Map<RunId, number>();
   for (const [index, entry] of input.timelineEntries.entries()) {
-    if (timelineEntryStartsResponse(entry)) {
+    if (timelineEntryStartsResponse(entry, dshMode ? { dshMode: true } : undefined)) {
       const runId = responseBoundaryRunId(entry);
       if (runId !== null && !promptIndexByRunId.has(runId)) promptIndexByRunId.set(runId, index);
     }
@@ -1178,7 +1320,7 @@ function deriveTurnFolds(input: {
   let lastResponseRunId: RunId | null = null;
   let pendingBoundary: { createdAt: string; anchorEntryId: string } | null = null;
   for (const [index, entry] of input.timelineEntries.entries()) {
-    if (timelineEntryStartsResponse(entry)) {
+    if (timelineEntryStartsResponse(entry, dshMode ? { dshMode: true } : undefined)) {
       const nextEntry = input.timelineEntries[index + 1];
       pendingBoundary = nextEntry
         ? { createdAt: entry.createdAt, anchorEntryId: nextEntry.id }
@@ -1201,7 +1343,7 @@ function deriveTurnFolds(input: {
       }
       continue;
     }
-    const ownRunId = timelineEntryFoldRunId(entry, runlessKey);
+    const ownRunId = timelineEntryFoldRunId(entry, runlessKey, dshMode);
     if (!ownRunId) {
       continue;
     }
@@ -1276,15 +1418,16 @@ function deriveTurnFolds(input: {
       const isCompaction = timelineEntryIsCompaction(entry);
       const isFoldableTrailingActivity =
         entry.kind === "work" &&
-        entry.entry.toolLifecycleStatus !== "inProgress" &&
-        !workEntryDisplayIndicatesToolFailure(entry.entry);
+        (dshMode ||
+          (entry.entry.toolLifecycleStatus !== "inProgress" &&
+            !workEntryDisplayIndicatesToolFailure(entry.entry)));
       if (!isCompaction && index > terminalEntryIndex && !isFoldableTrailingActivity) {
         continue;
       }
       if (
-        entry.id === visibleCompactionId ||
+        (!dshMode && entry.id === visibleCompactionId) ||
         timelineEntryIsPersistentResourceCard(entry) ||
-        input.liveSubagentEntryIds.has(entry.id) ||
+        (!dshMode && input.liveSubagentEntryIds.has(entry.id)) ||
         input.retainedAssistantReplyEntryIds.has(entry.id)
       ) {
         continue;
@@ -1297,15 +1440,19 @@ function deriveTurnFolds(input: {
       ) {
         continue;
       }
-      if (entry.kind === "work" && entry.entry.itemType === "notification") continue;
-      if (entry.kind === "work" && entry.entry.questionAnswer !== undefined) continue;
+      if (!dshMode && entry.kind === "work" && entry.entry.itemType === "notification") continue;
+      if (!dshMode && entry.kind === "work" && entry.entry.questionAnswer !== undefined) continue;
       hiddenEntryIds.add(entry.id);
     }
     if (hiddenEntryIds.size === 0) {
       continue;
     }
     const hidesNonCompactionWork = (entries: ReadonlyArray<TimelineEntry>) =>
-      entries.some((entry) => hiddenEntryIds.has(entry.id) && !timelineEntryIsCompaction(entry));
+      dshMode
+        ? entries.some((entry) => hiddenEntryIds.has(entry.id))
+        : entries.some(
+            (entry) => hiddenEntryIds.has(entry.id) && !timelineEntryIsCompaction(entry),
+          );
     if (!hidesNonCompactionWork(group.entries)) {
       continue;
     }
@@ -1712,7 +1859,9 @@ function deriveTimelineTurnFolds(
   if (dshPolicy !== null && !dshPolicy.foldCompletedTurns) {
     return new Map<string, TurnFold>();
   }
-  const timelineEntries = timelineRowEntries(input);
+  const rawTimelineEntries = timelineRowEntries(input);
+  const timelineEntries =
+    dshPolicy !== null ? convergeTimelineEntriesForDsh(rawTimelineEntries, m) : rawTimelineEntries;
   const rawUnsettledRunId = deriveUnsettledRunId(
     input.latestRun ?? null,
     input.runningRunId ?? null,
@@ -1726,6 +1875,7 @@ function deriveTimelineTurnFolds(
     timelineEntries,
     unsettledRunId,
     isWorking: input.isWorking,
+    dshMode: dshPolicy !== null,
   });
   return deriveTurnFolds({
     timelineEntries,
@@ -1733,7 +1883,8 @@ function deriveTimelineTurnFolds(
     latestRun: input.latestRun ?? null,
     unfoldedRunIds: new Set([...activeVisualResponseRunIds, ...failedRunIds]),
     runlessWorkActive: input.isWorking && input.runlessWorkActive === true,
-    liveSubagentEntryIds: liveSubagentCardEntryIds(timelineEntries),
+    liveSubagentEntryIds:
+      dshPolicy !== null ? new Set() : liveSubagentCardEntryIds(timelineEntries),
     retainedAssistantReplyEntryIds: retainedAssistantReplyEntryIds(timelineEntries),
     keepIntermediateAssistantReplies:
       input.collapsedAssistantReplyMode !== undefined
@@ -1755,6 +1906,7 @@ export function deriveMessagesTimelineRows(
     collapsedRunIds?: ReadonlySet<RunId>;
     expandedAttemptIds?: ReadonlySet<RunAttemptId>;
     expandedWorkGroupIds?: ReadonlySet<string>;
+    collapsedWorkGroupIds?: ReadonlySet<string>;
     isWorking: boolean;
     /** Native subagent work has no app run; runless entries form the live response. */
     runlessWorkActive?: boolean;
@@ -1783,7 +1935,11 @@ export function deriveMessagesTimelineRows(
       : dshPolicy !== null
         ? shouldKeepIntermediateAssistantRepliesVisible(DEFAULT_COLLAPSED_ASSISTANT_REPLY_MODE)
         : false;
-  const timelineEntries = timelineRowEntries(input);
+  const rawTimelineEntries = timelineRowEntries(input);
+  const timelineEntries =
+    dshPolicy !== null
+      ? convergeTimelineEntriesForDsh(rawTimelineEntries, resolve)
+      : rawTimelineEntries;
   const embeddedResultRunIds = new Set<RunId>();
   for (const entry of timelineEntries) {
     if ((entry.kind === "html-render" || entry.kind === "mcp-app") && entry.runId !== null) {
@@ -1797,6 +1953,13 @@ export function deriveMessagesTimelineRows(
       input.pendingApprovalRequestIds?.has(item.requestId) === true
     );
   };
+  const isDshExcludedFromProcessGroup = (entry: WorkLogEntry) =>
+    isPendingApproval(entry) ||
+    (entry.itemType === "user_input_request" &&
+      entry.questionAnswer === undefined &&
+      entry.toolLifecycleStatus === "inProgress") ||
+    (entry.itemType === "error" && entry.toolLifecycleStatus === "failed") ||
+    entry.sourceActivityKind === "runtime.error";
   const turnDiffSummaryByAssistantMessageId = new Map<MessageId, TurnDiffSummary>();
   for (const summary of input.turnDiffSummaries) {
     if (summary.assistantMessageId) {
@@ -1824,7 +1987,8 @@ export function deriveMessagesTimelineRows(
   const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(timelineEntries);
   const failedRunIds = failedTimelineRunIds(timelineEntries, input.latestRun ?? null);
   const itemizedRunIds = itemizedFailedRunIds(timelineEntries, failedRunIds);
-  const liveSubagentEntryIds = liveSubagentCardEntryIds(timelineEntries);
+  const liveSubagentEntryIds =
+    dshPolicy !== null ? new Set<string>() : liveSubagentCardEntryIds(timelineEntries);
   const retainedAssistantReplyIds = retainedAssistantReplyEntryIds(timelineEntries);
   const supersededFoldsByAnchorEntryId = deriveSupersededAttemptFolds(
     timelineEntries,
@@ -1839,6 +2003,7 @@ export function deriveMessagesTimelineRows(
     timelineEntries: timelineEntries,
     unsettledRunId,
     isWorking: input.isWorking,
+    dshMode: dshPolicy !== null,
   });
   const runlessWorkActive = input.isWorking && input.runlessWorkActive === true;
   const derivedTurnFolds =
@@ -1919,10 +2084,24 @@ export function deriveMessagesTimelineRows(
       collapseTiming,
     });
   };
+  const isWorkGroupExpanded = (
+    groupId: string,
+    options: { readonly isActiveTurn: boolean; readonly isBottomCompletedTurn: boolean },
+  ): boolean => {
+    const defaultOpen = shouldProcessGroupDefaultOpen(dshPolicy, {
+      isActiveTurn: options.isActiveTurn,
+      isBottomCompletedTurn: options.isBottomCompletedTurn,
+      collapseTiming,
+    });
+    if (defaultOpen) {
+      return !(input.collapsedWorkGroupIds?.has(groupId) ?? false);
+    }
+    return input.expandedWorkGroupIds?.has(groupId) ?? false;
+  };
   const groupActiveTail = shouldGroupStepsForRun(unsettledRunId);
 
   const activeTurnHeaderIndex = input.isWorking
-    ? lastResponseBoundaryIndex(timelineEntries) + 1
+    ? lastResponseBoundaryIndex(timelineEntries, dshPolicy !== null) + 1
     : timelineEntries.length;
 
   const activeToolEntries: Array<Extract<TimelineEntry, { kind: "work" }>> = [];
@@ -1930,23 +2109,24 @@ export function deriveMessagesTimelineRows(
     let tailAttemptId: string | null | undefined;
     for (let index = timelineEntries.length - 1; index >= activeTurnHeaderIndex; index -= 1) {
       const entry = timelineEntries[index]!;
-      if (
+      const breaksActiveGroup =
         entry.kind !== "work" ||
-        (dshPolicy !== null && isReasoningWorkEntry(entry.entry)) ||
-        entry.entry.tone === "error" ||
-        entry.entry.sourceActivityKind === "runtime.error" ||
-        entry.entry.itemType === "system_notice" ||
-        entry.entry.itemType === "notification" ||
-        entry.entry.itemType === "todo_list" ||
-        entry.entry.questionAnswer !== undefined ||
-        isPendingApproval(entry.entry) ||
         !runIdIsActiveResponse(entry.entry.runId) ||
-        entry.entry.sourceActivityKind === "context-compaction" ||
         collapsedEntryIds.has(entry.id) ||
         collapsedSupersededEntryIds.has(entry.id) ||
         foldsByAnchorEntryId.has(entry.id) ||
-        supersededFoldsByAnchorEntryId.has(entry.id)
-      ) {
+        supersededFoldsByAnchorEntryId.has(entry.id) ||
+        (dshPolicy !== null
+          ? isDshExcludedFromProcessGroup(entry.entry)
+          : entry.entry.tone === "error" ||
+            entry.entry.sourceActivityKind === "runtime.error" ||
+            entry.entry.itemType === "system_notice" ||
+            entry.entry.itemType === "notification" ||
+            entry.entry.itemType === "todo_list" ||
+            entry.entry.questionAnswer !== undefined ||
+            isPendingApproval(entry.entry) ||
+            entry.entry.sourceActivityKind === "context-compaction");
+      if (breaksActiveGroup) {
         break;
       }
       if (tailAttemptId === undefined) {
@@ -1961,6 +2141,10 @@ export function deriveMessagesTimelineRows(
   const visibleActiveToolEntries = activeToolEntries.filter((entry) =>
     workEntryIsVisibleInGroup(entry.entry, true),
   );
+  const convergedActiveWorkEntries =
+    dshPolicy !== null
+      ? dedupeSkillLoadWorkEntries(visibleActiveToolEntries.map((entry) => entry.entry))
+      : visibleActiveToolEntries.map((entry) => entry.entry);
   const activeWorkAnchor = activeToolEntries[0];
   const latestVisibleToolEntry = visibleActiveToolEntries.at(-1);
   const latestRunningToolEntry = visibleActiveToolEntries.findLast((entry) =>
@@ -1969,9 +2153,10 @@ export function deriveMessagesTimelineRows(
   const latestToolKeepsActivityLive =
     latestRunningToolEntry !== undefined ||
     (latestVisibleToolEntry !== undefined &&
-      workEntryIndicatesToolSuccess(latestVisibleToolEntry.entry) &&
+      (dshPolicy !== null || workEntryIndicatesToolSuccess(latestVisibleToolEntry.entry)) &&
       !input.pendingApprovalRequestIds?.size);
   const latestToolFailed =
+    dshPolicy === null &&
     latestRunningToolEntry === undefined &&
     latestVisibleToolEntry !== undefined &&
     latestVisibleToolEntry.entry.toolLifecycleStatus !== "declined" &&
@@ -1992,9 +2177,12 @@ export function deriveMessagesTimelineRows(
               : `work-live:${activeWorkAnchor.id}`,
             createdAt: activeWorkAnchor.createdAt,
             entry: (latestRunningToolEntry ?? latestVisibleToolEntry).entry,
-            groupedEntries: visibleActiveToolEntries.map((entry) => entry.entry),
+            groupedEntries: convergedActiveWorkEntries,
             groupId,
-            expanded: input.expandedWorkGroupIds?.has(groupId) ?? false,
+            expanded: isWorkGroupExpanded(groupId, {
+              isActiveTurn: true,
+              isBottomCompletedTurn: false,
+            }),
             active: latestToolKeepsActivityLive,
             ...(latestThoughtEntry && dshPolicy === null
               ? { thought: latestThoughtEntry.entry }
@@ -2086,7 +2274,7 @@ export function deriveMessagesTimelineRows(
     endedRunId !== null &&
     timelineEntries.findLastIndex((entry) => timelineEntryRunId(entry) === endedRunId) >=
       activeTurnHeaderIndex;
-  const appendWorkingRow = () => {
+  const appendWorkingRow = (options?: { readonly showDividerAbove?: boolean }) => {
     if (compactionOnlyRunFinished || zenAnswerLanded) return;
     if (runningCompactionRunId !== null && activeCompactionRunId === null) return;
     nextRows.push({
@@ -2097,6 +2285,8 @@ export function deriveMessagesTimelineRows(
         input.activeTurnStartedAt ??
         null,
       ...(activeCompactionRunId !== null ? { compacting: true as const } : {}),
+      ...(dshPolicy !== null ? { dshStyle: true } : {}),
+      ...(options?.showDividerAbove ? { showDividerAbove: true } : {}),
     });
   };
   let hasActivityRow = false;
@@ -2131,7 +2321,7 @@ export function deriveMessagesTimelineRows(
       continue;
     }
 
-    if (input.isWorking && index === activeTurnHeaderIndex) {
+    if (dshPolicy === null && input.isWorking && index === activeTurnHeaderIndex) {
       appendWorkingRow();
     }
 
@@ -2204,7 +2394,9 @@ export function deriveMessagesTimelineRows(
 
     if (
       timelineEntry.kind === "work" &&
-      timelineEntry.entry.sourceActivityKind === "context-compaction"
+      timelineEntry.entry.sourceActivityKind === "context-compaction" &&
+      (dshPolicy === null ||
+        (timelineEntry.entry.runId != null && compactionRuns.has(timelineEntry.entry.runId)))
     ) {
       const active = workEntryIsInActiveRun(timelineEntry.entry);
       if (
@@ -2254,40 +2446,20 @@ export function deriveMessagesTimelineRows(
     }
 
     if (timelineEntry.kind === "work") {
-      // DSH strict hierarchy (L1): reasoning NEVER merges into tool/command groups (`work-toggle` / `work-live`).
-      // Each reasoning block always emits its own independent top-level row on the timeline axis.
-      if (dshPolicy !== null && isReasoningWorkEntry(timelineEntry.entry)) {
-        const isLiveEntry = workEntryIsInActiveRun(timelineEntry.entry);
-        if (workEntryIsVisibleInGroup(timelineEntry.entry, isLiveEntry)) {
-          if (isLiveEntry) {
-            hasActivityRow = true;
-          }
-          nextRows.push({
-            kind: "work",
-            id: timelineEntry.id,
-            createdAt: timelineEntry.createdAt,
-            groupedEntries: [timelineEntry.entry],
-            isExpandedToolGroup: false,
-            ...(isLiveEntry ? { isLive: true } : {}),
-            ...(dshPolicy.defaultExpandLongItems
-              ? { autoExpandReasoning: true, autoExpandDetails: true }
-              : {}),
-          });
-        }
-        continue;
-      }
-      if (
-        isPendingApproval(timelineEntry.entry) ||
-        (timelineEntry.entry.runId != null && itemizedRunIds.has(timelineEntry.entry.runId)) ||
-        (timelineEntry.entry.itemType === "error" &&
-          timelineEntry.entry.toolLifecycleStatus === "failed") ||
-        timelineEntry.entry.tone === "error" ||
-        timelineEntry.entry.sourceActivityKind === "runtime.error" ||
-        timelineEntry.entry.itemType === "system_notice" ||
-        timelineEntry.entry.itemType === "notification" ||
-        timelineEntry.entry.itemType === "todo_list" ||
-        timelineEntry.entry.questionAnswer !== undefined
-      ) {
+      const mustStandOutsideGroup =
+        dshPolicy !== null
+          ? isDshExcludedFromProcessGroup(timelineEntry.entry)
+          : isPendingApproval(timelineEntry.entry) ||
+            (timelineEntry.entry.runId != null && itemizedRunIds.has(timelineEntry.entry.runId)) ||
+            (timelineEntry.entry.itemType === "error" &&
+              timelineEntry.entry.toolLifecycleStatus === "failed") ||
+            timelineEntry.entry.tone === "error" ||
+            timelineEntry.entry.sourceActivityKind === "runtime.error" ||
+            timelineEntry.entry.itemType === "system_notice" ||
+            timelineEntry.entry.itemType === "notification" ||
+            timelineEntry.entry.itemType === "todo_list" ||
+            timelineEntry.entry.questionAnswer !== undefined;
+      if (mustStandOutsideGroup) {
         nextRows.push({
           kind: "work",
           id: timelineEntry.id,
@@ -2311,7 +2483,14 @@ export function deriveMessagesTimelineRows(
             groupedEntries: [timelineEntry.entry],
             isExpandedToolGroup: false,
             ...(isLiveEntry ? { isLive: true } : {}),
-            ...(dshPolicy?.defaultExpandLongItems ? { autoExpandDetails: true } : {}),
+            ...(dshPolicy?.defaultExpandLongItems
+              ? {
+                  autoExpandDetails: true,
+                  ...(isReasoningWorkEntry(timelineEntry.entry)
+                    ? { autoExpandReasoning: true }
+                    : {}),
+                }
+              : {}),
           });
           nextRows.push(
             ...viewedImagesRows(workGroupId(timelineEntry.id), timelineEntry.createdAt, [
@@ -2325,41 +2504,57 @@ export function deriveMessagesTimelineRows(
       let cursor = index + 1;
       while (cursor < timelineEntries.length) {
         const nextEntry = timelineEntries[cursor];
-        if (
+        const breaksGroup =
           !nextEntry ||
           nextEntry.kind !== "work" ||
-          (dshPolicy !== null && isReasoningWorkEntry(nextEntry.entry)) ||
-          nextEntry.entry.sourceActivityKind === "context-compaction" ||
-          (nextEntry.entry.itemType === "error" &&
-            nextEntry.entry.toolLifecycleStatus === "failed") ||
-          nextEntry.entry.tone === "error" ||
-          nextEntry.entry.sourceActivityKind === "runtime.error" ||
-          nextEntry.entry.itemType === "system_notice" ||
-          nextEntry.entry.itemType === "notification" ||
-          nextEntry.entry.itemType === "todo_list" ||
-          nextEntry.entry.questionAnswer !== undefined ||
-          isPendingApproval(nextEntry.entry) ||
           activeWorkEntryIds.has(nextEntry.id) ||
           collapsedEntryIds.has(nextEntry.id) ||
           collapsedSupersededEntryIds.has(nextEntry.id) ||
           foldsByAnchorEntryId.has(nextEntry.id) ||
           supersededFoldsByAnchorEntryId.has(nextEntry.id) ||
           (nextEntry.entry.runId ?? null) !== (timelineEntry.entry.runId ?? null) ||
-          nextEntry.attempt?.id !== timelineEntry.attempt?.id
-        ) {
+          nextEntry.attempt?.id !== timelineEntry.attempt?.id ||
+          (dshPolicy !== null
+            ? isDshExcludedFromProcessGroup(nextEntry.entry) ||
+              (nextEntry.entry.sourceActivityKind === "context-compaction" &&
+                nextEntry.entry.runId != null &&
+                compactionRuns.has(nextEntry.entry.runId))
+            : nextEntry.entry.sourceActivityKind === "context-compaction" ||
+              (nextEntry.entry.itemType === "error" &&
+                nextEntry.entry.toolLifecycleStatus === "failed") ||
+              nextEntry.entry.tone === "error" ||
+              nextEntry.entry.sourceActivityKind === "runtime.error" ||
+              nextEntry.entry.itemType === "system_notice" ||
+              nextEntry.entry.itemType === "notification" ||
+              nextEntry.entry.itemType === "todo_list" ||
+              nextEntry.entry.questionAnswer !== undefined ||
+              isPendingApproval(nextEntry.entry));
+        if (breaksGroup) {
           break;
         }
         groupedEntries.push(nextEntry.entry);
         cursor += 1;
       }
-      const visibleGroupedEntries = groupedEntries.filter((entry) =>
+      const rawVisibleGroupedEntries = groupedEntries.filter((entry) =>
         workEntryIsVisibleInGroup(entry, workEntryIsInActiveRun(entry)),
       );
+      const visibleGroupedEntries =
+        dshPolicy !== null
+          ? dedupeSkillLoadWorkEntries(rawVisibleGroupedEntries)
+          : rawVisibleGroupedEntries;
       if (visibleGroupedEntries.length > 0) {
         const activeInProgressToolEntries = visibleGroupedEntries.filter(workEntryIsInActiveRun);
+        const groupRunId = timelineEntry.entry.runId ?? null;
+        const groupIsBottomCompleted =
+          bottomCompletedTurnRunId !== null &&
+          (groupRunId === bottomCompletedTurnRunId ||
+            (groupRunId === null && bottomCompletedTurnRunId.startsWith("runless:")));
         if (activeInProgressToolEntries.length > 0) {
           const groupId = workGroupId(timelineEntry.id);
-          const expanded = input.expandedWorkGroupIds?.has(groupId) ?? false;
+          const expanded = isWorkGroupExpanded(groupId, {
+            isActiveTurn: true,
+            isBottomCompletedTurn: false,
+          });
           const latestActiveToolEntry = activeInProgressToolEntries.at(-1)!;
           nextRows.push({
             kind: "work-live",
@@ -2399,10 +2594,15 @@ export function deriveMessagesTimelineRows(
           });
         } else {
           const groupId = workGroupId(timelineEntry.id);
-          const expanded = input.expandedWorkGroupIds?.has(groupId) ?? false;
+          const expanded = isWorkGroupExpanded(groupId, {
+            isActiveTurn: runIdIsActiveResponse(groupRunId),
+            isBottomCompletedTurn: groupIsBottomCompleted,
+          });
           const summaryKind = toolGroupSummaryKind(visibleGroupedEntries);
           const dshPrimaryCategory =
-            dshPolicy !== null ? classifyPrimaryStepGroupActivity(visibleGroupedEntries) : undefined;
+            dshPolicy !== null
+              ? classifyPrimaryStepGroupActivity(visibleGroupedEntries)
+              : undefined;
           const primarySourceEntry = visibleGroupedEntries.find(
             (entry) => entry.toolSource !== undefined,
           );
@@ -2432,7 +2632,7 @@ export function deriveMessagesTimelineRows(
             kind: "work-toggle",
             id: `work-toggle:${timelineEntry.id}`,
             createdAt: timelineEntry.createdAt,
-            runId: timelineEntry.entry.runId ?? null,
+            runId: groupRunId,
             groupId,
             hiddenCount: visibleGroupedEntries.length,
             expanded,
@@ -2636,10 +2836,16 @@ export function deriveMessagesTimelineRows(
   }
 
   const hasWorkingRow = nextRows.some((row) => row.kind === "working");
-  if (input.isWorking && !hasWorkingRow && activeTurnHeaderIndex === timelineEntries.length) {
+  if (
+    dshPolicy === null &&
+    input.isWorking &&
+    !hasWorkingRow &&
+    activeTurnHeaderIndex === timelineEntries.length
+  ) {
     appendWorkingRow();
   }
   if (
+    dshPolicy === null &&
     input.isWorking &&
     input.latestRun?.turnEnded !== true &&
     !setupOwnsWorkingSlot &&
@@ -2675,6 +2881,23 @@ export function deriveMessagesTimelineRows(
         ...(waitingOn > 0 ? { label: waitingOnSubagentsLabel(waitingOn, resolve) } : {}),
       });
     }
+  }
+  if (dshPolicy !== null && input.isWorking && !hasWorkingRow && !setupOwnsWorkingSlot) {
+    const lastUserRowIdx = nextRows.findLastIndex(
+      (row) => row.kind === "message" && row.message.role === "user",
+    );
+    const hasStepAboveInActiveTurn = nextRows
+      .slice(lastUserRowIdx + 1)
+      .some(
+        (row) =>
+          row.kind === "work-live" ||
+          row.kind === "work" ||
+          row.kind === "work-toggle" ||
+          row.kind === "thinking" ||
+          row.kind === "message" ||
+          row.kind === "event",
+      );
+    appendWorkingRow({ showDividerAbove: hasStepAboveInActiveTurn });
   }
 
   const result = attachTrailingToolGroupsToAssistant(
@@ -2828,6 +3051,7 @@ function replaceStreamingMessageRows(
     collapsedRunIds: previousCollapsedRuns,
     expandedAttemptIds: previousExpandedAttempts,
     expandedWorkGroupIds: previousExpandedGroups,
+    collapsedWorkGroupIds: previousCollapsedGroups,
     pendingApprovalRequestIds: previousPendingApprovalRequestIds,
     availableRevertTurnCounts: previousAvailableRevertTurnCounts,
     ...previousContext
@@ -2840,6 +3064,7 @@ function replaceStreamingMessageRows(
     collapsedRunIds,
     expandedAttemptIds,
     expandedWorkGroupIds,
+    collapsedWorkGroupIds,
     pendingApprovalRequestIds,
     availableRevertTurnCounts,
     ...context
@@ -2853,6 +3078,7 @@ function replaceStreamingMessageRows(
     !shallow(previousCollapsedRuns, collapsedRunIds) ||
     !shallow(previousExpandedAttempts, expandedAttemptIds) ||
     !shallow(previousExpandedGroups, expandedWorkGroupIds) ||
+    !shallow(previousCollapsedGroups, collapsedWorkGroupIds) ||
     !shallow(previousPendingApprovalRequestIds, pendingApprovalRequestIds) ||
     !shallow(previousAvailableRevertTurnCounts, availableRevertTurnCounts) ||
     !sameCheckpointSummaries(previousCheckpoints, turnDiffSummaries)
@@ -3041,7 +3267,10 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
   switch (a.kind) {
     case "working":
       return (
-        a.createdAt === (b as typeof a).createdAt && a.compacting === (b as typeof a).compacting
+        a.createdAt === (b as typeof a).createdAt &&
+        a.compacting === (b as typeof a).compacting &&
+        a.showDividerAbove === (b as typeof a).showDividerAbove &&
+        a.dshStyle === (b as typeof a).dshStyle
       );
     case "thinking": {
       const bt = b as typeof a;

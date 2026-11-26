@@ -6,8 +6,11 @@ import { deriveMessagesTimelineRows } from "./MessagesTimeline.logic";
 import {
   classifyPrimaryStepGroupActivity,
   classifyWorkEntryActivity,
+  dedupeSkillLoadWorkEntries,
+  extractContextInjectionData,
   extractReadLineRangeLabel,
   extractReasoningSummaryLine,
+  extractSkillStepData,
   extractWorkEntryLiveDetail,
   extractWorkStepCollapsedPreview,
   formatDshDurationCompact,
@@ -17,6 +20,7 @@ import {
   formatFileChangeAction,
   formatThinkingHeaderLabel,
   formatWorkStepElapsedMs,
+  isContextInjectionWorkEntry,
   latestCompletedParagraphFirstLine,
   localizeWorkStepLabel,
   parseCompactDiffPreview,
@@ -24,6 +28,7 @@ import {
   resolveWorkStepsPolicy,
   shouldGroupWorkStepsForTurn,
   shouldKeepIntermediateAssistantRepliesVisible,
+  shouldProcessGroupDefaultOpen,
   shouldTurnFoldDefaultOpen,
   splitDisplayFilePath,
   stripShellCommandWrapper,
@@ -85,7 +90,7 @@ describe("dshWorkSteps.logic", () => {
       mode: "detailed",
       foldCompletedTurns: true,
       defaultTurnFoldOpen: false,
-      stepGrouping: "none",
+      stepGrouping: "history",
       liveProcessDetail: true,
       settledReasoningPreview: true,
       defaultExpandLongItems: false,
@@ -106,9 +111,23 @@ describe("dshWorkSteps.logic", () => {
     const expanded = resolveWorkStepsPolicy("expanded");
     const standard = resolveWorkStepsPolicy("standard");
 
-    // detailed: transparent & flat on ALL turns (never buries steps in collapsed buckets)
+    // detailed: converges steps into ONE default-open bounded ProcessGroup (`stepGrouping: "history"`)
     expect(
       shouldGroupWorkStepsForTurn(detailed, {
+        isActiveTurn: true,
+        isBottomCompletedTurn: false,
+        collapseTiming: "after-turn",
+      }),
+    ).toBe(true);
+    expect(
+      shouldProcessGroupDefaultOpen(detailed, {
+        isActiveTurn: true,
+        isBottomCompletedTurn: false,
+        collapseTiming: "after-turn",
+      }),
+    ).toBe(true);
+    expect(
+      shouldProcessGroupDefaultOpen(standard, {
         isActiveTurn: true,
         isBottomCompletedTurn: false,
         collapseTiming: "after-turn",
@@ -120,21 +139,7 @@ describe("dshWorkSteps.logic", () => {
         isBottomCompletedTurn: true,
         collapseTiming: "next-message",
       }),
-    ).toBe(false);
-    expect(
-      shouldGroupWorkStepsForTurn(detailed, {
-        isActiveTurn: false,
-        isBottomCompletedTurn: true,
-        collapseTiming: "after-turn",
-      }),
-    ).toBe(false);
-    expect(
-      shouldGroupWorkStepsForTurn(detailed, {
-        isActiveTurn: false,
-        isBottomCompletedTurn: false,
-        collapseTiming: "after-turn",
-      }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldGroupWorkStepsForTurn(expanded, {
         isActiveTurn: false,
@@ -259,7 +264,7 @@ describe("dshWorkSteps.logic", () => {
       "已读取文件，修改了文件，执行了命令等",
     );
     expect(formatDshStepGroupSummary([thinkEntry, readEntry], "zh-CN")).toBe("已读取文件");
-    expect(formatDshStepGroupSummary([thinkEntry], "zh-CN")).toBe("已思考");
+    expect(formatDshStepGroupSummary([thinkEntry], "zh-CN")).toBe("已完成分析");
 
     // Live header: concise omits detail, standard includes verb · detail
     const conciseLive = formatDshLiveActivityLabel(readEntry, {
@@ -293,15 +298,24 @@ describe("dshWorkSteps.logic", () => {
       }),
     ).toBe("Inspecting timeline logic");
 
-    // Outer turn fold labels & duration formatting
+    // Outer turn fold labels & localized Chinese/English compact duration formatting
     expect(formatDshDurationCompact(12_400)).toBe("12s");
     expect(formatDshDurationCompact(75_000)).toBe("1m 15s");
+    expect(formatDshDurationCompact(12_400, "zh-CN")).toBe("12秒");
+    expect(formatDshDurationCompact(465_000, "zh-CN")).toBe("7分45秒");
     expect(
       formatDshTurnFoldLabel({ elapsedMs: 12_400, status: "completed", locale: "zh-CN" }),
     ).toEqual({
       prefix: "已完成，用时 ",
-      durationNumber: "12s",
-      fullText: "已完成，用时 12s",
+      durationNumber: "12秒",
+      fullText: "已完成，用时 12秒",
+    });
+    expect(
+      formatDshTurnFoldLabel({ elapsedMs: 465_000, status: "completed", locale: "zh-CN" }),
+    ).toEqual({
+      prefix: "已完成，用时 ",
+      durationNumber: "7分45秒",
+      fullText: "已完成，用时 7分45秒",
     });
     expect(
       formatDshTurnFoldLabel({ elapsedMs: null, status: "error", locale: "zh-CN" }).fullText,
@@ -478,7 +492,7 @@ describe("dshWorkSteps.logic", () => {
     ).toBe(true);
 
     // 3a. detailed + after-turn: completed turns auto-collapse when answer ends,
-    // and expanding a turn shows all steps transparently flat (zero work-toggle) with long items still folded
+    // and expanding a turn opens bounded ProcessGroup drawers (`work-toggle` expanded: true + `isExpandedToolGroup: true`)
     const detailedAfterTurnRows = deriveMessagesTimelineRows({
       ...baseInput,
       timelineEntries: buildTwoTurnTimeline(),
@@ -492,7 +506,7 @@ describe("dshWorkSteps.logic", () => {
     expect(detailedAfterTurnRows.filter((r) => r.kind === "work")).toHaveLength(0);
     expect(detailedAfterTurnRows.filter((r) => r.kind === "work-toggle")).toHaveLength(0);
 
-    // Expanding both turns in detailed mode renders every step flat & un-grouped (zero work-toggle)
+    // Expanding both turns in detailed mode renders default-open bounded ProcessGroups (all steps converged inside)
     const detailedExpandedBoth = deriveMessagesTimelineRows({
       ...baseInput,
       timelineEntries: buildTwoTurnTimeline(),
@@ -501,19 +515,23 @@ describe("dshWorkSteps.logic", () => {
       workStepsCollapseTiming: "after-turn",
       collapsedAssistantReplyMode: "all",
     });
-    expect(detailedExpandedBoth.filter((r) => r.kind === "work-toggle")).toHaveLength(0);
-    const detailedFlatWorkRows = detailedExpandedBoth.filter((r) => r.kind === "work");
-    expect(detailedFlatWorkRows.flatMap((r) => r.groupedEntries.map((entry) => entry.id))).toEqual([
+    const detailedToggles = detailedExpandedBoth.filter((r) => r.kind === "work-toggle");
+    expect(detailedToggles.length).toBeGreaterThan(0);
+    expect(detailedToggles.every((r) => r.expanded === true)).toBe(true);
+    const detailedDrawerRows = detailedExpandedBoth.filter(
+      (r): r is Extract<typeof r, { kind: "work" }> => r.kind === "work" && r.isExpandedToolGroup,
+    );
+    expect(detailedDrawerRows.flatMap((r) => r.groupedEntries.map((entry) => entry.id))).toEqual([
       "r1-think",
       "r1-read",
       "r1-cmd",
       "r2-think",
       "r2-edit",
     ]);
-    expect(detailedFlatWorkRows.every((r) => r.autoExpandDetails === undefined)).toBe(true);
-    expect(detailedFlatWorkRows.every((r) => r.autoExpandReasoning === undefined)).toBe(true);
+    expect(detailedDrawerRows.every((r) => r.autoExpandDetails === undefined)).toBe(true);
+    expect(detailedDrawerRows.every((r) => r.autoExpandReasoning === undefined)).toBe(true);
 
-    // 3b. detailed + next-message: bottom completed turn stays open & flat while earlier turn auto-collapses
+    // 3b. detailed + next-message: bottom completed turn stays open with its bounded ProcessGroup open while earlier turn auto-collapses
     const detailedNextMessageRows = deriveMessagesTimelineRows({
       ...baseInput,
       timelineEntries: buildTwoTurnTimeline(),
@@ -524,10 +542,15 @@ describe("dshWorkSteps.logic", () => {
     const detailedNextMessageFolds = detailedNextMessageRows.filter((r) => r.kind === "turn-fold");
     expect(detailedNextMessageFolds.find((r) => r.runId === run1)?.expanded).toBe(false);
     expect(detailedNextMessageFolds.find((r) => r.runId === run2)?.expanded).toBe(true);
-    expect(detailedNextMessageRows.filter((r) => r.kind === "work-toggle")).toHaveLength(0);
+    const nextMsgToggles = detailedNextMessageRows.filter((r) => r.kind === "work-toggle");
+    expect(nextMsgToggles).toHaveLength(1);
+    expect(nextMsgToggles[0]!.expanded).toBe(true);
     expect(
       detailedNextMessageRows
-        .filter((r) => r.kind === "work")
+        .filter(
+          (r): r is Extract<typeof r, { kind: "work" }> =>
+            r.kind === "work" && r.isExpandedToolGroup,
+        )
         .flatMap((r) => r.groupedEntries.map((entry) => entry.id)),
     ).toEqual(["r2-think", "r2-edit"]);
 
@@ -641,12 +664,24 @@ describe("dshWorkSteps.logic", () => {
       ...activeBase,
       workStepsDisplay: "detailed",
     });
-    expect(detailedActive.some((r) => r.kind === "work-live")).toBe(false);
+    const detailedLiveRow = detailedActive.find((r) => r.kind === "work-live");
+    expect(detailedLiveRow).toBeDefined();
+    expect(detailedLiveRow?.expanded).toBe(true);
     expect(
       detailedActive.some(
-        (r) => r.kind === "work" && r.groupedEntries.some((entry) => entry.id === "live-read"),
+        (r) =>
+          r.kind === "work" &&
+          r.isExpandedToolGroup &&
+          r.groupedEntries.some((entry) => entry.id === "live-read"),
       ),
     ).toBe(true);
+    // Active turn renders bottom DSH RunningStatus with 0.5px divider above
+    const bottomWorking = detailedActive.at(-1);
+    expect(bottomWorking).toMatchObject({
+      kind: "working",
+      dshStyle: true,
+      showDividerAbove: true,
+    });
   });
 
   it("strips noisy Windows/POSIX shell wrappers while keeping raw command inspectable", () => {
@@ -803,8 +838,8 @@ describe("dshWorkSteps.logic", () => {
     expect(classifyPrimaryStepGroupActivity([read])).toBe("read");
   });
 
-  it("keeps reasoning separate from tool groups when expanding a standard or concise turn", () => {
-    const runId = RunId.make("run-sep");
+  it("converges reasoning and tool steps inside ONE unified ProcessGroup in standard and concise turns (zero leaks)", () => {
+    const runId = RunId.make("run-converged");
     const entries: ReadonlyArray<TimelineEntry> = [
       {
         id: "u1",
@@ -856,26 +891,119 @@ describe("dshWorkSteps.logic", () => {
         workStepsDisplay: mode,
         locale: "zh-CN",
       });
-      expect(rows.map((r) => r.kind)).toEqual([
-        "message",
-        "turn-fold",
-        "work",
-        "work-toggle",
-        "message",
-      ]);
-      const reasonRow = rows[2]!;
-      const toggleRow = rows[3]!;
-      expect(reasonRow.kind === "work" && reasonRow.groupedEntries.map((e) => e.id)).toEqual([
-        "t1",
-      ]);
-      expect(reasonRow.kind === "work" && reasonRow.autoExpandReasoning).toBeUndefined();
+      // Reasoning + command converge into ONE single work-toggle (zero leaked outer reasoning row)
+      expect(rows.map((r) => r.kind)).toEqual(["message", "turn-fold", "work-toggle", "message"]);
+      const toggleRow = rows[2]!;
       expect(toggleRow).toMatchObject({
         kind: "work-toggle",
-        summary: "已执行命令",
+        summary: "执行了命令",
         dshPrimaryCategory: "commands",
-        hiddenCount: 1,
+        hiddenCount: 2,
       });
+
+      const expandedRows = deriveMessagesTimelineRows({
+        timelineEntries: entries,
+        expandedRunIds: new Set([runId]),
+        expandedWorkGroupIds: new Set([toggleRow.kind === "work-toggle" ? toggleRow.groupId : ""]),
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
+        isWorking: false,
+        activeTurnStartedAt: null,
+        workStepsDisplay: mode,
+        locale: "zh-CN",
+      });
+      const drawer = expandedRows.find((r) => r.kind === "work" && r.isExpandedToolGroup);
+      expect(drawer?.kind === "work" && drawer.groupedEntries.map((e) => e.id)).toEqual([
+        "t1",
+        "c1",
+      ]);
     }
+  });
+
+  it("extracts context_injection payloads defensively (both flat backend and §4.2 shapes) and dedupes SKILL.md reads against native skill tools", () => {
+    // 1. Flat backend shape (`sourceKind`, `label`, `sourcePath`, `statusLabel`, `content`)
+    const ctx120Entry = makeWorkEntry({
+      id: "ctx-1",
+      sourceActivityKind: "context_injection",
+      label: "Context injection",
+      tone: "info",
+      toolData: {
+        sourceKind: "agent-instructions",
+        label: "AGENTS.md",
+        sourcePath: "AGENTS.md",
+        statusLabel: "已载入",
+        content: "<system-reminder>\n# Project instructions\n</system-reminder>",
+      },
+    });
+    expect(isContextInjectionWorkEntry(ctx120Entry)).toBe(true);
+    const parsed120 = extractContextInjectionData(ctx120Entry);
+    expect(parsed120).toMatchObject({
+      sourceKind: "agent-instructions",
+      form: "instructions",
+      label: "AGENTS.md",
+      sourcePath: "AGENTS.md",
+      statusLabel: "已载入",
+    });
+    expect(parsed120?.content).toContain("<system-reminder>");
+
+    // 2. §4.2 shape (`files`, `sections`, `supersedesPrevious`)
+    const ctx42Entry = makeWorkEntry({
+      id: "ctx-2",
+      sourceActivityKind: "context_injection",
+      label: "运行时上下文",
+      tone: "info",
+      toolData: {
+        sourceKind: "runtime-context",
+        form: "snapshot",
+        label: "运行时上下文",
+        sections: [{ name: "OS", text: "Windows 11" }],
+        supersedesPrevious: true,
+      },
+    });
+    expect(extractContextInjectionData(ctx42Entry)).toMatchObject({
+      sourceKind: "runtime-context",
+      form: "snapshot",
+      supersedesPrevious: true,
+      sections: [{ name: "OS", text: "Windows 11" }],
+    });
+
+    // 3. Skill promotion from `*/SKILL.md` read + YAML frontmatter `name:` parsing
+    const skillMdRead = makeWorkEntry({
+      id: "read-skill-md",
+      toolTitle: "read_file",
+      toolData: {
+        input: { file_path: "C:/Users/Fish/.gemini/config/skills/systematic-debugging/SKILL.md" },
+        output: "---\nname: systematic-debugging\ndescription: Debug flow\n---\n# Body",
+      },
+    });
+    const promoted = extractSkillStepData(skillMdRead);
+    expect(promoted).toMatchObject({
+      skillName: "systematic-debugging",
+      isNativeSkillTool: false,
+    });
+    expect(classifyWorkEntryActivity(skillMdRead)).toBe("skill");
+
+    // 4. Native skill tool call + duplicate SKILL.md read -> deduped cleanly!
+    const nativeSkill = makeWorkEntry({
+      id: "native-skill-1",
+      toolTitle: "skill",
+      toolData: {
+        dshToolName: "skill",
+        input: { name: "systematic-debugging" },
+        output: "Loaded systematic-debugging instructions.",
+      },
+    });
+    const unrelatedRead = makeWorkEntry({
+      id: "read-readme",
+      toolTitle: "read_file",
+      toolData: { input: { file_path: "README.md" } },
+    });
+    expect(extractSkillStepData(nativeSkill)).toMatchObject({
+      skillName: "systematic-debugging",
+      isNativeSkillTool: true,
+    });
+    const deduped = dedupeSkillLoadWorkEntries([nativeSkill, skillMdRead, unrelatedRead]);
+    expect(deduped.map((e) => e.id)).toEqual(["native-skill-1", "read-readme"]);
   });
 
   it("localizes every English work-step verb and action header in zh-CN while preserving en-US", () => {

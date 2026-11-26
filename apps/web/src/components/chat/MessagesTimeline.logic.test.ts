@@ -4,6 +4,7 @@ import {
   NodeId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderThreadId,
   ProviderTurnId,
   RunAttemptId,
   TurnItemId,
@@ -5185,7 +5186,7 @@ describe("workEntryReadOutput", () => {
   });
 });
 
-describe("DSH strict Thinking & Command/Tool hierarchy", () => {
+describe("1:1 DSH NEXT ProcessGroup convergence & zero-leak hierarchy", () => {
   const runId = RunId.make("dsh-hierarchy-run");
   const at = (second: number) => `2026-11-25T10:00:${String(second).padStart(2, "0")}.000Z`;
 
@@ -5264,7 +5265,7 @@ describe("DSH strict Thinking & Command/Tool hierarchy", () => {
   };
 
   it.each(["concise", "standard", "detailed", "expanded"] as const)(
-    "NEVER groups reasoning inside 已执行命令 (`work-toggle`) in %s mode when turn is unfolded",
+    "converges reasoning and commands according to %s policy when turn is unfolded",
     (workStepsDisplay) => {
       const rows = deriveMessagesTimelineRows({
         timelineEntries: makeTurnEntries(),
@@ -5284,29 +5285,15 @@ describe("DSH strict Thinking & Command/Tool hierarchy", () => {
         locale: "zh-CN",
       });
 
-      // Reasoning MUST always emit as its own independent top-level `work` row (`isExpandedToolGroup: false`)
-      const reasoningRow = rows.find(
-        (row) => row.kind === "work" && row.groupedEntries.some((entry) => entry.id === "reason-1"),
-      );
-      expect(reasoningRow).toBeDefined();
-      expect(reasoningRow?.kind === "work" && reasoningRow.isExpandedToolGroup).toBe(false);
-      expect(
-        reasoningRow?.kind === "work" && reasoningRow.groupedEntries.map((entry) => entry.id),
-      ).toEqual(["reason-1"]);
-      expect(reasoningRow?.kind === "work" ? reasoningRow.autoExpandReasoning : undefined).toBe(
-        workStepsDisplay === "expanded" ? true : undefined,
-      );
-
-      // In concise/standard, the command emits its OWN `work-toggle` ("已执行命令")
-      // completely separate from reasoning, and expanding it contains ONLY the command!
-      // In detailed/expanded, steps stay transparent and flat (no `work-toggle` hiding them).
       if (workStepsDisplay === "concise" || workStepsDisplay === "standard") {
+        // Reasoning + command converge into ONE collapsed ProcessGroup (`work-toggle`)
+        expect(rows.map((r) => r.kind)).toEqual(["message", "turn-fold", "work-toggle", "message"]);
         const toggleRow = rows.find((row) => row.kind === "work-toggle");
         expect(toggleRow).toMatchObject({
           kind: "work-toggle",
-          summary: "已执行命令",
+          summary: "执行了命令",
           dshPrimaryCategory: "commands",
-          hiddenCount: 1,
+          hiddenCount: 2,
           expanded: false,
         });
 
@@ -5336,26 +5323,58 @@ describe("DSH strict Thinking & Command/Tool hierarchy", () => {
         expect(
           expandedChildrenRow?.kind === "work" &&
             expandedChildrenRow.groupedEntries.map((entry) => entry.id),
-        ).toEqual(["cmd-1"]);
-        expect(
-          expandedChildrenRow?.kind === "work" &&
-            expandedChildrenRow.groupedEntries.some((entry) => entry.itemType === "reasoning"),
-        ).toBe(false);
+        ).toEqual(["reason-1", "cmd-1"]);
+      } else if (workStepsDisplay === "detailed") {
+        // Detailed opens ONE converged bounded ProcessGroup drawer directly
+        expect(rows.map((r) => r.kind)).toEqual([
+          "message",
+          "turn-fold",
+          "work-toggle",
+          "work",
+          "message",
+        ]);
+        const toggleRow = rows.find((row) => row.kind === "work-toggle");
+        expect(toggleRow?.kind === "work-toggle" && toggleRow.expanded).toBe(true);
+        const drawerRow = rows.find((row) => row.kind === "work" && row.isExpandedToolGroup);
+        expect(drawerRow?.kind === "work" && drawerRow.groupedEntries.map((e) => e.id)).toEqual([
+          "reason-1",
+          "cmd-1",
+        ]);
+        // Respects explicit user collapse in collapsedWorkGroupIds
+        const collapsedRows = deriveMessagesTimelineRows({
+          timelineEntries: makeTurnEntries(),
+          latestRun: { runId, status: "completed", startedAt: at(0), completedAt: at(9) },
+          expandedRunIds: new Set([runId]),
+          collapsedWorkGroupIds: new Set([toggleRow!.groupId]),
+          isWorking: false,
+          activeTurnStartedAt: null,
+          turnDiffSummaries: [],
+          supportsConversationRollback: false,
+          workStepsDisplay,
+          workStepsCollapseTiming: "after-turn",
+          locale: "zh-CN",
+        });
+        expect(collapsedRows.map((r) => r.kind)).toEqual([
+          "message",
+          "turn-fold",
+          "work-toggle",
+          "message",
+        ]);
       } else {
+        // Expanded renders flat without ProcessGroup folding
         expect(rows.some((row) => row.kind === "work-toggle")).toBe(false);
-        const cmdRow = rows.find(
-          (row) => row.kind === "work" && row.groupedEntries.some((entry) => entry.id === "cmd-1"),
-        );
-        expect(cmdRow?.kind === "work" && cmdRow.groupedEntries.map((e) => e.id)).toEqual(["cmd-1"]);
-        expect(cmdRow?.kind === "work" ? cmdRow.autoExpandDetails : undefined).toBe(
-          workStepsDisplay === "expanded" ? true : undefined,
-        );
+        const workRows = rows.filter((row) => row.kind === "work");
+        expect(workRows.flatMap((r) => r.groupedEntries.map((e) => e.id))).toEqual([
+          "reason-1",
+          "cmd-1",
+        ]);
+        expect(workRows.every((r) => r.autoExpandDetails === true)).toBe(true);
       }
     },
   );
 
-  it.each(["concise", "standard"] as const)(
-    "keeps reasoning independent from active `work-live` tool group in %s mode",
+  it.each(["concise", "standard", "detailed"] as const)(
+    "converges reasoning + command into ONE active work-live ProcessGroup with bottom DSH RunningStatus in %s mode",
     (workStepsDisplay) => {
       const entries = makeTurnEntries({
         reasoningStatus: "completed",
@@ -5379,26 +5398,34 @@ describe("DSH strict Thinking & Command/Tool hierarchy", () => {
         locale: "zh-CN",
       });
 
-      const reasoningRow = rows.find(
-        (row) => row.kind === "work" && row.groupedEntries.some((e) => e.id === "reason-1"),
-      );
-      expect(reasoningRow).toMatchObject({
-        kind: "work",
-        isExpandedToolGroup: false,
-        groupedEntries: [expect.objectContaining({ id: "reason-1" })],
-      });
-
       const liveRow = rows.find((row) => row.kind === "work-live");
       expect(liveRow).toBeDefined();
       expect(liveRow?.kind === "work-live" && liveRow.entry.id).toBe("cmd-1");
       expect(
         liveRow?.kind === "work-live" && liveRow.groupedEntries.map((entry) => entry.id),
-      ).toEqual(["cmd-1"]);
-      expect(liveRow?.kind === "work-live" ? liveRow.thought : undefined).toBeUndefined();
+      ).toEqual(["reason-1", "cmd-1"]);
+      expect(liveRow?.kind === "work-live" && liveRow.expanded).toBe(
+        workStepsDisplay === "detailed",
+      );
+      // Zero leaked outer reasoning rows outside ProcessGroup
+      expect(
+        rows.some(
+          (row) =>
+            row.kind === "work" &&
+            !row.isExpandedToolGroup &&
+            row.groupedEntries.some((e) => e.id === "reason-1"),
+        ),
+      ).toBe(false);
+      // Bottom DSH RunningStatus with 0.5px divider above
+      expect(rows.at(-1)).toMatchObject({
+        kind: "working",
+        dshStyle: true,
+        showDividerAbove: true,
+      });
     },
   );
 
-  it("breaks tool groups cleanly around interleaved reasoning blocks in standard mode", () => {
+  it("converges interleaved reasoning and tool calls into ONE single ProcessGroup (zero Fig 3 fragmentation)", () => {
     const entries: ReadonlyArray<TimelineEntry> = [
       ...makeTurnEntries({ includeFinalAnswer: false }),
       {
@@ -5476,24 +5503,298 @@ describe("DSH strict Thinking & Command/Tool hierarchy", () => {
 
     expect(
       rows.map((row) =>
-        row.kind === "work-toggle"
-          ? `toggle:${row.summary}:${row.hiddenCount}`
-          : row.kind === "work"
-            ? `work:${row.groupedEntries.map((e) => e.id).join(",")}`
-            : row.kind,
+        row.kind === "work-toggle" ? `toggle:${row.summary}:${row.hiddenCount}` : row.kind,
       ),
-    ).toEqual([
-      "message",
-      "turn-fold",
-      "work:reason-1",
-      "toggle:已执行命令:2",
-      "work:reason-2",
-      "toggle:已修改文件:1",
-      "message",
-    ]);
+    ).toEqual(["message", "turn-fold", "toggle:执行了命令并修改了文件:5", "message"]);
   });
 
-  it("streams live reasoning as its own top-level row in standard mode with incremental parity", () => {
+  it("eliminates ALL 6 Fig 3 leak roots: context_injection + reasoning + skill_load + exitCode:1 command + subagent + notification + todo_list + system_notice + handoff all converge with ZERO outer leaks", () => {
+    const subagentItem: OrchestrationV2ProjectedTurnItem["item"] = {
+      id: TurnItemId.make("sub-1"),
+      threadId: ThreadId.make("thread-1"),
+      runId,
+      nodeId: NodeId.make("node-sub-1"),
+      providerThreadId: ProviderThreadId.make("pt-1"),
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 5,
+      status: "running",
+      title: "DSH 调研助手",
+      startedAt: DateTime.makeUnsafe(at(4)),
+      completedAt: null,
+      updatedAt: DateTime.makeUnsafe(at(5)),
+      type: "subagent",
+      subagentId: NodeId.make("sub-node-1"),
+      origin: "app_owned",
+      driver: ProviderDriverKind.make("acp"),
+      providerInstanceId: ProviderInstanceId.make("acp_dsh"),
+      childThreadId: ThreadId.make("child-thread-1"),
+      prompt: "Inspect backend",
+      result: null,
+    };
+    const failedCmdItem: OrchestrationV2ProjectedTurnItem["item"] = {
+      id: TurnItemId.make("cmd-fail"),
+      threadId: ThreadId.make("thread-1"),
+      runId,
+      nodeId: NodeId.make("node-cmd-fail"),
+      providerThreadId: ProviderThreadId.make("pt-1"),
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 4,
+      status: "completed",
+      title: null,
+      startedAt: DateTime.makeUnsafe(at(3)),
+      completedAt: DateTime.makeUnsafe(at(4)),
+      updatedAt: DateTime.makeUnsafe(at(4)),
+      type: "command_execution",
+      input: "git diff --exit-code",
+      output: "diff --git a/x b/x",
+      exitCode: 1,
+    };
+    const notificationItem: OrchestrationV2ProjectedTurnItem["item"] = {
+      id: TurnItemId.make("notif-1"),
+      threadId: ThreadId.make("thread-1"),
+      runId,
+      nodeId: NodeId.make("node-notif-1"),
+      providerThreadId: ProviderThreadId.make("pt-1"),
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 6,
+      status: "completed",
+      title: null,
+      startedAt: DateTime.makeUnsafe(at(5)),
+      completedAt: DateTime.makeUnsafe(at(5)),
+      updatedAt: DateTime.makeUnsafe(at(5)),
+      type: "notification",
+      source: { kind: "subagent", childThreadId: ThreadId.make("child-thread-1") },
+      outcome: "completed",
+      summary: "Subagent finished",
+      detail: "All checks passed",
+    };
+
+    const richTurnEntries: ReadonlyArray<TimelineEntry> = [
+      {
+        id: "user-rich",
+        kind: "message",
+        createdAt: at(0),
+        message: {
+          id: MessageId.make("user-rich"),
+          role: "user",
+          text: "Run full audit",
+          runId: null,
+          createdAt: at(0),
+          updatedAt: at(0),
+          streaming: false,
+        },
+      },
+      {
+        id: "ctx-1",
+        kind: "work",
+        createdAt: at(1),
+        entry: {
+          id: "ctx-1",
+          runId,
+          createdAt: at(1),
+          label: "AGENTS.md",
+          tone: "info",
+          sourceActivityKind: "context_injection",
+          toolData: {
+            sourceKind: "agent-instructions",
+            label: "AGENTS.md",
+            sourcePath: "AGENTS.md",
+            statusLabel: "已载入",
+            content: "<system-reminder>Rules</system-reminder>",
+          },
+        },
+      },
+      {
+        id: "reason-rich",
+        kind: "work",
+        createdAt: at(2),
+        entry: {
+          id: "reason-rich",
+          runId,
+          createdAt: at(2),
+          label: "Thinking",
+          tone: "thinking",
+          itemType: "reasoning",
+          detail: "Let's inspect the repo and run git diff.",
+          toolLifecycleStatus: "completed",
+        },
+      },
+      {
+        id: "skill-native",
+        kind: "work",
+        createdAt: at(2),
+        entry: {
+          id: "skill-native",
+          runId,
+          createdAt: at(2),
+          label: "Skill",
+          tone: "tool",
+          toolTitle: "skill",
+          toolLifecycleStatus: "completed",
+          toolData: {
+            dshToolName: "skill",
+            input: { name: "tdd" },
+            output: "# TDD instructions",
+          },
+        },
+      },
+      {
+        id: "skill-md-dup",
+        kind: "work",
+        createdAt: at(2),
+        entry: {
+          id: "skill-md-dup",
+          runId,
+          createdAt: at(2),
+          label: "Read file",
+          tone: "tool",
+          toolTitle: "read_file",
+          toolLifecycleStatus: "completed",
+          toolData: {
+            input: { file_path: "skills/tdd/SKILL.md" },
+            output: "---\nname: tdd\n---\n# TDD instructions",
+          },
+        },
+      },
+      {
+        id: "cmd-fail",
+        kind: "work",
+        createdAt: at(3),
+        entry: {
+          id: "cmd-fail",
+          runId,
+          createdAt: at(3),
+          label: "Ran command",
+          tone: "error",
+          itemType: "command_execution",
+          command: "git diff --exit-code",
+          toolLifecycleStatus: "failed",
+          structuredPayload: failedCmdItem,
+          projectedItem: {
+            position: 4,
+            visibility: "local",
+            sourceThreadId: ThreadId.make("thread-1"),
+            sourceItemId: failedCmdItem.id,
+            item: failedCmdItem,
+          },
+        },
+      },
+      {
+        id: "sub-1",
+        kind: "event",
+        createdAt: at(4),
+        projectedItem: {
+          position: 5,
+          visibility: "local",
+          sourceThreadId: ThreadId.make("thread-1"),
+          sourceItemId: subagentItem.id,
+          item: subagentItem,
+        },
+      },
+      {
+        id: "notif-1",
+        kind: "work",
+        createdAt: at(5),
+        entry: {
+          id: "notif-1",
+          runId,
+          createdAt: at(5),
+          label: "Subagent finished",
+          tone: "info",
+          itemType: "notification",
+          toolLifecycleStatus: "completed",
+          structuredPayload: notificationItem,
+          projectedItem: {
+            position: 6,
+            visibility: "local",
+            sourceThreadId: ThreadId.make("thread-1"),
+            sourceItemId: notificationItem.id,
+            item: notificationItem,
+          },
+        },
+      },
+      {
+        id: "notice-1",
+        kind: "work",
+        createdAt: at(5),
+        entry: {
+          id: "notice-1",
+          runId,
+          createdAt: at(5),
+          label: "Model switched",
+          tone: "info",
+          itemType: "system_notice",
+        },
+      },
+      {
+        id: "answer-rich",
+        kind: "message",
+        createdAt: at(12),
+        message: {
+          id: MessageId.make("answer-rich"),
+          role: "assistant",
+          text: "Audit finished cleanly.",
+          runId,
+          createdAt: at(12),
+          updatedAt: at(12),
+          streaming: false,
+        },
+      },
+    ];
+
+    // 1. Active turn: ZERO outer event / reasoning / notice rows; everything inside ONE `work-live` + bottom `working`
+    const activeRows = deriveMessagesTimelineRows({
+      timelineEntries: richTurnEntries.slice(0, -1),
+      latestRun: { runId, status: "running", startedAt: at(0), completedAt: null },
+      runningRunId: runId,
+      isWorking: true,
+      activeTurnStartedAt: at(0),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+      workStepsDisplay: "standard",
+      locale: "zh-CN",
+    });
+    expect(activeRows.map((r) => r.kind)).toEqual(["message", "work-live", "working"]);
+    const activeGroupIds =
+      activeRows[1]?.kind === "work-live" ? activeRows[1].groupedEntries.map((e) => e.id) : [];
+    // Duplicate SKILL.md read was deduped; every other step is inside the single ProcessGroup!
+    expect(activeGroupIds).toEqual([
+      "ctx-1",
+      "reason-rich",
+      "skill-native",
+      "cmd-fail",
+      "sub-1",
+      "notif-1",
+      "notice-1",
+    ]);
+
+    // 2. Completed turn (after-turn): ZERO leaked rows between prompt, single TurnFold, and final answer!
+    const completedRows = deriveMessagesTimelineRows({
+      timelineEntries: richTurnEntries,
+      latestRun: { runId, status: "completed", startedAt: at(0), completedAt: at(12) },
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+      workStepsDisplay: "standard",
+      workStepsCollapseTiming: "after-turn",
+      locale: "zh-CN",
+    });
+    expect(completedRows.map((r) => r.kind)).toEqual(["message", "turn-fold", "message"]);
+    expect(completedRows[1]).toMatchObject({
+      kind: "turn-fold",
+      expanded: false,
+      label: "已完成，用时 12秒",
+    });
+  });
+
+  it("streams live reasoning inside converged work-live row in standard mode with incremental parity", () => {
     const source = makeStreamingWorkTimelineFixture("reasoning");
     const rowsInput = (timelineEntries: ReadonlyArray<TimelineEntry>) => ({
       timelineEntries,
@@ -5524,15 +5825,17 @@ describe("DSH strict Thinking & Command/Tool hierarchy", () => {
     let timeline = deriveTimelineEntriesFromVisibleTurnItemsWithState(timelineInput);
     let projection = deriveMessagesTimelineRowsWithState(rowsInput(timeline.entries));
 
-    const liveReason = projection.rows.find(
-      (row) => row.kind === "work" && row.groupedEntries.some((e) => e.id === source.streamingItemId),
+    const liveRow = projection.rows.find(
+      (row) =>
+        row.kind === "work-live" && row.groupedEntries.some((e) => e.id === source.streamingItemId),
     );
-    expect(liveReason).toMatchObject({
-      kind: "work",
-      isExpandedToolGroup: false,
-      isLive: true,
-    });
+    expect(liveRow).toBeDefined();
     expect(projection.rows.some((row) => row.kind === "thinking")).toBe(false);
+    expect(projection.rows.at(-1)).toMatchObject({
+      kind: "working",
+      dshStyle: true,
+      showDividerAbove: true,
+    });
 
     timelineInput = {
       visibleTurnItems: withStreamedText(
