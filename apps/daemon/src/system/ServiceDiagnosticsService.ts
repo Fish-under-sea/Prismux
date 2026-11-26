@@ -8,6 +8,11 @@ import {
   readSync,
   statSync
 } from "node:fs";
+import {
+  open as openFileAsync,
+  readdir as readdirAsync,
+  stat as statAsync
+} from "node:fs/promises";
 import * as http from "node:http";
 import * as https from "node:https";
 import { homedir } from "node:os";
@@ -37,7 +42,9 @@ import { resolve7zaBinary, type AppUpdater } from "../updater/AppUpdater.js";
 import type { WallpaperMediaService } from "../wallpapers/WallpaperMediaService.js";
 import type { OvernightFactory } from "../workflows/OvernightFactory.js";
 import {
+  PRISMUX_PROBE_PROVIDER_SPECS,
   PrismuxProviderProbeService,
+  canonicalizeProbeProviderId,
   type ProviderProbeSpec
 } from "./PrismuxProviderProbeService.js";
 import type { ResourceMonitorService } from "./ResourceMonitorService.js";
@@ -54,6 +61,83 @@ const execFileAsync = promisify(execFile);
 const DEFAULT_CACHE_TTL_MS = 30_000;
 const DEFAULT_SINGLE_CHECK_TIMEOUT_MS = 1_100;
 const DEFAULT_GLOBAL_BUDGET_MS = 2_400;
+export const CLI_DISCOVERY_POSITIVE_TTL_MS = 10 * 60 * 1000;
+export const CLI_DISCOVERY_NEGATIVE_TTL_MS = 5 * 60 * 1000;
+
+interface TtlCacheEntry<T> {
+  value: T;
+  expiresAt: number;
+}
+
+const MAX_DISCOVERY_CACHE_ENTRIES = 128;
+
+function getTtlCached<T>(
+  cache: Map<string, TtlCacheEntry<T>>,
+  key: string,
+  nowMs = Date.now()
+): { hit: true; value: T } | { hit: false } {
+  const entry = cache.get(key);
+  if (!entry) return { hit: false };
+  if (nowMs >= entry.expiresAt) {
+    cache.delete(key);
+    return { hit: false };
+  }
+  return { hit: true, value: entry.value };
+}
+
+function setTtlCached<T>(
+  cache: Map<string, TtlCacheEntry<T>>,
+  key: string,
+  value: T,
+  isPositive: boolean,
+  nowMs = Date.now()
+): void {
+  if (cache.size >= MAX_DISCOVERY_CACHE_ENTRIES && !cache.has(key)) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey !== undefined) {
+      cache.delete(oldestKey);
+    }
+  }
+  const ttlMs = isPositive
+    ? CLI_DISCOVERY_POSITIVE_TTL_MS
+    : CLI_DISCOVERY_NEGATIVE_TTL_MS;
+  cache.set(key, { value, expiresAt: nowMs + ttlMs });
+}
+
+const packagedDshCache = new Map<
+  string,
+  TtlCacheEntry<{ executablePath: string; bootstrapPath: string } | null>
+>();
+const packagedAgyCache = new Map<string, TtlCacheEntry<string | null>>();
+const androidSdkCache = new Map<
+  string,
+  TtlCacheEntry<{ sdkRoot: string | null; adbPath: string | null }>
+>();
+const cliProbeCache = new Map<string, TtlCacheEntry<CliProbeResult>>();
+const daemonUninstallDirsCache = new Map<string, TtlCacheEntry<readonly string[]>>();
+
+/**
+ * Clears all in-process CLI discovery, Android SDK, Uninstall registry, and CLI
+ * version probe caches (positive & negative). Invoked automatically on explicit
+ * `refresh=1` / `force=1` diagnostics and provider probe refreshes.
+ */
+export function clearCliDiscoveryCaches(): void {
+  packagedDshCache.clear();
+  packagedAgyCache.clear();
+  androidSdkCache.clear();
+  cliProbeCache.clear();
+  daemonUninstallDirsCache.clear();
+}
+
+export interface RunDiagnosticsOptions {
+  force?: boolean;
+  /** Optional list of configured/enabled provider IDs to scope AI CLI checks. */
+  providers?: readonly string[] | null;
+  /** Explicitly include all known AI providers regardless of `configuredProviders`. */
+  includeAll?: boolean;
+  /** Opt-in drive root scan (`C:/D:/E:/F:`); defaults to `false`. */
+  deepScan?: boolean;
+}
 
 export interface CliProbeResult {
   found: boolean;
@@ -125,6 +209,10 @@ export interface ServiceDiagnosticsOptions {
    * diagnostics run (defaults to Windows HKLM + HKCU registry refresh).
    */
   refreshEnv?: () => Promise<WindowsEnvRefreshResult | void> | void;
+  /** Optional configured/enabled provider IDs to scope AI provider scans by default. */
+  configuredProviders?:
+    | readonly string[]
+    | (() => readonly string[] | null | undefined);
 }
 
 const CATEGORY_LABELS: Record<DiagnosticCategoryId, string> = {
@@ -595,8 +683,6 @@ export type DaemonWindowsRegistryQueryRunner = (
   args: readonly string[]
 ) => string | undefined;
 
-const daemonUninstallDirsCache = new Map<string, readonly string[]>();
-
 function runWindowsUninstallRegQuery(args: readonly string[]): string | undefined {
   try {
     const raw = execFileSync("reg.exe", [...args], {
@@ -608,6 +694,79 @@ function runWindowsUninstallRegQuery(args: readonly string[]): string | undefine
     return decodeWindowsProcessOutput(raw);
   } catch {
     return undefined;
+  }
+}
+
+async function runWindowsUninstallRegQueryAsync(
+  args: readonly string[]
+): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileAsync("reg.exe", [...args], {
+      timeout: 1_500,
+      windowsHide: true,
+      maxBuffer: 4 * 1024 * 1024,
+      encoding: "buffer"
+    });
+    return decodeWindowsProcessOutput(stdout);
+  } catch {
+    return undefined;
+  }
+}
+
+async function isExistingFileAsync(filePath: string): Promise<boolean> {
+  try {
+    const st = await statAsync(filePath);
+    return st.isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function pathExistsAsync(targetPath: string): Promise<boolean> {
+  try {
+    await statAsync(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function hasAsarEntryAsync(
+  asarPath: string,
+  relativeEntry: string
+): Promise<boolean> {
+  const directPath = join(asarPath, ...relativeEntry.split("/"));
+  if (await isExistingFileAsync(directPath)) {
+    return true;
+  }
+  if (!(await isExistingFileAsync(asarPath))) {
+    return false;
+  }
+  let handle: Awaited<ReturnType<typeof openFileAsync>> | undefined;
+  try {
+    handle = await openFileAsync(asarPath, "r");
+    const prefix = Buffer.alloc(16);
+    const prefixRead = await handle.read(prefix, 0, 16, 0);
+    if (prefixRead.bytesRead < 16) return false;
+    const jsonSize = prefix.readUInt32LE(12);
+    if (jsonSize === 0 || jsonSize > 64 * 1024 * 1024) return false;
+    const jsonBuffer = Buffer.alloc(jsonSize);
+    const jsonRead = await handle.read(jsonBuffer, 0, jsonSize, 16);
+    if (jsonRead.bytesRead < jsonSize) return false;
+    const parsed = JSON.parse(jsonBuffer.toString("utf8")) as {
+      files?: Record<string, unknown>;
+    };
+    return lookupAsarEntryInHeader(parsed, relativeEntry) !== null;
+  } catch {
+    return false;
+  } finally {
+    if (handle !== undefined) {
+      try {
+        await handle.close();
+      } catch {
+        // ignore close failure
+      }
+    }
   }
 }
 
@@ -723,11 +882,13 @@ function discoverWindowsUninstallInstallDirsSync(options: {
   searchTerms: readonly string[];
   matchEntry: (entry: DaemonWindowsUninstallEntry) => boolean;
   queryRegistry?: DaemonWindowsRegistryQueryRunner;
+  bypassCache?: boolean;
 }): readonly string[] {
-  const useCache = options.queryRegistry === undefined;
+  const useCache =
+    options.queryRegistry === undefined && options.bypassCache !== true;
   if (useCache) {
-    const cached = daemonUninstallDirsCache.get(options.cacheKey);
-    if (cached !== undefined) return cached;
+    const cached = getTtlCached(daemonUninstallDirsCache, options.cacheKey);
+    if (cached.hit) return cached.value;
   }
 
   const runQuery = options.queryRegistry ?? runWindowsUninstallRegQuery;
@@ -779,7 +940,81 @@ function discoverWindowsUninstallInstallDirsSync(options: {
   }
 
   if (useCache) {
-    daemonUninstallDirsCache.set(options.cacheKey, dirs);
+    setTtlCached(daemonUninstallDirsCache, options.cacheKey, dirs, dirs.length > 0);
+  }
+  return dirs;
+}
+
+async function discoverWindowsUninstallInstallDirsAsync(options: {
+  cacheKey: string;
+  searchTerms: readonly string[];
+  matchEntry: (entry: DaemonWindowsUninstallEntry) => boolean;
+  queryRegistry?: DaemonWindowsRegistryQueryRunner;
+  bypassCache?: boolean;
+}): Promise<readonly string[]> {
+  const useCache =
+    options.queryRegistry === undefined && options.bypassCache !== true;
+  if (useCache) {
+    const cached = getTtlCached(daemonUninstallDirsCache, options.cacheKey);
+    if (cached.hit) return cached.value;
+  }
+
+  const runQuery = options.queryRegistry
+    ? async (args: readonly string[]) => options.queryRegistry!(args)
+    : runWindowsUninstallRegQueryAsync;
+  const bySubkey = new Map<string, DaemonWindowsUninstallEntry>();
+
+  const queries: Array<Promise<string | undefined>> = [];
+  for (const rootKey of WINDOWS_UNINSTALL_REGISTRY_KEYS) {
+    for (const term of options.searchTerms) {
+      queries.push(runQuery(["query", rootKey, "/s", "/d", "/f", term]));
+    }
+  }
+  const outputs = await Promise.all(queries);
+  for (const stdout of outputs) {
+    if (!stdout) continue;
+    for (const parsed of parseDaemonUninstallRegOutput(stdout)) {
+      const key = parsed.subkey.toLowerCase();
+      const existing = bySubkey.get(key);
+      bySubkey.set(key, existing ? mergeDaemonUninstallEntry(existing, parsed) : parsed);
+    }
+  }
+
+  const seen = new Set<string>();
+  const dirs: string[] = [];
+  for (const [key, partial] of bySubkey.entries()) {
+    let complete = partial;
+    const hasPathSignal =
+      complete.installLocation !== undefined ||
+      complete.uninstallString !== undefined ||
+      complete.quietUninstallString !== undefined ||
+      complete.displayIcon !== undefined;
+    if (!hasPathSignal || complete.displayName === undefined) {
+      const fullOut = await runQuery(["query", complete.subkey]);
+      if (fullOut) {
+        const exact = parseDaemonUninstallRegOutput(fullOut).find(
+          (entry) => entry.subkey.toLowerCase() === key
+        );
+        if (exact) complete = mergeDaemonUninstallEntry(complete, exact);
+      }
+    }
+    if (!options.matchEntry(complete)) continue;
+    for (const candidate of [
+      normalizeWinInstallDir(complete.installLocation),
+      extractDirFromWinCommandOrIcon(complete.uninstallString),
+      extractDirFromWinCommandOrIcon(complete.quietUninstallString),
+      extractDirFromWinCommandOrIcon(complete.displayIcon)
+    ]) {
+      if (!candidate) continue;
+      const lower = candidate.toLowerCase();
+      if (seen.has(lower)) continue;
+      seen.add(lower);
+      dirs.push(candidate);
+    }
+  }
+
+  if (useCache) {
+    setTtlCached(daemonUninstallDirsCache, options.cacheKey, dirs, dirs.length > 0);
   }
   return dirs;
 }
@@ -802,6 +1037,69 @@ function collectDshDirExecutableCandidatesSync(installDir: string): string[] {
   return candidates;
 }
 
+async function collectDshDirExecutableCandidatesAsync(
+  installDir: string
+): Promise<string[]> {
+  const candidates: string[] = [];
+  for (const candidate of WINDOWS_DSH_DESKTOP_CANDIDATES) {
+    candidates.push(join(installDir, candidate.executable));
+  }
+  try {
+    const names = await readdirAsync(installDir);
+    for (const name of names) {
+      if (!/\.exe$/i.test(name) || WINDOWS_UNINSTALLER_EXE_RE.test(name)) continue;
+      candidates.push(join(installDir, name));
+    }
+  } catch {
+    // ignore unreadable directory
+  }
+  return candidates;
+}
+
+function buildDshDiscoveryCacheKey(
+  env: Record<string, string | undefined>,
+  platform: NodeJS.Platform,
+  homeDir: string,
+  scanRegistry: boolean,
+  shouldScanDriveRoots: boolean
+): string {
+  const readEnv = (k: string) => readEnvCaseInsensitive(env, k, platform) ?? "";
+  return [
+    platform,
+    homeDir,
+    scanRegistry ? "reg1" : "reg0",
+    shouldScanDriveRoots ? "deep1" : "deep0",
+    readEnv("DSH_DESKTOP_APP_EXECUTABLE"),
+    readEnv("DSH_DESKTOP_DSH_BOOTSTRAP"),
+    readEnv("USERPROFILE"),
+    readEnv("LOCALAPPDATA"),
+    readEnv("ProgramFiles"),
+    readEnv("ProgramFiles(x86)"),
+    readEnv("HOME")
+  ].join("|");
+}
+
+function buildAgyDiscoveryCacheKey(
+  env: Record<string, string | undefined>,
+  platform: NodeJS.Platform,
+  homeDir: string,
+  scanRegistry: boolean,
+  shouldScanDriveRoots: boolean
+): string {
+  const readEnv = (k: string) => readEnvCaseInsensitive(env, k, platform) ?? "";
+  return [
+    platform,
+    homeDir,
+    scanRegistry ? "reg1" : "reg0",
+    shouldScanDriveRoots ? "deep1" : "deep0",
+    readEnv("USERPROFILE"),
+    readEnv("LOCALAPPDATA"),
+    readEnv("ProgramFiles"),
+    readEnv("ProgramFiles(x86)"),
+    readEnv("HOME")
+  ].join("|");
+}
+
 export function findPackagedDshDesktopCli(
   env: Record<string, string | undefined> = process.env,
   platform: NodeJS.Platform = process.platform,
@@ -810,15 +1108,32 @@ export function findPackagedDshDesktopCli(
     queryRegistry?: DaemonWindowsRegistryQueryRunner;
     scanRegistry?: boolean;
     scanDriveRoots?: boolean;
+    deepScan?: boolean;
+    bypassCache?: boolean;
   } = {}
 ): { executablePath: string; bootstrapPath: string } | null {
+  const scanRegistry = options.scanRegistry !== false;
+  const shouldScanDriveRoots =
+    options.deepScan === true || options.scanDriveRoots === true;
+  const useCache =
+    options.queryRegistry === undefined && options.bypassCache !== true;
+  const cacheKey = useCache
+    ? buildDshDiscoveryCacheKey(env, platform, homeDir, scanRegistry, shouldScanDriveRoots)
+    : "";
+  if (useCache) {
+    const cached = getTtlCached(packagedDshCache, cacheKey);
+    if (cached.hit) return cached.value;
+  }
+
   const readEnv = (key: string): string | undefined =>
     readEnvCaseInsensitive(env, key, platform);
 
   const explicitApp = readEnv("DSH_DESKTOP_APP_EXECUTABLE");
   const explicitBootstrap = readEnv("DSH_DESKTOP_DSH_BOOTSTRAP");
   if (explicitApp && explicitBootstrap && isExistingFile(explicitApp)) {
-    return { executablePath: explicitApp, bootstrapPath: explicitBootstrap };
+    const found = { executablePath: explicitApp, bootstrapPath: explicitBootstrap };
+    if (useCache) setTtlCached(packagedDshCache, cacheKey, found, true);
+    return found;
   }
 
   const candidateExes: string[] = [];
@@ -839,7 +1154,7 @@ export function findPackagedDshDesktopCli(
       }
     }
 
-    if (options.scanRegistry !== false) {
+    if (scanRegistry) {
       const registryDirs = discoverWindowsUninstallInstallDirsSync({
         cacheKey: "dsh",
         searchTerms: ["DSH", "DeepSeek"],
@@ -848,14 +1163,15 @@ export function findPackagedDshDesktopCli(
           DSH_UNINSTALL_MATCH_RE.test(entry.comments ?? "") ||
           DSH_UNINSTALL_MATCH_RE.test(entry.uninstallString ?? "") ||
           DSH_UNINSTALL_MATCH_RE.test(entry.displayIcon ?? ""),
-        ...(options.queryRegistry ? { queryRegistry: options.queryRegistry } : {})
+        ...(options.queryRegistry ? { queryRegistry: options.queryRegistry } : {}),
+        ...(options.bypassCache ? { bypassCache: true } : {})
       });
       for (const dir of registryDirs) {
         candidateExes.push(...collectDshDirExecutableCandidatesSync(dir));
       }
     }
 
-    if (options.scanDriveRoots !== false) {
+    if (shouldScanDriveRoots) {
       for (const drive of WINDOWS_COMMON_DRIVES) {
         for (const subdir of WINDOWS_DSH_DRIVE_SUBDIRS) {
           const dir = `${drive}\\${subdir}`;
@@ -889,14 +1205,136 @@ export function findPackagedDshDesktopCli(
         : join(appDir, "resources", "app.asar");
     for (const entry of DSH_ASAR_BOOTSTRAP_ENTRIES) {
       if (hasAsarEntrySync(asarPath, entry)) {
-        return {
+        const found = {
           executablePath,
           bootstrapPath: join(asarPath, ...entry.split("/"))
         };
+        if (useCache) setTtlCached(packagedDshCache, cacheKey, found, true);
+        return found;
       }
     }
   }
 
+  if (useCache) setTtlCached(packagedDshCache, cacheKey, null, false);
+  return null;
+}
+
+export async function findPackagedDshDesktopCliAsync(
+  env: Record<string, string | undefined> = process.env,
+  platform: NodeJS.Platform = process.platform,
+  homeDir: string = homedir(),
+  options: {
+    queryRegistry?: DaemonWindowsRegistryQueryRunner;
+    scanRegistry?: boolean;
+    scanDriveRoots?: boolean;
+    deepScan?: boolean;
+    bypassCache?: boolean;
+  } = {}
+): Promise<{ executablePath: string; bootstrapPath: string } | null> {
+  const scanRegistry = options.scanRegistry !== false;
+  const shouldScanDriveRoots =
+    options.deepScan === true || options.scanDriveRoots === true;
+  const useCache =
+    options.queryRegistry === undefined && options.bypassCache !== true;
+  const cacheKey = useCache
+    ? buildDshDiscoveryCacheKey(env, platform, homeDir, scanRegistry, shouldScanDriveRoots)
+    : "";
+  if (useCache) {
+    const cached = getTtlCached(packagedDshCache, cacheKey);
+    if (cached.hit) return cached.value;
+  }
+
+  const readEnv = (key: string): string | undefined =>
+    readEnvCaseInsensitive(env, key, platform);
+
+  const explicitApp = readEnv("DSH_DESKTOP_APP_EXECUTABLE");
+  const explicitBootstrap = readEnv("DSH_DESKTOP_DSH_BOOTSTRAP");
+  if (explicitApp && explicitBootstrap && (await isExistingFileAsync(explicitApp))) {
+    const found = { executablePath: explicitApp, bootstrapPath: explicitBootstrap };
+    if (useCache) setTtlCached(packagedDshCache, cacheKey, found, true);
+    return found;
+  }
+
+  const candidateExes: string[] = [];
+  if (platform === "win32") {
+    const userProfile = readEnv("USERPROFILE") || homeDir;
+    const localAppData = readEnv("LOCALAPPDATA") || join(userProfile, "AppData", "Local");
+    const programFiles = readEnv("ProgramFiles");
+    const programFilesX86 = readEnv("ProgramFiles(x86)");
+    const roots = [
+      join(localAppData, "Programs"),
+      localAppData,
+      ...(programFiles ? [programFiles] : []),
+      ...(programFilesX86 ? [programFilesX86] : [])
+    ];
+    for (const root of roots) {
+      for (const candidate of WINDOWS_DSH_DESKTOP_CANDIDATES) {
+        candidateExes.push(join(root, candidate.folder, candidate.executable));
+      }
+    }
+
+    if (scanRegistry) {
+      const registryDirs = await discoverWindowsUninstallInstallDirsAsync({
+        cacheKey: "dsh",
+        searchTerms: ["DSH", "DeepSeek"],
+        matchEntry: (entry) =>
+          DSH_UNINSTALL_MATCH_RE.test(entry.displayName ?? "") ||
+          DSH_UNINSTALL_MATCH_RE.test(entry.comments ?? "") ||
+          DSH_UNINSTALL_MATCH_RE.test(entry.uninstallString ?? "") ||
+          DSH_UNINSTALL_MATCH_RE.test(entry.displayIcon ?? ""),
+        ...(options.queryRegistry ? { queryRegistry: options.queryRegistry } : {}),
+        ...(options.bypassCache ? { bypassCache: true } : {})
+      });
+      for (const dir of registryDirs) {
+        candidateExes.push(...(await collectDshDirExecutableCandidatesAsync(dir)));
+      }
+    }
+
+    if (shouldScanDriveRoots) {
+      for (const drive of WINDOWS_COMMON_DRIVES) {
+        for (const subdir of WINDOWS_DSH_DRIVE_SUBDIRS) {
+          const dir = `${drive}\\${subdir}`;
+          if (await pathExistsAsync(dir)) {
+            candidateExes.push(...(await collectDshDirExecutableCandidatesAsync(dir)));
+          }
+        }
+      }
+    }
+  } else if (platform === "darwin") {
+    const home = readEnv("HOME") || homeDir;
+    for (const root of ["/Applications", join(home, "Applications")]) {
+      for (const candidate of MACOS_DSH_DESKTOP_CANDIDATES) {
+        candidateExes.push(
+          join(root, candidate.bundle, "Contents", "MacOS", candidate.executable)
+        );
+      }
+    }
+  }
+
+  const seen = new Set<string>();
+  for (const executablePath of candidateExes) {
+    const dedupeKey = platform === "win32" ? executablePath.toLowerCase() : executablePath;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    if (!(await isExistingFileAsync(executablePath))) continue;
+    const appDir = dirname(executablePath);
+    const asarPath =
+      platform === "darwin"
+        ? resolve(appDir, "..", "Resources", "app.asar")
+        : join(appDir, "resources", "app.asar");
+    for (const entry of DSH_ASAR_BOOTSTRAP_ENTRIES) {
+      if (await hasAsarEntryAsync(asarPath, entry)) {
+        const found = {
+          executablePath,
+          bootstrapPath: join(asarPath, ...entry.split("/"))
+        };
+        if (useCache) setTtlCached(packagedDshCache, cacheKey, found, true);
+        return found;
+      }
+    }
+  }
+
+  if (useCache) setTtlCached(packagedDshCache, cacheKey, null, false);
   return null;
 }
 
@@ -908,8 +1346,23 @@ export function findPackagedAntigravityCli(
     queryRegistry?: DaemonWindowsRegistryQueryRunner;
     scanRegistry?: boolean;
     scanDriveRoots?: boolean;
+    deepScan?: boolean;
+    bypassCache?: boolean;
   } = {}
 ): string | null {
+  const scanRegistry = options.scanRegistry !== false;
+  const shouldScanDriveRoots =
+    options.deepScan === true || options.scanDriveRoots === true;
+  const useCache =
+    options.queryRegistry === undefined && options.bypassCache !== true;
+  const cacheKey = useCache
+    ? buildAgyDiscoveryCacheKey(env, platform, homeDir, scanRegistry, shouldScanDriveRoots)
+    : "";
+  if (useCache) {
+    const cached = getTtlCached(packagedAgyCache, cacheKey);
+    if (cached.hit) return cached.value;
+  }
+
   if (platform !== "win32") {
     const home = readEnvCaseInsensitive(env, "HOME", platform) || homeDir;
     for (const candidate of [
@@ -918,8 +1371,12 @@ export function findPackagedAntigravityCli(
       "/opt/homebrew/bin/agy",
       "/usr/local/bin/agy"
     ]) {
-      if (isExistingFile(candidate)) return candidate;
+      if (isExistingFile(candidate)) {
+        if (useCache) setTtlCached(packagedAgyCache, cacheKey, candidate, true);
+        return candidate;
+      }
     }
+    if (useCache) setTtlCached(packagedAgyCache, cacheKey, null, false);
     return null;
   }
 
@@ -942,21 +1399,22 @@ export function findPackagedAntigravityCli(
       : [])
   ];
 
-  if (options.scanRegistry !== false) {
+  if (scanRegistry) {
     const registryDirs = discoverWindowsUninstallInstallDirsSync({
       cacheKey: "antigravity",
       searchTerms: ["Antigravity"],
       matchEntry: (entry) =>
         entry.displayName !== undefined &&
         ANTIGRAVITY_UNINSTALL_MATCH_RE.test(entry.displayName.trim()),
-      ...(options.queryRegistry ? { queryRegistry: options.queryRegistry } : {})
+      ...(options.queryRegistry ? { queryRegistry: options.queryRegistry } : {}),
+      ...(options.bypassCache ? { bypassCache: true } : {})
     });
     for (const dir of registryDirs) {
       candidateDirs.push(join(dir, "bin"), dir, join(dir, "resources", "app", "bin"));
     }
   }
 
-  if (options.scanDriveRoots !== false) {
+  if (shouldScanDriveRoots) {
     for (const drive of WINDOWS_COMMON_DRIVES) {
       candidateDirs.push(
         `${drive}\\Antigravity\\bin`,
@@ -973,9 +1431,116 @@ export function findPackagedAntigravityCli(
     seen.add(key);
     for (const exe of ["agy.exe", "agy.cmd", "agy.bat"]) {
       const candidate = join(dir, exe);
-      if (isExistingFile(candidate)) return candidate;
+      if (isExistingFile(candidate)) {
+        if (useCache) setTtlCached(packagedAgyCache, cacheKey, candidate, true);
+        return candidate;
+      }
     }
   }
+  if (useCache) setTtlCached(packagedAgyCache, cacheKey, null, false);
+  return null;
+}
+
+export async function findPackagedAntigravityCliAsync(
+  env: Record<string, string | undefined> = process.env,
+  platform: NodeJS.Platform = process.platform,
+  homeDir: string = homedir(),
+  options: {
+    queryRegistry?: DaemonWindowsRegistryQueryRunner;
+    scanRegistry?: boolean;
+    scanDriveRoots?: boolean;
+    deepScan?: boolean;
+    bypassCache?: boolean;
+  } = {}
+): Promise<string | null> {
+  const scanRegistry = options.scanRegistry !== false;
+  const shouldScanDriveRoots =
+    options.deepScan === true || options.scanDriveRoots === true;
+  const useCache =
+    options.queryRegistry === undefined && options.bypassCache !== true;
+  const cacheKey = useCache
+    ? buildAgyDiscoveryCacheKey(env, platform, homeDir, scanRegistry, shouldScanDriveRoots)
+    : "";
+  if (useCache) {
+    const cached = getTtlCached(packagedAgyCache, cacheKey);
+    if (cached.hit) return cached.value;
+  }
+
+  if (platform !== "win32") {
+    const home = readEnvCaseInsensitive(env, "HOME", platform) || homeDir;
+    for (const candidate of [
+      join(home, ".antigravity", "bin", "agy"),
+      join(home, ".local", "bin", "agy"),
+      "/opt/homebrew/bin/agy",
+      "/usr/local/bin/agy"
+    ]) {
+      if (await isExistingFileAsync(candidate)) {
+        if (useCache) setTtlCached(packagedAgyCache, cacheKey, candidate, true);
+        return candidate;
+      }
+    }
+    if (useCache) setTtlCached(packagedAgyCache, cacheKey, null, false);
+    return null;
+  }
+
+  const userProfile = readEnvCaseInsensitive(env, "USERPROFILE", platform) || homeDir;
+  const localAppData =
+    readEnvCaseInsensitive(env, "LOCALAPPDATA", platform) || join(userProfile, "AppData", "Local");
+  const programFiles = readEnvCaseInsensitive(env, "ProgramFiles", platform);
+  const programFilesX86 = readEnvCaseInsensitive(env, "ProgramFiles(x86)", platform);
+
+  const candidateDirs: string[] = [
+    join(localAppData, "agy", "bin"),
+    join(userProfile, ".antigravity", "bin"),
+    join(localAppData, "Programs", "antigravity", "bin"),
+    join(localAppData, "Programs", "Antigravity"),
+    ...(programFiles
+      ? [join(programFiles, "Antigravity", "bin"), join(programFiles, "Antigravity")]
+      : []),
+    ...(programFilesX86
+      ? [join(programFilesX86, "Antigravity", "bin"), join(programFilesX86, "Antigravity")]
+      : [])
+  ];
+
+  if (scanRegistry) {
+    const registryDirs = await discoverWindowsUninstallInstallDirsAsync({
+      cacheKey: "antigravity",
+      searchTerms: ["Antigravity"],
+      matchEntry: (entry) =>
+        entry.displayName !== undefined &&
+        ANTIGRAVITY_UNINSTALL_MATCH_RE.test(entry.displayName.trim()),
+      ...(options.queryRegistry ? { queryRegistry: options.queryRegistry } : {}),
+      ...(options.bypassCache ? { bypassCache: true } : {})
+    });
+    for (const dir of registryDirs) {
+      candidateDirs.push(join(dir, "bin"), dir, join(dir, "resources", "app", "bin"));
+    }
+  }
+
+  if (shouldScanDriveRoots) {
+    for (const drive of WINDOWS_COMMON_DRIVES) {
+      candidateDirs.push(
+        `${drive}\\Antigravity\\bin`,
+        `${drive}\\Program Files\\Antigravity\\bin`,
+        `${drive}\\Programs\\Antigravity\\bin`
+      );
+    }
+  }
+
+  const seen = new Set<string>();
+  for (const dir of candidateDirs) {
+    const key = dir.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    for (const exe of ["agy.exe", "agy.cmd", "agy.bat"]) {
+      const candidate = join(dir, exe);
+      if (await isExistingFileAsync(candidate)) {
+        if (useCache) setTtlCached(packagedAgyCache, cacheKey, candidate, true);
+        return candidate;
+      }
+    }
+  }
+  if (useCache) setTtlCached(packagedAgyCache, cacheKey, null, false);
   return null;
 }
 
@@ -987,30 +1552,68 @@ export async function defaultCliProbe(
     env?: Record<string, string | undefined>;
     platform?: NodeJS.Platform;
     includeFallbackDirs?: boolean;
+    deepScan?: boolean;
+    refresh?: boolean;
+    bypassCache?: boolean;
   } = {}
 ): Promise<CliProbeResult> {
   const started = performance.now();
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
-  const extraDirs =
-    options.includeFallbackDirs === false
-      ? []
-      : getDefaultCliExtraDirs(env, platform);
+  const includeFallback = options.includeFallbackDirs !== false;
+  const deepScan = options.deepScan === true;
+  const useCache = options.refresh !== true && options.bypassCache !== true;
+  const pathEnv = readEnvCaseInsensitive(env, "PATH", platform) ?? "";
+  const probeCacheKey = useCache
+    ? [
+        platform,
+        command.trim().toLowerCase(),
+        args.join("\0"),
+        includeFallback ? "fb1" : "fb0",
+        deepScan ? "deep1" : "deep0",
+        pathEnv,
+        readEnvCaseInsensitive(env, "LOCALAPPDATA", platform) ?? "",
+        readEnvCaseInsensitive(env, "USERPROFILE", platform) ?? ""
+      ].join("|")
+    : "";
+
+  if (useCache) {
+    const cached = getTtlCached(cliProbeCache, probeCacheKey);
+    if (cached.hit) {
+      return { ...cached.value };
+    }
+  }
+
+  const storeAndReturn = (result: CliProbeResult): CliProbeResult => {
+    if (useCache) {
+      setTtlCached(
+        cliProbeCache,
+        probeCacheKey,
+        result,
+        result.found && !result.error
+      );
+    }
+    return result;
+  };
+
+  const extraDirs = includeFallback ? getDefaultCliExtraDirs(env, platform) : [];
   let located = findExecutableOnPath([command], {
     env,
     platform,
     extraDirs
   });
-  if (
-    !located &&
-    command.trim().toLowerCase() === "agy" &&
-    options.includeFallbackDirs !== false
-  ) {
-    located = findPackagedAntigravityCli(env, platform);
+  if (!located && command.trim().toLowerCase() === "agy" && includeFallback) {
+    located = await findPackagedAntigravityCliAsync(env, platform, homedir(), {
+      deepScan,
+      bypassCache: options.refresh === true || options.bypassCache === true
+    });
   }
   if (!located) {
-    if (command.trim().toLowerCase() === "dsh" && options.includeFallbackDirs !== false) {
-      const packagedDsh = findPackagedDshDesktopCli(env, platform);
+    if (command.trim().toLowerCase() === "dsh" && includeFallback) {
+      const packagedDsh = await findPackagedDshDesktopCliAsync(env, platform, homedir(), {
+        deepScan,
+        bypassCache: options.refresh === true || options.bypassCache === true
+      });
       if (packagedDsh) {
         const fastVersion = resolveDshInstalledVersionFastSync({
           binaryPath: packagedDsh.executablePath,
@@ -1019,12 +1622,12 @@ export async function defaultCliProbe(
           platform
         });
         if (fastVersion) {
-          return {
+          return storeAndReturn({
             found: true,
             path: packagedDsh.executablePath,
             version: fastVersion,
             latencyMs: Math.max(0, Math.round(performance.now() - started))
-          };
+          });
         }
         const dshEnv: Record<string, string | undefined> = {};
         for (const [key, value] of Object.entries(env)) {
@@ -1047,30 +1650,30 @@ export async function defaultCliProbe(
             }
           );
           const combined = `${String(result.stdout ?? "")}\n${String(result.stderr ?? "")}`;
-          return {
+          return storeAndReturn({
             found: true,
             path: packagedDsh.executablePath,
             version: extractFirstVersionLine(combined),
             latencyMs: Math.max(0, Math.round(performance.now() - started))
-          };
+          });
         } catch (err) {
-          return {
+          return storeAndReturn({
             found: true,
             path: packagedDsh.executablePath,
             version: null,
             latencyMs: Math.max(0, Math.round(performance.now() - started)),
             error: err instanceof Error ? err.message : String(err)
-          };
+          });
         }
       }
     }
-    return {
+    return storeAndReturn({
       found: false,
       path: null,
       version: null,
       latencyMs: Math.max(0, Math.round(performance.now() - started)),
       error: `PATH 中未找到 ${command}`
-    };
+    });
   }
 
   try {
@@ -1090,12 +1693,12 @@ export async function defaultCliProbe(
         version = fastVersion;
       }
     }
-    return {
+    return storeAndReturn({
       found: true,
       path: located,
       version,
       latencyMs: Math.max(0, Math.round(performance.now() - started))
-    };
+    });
   } catch (err) {
     if (command.trim().toLowerCase() === "dsh") {
       const fastVersion = resolveDshInstalledVersionFastSync({
@@ -1104,21 +1707,21 @@ export async function defaultCliProbe(
         platform
       });
       if (fastVersion) {
-        return {
+        return storeAndReturn({
           found: true,
           path: located,
           version: fastVersion,
           latencyMs: Math.max(0, Math.round(performance.now() - started))
-        };
+        });
       }
     }
-    return {
+    return storeAndReturn({
       found: true,
       path: located,
       version: null,
       latencyMs: Math.max(0, Math.round(performance.now() - started)),
       error: err instanceof Error ? err.message : String(err)
-    };
+    });
   }
 }
 
@@ -1278,12 +1881,58 @@ function scanWinGetPlatformToolsCandidates(localAppData: string): string[] {
   return candidates;
 }
 
+async function scanWinGetPlatformToolsCandidatesAsync(
+  localAppData: string
+): Promise<string[]> {
+  const packagesDir = join(localAppData, "Microsoft", "WinGet", "Packages");
+  const candidates: string[] = [];
+  try {
+    const entries = await readdirAsync(packagesDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      if (/^google\.platformtools/i.test(entry.name)) {
+        const pkgRoot = join(packagesDir, entry.name);
+        candidates.push(join(pkgRoot, "platform-tools", "adb.exe"));
+        candidates.push(join(pkgRoot, "adb.exe"));
+      }
+    }
+  } catch {
+    // ignore inaccessible WinGet package directories
+  }
+  return candidates;
+}
+
+function buildAndroidSdkCacheKey(
+  env: Record<string, string | undefined>,
+  platform: NodeJS.Platform,
+  homeDir: string,
+  scanWellKnownDirs: boolean,
+  deepScan: boolean
+): string {
+  const readEnv = (k: string) => readEnvCaseInsensitive(env, k, platform) ?? "";
+  return [
+    platform,
+    homeDir,
+    scanWellKnownDirs ? "wk1" : "wk0",
+    deepScan ? "deep1" : "deep0",
+    readEnv("ANDROID_HOME"),
+    readEnv("ANDROID_SDK_ROOT"),
+    readEnv("PATH"),
+    readEnv("USERPROFILE"),
+    readEnv("LOCALAPPDATA")
+  ].join("|");
+}
+
 export function defaultDetectAndroidSdk(
   options: {
     env?: Record<string, string | undefined>;
     platform?: NodeJS.Platform;
     homeDir?: string;
     scanWellKnownDirs?: boolean;
+    deepScan?: boolean;
+    bypassCache?: boolean;
   } = {}
 ): {
   sdkRoot: string | null;
@@ -1293,6 +1942,27 @@ export function defaultDetectAndroidSdk(
   const platform = options.platform ?? process.platform;
   const homeDir = options.homeDir ?? homedir();
   const scanWellKnownDirs = options.scanWellKnownDirs !== false;
+  const deepScan = options.deepScan === true;
+  const useCache = options.bypassCache !== true;
+  const cacheKey = useCache
+    ? buildAndroidSdkCacheKey(env, platform, homeDir, scanWellKnownDirs, deepScan)
+    : "";
+  if (useCache) {
+    const cached = getTtlCached(androidSdkCache, cacheKey);
+    if (cached.hit) return { ...cached.value };
+  }
+  const finish = (result: { sdkRoot: string | null; adbPath: string | null }) => {
+    if (useCache) {
+      setTtlCached(
+        androidSdkCache,
+        cacheKey,
+        result,
+        result.adbPath !== null || result.sdkRoot !== null
+      );
+    }
+    return result;
+  };
+
   const adbBin = platform === "win32" ? "adb.exe" : "adb";
 
   const envCandidates: string[] = [];
@@ -1314,31 +1984,31 @@ export function defaultDetectAndroidSdk(
     }
     const nestedAdb = join(dir, "platform-tools", adbBin);
     if (isExistingFile(nestedAdb)) {
-      return { sdkRoot: dir, adbPath: nestedAdb };
+      return finish({ sdkRoot: dir, adbPath: nestedAdb });
     }
     const directAdb = join(dir, adbBin);
     if (isExistingFile(directAdb)) {
-      return {
+      return finish({
         sdkRoot: inferAndroidSdkRootFromAdb(directAdb) ?? sdkRoot,
         adbPath: directAdb
-      };
+      });
     }
   }
 
   // 2. Refreshed PATH lookup (covers WinGet, Scoop, Chocolatey, Android Studio, custom PATH)
   const pathAdb = findExecutableOnPath([adbBin], { env, platform });
   if (pathAdb) {
-    return {
+    return finish({
       sdkRoot: sdkRoot ?? inferAndroidSdkRootFromAdb(pathAdb),
       adbPath: pathAdb
-    };
+    });
   }
 
   if (!scanWellKnownDirs) {
-    return { sdkRoot, adbPath: null };
+    return finish({ sdkRoot, adbPath: null });
   }
 
-  // 3. Well-known platform SDK roots & Windows package manager locations
+  // 3. Env-derived SDK roots & Windows user package manager locations (drive-root scans require deepScan: true)
   const wellKnownRoots: string[] = [];
   const directAdbCandidates: string[] = [];
 
@@ -1348,18 +2018,21 @@ export function defaultDetectAndroidSdk(
       env["LOCALAPPDATA"]?.trim() || join(userProfile, "AppData", "Local");
     wellKnownRoots.push(
       join(localAppData, "Android", "Sdk"),
-      join(userProfile, "AppData", "Local", "Android", "Sdk"),
-      "C:\\Android\\Sdk",
-      "D:\\Android\\Sdk"
+      join(userProfile, "AppData", "Local", "Android", "Sdk")
     );
     directAdbCandidates.push(
       join(localAppData, "Microsoft", "WinGet", "Links", "adb.exe"),
       ...scanWinGetPlatformToolsCandidates(localAppData),
       join(userProfile, "scoop", "shims", "adb.exe"),
-      join(userProfile, "scoop", "apps", "adb", "current", "platform-tools", "adb.exe"),
-      "C:\\ProgramData\\chocolatey\\bin\\adb.exe",
-      "C:\\platform-tools\\adb.exe"
+      join(userProfile, "scoop", "apps", "adb", "current", "platform-tools", "adb.exe")
     );
+    if (deepScan) {
+      wellKnownRoots.push("C:\\Android\\Sdk", "D:\\Android\\Sdk");
+      directAdbCandidates.push(
+        "C:\\ProgramData\\chocolatey\\bin\\adb.exe",
+        "C:\\platform-tools\\adb.exe"
+      );
+    }
   } else if (platform === "darwin") {
     wellKnownRoots.push(
       join(homeDir, "Library", "Android", "sdk"),
@@ -1383,26 +2056,170 @@ export function defaultDetectAndroidSdk(
     }
     const adbCandidate = join(dir, "platform-tools", adbBin);
     if (isExistingFile(adbCandidate)) {
-      return { sdkRoot: dir, adbPath: adbCandidate };
+      return finish({ sdkRoot: dir, adbPath: adbCandidate });
     }
   }
 
   for (const directAdb of directAdbCandidates) {
     if (isExistingFile(directAdb)) {
-      return {
+      return finish({
         sdkRoot: sdkRoot ?? inferAndroidSdkRootFromAdb(directAdb),
         adbPath: directAdb
-      };
+      });
     }
   }
 
-  return { sdkRoot, adbPath: null };
+  return finish({ sdkRoot, adbPath: null });
 }
 
-function detectLocalToolchainPackage(
+export async function defaultDetectAndroidSdkAsync(
+  options: {
+    env?: Record<string, string | undefined>;
+    platform?: NodeJS.Platform;
+    homeDir?: string;
+    scanWellKnownDirs?: boolean;
+    deepScan?: boolean;
+    bypassCache?: boolean;
+  } = {}
+): Promise<{
+  sdkRoot: string | null;
+  adbPath: string | null;
+}> {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const homeDir = options.homeDir ?? homedir();
+  const scanWellKnownDirs = options.scanWellKnownDirs !== false;
+  const deepScan = options.deepScan === true;
+  const useCache = options.bypassCache !== true;
+  const cacheKey = useCache
+    ? buildAndroidSdkCacheKey(env, platform, homeDir, scanWellKnownDirs, deepScan)
+    : "";
+  if (useCache) {
+    const cached = getTtlCached(androidSdkCache, cacheKey);
+    if (cached.hit) return { ...cached.value };
+  }
+  const finish = (result: { sdkRoot: string | null; adbPath: string | null }) => {
+    if (useCache) {
+      setTtlCached(
+        androidSdkCache,
+        cacheKey,
+        result,
+        result.adbPath !== null || result.sdkRoot !== null
+      );
+    }
+    return result;
+  };
+
+  const adbBin = platform === "win32" ? "adb.exe" : "adb";
+
+  const envCandidates: string[] = [];
+  const envHome = env["ANDROID_HOME"]?.trim();
+  const envSdkRoot = env["ANDROID_SDK_ROOT"]?.trim();
+  if (envHome) envCandidates.push(resolve(envHome));
+  if (envSdkRoot) envCandidates.push(resolve(envSdkRoot));
+
+  let sdkRoot: string | null = null;
+
+  for (const dir of envCandidates) {
+    if (!(await pathExistsAsync(dir))) {
+      continue;
+    }
+    if (sdkRoot === null) {
+      sdkRoot =
+        basename(dir).toLowerCase() === "platform-tools" ? dirname(dir) : dir;
+    }
+    const nestedAdb = join(dir, "platform-tools", adbBin);
+    if (await isExistingFileAsync(nestedAdb)) {
+      return finish({ sdkRoot: dir, adbPath: nestedAdb });
+    }
+    const directAdb = join(dir, adbBin);
+    if (await isExistingFileAsync(directAdb)) {
+      return finish({
+        sdkRoot: inferAndroidSdkRootFromAdb(directAdb) ?? sdkRoot,
+        adbPath: directAdb
+      });
+    }
+  }
+
+  const pathAdb = findExecutableOnPath([adbBin], { env, platform });
+  if (pathAdb) {
+    return finish({
+      sdkRoot: sdkRoot ?? inferAndroidSdkRootFromAdb(pathAdb),
+      adbPath: pathAdb
+    });
+  }
+
+  if (!scanWellKnownDirs) {
+    return finish({ sdkRoot, adbPath: null });
+  }
+
+  const wellKnownRoots: string[] = [];
+  const directAdbCandidates: string[] = [];
+
+  if (platform === "win32") {
+    const userProfile = env["USERPROFILE"]?.trim() || homeDir;
+    const localAppData =
+      env["LOCALAPPDATA"]?.trim() || join(userProfile, "AppData", "Local");
+    wellKnownRoots.push(
+      join(localAppData, "Android", "Sdk"),
+      join(userProfile, "AppData", "Local", "Android", "Sdk")
+    );
+    directAdbCandidates.push(
+      join(localAppData, "Microsoft", "WinGet", "Links", "adb.exe"),
+      ...(await scanWinGetPlatformToolsCandidatesAsync(localAppData)),
+      join(userProfile, "scoop", "shims", "adb.exe"),
+      join(userProfile, "scoop", "apps", "adb", "current", "platform-tools", "adb.exe")
+    );
+    if (deepScan) {
+      wellKnownRoots.push("C:\\Android\\Sdk", "D:\\Android\\Sdk");
+      directAdbCandidates.push(
+        "C:\\ProgramData\\chocolatey\\bin\\adb.exe",
+        "C:\\platform-tools\\adb.exe"
+      );
+    }
+  } else if (platform === "darwin") {
+    wellKnownRoots.push(
+      join(homeDir, "Library", "Android", "sdk"),
+      "/opt/homebrew/share/android-commandlinetools",
+      "/usr/local/share/android-commandlinetools"
+    );
+  } else {
+    wellKnownRoots.push(
+      join(homeDir, "Android", "Sdk"),
+      "/opt/android-sdk",
+      "/usr/lib/android-sdk"
+    );
+  }
+
+  for (const dir of wellKnownRoots) {
+    if (!(await pathExistsAsync(dir))) {
+      continue;
+    }
+    if (sdkRoot === null) {
+      sdkRoot = dir;
+    }
+    const adbCandidate = join(dir, "platform-tools", adbBin);
+    if (await isExistingFileAsync(adbCandidate)) {
+      return finish({ sdkRoot: dir, adbPath: adbCandidate });
+    }
+  }
+
+  for (const directAdb of directAdbCandidates) {
+    if (await isExistingFileAsync(directAdb)) {
+      return finish({
+        sdkRoot: sdkRoot ?? inferAndroidSdkRootFromAdb(directAdb),
+        adbPath: directAdb
+      });
+    }
+  }
+
+  return finish({ sdkRoot, adbPath: null });
+}
+
+async function detectLocalToolchainPackageAsync(
   packageBinary: string,
   dataDir: string
-): string | null {
+): Promise<string | null> {
   const onPath = findExecutableOnPath([packageBinary], {
     extraDirs: getDefaultCliExtraDirs()
   });
@@ -1424,12 +2241,8 @@ function detectLocalToolchainPackage(
       join(root, "node_modules", packageBinary, "package.json")
     ];
     for (const candidate of candidates) {
-      try {
-        if (existsSync(candidate)) {
-          return candidate;
-        }
-      } catch {
-        // ignore
+      if (await pathExistsAsync(candidate)) {
+        return candidate;
       }
     }
   }
@@ -1495,6 +2308,7 @@ export class ServiceDiagnosticsService {
   private readonly cacheTtlMs: number;
   private readonly singleCheckTimeoutMs: number;
   private readonly globalBudgetMs: number;
+  private readonly customCliProbe: boolean;
   private readonly cliProbeFn: (
     command: string,
     args: string[],
@@ -1506,16 +2320,19 @@ export class ServiceDiagnosticsService {
     headers?: Record<string, string>,
     method?: "HEAD" | "GET"
   ) => Promise<NetworkProbeResult>;
-  private readonly detectAndroidSdkFn: () => {
-    sdkRoot: string | null;
-    adbPath: string | null;
-  };
+  private readonly customDetectAndroidSdkFn:
+    | (() => { sdkRoot: string | null; adbPath: string | null })
+    | undefined;
   private readonly resolve7zaFn: () => string | null;
   private readonly refreshEnvFn: () => Promise<WindowsEnvRefreshResult | void> | void;
   private readonly providerProbeService: PrismuxProviderProbeService;
+  private configuredProvidersSource:
+    | readonly string[]
+    | (() => readonly string[] | null | undefined)
+    | undefined;
 
-  private cachedReport: ServiceDiagnosticsResponse | null = null;
-  private inflightRun: Promise<ServiceDiagnosticsResponse> | null = null;
+  private readonly cachedReports = new Map<string, ServiceDiagnosticsResponse>();
+  private readonly inflightRuns = new Map<string, Promise<ServiceDiagnosticsResponse>>();
   private generation = 0;
 
   constructor(options: ServiceDiagnosticsOptions) {
@@ -1529,10 +2346,10 @@ export class ServiceDiagnosticsService {
       options.globalBudgetMs ?? DEFAULT_GLOBAL_BUDGET_MS,
       2_700
     );
+    this.customCliProbe = options.cliProbe !== undefined;
     this.cliProbeFn = options.cliProbe ?? defaultCliProbe;
     this.networkProbeFn = options.networkProbe ?? defaultNetworkProbe;
-    this.detectAndroidSdkFn =
-      options.detectAndroidSdk ?? (() => defaultDetectAndroidSdk());
+    this.customDetectAndroidSdkFn = options.detectAndroidSdk;
     this.resolve7zaFn =
       options.resolve7za ??
       (() => this.opts.appUpdater?.resolve7zaPath() ?? resolve7zaBinary());
@@ -1542,22 +2359,60 @@ export class ServiceDiagnosticsService {
         refreshWindowsEnvironmentFromRegistry({
           timeoutMs: Math.min(600, this.singleCheckTimeoutMs)
         }));
+    this.configuredProvidersSource = options.configuredProviders;
     if (options.providerProbeService && !options.cliProbe) {
       this.providerProbeService = options.providerProbeService;
     } else {
       this.providerProbeService = new PrismuxProviderProbeService({
         coreRpcClient: options.coreRpcClient ?? options.t3RpcClient,
         cliTimeoutMs: this.singleCheckTimeoutMs,
-        cliProbe: this.cliProbeFn,
-        refreshEnv: this.refreshEnvFn
+        ...(options.cliProbe ? { cliProbe: options.cliProbe } : {}),
+        refreshEnv: this.refreshEnvFn,
+        ...(options.configuredProviders !== undefined
+          ? { configuredProviders: options.configuredProviders }
+          : {})
       });
     }
   }
 
+  setConfiguredProviders(providers: readonly string[] | null): void {
+    this.configuredProvidersSource = providers ?? undefined;
+    this.providerProbeService.setConfiguredProviders(providers);
+    this.cachedReports.clear();
+  }
+
+  private resolveScopedProviderIds(options: RunDiagnosticsOptions): string[] | null {
+    if (options.includeAll === true) {
+      return null;
+    }
+    const rawList =
+      options.providers !== undefined && options.providers !== null
+        ? options.providers
+        : typeof this.configuredProvidersSource === "function"
+          ? this.configuredProvidersSource()
+          : this.configuredProvidersSource;
+    if (rawList === undefined || rawList === null) {
+      return null;
+    }
+    const seen = new Set<string>();
+    const canonical: string[] = [];
+    for (const raw of rawList) {
+      const id = canonicalizeProbeProviderId(raw);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      canonical.push(id);
+    }
+    canonical.sort();
+    return canonical;
+  }
+
   clearCache(): void {
     this.generation += 1;
-    this.cachedReport = null;
-    this.inflightRun = null;
+    this.cachedReports.clear();
+    this.inflightRuns.clear();
+    if (!this.customCliProbe) {
+      clearCliDiscoveryCaches();
+    }
     this.providerProbeService.clearCache();
   }
 
@@ -1565,40 +2420,64 @@ export class ServiceDiagnosticsService {
     this.clearCache();
   }
 
-  async runDiagnostics(force = false): Promise<ServiceDiagnosticsResponse> {
+  async runDiagnostics(
+    forceOrOptions: boolean | RunDiagnosticsOptions = false
+  ): Promise<ServiceDiagnosticsResponse> {
+    const opts: RunDiagnosticsOptions =
+      typeof forceOrOptions === "boolean"
+        ? { force: forceOrOptions }
+        : forceOrOptions;
+    const force = opts.force === true;
+    const deepScan = opts.deepScan === true;
+    const scopedProviders = this.resolveScopedProviderIds(opts);
+    const scopeKey = `${scopedProviders === null ? "all" : scopedProviders.length === 0 ? "none" : scopedProviders.join(",")}:${deepScan ? "deep" : "std"}`;
+
     const now = Date.now();
-    if (
-      !force &&
-      this.cachedReport !== null &&
-      now - this.cachedReport.checkedAt < this.cacheTtlMs
-    ) {
+    const cachedReport = this.cachedReports.get(scopeKey);
+    if (!force && cachedReport !== undefined && now - cachedReport.checkedAt < this.cacheTtlMs) {
       return {
-        ...this.cachedReport,
+        ...cachedReport,
         cached: true
       };
     }
 
-    if (!force && this.inflightRun !== null) {
-      return this.inflightRun;
+    const existingInflight = this.inflightRuns.get(scopeKey);
+    if (!force && existingInflight !== undefined) {
+      return existingInflight;
     }
 
     if (force) {
       this.generation += 1;
-      this.cachedReport = null;
+      this.cachedReports.clear();
+      if (!this.customCliProbe) {
+        clearCliDiscoveryCaches();
+      }
+      this.providerProbeService.clearCache();
     }
 
     const runGeneration = this.generation;
-    const run = this.executeAllChecks(runGeneration).finally(() => {
-      if (this.inflightRun === run) {
-        this.inflightRun = null;
+    const run = this.executeAllChecks(runGeneration, {
+      force,
+      deepScan,
+      scopedProviders,
+      scopeKey
+    }).finally(() => {
+      if (this.inflightRuns.get(scopeKey) === run) {
+        this.inflightRuns.delete(scopeKey);
       }
     });
-    this.inflightRun = run;
+    this.inflightRuns.set(scopeKey, run);
     return run;
   }
 
   private async executeAllChecks(
-    runGeneration: number
+    runGeneration: number,
+    ctx: {
+      force: boolean;
+      deepScan: boolean;
+      scopedProviders: string[] | null;
+      scopeKey: string;
+    }
   ): Promise<ServiceDiagnosticsResponse> {
     const startedAt = performance.now();
     const budget = this.globalBudgetMs;
@@ -1615,6 +2494,12 @@ export class ServiceDiagnosticsService {
     const elapsedAfterEnvMs = Math.max(0, performance.now() - startedAt);
     const remainingBudget = Math.max(400, budget - elapsedAfterEnvMs);
     const perCheckTimeout = Math.min(this.singleCheckTimeoutMs, remainingBudget);
+
+    const allowedProviderSet =
+      ctx.scopedProviders !== null ? new Set(ctx.scopedProviders) : null;
+    const providerSpecsToProbe = PRISMUX_PROBE_PROVIDER_SPECS.filter(
+      (spec) => allowedProviderSet === null || allowedProviderSet.has(spec.providerId)
+    );
 
     const checkSpecs: Array<{
       id: string;
@@ -1655,7 +2540,7 @@ export class ServiceDiagnosticsService {
         category: "memory_sync",
         name: "memory.db (SQLite WAL + FTS5)",
         settingsRoute: "/settings/memory",
-        run: async () => this.checkMemoryDb()
+        run: () => this.checkMemoryDb()
       },
       {
         id: "memory.sqlite_vec",
@@ -1672,49 +2557,20 @@ export class ServiceDiagnosticsService {
         run: async () => this.checkSyncVault()
       },
 
-      // c. AI Provider CLI (6) — delegated to unified PrismuxProviderProbeService, ZERO OAuth/keyring reads
-      {
-        id: "provider.agy",
-        category: "ai_providers",
-        name: "Antigravity CLI (agy · 纯 ACP)",
+      // c. AI Provider CLI — scoped to configured providers when specified; ZERO OAuth/keyring reads
+      ...providerSpecsToProbe.map((spec) => ({
+        id: spec.diagId,
+        category: "ai_providers" as const,
+        name: spec.diagName,
         settingsRoute: "/settings/providers",
-        run: () => this.checkProviderViaUnifiedProbe("antigravity", perCheckTimeout)
-      },
-      {
-        id: "provider.claude",
-        category: "ai_providers",
-        name: "Claude Code CLI (claude)",
-        settingsRoute: "/settings/providers",
-        run: () => this.checkProviderViaUnifiedProbe("claudeAgent", perCheckTimeout)
-      },
-      {
-        id: "provider.codex",
-        category: "ai_providers",
-        name: "Codex CLI (codex)",
-        settingsRoute: "/settings/providers",
-        run: () => this.checkProviderViaUnifiedProbe("codex", perCheckTimeout)
-      },
-      {
-        id: "provider.dsh",
-        category: "ai_providers",
-        name: "DeepSeek Harness CLI (dsh · ACP)",
-        settingsRoute: "/settings/providers",
-        run: () => this.checkProviderViaUnifiedProbe("dsh", perCheckTimeout)
-      },
-      {
-        id: "provider.gemini",
-        category: "ai_providers",
-        name: "Gemini CLI (gemini)",
-        settingsRoute: "/settings/providers",
-        run: () => this.checkProviderViaUnifiedProbe("gemini", perCheckTimeout)
-      },
-      {
-        id: "provider.opencode",
-        category: "ai_providers",
-        name: "OpenCode CLI (opencode)",
-        settingsRoute: "/settings/providers",
-        run: () => this.checkProviderViaUnifiedProbe("opencode", perCheckTimeout)
-      },
+        run: () =>
+          this.checkProviderViaUnifiedProbe(
+            spec.providerId,
+            perCheckTimeout,
+            ctx.force,
+            ctx.deepScan
+          )
+      })),
 
       // d. 模拟器与媒体工具 (7)
       {
@@ -1735,13 +2591,13 @@ export class ServiceDiagnosticsService {
         id: "tool.android_sdk",
         category: "simulators_media",
         name: "Android SDK / adb",
-        run: () => this.checkAndroidSdk(perCheckTimeout)
+        run: () => this.checkAndroidSdk(perCheckTimeout, ctx.force, ctx.deepScan)
       },
       {
         id: "tool.expo_device_hub",
         category: "simulators_media",
         name: "expo-device-hub",
-        run: async () =>
+        run: () =>
           this.checkDeviceToolchainBinary(
             "tool.expo_device_hub",
             "expo-device-hub",
@@ -1752,7 +2608,7 @@ export class ServiceDiagnosticsService {
         id: "tool.agent_device",
         category: "simulators_media",
         name: "agent-device",
-        run: async () =>
+        run: () =>
           this.checkDeviceToolchainBinary(
             "tool.agent_device",
             "agent-device",
@@ -1771,7 +2627,9 @@ export class ServiceDiagnosticsService {
             args: ["--version"],
             fixAction: "安装 Git 并加入 PATH",
             fixCommand: "winget install --id Git.Git -e",
-            timeoutMs: perCheckTimeout
+            timeoutMs: perCheckTimeout,
+            force: ctx.force,
+            deepScan: ctx.deepScan
           })
       },
       {
@@ -1786,7 +2644,9 @@ export class ServiceDiagnosticsService {
             args: ["--version"],
             fixAction: "按需安装 GitHub CLI（仅做版本探测）",
             fixCommand: "winget install --id GitHub.cli -e",
-            timeoutMs: perCheckTimeout
+            timeoutMs: perCheckTimeout,
+            force: ctx.force,
+            deepScan: ctx.deepScan
           })
       },
 
@@ -1946,7 +2806,13 @@ export class ServiceDiagnosticsService {
     };
 
     if (runGeneration === this.generation) {
-      this.cachedReport = report;
+      if (this.cachedReports.size >= 8 && !this.cachedReports.has(ctx.scopeKey)) {
+        const oldest = this.cachedReports.keys().next().value;
+        if (oldest !== undefined) {
+          this.cachedReports.delete(oldest);
+        }
+      }
+      this.cachedReports.set(ctx.scopeKey, report);
     }
     return report;
   }
@@ -2140,7 +3006,7 @@ export class ServiceDiagnosticsService {
     };
   }
 
-  private checkMemoryDb(): DiagnosticCheckItem {
+  private async checkMemoryDb(): Promise<DiagnosticCheckItem> {
     const dbPath =
       this.opts.memoryDbPath ?? join(this.opts.dataDir, "data", "memory.db");
     if (!this.opts.memoryStore) {
@@ -2153,11 +3019,17 @@ export class ServiceDiagnosticsService {
         settingsRoute: "/settings/memory"
       };
     }
-    const exists = dbPath === ":memory:" || existsSync(dbPath);
-    const sizeKb =
-      dbPath !== ":memory:" && exists
-        ? Math.round((statSync(dbPath).size / 1024) * 10) / 10
-        : null;
+    let exists = dbPath === ":memory:";
+    let sizeKb: number | null = null;
+    if (!exists) {
+      try {
+        const st = await statAsync(dbPath);
+        exists = true;
+        sizeKb = Math.round((st.size / 1024) * 10) / 10;
+      } catch {
+        exists = false;
+      }
+    }
     return {
       id: "memory.sqlite_wal",
       category: "memory_sync",
@@ -2246,7 +3118,9 @@ export class ServiceDiagnosticsService {
 
   private async checkProviderViaUnifiedProbe(
     providerId: string,
-    timeoutMs: number
+    timeoutMs: number,
+    force = false,
+    deepScan = false
   ): Promise<DiagnosticCheckItem | null> {
     const spec: ProviderProbeSpec | undefined =
       this.providerProbeService.getProviderSpec(providerId);
@@ -2254,9 +3128,10 @@ export class ServiceDiagnosticsService {
       return null;
     }
     const snapshot = await this.providerProbeService.probeProvider(providerId, {
-      refresh: true,
+      refresh: force,
       skipEnvRefresh: true,
-      timeoutMs
+      timeoutMs,
+      deepScan
     });
     if (!snapshot.installed) {
       // Optional AI Provider CLIs that are not installed on this machine are omitted
@@ -2366,8 +3241,17 @@ export class ServiceDiagnosticsService {
     };
   }
 
-  private async checkAndroidSdk(timeoutMs: number): Promise<DiagnosticCheckItem> {
-    const detected = this.detectAndroidSdkFn();
+  private async checkAndroidSdk(
+    timeoutMs: number,
+    force = false,
+    deepScan = false
+  ): Promise<DiagnosticCheckItem> {
+    const detected = this.customDetectAndroidSdkFn
+      ? this.customDetectAndroidSdkFn()
+      : await defaultDetectAndroidSdkAsync({
+          deepScan,
+          bypassCache: force
+        });
     if (detected.adbPath) {
       let version: string | null = null;
       const started = performance.now();
@@ -2410,12 +3294,12 @@ export class ServiceDiagnosticsService {
     };
   }
 
-  private checkDeviceToolchainBinary(
+  private async checkDeviceToolchainBinary(
     id: string,
     name: string,
     binName: string
-  ): DiagnosticCheckItem {
-    const located = detectLocalToolchainPackage(binName, this.opts.dataDir);
+  ): Promise<DiagnosticCheckItem> {
+    const located = await detectLocalToolchainPackageAsync(binName, this.opts.dataDir);
     if (located) {
       return {
         id,
@@ -2445,12 +3329,15 @@ export class ServiceDiagnosticsService {
     fixAction: string;
     fixCommand: string;
     timeoutMs: number;
+    force?: boolean;
+    deepScan?: boolean;
   }): Promise<DiagnosticCheckItem> {
-    const probed = await this.cliProbeFn(
-      params.command,
-      params.args,
-      params.timeoutMs
-    );
+    const probed = this.customCliProbe
+      ? await this.cliProbeFn(params.command, params.args, params.timeoutMs)
+      : await defaultCliProbe(params.command, params.args, params.timeoutMs, {
+          refresh: params.force === true,
+          deepScan: params.deepScan === true
+        });
     if (probed.found) {
       return {
         id: params.id,

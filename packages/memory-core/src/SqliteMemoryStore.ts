@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync, type SQLInputValue, type SQLOutputValue } from "node:sqlite";
 import {
@@ -24,6 +24,36 @@ import { generateUlid } from "./ulid.js";
 
 const RRF_K = 60;
 const SQLITE_VEC_MAX_K = 4096;
+export const MEMORY_DB_JOURNAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024; // 64 MiB
+export const DEFAULT_TOMBSTONE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+export const DEFAULT_MAX_RECALL_SNAPSHOTS = 500;
+export const DEFAULT_RECALL_SNAPSHOT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+export const DEFAULT_INCREMENTAL_VACUUM_PAGES = 1024;
+export const DEFAULT_DAILY_MAINTENANCE_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
+
+export interface MemoryCompactOptions {
+  /** Soft-deleted `memory_entries` older than this threshold are hard-purged (default: 30d). */
+  tombstoneMaxAgeMs?: number;
+  /** Maximum rows retained in `memory_recall_snapshots` (default: 500). */
+  maxRecallSnapshots?: number;
+  /** Age threshold for pruning `memory_recall_snapshots` (default: 30d). */
+  recallSnapshotMaxAgeMs?: number;
+  /** Max pages reclaimed per `PRAGMA incremental_vacuum(N)` call (default: 1024). */
+  incrementalVacuumPages?: number;
+  /** Injectable clock for deterministic tests. */
+  nowMs?: number;
+}
+
+export interface MemoryCompactResult {
+  purgedTombstones: number;
+  trimmedRecallSnapshots: number;
+  walCheckpointed: boolean;
+  incrementalVacuumRan: boolean;
+  bytesBefore: number;
+  bytesAfter: number;
+  freedBytes: number;
+  durationMs: number;
+}
 
 export interface SqliteMemoryStoreConfig extends MemoryStoreConfig {
   /** Whether to attempt loading the `sqlite-vec` extension (default: true). */
@@ -34,6 +64,22 @@ export interface SqliteMemoryStoreConfig extends MemoryStoreConfig {
   resourcesPath?: string | null;
   /** Whether to allow fallback `import("sqlite-vec")` lookup (default: true). */
   allowPackageImport?: boolean;
+  /** Interval for daily unref'd background maintenance (default: 24h; 0 disables). */
+  maintenanceIntervalMs?: number;
+}
+
+function measureSqliteFootprintBytes(dbPath: string): number {
+  if (dbPath === ":memory:") return 0;
+  let total = 0;
+  for (const candidate of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+    try {
+      const st = statSync(candidate);
+      if (st.isFile()) total += st.size;
+    } catch {
+      // Sidecar files may not exist yet
+    }
+  }
+  return total;
 }
 
 type DbRow = Record<string, SQLOutputValue>;
@@ -145,6 +191,7 @@ export class SqliteMemoryStore implements MemoryStore {
   private vecExtensionPath: string | null = null;
   private vecSource: SqliteVecCandidateSource | null = null;
   private vecLoadError: string | null = null;
+  private maintenanceTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(config: SqliteMemoryStoreConfig) {
     if (!Number.isInteger(config.embeddingDimensions) || config.embeddingDimensions <= 0) {
@@ -193,10 +240,13 @@ export class SqliteMemoryStore implements MemoryStore {
 
     const db = new DatabaseSync(this.config.dbPath, { allowExtension: true });
     try {
+      db.exec("PRAGMA auto_vacuum = INCREMENTAL;");
       if (this.config.enableWal) {
         db.exec("PRAGMA journal_mode = WAL;");
       }
-      db.exec("PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;");
+      db.exec(
+        `PRAGMA journal_size_limit = ${MEMORY_DB_JOURNAL_SIZE_LIMIT_BYTES}; PRAGMA busy_timeout = 5000; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;`
+      );
 
       db.exec(`
         CREATE TABLE IF NOT EXISTS memory_entries (
@@ -290,6 +340,7 @@ export class SqliteMemoryStore implements MemoryStore {
       }
 
       this.db = db;
+      this.scheduleDailyMaintenance();
     } catch (error) {
       try {
         if (db.isOpen) {
@@ -742,7 +793,154 @@ export class SqliteMemoryStore implements MemoryStore {
     };
   }
 
+  private scheduleDailyMaintenance(): void {
+    this.clearMaintenanceTimer();
+    if (this.config.dbPath === ":memory:") {
+      return;
+    }
+    const intervalMs =
+      this.config.maintenanceIntervalMs ?? DEFAULT_DAILY_MAINTENANCE_INTERVAL_MS;
+    if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+      return;
+    }
+    this.maintenanceTimer = setInterval(() => {
+      void this.compact().catch(() => {
+        // Non-fatal background maintenance failure.
+      });
+    }, intervalMs);
+    this.maintenanceTimer.unref?.();
+  }
+
+  private clearMaintenanceTimer(): void {
+    if (this.maintenanceTimer !== undefined) {
+      clearInterval(this.maintenanceTimer);
+      this.maintenanceTimer = undefined;
+    }
+  }
+
+  /**
+   * Performs safe, non-destructive SQLite maintenance on `memory.db`:
+   * 1. Hard-purges soft-deleted `memory_entries` tombstones older than 30 days
+   * 2. Trims `memory_recall_snapshots` to newest 500 rows & within 30 days
+   * 3. Runs `PRAGMA wal_checkpoint(TRUNCATE)` and `PRAGMA incremental_vacuum(1024)`
+   */
+  async compact(options: MemoryCompactOptions = {}): Promise<MemoryCompactResult> {
+    const db = this.requireDb();
+    const startedAt = performance.now();
+    const nowMs = options.nowMs ?? Date.now();
+    const tombstoneMaxAgeMs = Math.max(
+      0,
+      options.tombstoneMaxAgeMs ?? DEFAULT_TOMBSTONE_MAX_AGE_MS
+    );
+    const maxRecallSnapshots = Math.max(
+      0,
+      Math.floor(options.maxRecallSnapshots ?? DEFAULT_MAX_RECALL_SNAPSHOTS)
+    );
+    const recallSnapshotMaxAgeMs = Math.max(
+      0,
+      options.recallSnapshotMaxAgeMs ?? DEFAULT_RECALL_SNAPSHOT_MAX_AGE_MS
+    );
+    const incrementalVacuumPages = Math.max(
+      0,
+      Math.floor(
+        options.incrementalVacuumPages ?? DEFAULT_INCREMENTAL_VACUUM_PAGES
+      )
+    );
+
+    const bytesBefore = measureSqliteFootprintBytes(this.config.dbPath);
+
+    const { purgedTombstones, trimmedRecallSnapshots } = runInTransaction(db, () => {
+      const tombstoneCutoff = nowMs - tombstoneMaxAgeMs;
+      const expiredRows = db
+        .prepare(
+          "SELECT id FROM memory_entries WHERE deleted_at IS NOT NULL AND deleted_at < ?"
+        )
+        .all(tombstoneCutoff) as Array<{ id?: unknown }>;
+
+      for (const row of expiredRows) {
+        if (typeof row.id !== "string" || row.id.length === 0) continue;
+        db.prepare("DELETE FROM memory_fts WHERE id = ?").run(row.id);
+        if (this.vecEnabled) {
+          db.prepare("DELETE FROM memory_vec WHERE id = ?").run(row.id);
+        }
+      }
+
+      const purgedRes = db
+        .prepare(
+          "DELETE FROM memory_entries WHERE deleted_at IS NOT NULL AND deleted_at < ?"
+        )
+        .run(tombstoneCutoff);
+
+      const snapshotCutoff = nowMs - recallSnapshotMaxAgeMs;
+      const oldSnapshotsRes = db
+        .prepare("DELETE FROM memory_recall_snapshots WHERE updated_at < ?")
+        .run(snapshotCutoff);
+
+      const overflowSnapshotsRes = db
+        .prepare(
+          `DELETE FROM memory_recall_snapshots
+           WHERE rowid NOT IN (
+             SELECT rowid FROM memory_recall_snapshots
+             ORDER BY updated_at DESC, rowid DESC
+             LIMIT ?
+           )`
+        )
+        .run(maxRecallSnapshots);
+
+      return {
+        purgedTombstones: Number(purgedRes.changes ?? 0),
+        trimmedRecallSnapshots:
+          Number(oldSnapshotsRes.changes ?? 0) +
+          Number(overflowSnapshotsRes.changes ?? 0)
+      };
+    });
+
+    let walCheckpointed = false;
+    let incrementalVacuumRan = false;
+    if (this.config.dbPath !== ":memory:") {
+      try {
+        db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+        walCheckpointed = true;
+      } catch {
+        walCheckpointed = false;
+      }
+      if (incrementalVacuumPages > 0) {
+        try {
+          db.exec(`PRAGMA incremental_vacuum(${incrementalVacuumPages});`);
+          incrementalVacuumRan = true;
+        } catch {
+          incrementalVacuumRan = false;
+        }
+        try {
+          db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+        } catch {
+          // Ignore secondary checkpoint error
+        }
+      }
+    } else if (incrementalVacuumPages > 0) {
+      try {
+        db.exec(`PRAGMA incremental_vacuum(${incrementalVacuumPages});`);
+        incrementalVacuumRan = true;
+      } catch {
+        incrementalVacuumRan = false;
+      }
+    }
+
+    const bytesAfter = measureSqliteFootprintBytes(this.config.dbPath);
+    return {
+      purgedTombstones,
+      trimmedRecallSnapshots,
+      walCheckpointed,
+      incrementalVacuumRan,
+      bytesBefore,
+      bytesAfter,
+      freedBytes: Math.max(0, bytesBefore - bytesAfter),
+      durationMs: Math.max(0, Math.round(performance.now() - startedAt))
+    };
+  }
+
   async close(): Promise<void> {
+    this.clearMaintenanceTimer();
     if (this.db !== undefined) {
       if (this.db.isOpen) {
         this.db.close();

@@ -1,13 +1,10 @@
 import {
-  existsSync,
-  openSync,
-  readFileSync,
-  readSync,
-  readdirSync,
-  realpathSync,
-  statSync,
-  closeSync
-} from "node:fs";
+  open as openFileAsync,
+  readdir as readdirAsync,
+  readFile as readFileAsync,
+  realpath as realpathAsync,
+  stat as statAsync
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join, normalize, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -29,7 +26,8 @@ const MAX_INBOX_BYTES = 512 * 1024;
 const MAX_TASK_BYTES = 64 * 1024;
 const MAX_DETACHED_SUBAGENTS = 64;
 const MAX_SUBAGENT_STEPS = 25;
-const ROSTER_SCAN_TTL_MS = 3_000;
+export const ROSTER_SCAN_TTL_MS = 10_000;
+const MAX_AUX_CACHE_ENTRIES = 128;
 const STUCK_MS = 10 * 60 * 1000;
 const STEP_ERROR_SETTLE_MS = 60 * 1000;
 
@@ -315,33 +313,62 @@ export interface AgentAuxServiceOptions {
   codexHomeDir?: string;
   /** Clock provider for deterministic testing. */
   now?: () => number;
+  /** Injectable read-only SQLite opener for deterministic cache hit verification tests. */
+  openCodexDb?: (dbPath: string) => DatabaseSync;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function safeReaddir(dirPath: string): string[] {
+function setBoundedCache<K, V>(cache: Map<K, V>, key: K, value: V): void {
+  if (cache.size >= MAX_AUX_CACHE_ENTRIES && !cache.has(key)) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) {
+      cache.delete(oldest);
+    }
+  }
+  cache.set(key, value);
+}
+
+async function safeReaddirAsync(dirPath: string): Promise<string[]> {
   try {
-    return readdirSync(dirPath);
+    return await readdirAsync(dirPath);
   } catch {
     return [];
   }
 }
 
-function safeStat(filePath: string): { mtime: number; size: number; isFile: boolean } | null {
+interface StatInfo {
+  mtime: number;
+  size: number;
+  isFile: boolean;
+  isDirectory: boolean;
+}
+
+async function safeStatAsync(filePath: string): Promise<StatInfo | null> {
   try {
-    const st = statSync(filePath);
-    return { mtime: st.mtimeMs, size: st.size, isFile: st.isFile() };
+    const st = await statAsync(filePath);
+    return {
+      mtime: st.mtimeMs,
+      size: st.size,
+      isFile: st.isFile(),
+      isDirectory: st.isDirectory()
+    };
   } catch {
     return null;
   }
 }
 
-function isContainedInRoot(targetPath: string, rootDir: string): boolean {
+async function isContainedInRootAsync(
+  targetPath: string,
+  rootDir: string
+): Promise<boolean> {
   try {
-    const rootReal = realpathSync(rootDir);
-    const targetReal = realpathSync(targetPath);
+    const [rootReal, targetReal] = await Promise.all([
+      realpathAsync(rootDir),
+      realpathAsync(targetPath)
+    ]);
     const prefix = rootReal.endsWith(sep) ? rootReal : `${rootReal}${sep}`;
     if (process.platform === "win32") {
       const lowerTarget = targetReal.toLowerCase();
@@ -355,60 +382,79 @@ function isContainedInRoot(targetPath: string, rootDir: string): boolean {
   }
 }
 
-function readSmallTextFile(filePath: string, rootDir: string, maxBytes: number): string | null {
-  if (!isContainedInRoot(filePath, rootDir)) return null;
-  const st = safeStat(filePath);
+async function readSmallTextFileAsync(
+  filePath: string,
+  rootDir: string,
+  maxBytes: number
+): Promise<string | null> {
+  const st = await safeStatAsync(filePath);
   if (!st || !st.isFile || st.size < 0 || st.size > maxBytes) return null;
+  if (!(await isContainedInRootAsync(filePath, rootDir))) return null;
   try {
-    return readFileSync(filePath, "utf8");
+    return await readFileAsync(filePath, "utf8");
   } catch {
     return null;
   }
 }
 
-function readTailTextFile(
+async function readTailTextFileAsync(
   filePath: string,
   rootDir: string,
-  maxBytes: number
-): { text: string; mtime: number; truncated: boolean } | null {
-  if (!isContainedInRoot(filePath, rootDir)) return null;
-  const st = safeStat(filePath);
+  maxBytes: number,
+  precomputedStat?: StatInfo | null
+): Promise<{ text: string; mtime: number; size: number; truncated: boolean } | null> {
+  const st = precomputedStat !== undefined ? precomputedStat : await safeStatAsync(filePath);
   if (!st || !st.isFile || st.size < 0) return null;
+  if (!(await isContainedInRootAsync(filePath, rootDir))) return null;
   if (st.size === 0) {
-    return { text: "", mtime: st.mtime, truncated: false };
+    return { text: "", mtime: st.mtime, size: 0, truncated: false };
   }
   if (st.size <= maxBytes) {
     try {
-      return { text: readFileSync(filePath, "utf8"), mtime: st.mtime, truncated: false };
+      return {
+        text: await readFileAsync(filePath, "utf8"),
+        mtime: st.mtime,
+        size: st.size,
+        truncated: false
+      };
     } catch {
       return null;
     }
   }
-  let fd: number | null = null;
+  let handle: Awaited<ReturnType<typeof openFileAsync>> | null = null;
   try {
-    fd = openSync(filePath, "r");
+    handle = await openFileAsync(filePath, "r");
     const tailStart = Math.max(0, st.size - maxBytes);
     const readLength = st.size - tailStart;
     const buf = Buffer.allocUnsafe(readLength);
-    const bytesRead = readSync(fd, buf, 0, readLength, tailStart);
+    const { bytesRead } = await handle.read(buf, 0, readLength, tailStart);
     const slice = buf.subarray(0, bytesRead);
     const firstNewline = slice.indexOf(0x0a);
     const text =
       firstNewline >= 0
         ? slice.toString("utf8", firstNewline + 1)
         : slice.toString("utf8");
-    return { text, mtime: st.mtime, truncated: true };
+    return { text, mtime: st.mtime, size: st.size, truncated: true };
   } catch {
     return null;
   } finally {
-    if (fd !== null) {
+    if (handle !== null) {
       try {
-        closeSync(fd);
+        await handle.close();
       } catch {
         // ignore close errors
       }
     }
   }
+}
+
+async function computeSqliteFileFingerprint(dbPath: string): Promise<string | null> {
+  const mainStat = await safeStatAsync(dbPath);
+  if (!mainStat || !mainStat.isFile) {
+    return null;
+  }
+  const walStat = await safeStatAsync(`${dbPath}-wal`);
+  return `${mainStat.mtime}:${mainStat.size}|${walStat?.mtime ?? 0}:${walStat?.size ?? 0}`;
 }
 
 function normalizePathForCompare(raw: string): string {
@@ -678,12 +724,35 @@ function extractReplyQuestion(text: string): string {
   return lastQ ? oneLine(lastQ, 200) : "";
 }
 
-function summarizeTranscriptFile(
+async function summarizeTranscriptFileAsync(
   filePath: string,
   rootDir: string,
-  collectRecentSteps = false
-): TranscriptSummary | null {
-  const tail = readTailTextFile(filePath, rootDir, MAX_TRANSCRIPT_TAIL_BYTES);
+  collectRecentSteps = false,
+  cache?: Map<
+    string,
+    { mtime: number; size: number; collectRecentSteps: boolean; summary: TranscriptSummary }
+  >
+): Promise<TranscriptSummary | null> {
+  const st = await safeStatAsync(filePath);
+  if (!st || !st.isFile || st.size < 0) return null;
+  const cacheKey = `${filePath}|${collectRecentSteps ? "1" : "0"}`;
+  if (cache) {
+    const cached = cache.get(cacheKey);
+    if (
+      cached &&
+      cached.mtime === st.mtime &&
+      cached.size === st.size &&
+      cached.collectRecentSteps === collectRecentSteps
+    ) {
+      return cached.summary;
+    }
+  }
+  const tail = await readTailTextFileAsync(
+    filePath,
+    rootDir,
+    MAX_TRANSCRIPT_TAIL_BYTES,
+    st
+  );
   if (!tail) return null;
   const lines = tail.text.split("\n").filter((line) => line.trim().length > 0);
   let steps = lines.length;
@@ -788,7 +857,7 @@ function summarizeTranscriptFile(
   const replied = reply !== null;
   const replyAsk = replied ? extractReplyQuestion(reply) : "";
 
-  return {
+  const summary: TranscriptSummary = {
     steps,
     activity,
     activityKind,
@@ -799,6 +868,15 @@ function summarizeTranscriptFile(
     mtime: tail.mtime,
     recentSteps
   };
+  if (cache) {
+    setBoundedCache(cache, cacheKey, {
+      mtime: tail.mtime,
+      size: tail.size,
+      collectRecentSteps,
+      summary
+    });
+  }
+  return summary;
 }
 
 function stepFailureOf(
@@ -841,19 +919,99 @@ export class AgentAuxService {
   private readonly claudeHomeDirOverride: string | undefined;
   private readonly codexHomeDirOverride: string | undefined;
   private readonly nowFn: () => number;
+  private readonly openCodexDbFn: (dbPath: string) => DatabaseSync;
+
+  private agyAppDataCache: {
+    builtAt: number;
+    geminiRootMtime: number;
+    dirs: string[];
+  } = { builtAt: 0, geminiRootMtime: -1, dirs: [] };
+
   private swarmDirCache: {
     builtAt: number;
+    brainMtimes: Map<string, number>;
     entries: Array<{ appData: string; convId: string }>;
-  } = { builtAt: 0, entries: [] };
+  } = { builtAt: 0, brainMtimes: new Map(), entries: [] };
+
+  private readonly transcriptCache = new Map<
+    string,
+    { mtime: number; size: number; collectRecentSteps: boolean; summary: TranscriptSummary }
+  >();
+
+  private readonly dirListingCache = new Map<
+    string,
+    { mtime: number; entries: string[] }
+  >();
+
+  private readonly jsonObjectCache = new Map<
+    string,
+    { mtime: number; size: number; value: Record<string, unknown> | null }
+  >();
+
+  private readonly codexStateCache = new Map<
+    string,
+    {
+      fingerprint: string;
+      spawnedThreads: AgentAuxCodexSpawnedThread[];
+      relatedThreadIds: string[];
+    }
+  >();
+
+  private readonly codexGoalsCache = new Map<
+    string,
+    { fingerprint: string; goals: AgentAuxCodexGoal[] }
+  >();
 
   constructor(options: AgentAuxServiceOptions = {}) {
     this.agyAppDataDirsOverride = options.agyAppDataDirs;
     this.claudeHomeDirOverride = options.claudeHomeDir;
     this.codexHomeDirOverride = options.codexHomeDir;
     this.nowFn = options.now ?? (() => Date.now());
+    this.openCodexDbFn =
+      options.openCodexDb ??
+      ((dbPath) => new DatabaseSync(dbPath, { readOnly: true }));
   }
 
-  inspect(query: AgentAuxInspectQuery): AgentAuxInspectResponse {
+  private async readDirCached(dirPath: string): Promise<string[]> {
+    const st = await safeStatAsync(dirPath);
+    if (!st || !st.isDirectory) {
+      this.dirListingCache.delete(dirPath);
+      return [];
+    }
+    const cached = this.dirListingCache.get(dirPath);
+    if (cached && cached.mtime === st.mtime) {
+      return cached.entries;
+    }
+    const entries = await safeReaddirAsync(dirPath);
+    setBoundedCache(this.dirListingCache, dirPath, { mtime: st.mtime, entries });
+    return entries;
+  }
+
+  private async readCachedJsonObject(
+    filePath: string,
+    rootDir: string,
+    maxBytes: number
+  ): Promise<Record<string, unknown> | null> {
+    const st = await safeStatAsync(filePath);
+    if (!st || !st.isFile || st.size < 0 || st.size > maxBytes) {
+      this.jsonObjectCache.delete(filePath);
+      return null;
+    }
+    const cached = this.jsonObjectCache.get(filePath);
+    if (cached && cached.mtime === st.mtime && cached.size === st.size) {
+      return cached.value;
+    }
+    const text = await readSmallTextFileAsync(filePath, rootDir, maxBytes);
+    const parsed = parseJsonObject(text);
+    setBoundedCache(this.jsonObjectCache, filePath, {
+      mtime: st.mtime,
+      size: st.size,
+      value: parsed
+    });
+    return parsed;
+  }
+
+  async inspect(query: AgentAuxInspectQuery): Promise<AgentAuxInspectResponse> {
     const provider = normalizeProvider(query.provider);
     const sessionId = validateSessionId(query.sessionId);
     const cwd = validateCwd(query.cwd);
@@ -867,9 +1025,9 @@ export class AgentAuxService {
     let swarm: AgentAuxSwarmSnapshot | undefined;
     let agySubagents: AgentAuxNativeSubagent[] | undefined;
     if (tryAgy && sessionId && AGY_CONV_ID_RE.test(sessionId)) {
-      swarm = this.inspectAgySwarm(sessionId, updatedAt) ?? undefined;
+      swarm = (await this.inspectAgySwarm(sessionId, updatedAt)) ?? undefined;
       if (!swarm) {
-        const subs = this.inspectAgyDetachedSubagents(sessionId);
+        const subs = await this.inspectAgyDetachedSubagents(sessionId);
         if (subs.length > 0) {
           agySubagents = subs;
         }
@@ -879,7 +1037,7 @@ export class AgentAuxService {
     let claudeTeam: AgentAuxClaudeTeamSnapshot | undefined;
     let claudeTasks: AgentAuxTaskItem[] = [];
     if (tryClaude && (sessionId || cwd)) {
-      const cc = this.inspectClaudeCode(sessionId, cwd);
+      const cc = await this.inspectClaudeCode(sessionId, cwd);
       if (cc.team) {
         claudeTeam = cc.team;
       }
@@ -889,7 +1047,7 @@ export class AgentAuxService {
     let codex: AgentAuxCodexSnapshot | undefined;
     let codexTasks: AgentAuxTaskItem[] = [];
     if (tryCodex && (sessionId || cwd)) {
-      const cx = this.inspectCodex(sessionId, cwd);
+      const cx = await this.inspectCodex(sessionId, cwd);
       if (cx && (cx.goals.length > 0 || cx.spawnedThreads.length > 0)) {
         codex = cx;
         codexTasks = cx.goals.map((goal) => ({
@@ -1008,29 +1166,58 @@ export class AgentAuxService {
     };
   }
 
-  private resolveAgyAppDataDirs(): string[] {
+  private async resolveAgyAppDataDirs(): Promise<string[]> {
     if (this.agyAppDataDirsOverride) {
-      return this.agyAppDataDirsOverride.filter((dir) =>
-        existsSync(join(dir, "brain"))
-      );
+      const out: string[] = [];
+      for (const dir of this.agyAppDataDirsOverride) {
+        const brainStat = await safeStatAsync(join(dir, "brain"));
+        if (brainStat?.isDirectory) {
+          out.push(dir);
+        }
+      }
+      return out;
     }
+
+    const nowMs = this.nowFn();
     const geminiRoot = join(homedir(), ".gemini");
+    if (
+      this.agyAppDataCache.builtAt > 0 &&
+      nowMs - this.agyAppDataCache.builtAt < ROSTER_SCAN_TTL_MS
+    ) {
+      return this.agyAppDataCache.dirs;
+    }
+
+    const rootStat = await safeStatAsync(geminiRoot);
+    if (!rootStat || !rootStat.isDirectory) {
+      this.agyAppDataCache = { builtAt: nowMs, geminiRootMtime: -1, dirs: [] };
+      return [];
+    }
+    if (
+      this.agyAppDataCache.builtAt > 0 &&
+      this.agyAppDataCache.geminiRootMtime === rootStat.mtime
+    ) {
+      this.agyAppDataCache.builtAt = nowMs;
+      return this.agyAppDataCache.dirs;
+    }
+
     const candidates = [
       join(geminiRoot, "antigravity"),
       join(geminiRoot, "antigravity-acp"),
       join(geminiRoot, "antigravity-cli")
     ];
-    for (const child of safeReaddir(geminiRoot).sort()) {
+    const children = (await safeReaddirAsync(geminiRoot)).sort();
+    for (const child of children) {
       if (!SAFE_DIR_SEGMENT_RE.test(child)) continue;
       candidates.push(join(geminiRoot, child));
     }
     const seen = new Set<string>();
     const out: string[] = [];
     for (const dir of candidates) {
-      if (!existsSync(join(dir, "brain"))) continue;
+      const brainStat = await safeStatAsync(join(dir, "brain"));
+      if (!brainStat?.isDirectory) continue;
       let real = dir;
       try {
-        real = realpathSync(dir);
+        real = await realpathAsync(dir);
       } catch {
         continue;
       }
@@ -1039,25 +1226,61 @@ export class AgentAuxService {
       seen.add(key);
       out.push(real);
     }
+    this.agyAppDataCache = {
+      builtAt: nowMs,
+      geminiRootMtime: rootStat.mtime,
+      dirs: out
+    };
     return out;
   }
 
-  private listAgySwarmDirs(appDataDirs: readonly string[]): Array<{
-    appData: string;
-    convId: string;
-  }> {
+  private async listAgySwarmDirs(appDataDirs: readonly string[]): Promise<
+    Array<{
+      appData: string;
+      convId: string;
+    }>
+  > {
     const nowMs = this.nowFn();
     if (
       !this.agyAppDataDirsOverride &&
+      this.swarmDirCache.builtAt > 0 &&
       nowMs - this.swarmDirCache.builtAt < ROSTER_SCAN_TTL_MS
     ) {
       return this.swarmDirCache.entries;
     }
+
+    // Directory mtimeMs short-circuit: if every brainDir's mtimeMs is unchanged, reuse entries.
+    if (
+      !this.agyAppDataDirsOverride &&
+      this.swarmDirCache.builtAt > 0 &&
+      this.swarmDirCache.brainMtimes.size === appDataDirs.length
+    ) {
+      let allUnchanged = true;
+      for (const appData of appDataDirs) {
+        const brainDir = join(appData, "brain");
+        const st = await safeStatAsync(brainDir);
+        const prevMtime = this.swarmDirCache.brainMtimes.get(brainDir);
+        if (!st || prevMtime === undefined || st.mtime !== prevMtime) {
+          allUnchanged = false;
+          break;
+        }
+      }
+      if (allUnchanged) {
+        this.swarmDirCache.builtAt = nowMs;
+        return this.swarmDirCache.entries;
+      }
+    }
+
     const entries: Array<{ appData: string; convId: string }> = [];
+    const brainMtimes = new Map<string, number>();
     const seen = new Set<string>();
     for (const appData of appDataDirs) {
       const brainDir = join(appData, "brain");
-      for (const convId of safeReaddir(brainDir)) {
+      const brainStat = await safeStatAsync(brainDir);
+      if (!brainStat || !brainStat.isDirectory) continue;
+      brainMtimes.set(brainDir, brainStat.mtime);
+      const convIds = await this.readDirCached(brainDir);
+      for (const convId of convIds) {
         if (!AGY_CONV_ID_RE.test(convId) || seen.has(convId)) continue;
         const membersPath = join(
           brainDir,
@@ -1066,20 +1289,21 @@ export class AgentAuxService {
           "swarm",
           "members.json"
         );
-        if (existsSync(membersPath)) {
+        const membersStat = await safeStatAsync(membersPath);
+        if (membersStat?.isFile) {
           seen.add(convId);
           entries.push({ appData, convId });
         }
       }
     }
-    this.swarmDirCache = { builtAt: nowMs, entries };
+    this.swarmDirCache = { builtAt: nowMs, brainMtimes, entries };
     return entries;
   }
 
-  private readSwarmRoster(
+  private async readSwarmRoster(
     appData: string,
     convId: string
-  ): { title: string; members: Record<string, Record<string, unknown>> } | null {
+  ): Promise<{ title: string; members: Record<string, Record<string, unknown>> } | null> {
     const membersPath = join(
       appData,
       "brain",
@@ -1088,8 +1312,10 @@ export class AgentAuxService {
       "swarm",
       "members.json"
     );
-    const parsed = parseJsonObject(
-      readSmallTextFile(membersPath, appData, MAX_VIEW_BYTES * 4)
+    const parsed = await this.readCachedJsonObject(
+      membersPath,
+      appData,
+      MAX_VIEW_BYTES * 4
     );
     if (!parsed) return null;
     const rawMembers = isRecord(parsed.members) ? parsed.members : {};
@@ -1105,11 +1331,11 @@ export class AgentAuxService {
     };
   }
 
-  private inspectAgySwarm(
+  private async inspectAgySwarm(
     sessionId: string,
     nowMs: number
-  ): AgentAuxSwarmSnapshot | null {
-    const appDataDirs = this.resolveAgyAppDataDirs();
+  ): Promise<AgentAuxSwarmSnapshot | null> {
+    const appDataDirs = await this.resolveAgyAppDataDirs();
     if (appDataDirs.length === 0) return null;
 
     let matchedAppData: string | null = null;
@@ -1122,7 +1348,7 @@ export class AgentAuxService {
 
     // 1. Direct coordinator check
     for (const appData of appDataDirs) {
-      const roster = this.readSwarmRoster(appData, sessionId);
+      const roster = await this.readSwarmRoster(appData, sessionId);
       if (roster) {
         matchedAppData = appData;
         matchedSwarmId = sessionId;
@@ -1137,8 +1363,9 @@ export class AgentAuxService {
 
     // 2. Worker reverse lookup
     if (!matchedRoster) {
-      for (const { appData, convId } of this.listAgySwarmDirs(appDataDirs)) {
-        const roster = this.readSwarmRoster(appData, convId);
+      const swarmDirs = await this.listAgySwarmDirs(appDataDirs);
+      for (const { appData, convId } of swarmDirs) {
+        const roster = await this.readSwarmRoster(appData, convId);
         if (!roster) continue;
         const found = Object.entries(roster.members).find(
           ([, m]) => m.conversation_id === sessionId
@@ -1167,7 +1394,7 @@ export class AgentAuxService {
     const names = Object.keys(matchedRoster.members);
 
     // Parse board.jsonl (last 400 lines)
-    const boardTail = readTailTextFile(
+    const boardTail = await readTailTextFileAsync(
       join(swarmDir, "board.jsonl"),
       matchedAppData,
       MAX_BOARD_TAIL_BYTES
@@ -1294,73 +1521,77 @@ export class AgentAuxService {
     }
     const chosenNarrator = narratorName ?? deadNarratorName;
 
-    const members: AgentAuxSwarmMember[] = names.map((name) => {
-      const raw = matchedRoster.members[name] ?? {};
-      const convId =
-        typeof raw.conversation_id === "string" ? raw.conversation_id : "";
-      const tr =
-        convId && AGY_CONV_ID_RE.test(convId) && raw.killed !== true
-          ? summarizeTranscriptFile(
-              join(
+    const members: AgentAuxSwarmMember[] = await Promise.all(
+      names.map(async (name) => {
+        const raw = matchedRoster.members[name] ?? {};
+        const convId =
+          typeof raw.conversation_id === "string" ? raw.conversation_id : "";
+        const tr =
+          convId && AGY_CONV_ID_RE.test(convId) && raw.killed !== true
+            ? await summarizeTranscriptFileAsync(
+                join(
+                  matchedAppData,
+                  "brain",
+                  convId,
+                  ".system_generated",
+                  "logs",
+                  "transcript.jsonl"
+                ),
                 matchedAppData,
-                "brain",
-                convId,
-                ".system_generated",
-                "logs",
-                "transcript.jsonl"
-              ),
-              matchedAppData
-            )
-          : null;
-      const lastReadSeq =
-        typeof raw.last_read_seq === "number" && Number.isFinite(raw.last_read_seq)
-          ? raw.last_read_seq
-          : 0;
-      const postStats = postsByMember.get(name) ?? {
-        posts: 0,
-        lastPostSeq: 0,
-        lastPostTime: "",
-        lastPostTs: null
-      };
-      const channels = Array.isArray(raw.channels)
-        ? raw.channels.filter((c): c is string => typeof c === "string")
-        : undefined;
-      return {
-        name,
-        conversationId: convId,
-        model: typeof raw.model === "string" ? raw.model : "",
-        role: roleOfMember(name, raw),
-        wakeMode: typeof raw.wake_mode === "string" ? raw.wake_mode : "",
-        status: memberStatusOf(raw, tr),
-        waitSince:
-          typeof raw.wait_since === "number" && Number.isFinite(raw.wait_since)
-            ? raw.wait_since
-            : 0,
-        lastReadSeq,
-        unread: Math.max(0, head - lastReadSeq),
-        killed: raw.killed === true,
-        steps: tr?.steps ?? 0,
-        activity: tr?.activity ?? "",
-        activityKind: tr?.activityKind ?? "",
-        replied: tr?.replied ?? false,
-        replyAsk: tr?.replyAsk ?? "",
-        narrator: narratorRank(name, raw) >= 0,
-        roleWorker: isRoleWorker(name, raw),
-        failure: stepFailureOf(tr, nowMs),
-        transcriptMtime: tr?.mtime ?? 0,
-        posts: postStats.posts,
-        lastPostSeq: postStats.lastPostSeq,
-        lastPostTime: postStats.lastPostTime,
-        lastPostTs: postStats.lastPostTs,
-        ...(typeof raw.workspace === "string" && raw.workspace
-          ? { workspace: raw.workspace }
-          : {}),
-        ...(typeof raw.workspace_mode === "string" && raw.workspace_mode
-          ? { workspaceMode: raw.workspace_mode }
-          : {}),
-        ...(channels && channels.length > 0 ? { channels } : {})
-      };
-    });
+                false,
+                this.transcriptCache
+              )
+            : null;
+        const lastReadSeq =
+          typeof raw.last_read_seq === "number" && Number.isFinite(raw.last_read_seq)
+            ? raw.last_read_seq
+            : 0;
+        const postStats = postsByMember.get(name) ?? {
+          posts: 0,
+          lastPostSeq: 0,
+          lastPostTime: "",
+          lastPostTs: null
+        };
+        const channels = Array.isArray(raw.channels)
+          ? raw.channels.filter((c): c is string => typeof c === "string")
+          : undefined;
+        return {
+          name,
+          conversationId: convId,
+          model: typeof raw.model === "string" ? raw.model : "",
+          role: roleOfMember(name, raw),
+          wakeMode: typeof raw.wake_mode === "string" ? raw.wake_mode : "",
+          status: memberStatusOf(raw, tr),
+          waitSince:
+            typeof raw.wait_since === "number" && Number.isFinite(raw.wait_since)
+              ? raw.wait_since
+              : 0,
+          lastReadSeq,
+          unread: Math.max(0, head - lastReadSeq),
+          killed: raw.killed === true,
+          steps: tr?.steps ?? 0,
+          activity: tr?.activity ?? "",
+          activityKind: tr?.activityKind ?? "",
+          replied: tr?.replied ?? false,
+          replyAsk: tr?.replyAsk ?? "",
+          narrator: narratorRank(name, raw) >= 0,
+          roleWorker: isRoleWorker(name, raw),
+          failure: stepFailureOf(tr, nowMs),
+          transcriptMtime: tr?.mtime ?? 0,
+          posts: postStats.posts,
+          lastPostSeq: postStats.lastPostSeq,
+          lastPostTime: postStats.lastPostTime,
+          lastPostTs: postStats.lastPostTs,
+          ...(typeof raw.workspace === "string" && raw.workspace
+            ? { workspace: raw.workspace }
+            : {}),
+          ...(typeof raw.workspace_mode === "string" && raw.workspace_mode
+            ? { workspaceMode: raw.workspace_mode }
+            : {}),
+          ...(channels && channels.length > 0 ? { channels } : {})
+        };
+      })
+    );
 
     members.sort(
       (a, b) =>
@@ -1401,24 +1632,26 @@ export class AgentAuxService {
     }
 
     // Read plan.json (capped 64 KB)
-    const planRaw = parseJsonObject(
-      readSmallTextFile(join(swarmDir, "plan.json"), matchedAppData, MAX_VIEW_BYTES)
+    const planRaw = await this.readCachedJsonObject(
+      join(swarmDir, "plan.json"),
+      matchedAppData,
+      MAX_VIEW_BYTES
     );
     const plan = planRaw ? (planRaw as unknown as AgentAuxSwarmPlan) : null;
 
     // Read view.json (capped 64 KB, swarm dir or narrator fallback)
-    let viewRaw = parseJsonObject(
-      readSmallTextFile(join(swarmDir, "view.json"), matchedAppData, MAX_VIEW_BYTES)
+    let viewRaw = await this.readCachedJsonObject(
+      join(swarmDir, "view.json"),
+      matchedAppData,
+      MAX_VIEW_BYTES
     );
     if (!viewRaw && chosenNarrator) {
       const narratorConv = matchedRoster.members[chosenNarrator]?.conversation_id;
       if (typeof narratorConv === "string" && AGY_CONV_ID_RE.test(narratorConv)) {
-        viewRaw = parseJsonObject(
-          readSmallTextFile(
-            join(matchedAppData, "brain", narratorConv, "swarm_view", "view.json"),
-            matchedAppData,
-            MAX_VIEW_BYTES
-          )
+        viewRaw = await this.readCachedJsonObject(
+          join(matchedAppData, "brain", narratorConv, "swarm_view", "view.json"),
+          matchedAppData,
+          MAX_VIEW_BYTES
         );
       }
     }
@@ -1438,8 +1671,10 @@ export class AgentAuxService {
     };
   }
 
-  private inspectAgyDetachedSubagents(sessionId: string): AgentAuxNativeSubagent[] {
-    const appDataDirs = this.resolveAgyAppDataDirs();
+  private async inspectAgyDetachedSubagents(
+    sessionId: string
+  ): Promise<AgentAuxNativeSubagent[]> {
+    const appDataDirs = await this.resolveAgyAppDataDirs();
     const result: AgentAuxNativeSubagent[] = [];
     for (const appData of appDataDirs) {
       const subDir = join(
@@ -1449,15 +1684,20 @@ export class AgentAuxService {
         ".system_generated",
         "subagents"
       );
-      if (!existsSync(subDir) || !isContainedInRoot(subDir, appData)) continue;
-      const files = safeReaddir(subDir)
+      const subDirStat = await safeStatAsync(subDir);
+      if (!subDirStat?.isDirectory || !(await isContainedInRootAsync(subDir, appData))) {
+        continue;
+      }
+      const files = (await this.readDirCached(subDir))
         .filter((f) => f.endsWith(".json"))
         .slice(0, MAX_DETACHED_SUBAGENTS);
       for (const file of files) {
         const stem = file.slice(0, -5);
         if (!SAFE_DIR_SEGMENT_RE.test(stem)) continue;
-        const parsed = parseJsonObject(
-          readSmallTextFile(join(subDir, file), appData, MAX_VIEW_BYTES)
+        const parsed = await this.readCachedJsonObject(
+          join(subDir, file),
+          appData,
+          MAX_VIEW_BYTES
         );
         if (!parsed) continue;
         const convId =
@@ -1477,7 +1717,7 @@ export class AgentAuxService {
         const state =
           typeof parsed.state === "string" ? parsed.state : "RUNNING";
         const tr = AGY_CONV_ID_RE.test(convId)
-          ? summarizeTranscriptFile(
+          ? await summarizeTranscriptFileAsync(
               join(
                 appData,
                 "brain",
@@ -1487,7 +1727,8 @@ export class AgentAuxService {
                 "transcript.jsonl"
               ),
               appData,
-              true
+              true,
+              this.transcriptCache
             )
           : null;
         const lowerState = state.toLowerCase();
@@ -1522,15 +1763,16 @@ export class AgentAuxService {
     return result;
   }
 
-  private inspectClaudeCode(
+  private async inspectClaudeCode(
     sessionId: string | undefined,
     cwd: string | undefined
-  ): {
+  ): Promise<{
     team: AgentAuxClaudeTeamSnapshot | null;
     tasks: AgentAuxTaskItem[];
-  } {
+  }> {
     const claudeRoot = this.claudeHomeDirOverride ?? join(homedir(), ".claude");
-    if (!existsSync(claudeRoot)) {
+    const claudeRootStat = await safeStatAsync(claudeRoot);
+    if (!claudeRootStat?.isDirectory) {
       return { team: null, tasks: [] };
     }
 
@@ -1538,12 +1780,16 @@ export class AgentAuxService {
     let matchedTeam: AgentAuxClaudeTeamSnapshot | null = null;
     let matchedTeamFolder: string | null = null;
 
-    if (existsSync(teamsDir) && isContainedInRoot(teamsDir, claudeRoot)) {
-      for (const teamFolder of safeReaddir(teamsDir).sort()) {
+    const teamsDirStat = await safeStatAsync(teamsDir);
+    if (teamsDirStat?.isDirectory && (await isContainedInRootAsync(teamsDir, claudeRoot))) {
+      const teamFolders = [...(await this.readDirCached(teamsDir))].sort();
+      for (const teamFolder of teamFolders) {
         if (!SAFE_DIR_SEGMENT_RE.test(teamFolder)) continue;
         const teamDir = join(teamsDir, teamFolder);
-        const config = parseJsonObject(
-          readSmallTextFile(join(teamDir, "config.json"), claudeRoot, MAX_INBOX_BYTES)
+        const config = await this.readCachedJsonObject(
+          join(teamDir, "config.json"),
+          claudeRoot,
+          MAX_INBOX_BYTES
         );
         if (!config) continue;
 
@@ -1635,12 +1881,14 @@ export class AgentAuxService {
           color?: string;
         }> = [];
 
-        if (existsSync(inboxesDir) && isContainedInRoot(inboxesDir, claudeRoot)) {
-          for (const file of safeReaddir(inboxesDir).sort()) {
+        const inboxesStat = await safeStatAsync(inboxesDir);
+        if (inboxesStat?.isDirectory && (await isContainedInRootAsync(inboxesDir, claudeRoot))) {
+          const inboxFiles = [...(await this.readDirCached(inboxesDir))].sort();
+          for (const file of inboxFiles) {
             if (!file.endsWith(".json")) continue;
             const recipient = file.slice(0, -5);
             if (!SAFE_DIR_SEGMENT_RE.test(recipient)) continue;
-            const text = readSmallTextFile(
+            const text = await readSmallTextFileAsync(
               join(inboxesDir, file),
               claudeRoot,
               MAX_INBOX_BYTES
@@ -1760,16 +2008,21 @@ export class AgentAuxService {
 
     const tasksById = new Map<string, AgentAuxTaskItem>();
     const tasksRoot = join(claudeRoot, "tasks");
-    if (existsSync(tasksRoot) && isContainedInRoot(tasksRoot, claudeRoot)) {
+    const tasksRootStat = await safeStatAsync(tasksRoot);
+    if (tasksRootStat?.isDirectory && (await isContainedInRootAsync(tasksRoot, claudeRoot))) {
       for (const bucket of taskBuckets) {
         const bucketDir = join(tasksRoot, bucket);
-        if (!existsSync(bucketDir) || !isContainedInRoot(bucketDir, claudeRoot)) {
+        const bucketStat = await safeStatAsync(bucketDir);
+        if (!bucketStat?.isDirectory || !(await isContainedInRootAsync(bucketDir, claudeRoot))) {
           continue;
         }
-        for (const file of safeReaddir(bucketDir).sort()) {
+        const taskFiles = [...(await this.readDirCached(bucketDir))].sort();
+        for (const file of taskFiles) {
           if (!file.endsWith(".json")) continue;
-          const parsed = parseJsonObject(
-            readSmallTextFile(join(bucketDir, file), claudeRoot, MAX_TASK_BYTES)
+          const parsed = await this.readCachedJsonObject(
+            join(bucketDir, file),
+            claudeRoot,
+            MAX_TASK_BYTES
           );
           if (!parsed) continue;
           const id =
@@ -1823,148 +2076,183 @@ export class AgentAuxService {
     };
   }
 
-  private inspectCodex(
+  private async inspectCodex(
     sessionId: string | undefined,
     cwd: string | undefined
-  ): AgentAuxCodexSnapshot | null {
+  ): Promise<AgentAuxCodexSnapshot | null> {
     const codexRoot = this.codexHomeDirOverride ?? join(homedir(), ".codex");
-    if (!existsSync(codexRoot)) return null;
+    const codexRootStat = await safeStatAsync(codexRoot);
+    if (!codexRootStat?.isDirectory) return null;
 
-    const spawnedThreads: AgentAuxCodexSpawnedThread[] = [];
+    let spawnedThreads: AgentAuxCodexSpawnedThread[] = [];
     const relatedThreadIds = new Set<string>();
     if (sessionId) relatedThreadIds.add(sessionId);
 
     // 1. Read-only check state_5.sqlite for thread_spawn_edges + threads
+    //    Short-circuits via async mtimeMs/size fingerprint (including -wal) to avoid
+    //    reopening DatabaseSync when the SQLite file has not changed.
     const stateDbPath = join(codexRoot, "state_5.sqlite");
-    if (existsSync(stateDbPath) && isContainedInRoot(stateDbPath, codexRoot)) {
-      let db: DatabaseSync | null = null;
-      try {
-        db = new DatabaseSync(stateDbPath, { readOnly: true });
-        if (sessionId) {
-          let parentId = sessionId;
-          const asChild = db
-            .prepare(
-              "SELECT parent_thread_id FROM thread_spawn_edges WHERE child_thread_id = ? LIMIT 1"
-            )
-            .get(sessionId) as { parent_thread_id?: string } | undefined;
-          if (typeof asChild?.parent_thread_id === "string" && asChild.parent_thread_id) {
-            parentId = asChild.parent_thread_id;
-            relatedThreadIds.add(parentId);
+    if (sessionId) {
+      const stateFingerprint = await computeSqliteFileFingerprint(stateDbPath);
+      if (stateFingerprint !== null) {
+        const stateCacheKey = `${stateDbPath}|${sessionId}`;
+        const cachedState = this.codexStateCache.get(stateCacheKey);
+        if (cachedState && cachedState.fingerprint === stateFingerprint) {
+          spawnedThreads = cachedState.spawnedThreads;
+          for (const tid of cachedState.relatedThreadIds) {
+            relatedThreadIds.add(tid);
           }
+        } else if (await isContainedInRootAsync(stateDbPath, codexRoot)) {
+          let db: DatabaseSync | null = null;
+          const queriedThreads: AgentAuxCodexSpawnedThread[] = [];
+          const queriedIds = new Set<string>([sessionId]);
+          try {
+            db = this.openCodexDbFn(stateDbPath);
+            let parentId = sessionId;
+            const asChild = db
+              .prepare(
+                "SELECT parent_thread_id FROM thread_spawn_edges WHERE child_thread_id = ? LIMIT 1"
+              )
+              .get(sessionId) as { parent_thread_id?: string } | undefined;
+            if (typeof asChild?.parent_thread_id === "string" && asChild.parent_thread_id) {
+              parentId = asChild.parent_thread_id;
+              queriedIds.add(parentId);
+            }
 
-          const rows = db
-            .prepare(
-              `SELECT e.parent_thread_id, e.child_thread_id, e.status,
-                      t.title, t.agent_nickname, t.agent_role, t.model, t.reasoning_effort, t.cwd, t.updated_at_ms
-                 FROM thread_spawn_edges e
-                 LEFT JOIN threads t ON t.id = e.child_thread_id
-                WHERE e.parent_thread_id = ?
-                ORDER BY COALESCE(t.updated_at_ms, 0) DESC
-                LIMIT 64`
-            )
-            .all(parentId) as Array<Record<string, unknown>>;
+            const rows = db
+              .prepare(
+                `SELECT e.parent_thread_id, e.child_thread_id, e.status,
+                        t.title, t.agent_nickname, t.agent_role, t.model, t.reasoning_effort, t.cwd, t.updated_at_ms
+                   FROM thread_spawn_edges e
+                   LEFT JOIN threads t ON t.id = e.child_thread_id
+                  WHERE e.parent_thread_id = ?
+                  ORDER BY COALESCE(t.updated_at_ms, 0) DESC
+                  LIMIT 64`
+              )
+              .all(parentId) as Array<Record<string, unknown>>;
 
-          for (const row of rows) {
-            const childId =
-              typeof row.child_thread_id === "string" ? row.child_thread_id : "";
-            if (!childId) continue;
-            relatedThreadIds.add(childId);
-            spawnedThreads.push({
-              threadId: childId,
-              parentThreadId:
-                typeof row.parent_thread_id === "string"
-                  ? row.parent_thread_id
-                  : parentId,
-              status: typeof row.status === "string" ? row.status : "unknown",
-              title: typeof row.title === "string" ? row.title : childId,
-              nickname:
-                typeof row.agent_nickname === "string" ? row.agent_nickname : "",
-              role: typeof row.agent_role === "string" ? row.agent_role : "",
-              model: typeof row.model === "string" ? row.model : "",
-              reasoningEffort:
-                typeof row.reasoning_effort === "string"
-                  ? row.reasoning_effort
-                  : "",
-              cwd: typeof row.cwd === "string" ? row.cwd : "",
-              updatedAtMs:
-                typeof row.updated_at_ms === "number" ? row.updated_at_ms : 0
+            for (const row of rows) {
+              const childId =
+                typeof row.child_thread_id === "string" ? row.child_thread_id : "";
+              if (!childId) continue;
+              queriedIds.add(childId);
+              queriedThreads.push({
+                threadId: childId,
+                parentThreadId:
+                  typeof row.parent_thread_id === "string"
+                    ? row.parent_thread_id
+                    : parentId,
+                status: typeof row.status === "string" ? row.status : "unknown",
+                title: typeof row.title === "string" ? row.title : childId,
+                nickname:
+                  typeof row.agent_nickname === "string" ? row.agent_nickname : "",
+                role: typeof row.agent_role === "string" ? row.agent_role : "",
+                model: typeof row.model === "string" ? row.model : "",
+                reasoningEffort:
+                  typeof row.reasoning_effort === "string"
+                    ? row.reasoning_effort
+                    : "",
+                cwd: typeof row.cwd === "string" ? row.cwd : "",
+                updatedAtMs:
+                  typeof row.updated_at_ms === "number" ? row.updated_at_ms : 0
+              });
+            }
+            setBoundedCache(this.codexStateCache, stateCacheKey, {
+              fingerprint: stateFingerprint,
+              spawnedThreads: queriedThreads,
+              relatedThreadIds: [...queriedIds]
             });
+            spawnedThreads = queriedThreads;
+            for (const tid of queriedIds) {
+              relatedThreadIds.add(tid);
+            }
+          } catch {
+            // Gracefully ignore missing tables or locked sqlite files.
+          } finally {
+            try {
+              db?.close();
+            } catch {
+              // ignore close errors
+            }
           }
-        }
-      } catch {
-        // Gracefully ignore missing tables or locked sqlite files.
-      } finally {
-        try {
-          db?.close();
-        } catch {
-          // ignore close errors
         }
       }
     }
 
-    // 2. Read-only check goals_1.sqlite for thread_goals
-    const goals: AgentAuxCodexGoal[] = [];
+    // 2. Read-only check goals_1.sqlite for thread_goals (also mtimeMs/size short-circuited)
+    let goals: AgentAuxCodexGoal[] = [];
     const goalsDbPath = join(codexRoot, "goals_1.sqlite");
-    if (
-      relatedThreadIds.size > 0 &&
-      existsSync(goalsDbPath) &&
-      isContainedInRoot(goalsDbPath, codexRoot)
-    ) {
-      let db: DatabaseSync | null = null;
-      try {
-        db = new DatabaseSync(goalsDbPath, { readOnly: true });
-        const ids = [...relatedThreadIds];
-        const placeholders = ids.map(() => "?").join(", ");
-        const rows = db
-          .prepare(
-            `SELECT thread_id, goal_id, objective, status, token_budget, tokens_used,
-                    time_used_seconds, created_at_ms, updated_at_ms
-               FROM thread_goals
-              WHERE thread_id IN (${placeholders})
-              ORDER BY updated_at_ms DESC`
-          )
-          .all(...ids) as Array<Record<string, unknown>>;
+    if (relatedThreadIds.size > 0) {
+      const goalsFingerprint = await computeSqliteFileFingerprint(goalsDbPath);
+      if (goalsFingerprint !== null) {
+        const sortedIds = [...relatedThreadIds].sort();
+        const goalsCacheKey = `${goalsDbPath}|${sortedIds.join(",")}`;
+        const cachedGoals = this.codexGoalsCache.get(goalsCacheKey);
+        if (cachedGoals && cachedGoals.fingerprint === goalsFingerprint) {
+          goals = cachedGoals.goals;
+        } else if (await isContainedInRootAsync(goalsDbPath, codexRoot)) {
+          let db: DatabaseSync | null = null;
+          const queriedGoals: AgentAuxCodexGoal[] = [];
+          try {
+            db = this.openCodexDbFn(goalsDbPath);
+            const placeholders = sortedIds.map(() => "?").join(", ");
+            const rows = db
+              .prepare(
+                `SELECT thread_id, goal_id, objective, status, token_budget, tokens_used,
+                        time_used_seconds, created_at_ms, updated_at_ms
+                   FROM thread_goals
+                  WHERE thread_id IN (${placeholders})
+                  ORDER BY updated_at_ms DESC`
+              )
+              .all(...sortedIds) as Array<Record<string, unknown>>;
 
-        for (const row of rows) {
-          const threadId = typeof row.thread_id === "string" ? row.thread_id : "";
-          const goalId = typeof row.goal_id === "string" ? row.goal_id : "";
-          const objective = typeof row.objective === "string" ? row.objective : "";
-          if (!threadId || !objective) continue;
-          const rawStatus = typeof row.status === "string" ? row.status : "active";
-          const status: AgentAuxCodexGoal["status"] =
-            rawStatus === "active" ||
-            rawStatus === "paused" ||
-            rawStatus === "blocked" ||
-            rawStatus === "usage_limited" ||
-            rawStatus === "budget_limited" ||
-            rawStatus === "complete"
-              ? rawStatus
-              : "active";
-          goals.push({
-            threadId,
-            goalId,
-            objective,
-            status,
-            tokenBudget:
-              typeof row.token_budget === "number" ? row.token_budget : null,
-            tokensUsed: typeof row.tokens_used === "number" ? row.tokens_used : 0,
-            timeUsedSeconds:
-              typeof row.time_used_seconds === "number"
-                ? row.time_used_seconds
-                : 0,
-            createdAtMs:
-              typeof row.created_at_ms === "number" ? row.created_at_ms : 0,
-            updatedAtMs:
-              typeof row.updated_at_ms === "number" ? row.updated_at_ms : 0
-          });
-        }
-      } catch {
-        // Gracefully ignore missing tables or locked sqlite files.
-      } finally {
-        try {
-          db?.close();
-        } catch {
-          // ignore close errors
+            for (const row of rows) {
+              const threadId = typeof row.thread_id === "string" ? row.thread_id : "";
+              const goalId = typeof row.goal_id === "string" ? row.goal_id : "";
+              const objective = typeof row.objective === "string" ? row.objective : "";
+              if (!threadId || !objective) continue;
+              const rawStatus = typeof row.status === "string" ? row.status : "active";
+              const status: AgentAuxCodexGoal["status"] =
+                rawStatus === "active" ||
+                rawStatus === "paused" ||
+                rawStatus === "blocked" ||
+                rawStatus === "usage_limited" ||
+                rawStatus === "budget_limited" ||
+                rawStatus === "complete"
+                  ? rawStatus
+                  : "active";
+              queriedGoals.push({
+                threadId,
+                goalId,
+                objective,
+                status,
+                tokenBudget:
+                  typeof row.token_budget === "number" ? row.token_budget : null,
+                tokensUsed: typeof row.tokens_used === "number" ? row.tokens_used : 0,
+                timeUsedSeconds:
+                  typeof row.time_used_seconds === "number"
+                    ? row.time_used_seconds
+                    : 0,
+                createdAtMs:
+                  typeof row.created_at_ms === "number" ? row.created_at_ms : 0,
+                updatedAtMs:
+                  typeof row.updated_at_ms === "number" ? row.updated_at_ms : 0
+              });
+            }
+            setBoundedCache(this.codexGoalsCache, goalsCacheKey, {
+              fingerprint: goalsFingerprint,
+              goals: queriedGoals
+            });
+            goals = queriedGoals;
+          } catch {
+            // Gracefully ignore missing tables or locked sqlite files.
+          } finally {
+            try {
+              db?.close();
+            } catch {
+              // ignore close errors
+            }
+          }
         }
       }
     }

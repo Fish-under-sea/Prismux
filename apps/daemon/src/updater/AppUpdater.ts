@@ -13,6 +13,11 @@ import {
   statSync,
   writeFileSync
 } from "node:fs";
+import {
+  lstat as lstatAsync,
+  readdir as readdirAsync,
+  rm as rmAsync
+} from "node:fs/promises";
 import * as http from "node:http";
 import * as https from "node:https";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -99,6 +104,67 @@ const PROGRESS_SSE_MIN_PERCENT_DELTA = 1;
 export const DEFAULT_AUTO_CHECK_INITIAL_DELAY_MS = 15_000;
 export const DEFAULT_AUTO_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 export const MAX_RELEASE_NOTES_CHARS = 24 * 1024;
+export const DEFAULT_UPDATE_TEMP_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+export const DEFAULT_UPDATE_CACHE_MAX_BYTES = 512 * 1024 * 1024;
+export const DEFAULT_MAX_RETAINED_NEWER_INSTALLERS = 1;
+
+export interface UpdateCacheCleanupOptions {
+  nowMs?: number;
+  maxStaleTempAgeMs?: number;
+  maxTotalBytes?: number;
+  maxNewerInstallers?: number;
+}
+
+export interface UpdateCacheCleanupResult {
+  scannedDir: string;
+  removedFiles: string[];
+  freedBytes: number;
+  keptFiles: string[];
+  errors: string[];
+}
+
+const INSTALLER_ARTIFACT_EXT_RE =
+  /\.(?:exe|zip|msi|dmg|appimage|deb|rpm|7z|7z\.\d{3}|sha256)$/i;
+
+export function extractInstallerVersionFromFilename(fileName: string): string | null {
+  const trimmed = fileName.trim();
+  if (!INSTALLER_ARTIFACT_EXT_RE.test(trimmed)) {
+    return null;
+  }
+  let stem = trimmed
+    .replace(/\.sha256$/i, "")
+    .replace(/\.7z\.\d{3}$/i, "")
+    .replace(/\.(?:exe|zip|msi|dmg|appimage|deb|rpm|7z)$/i, "");
+  stem = stem.replace(
+    /-(?:win|windows|linux|mac|macos|darwin)(?:-(?:x64|arm64|ia32|universal))?$/i,
+    ""
+  );
+  stem = stem.replace(/-(?:x64|arm64|ia32|universal)$/i, "");
+  const match = /(?:^|[-_])v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/i.exec(stem);
+  const candidate = match?.[1]?.trim();
+  if (!candidate) {
+    return null;
+  }
+  return parseSemver(candidate) !== null ? candidate : null;
+}
+
+async function computePathSizeSafe(targetPath: string, depth = 0): Promise<number> {
+  if (depth > 8) return 0;
+  try {
+    const st = await lstatAsync(targetPath);
+    if (st.isSymbolicLink()) return 0;
+    if (st.isFile()) return st.size;
+    if (!st.isDirectory()) return 0;
+    const children = await readdirAsync(targetPath);
+    let total = 0;
+    for (const child of children) {
+      total += await computePathSizeSafe(join(targetPath, child), depth + 1);
+    }
+    return total;
+  } catch {
+    return 0;
+  }
+}
 
 export type { UpdateDownloadProgress };
 
@@ -1305,6 +1371,181 @@ export class AppUpdater {
     return this.downloadsDir;
   }
 
+  /**
+   * Cleans `~/.prismux/updates/`:
+   * - Deletes downloaded installers matching `<= currentVersion`
+   * - Purges stale `.split-work-*` directories & `*.part` leftovers older than 24h
+   * - Keeps at most 1 newer installer (`> currentVersion`) within a 512 MiB cap
+   */
+  async cleanupUpdateCache(
+    options: UpdateCacheCleanupOptions = {}
+  ): Promise<UpdateCacheCleanupResult> {
+    const nowMs = options.nowMs ?? Date.now();
+    const maxStaleTempAgeMs = Math.max(
+      0,
+      options.maxStaleTempAgeMs ?? DEFAULT_UPDATE_TEMP_MAX_AGE_MS
+    );
+    const maxTotalBytes = Math.max(
+      0,
+      options.maxTotalBytes ?? DEFAULT_UPDATE_CACHE_MAX_BYTES
+    );
+    const maxNewerInstallers = Math.max(
+      0,
+      Math.floor(options.maxNewerInstallers ?? DEFAULT_MAX_RETAINED_NEWER_INSTALLERS)
+    );
+
+    const removedFiles: string[] = [];
+    const keptFiles: string[] = [];
+    const errors: string[] = [];
+    let freedBytes = 0;
+
+    if (this.downloading) {
+      return {
+        scannedDir: this.downloadsDir,
+        removedFiles,
+        freedBytes,
+        keptFiles,
+        errors
+      };
+    }
+
+    let entries: string[];
+    try {
+      entries = await readdirAsync(this.downloadsDir);
+    } catch {
+      return {
+        scannedDir: this.downloadsDir,
+        removedFiles,
+        freedBytes,
+        keptFiles,
+        errors
+      };
+    }
+
+    interface CandidateArtifact {
+      name: string;
+      fullPath: string;
+      version: string | null;
+      size: number;
+      mtimeMs: number;
+    }
+    const newerCandidates: CandidateArtifact[] = [];
+
+    for (const name of entries) {
+      const fullPath = join(this.downloadsDir, name);
+      let st;
+      try {
+        st = await lstatAsync(fullPath);
+      } catch {
+        continue;
+      }
+      if (st.isSymbolicLink()) {
+        continue;
+      }
+
+      const isTempArtifact =
+        name.startsWith(".split-work-") || name.toLowerCase().endsWith(".part");
+      if (isTempArtifact) {
+        if (nowMs - st.mtimeMs >= maxStaleTempAgeMs) {
+          const bytes = st.isDirectory()
+            ? await computePathSizeSafe(fullPath)
+            : st.size;
+          try {
+            await rmAsync(fullPath, { recursive: true, force: true });
+            removedFiles.push(name);
+            freedBytes += bytes;
+          } catch (err) {
+            errors.push(
+              `${name}: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+        } else {
+          keptFiles.push(name);
+        }
+        continue;
+      }
+
+      if (!st.isFile() || !INSTALLER_ARTIFACT_EXT_RE.test(name)) {
+        keptFiles.push(name);
+        continue;
+      }
+
+      const parsedVer = extractInstallerVersionFromFilename(name);
+      if (parsedVer !== null && compareSemver(parsedVer, this.currentVersion) <= 0) {
+        try {
+          await rmAsync(fullPath, { force: true });
+          removedFiles.push(name);
+          freedBytes += st.size;
+          if (this.lastDownload && resolve(this.lastDownload.filePath) === resolve(fullPath)) {
+            this.lastDownload = null;
+          }
+        } catch (err) {
+          errors.push(
+            `${name}: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+        continue;
+      }
+
+      newerCandidates.push({
+        name,
+        fullPath,
+        version: parsedVer,
+        size: st.size,
+        mtimeMs: st.mtimeMs
+      });
+    }
+
+    // Sort newer installers: highest SemVer first, then newest mtimeMs descending.
+    newerCandidates.sort((a, b) => {
+      if (a.version !== null && b.version !== null) {
+        const cmp = compareSemver(b.version, a.version);
+        if (cmp !== 0) return cmp;
+      } else if (a.version !== null) {
+        return -1;
+      } else if (b.version !== null) {
+        return 1;
+      }
+      return b.mtimeMs - a.mtimeMs;
+    });
+
+    let retainedCount = 0;
+    let retainedBytes = 0;
+    for (const candidate of newerCandidates) {
+      const fitsCount = retainedCount < maxNewerInstallers;
+      const fitsSize = retainedBytes + candidate.size <= maxTotalBytes;
+      if (fitsCount && fitsSize) {
+        retainedCount += 1;
+        retainedBytes += candidate.size;
+        keptFiles.push(candidate.name);
+      } else {
+        try {
+          await rmAsync(candidate.fullPath, { force: true });
+          removedFiles.push(candidate.name);
+          freedBytes += candidate.size;
+          if (
+            this.lastDownload &&
+            resolve(this.lastDownload.filePath) === resolve(candidate.fullPath)
+          ) {
+            this.lastDownload = null;
+          }
+        } catch (err) {
+          errors.push(
+            `${candidate.name}: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+      }
+    }
+
+    return {
+      scannedDir: this.downloadsDir,
+      removedFiles,
+      freedBytes,
+      keptFiles,
+      errors
+    };
+  }
+
   resolve7zaPath(): string | null {
     return resolve7zaBinary(this.sevenZipPathOverride);
   }
@@ -1625,6 +1866,9 @@ export class AppUpdater {
             }
           }
           this.emitEvent(result.hasUpdate ? "available" : "up-to-date");
+          void this.cleanupUpdateCache().catch(() => {
+            // Non-fatal background cache pruning after update check.
+          });
           return result;
         } catch (error) {
           errors.push({

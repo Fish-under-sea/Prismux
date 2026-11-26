@@ -12,11 +12,26 @@ import type {
 } from "@prismux/protocol";
 
 export const DEFAULT_PTY_RING_BUFFER_BYTES = 2 * 1024 * 1024;
+export const DEFAULT_DEAD_SESSION_TTL_MS = 30 * 60 * 1000;
+export const DEFAULT_MAX_RETAINED_DEAD_SESSIONS = 16;
 
 const DEFAULT_PTY_COLS = 120;
 const DEFAULT_PTY_ROWS = 30;
 const KILL_GRACE_PERIOD_MS = 1500;
 const KILL_FORCE_CLOSE_TIMEOUT_MS = 3000;
+const DEFAULT_DEAD_SESSION_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
+export interface PersistentPtyPoolOptions {
+  ringBufferBytes?: number;
+  /** TTL before dead (`alive: false`) sessions & their ring buffers are evicted (default: 30 min). */
+  deadSessionTtlMs?: number;
+  /** Maximum number of dead sessions retained concurrently (default: 16). */
+  maxRetainedDeadSessions?: number;
+  /** Background sweep interval in ms (default: 5 min; 0 disables background timer). */
+  sweepIntervalMs?: number;
+  /** Injectable clock for deterministic unit tests. */
+  now?: () => number;
+}
 
 const POLLUTING_ENV_KEYS = new Set<string>([
   "ELECTRON_RUN_AS_NODE",
@@ -94,6 +109,7 @@ interface PtySessionState {
   rows: number;
   createdAt: number;
   lastActivityAt: number;
+  deadAt?: number;
   child?: ChildProcessWithoutNullStreams;
   closePromise?: Promise<void>;
   killInitiated: boolean;
@@ -245,9 +261,122 @@ async function resolveWorktreeBranch(worktreePath: string): Promise<string | und
 export class PersistentPtyPool {
   private readonly sessions = new Map<string, PtySessionState>();
   private readonly ringBufferBytes: number;
+  private readonly deadSessionTtlMs: number;
+  private readonly maxRetainedDeadSessions: number;
+  private readonly sweepIntervalMs: number;
+  private readonly now: () => number;
+  private deadSweepTimer: NodeJS.Timeout | undefined;
 
-  constructor(ringBufferBytes = DEFAULT_PTY_RING_BUFFER_BYTES) {
-    this.ringBufferBytes = validateRingBufferBytes(ringBufferBytes);
+  constructor(
+    ringBufferBytesOrOptions: number | PersistentPtyPoolOptions = DEFAULT_PTY_RING_BUFFER_BYTES
+  ) {
+    if (typeof ringBufferBytesOrOptions === "number") {
+      this.ringBufferBytes = validateRingBufferBytes(ringBufferBytesOrOptions);
+      this.deadSessionTtlMs = DEFAULT_DEAD_SESSION_TTL_MS;
+      this.maxRetainedDeadSessions = DEFAULT_MAX_RETAINED_DEAD_SESSIONS;
+      this.sweepIntervalMs = DEFAULT_DEAD_SESSION_SWEEP_INTERVAL_MS;
+      this.now = () => Date.now();
+    } else {
+      this.ringBufferBytes = validateRingBufferBytes(
+        ringBufferBytesOrOptions.ringBufferBytes ?? DEFAULT_PTY_RING_BUFFER_BYTES
+      );
+      this.deadSessionTtlMs = Math.max(
+        0,
+        ringBufferBytesOrOptions.deadSessionTtlMs ?? DEFAULT_DEAD_SESSION_TTL_MS
+      );
+      this.maxRetainedDeadSessions = Math.max(
+        0,
+        Math.floor(
+          ringBufferBytesOrOptions.maxRetainedDeadSessions ??
+            DEFAULT_MAX_RETAINED_DEAD_SESSIONS
+        )
+      );
+      this.sweepIntervalMs = Math.max(
+        0,
+        ringBufferBytesOrOptions.sweepIntervalMs ??
+          DEFAULT_DEAD_SESSION_SWEEP_INTERVAL_MS
+      );
+      this.now = ringBufferBytesOrOptions.now ?? (() => Date.now());
+    }
+  }
+
+  private ensureDeadSweepTimer(): void {
+    if (this.deadSweepTimer !== undefined || this.sweepIntervalMs <= 0) {
+      return;
+    }
+    this.deadSweepTimer = setInterval(() => {
+      this.evictDeadSessions();
+    }, this.sweepIntervalMs);
+    this.deadSweepTimer.unref();
+  }
+
+  private stopDeadSweepTimer(): void {
+    if (this.deadSweepTimer !== undefined) {
+      clearInterval(this.deadSweepTimer);
+      this.deadSweepTimer = undefined;
+    }
+  }
+
+  private markSessionDead(state: PtySessionState): void {
+    state.alive = false;
+    if (state.deadAt === undefined) {
+      state.deadAt = this.now();
+    }
+    this.ensureDeadSweepTimer();
+    this.evictDeadSessions();
+  }
+
+  /**
+   * Evicts dead (`alive: false`) sessions that have exceeded `deadSessionTtlMs` (30m default)
+   * or exceed `maxRetainedDeadSessions` (16 default), immediately releasing their 2 MiB ring buffers.
+   */
+  evictDeadSessions(nowMs: number = this.now()): number {
+    let evicted = 0;
+    const retainedDead: PtySessionState[] = [];
+
+    for (const [ptyId, state] of this.sessions.entries()) {
+      if (state.alive) continue;
+      const deadSince = state.deadAt ?? state.lastActivityAt;
+      if (this.deadSessionTtlMs > 0 && nowMs - deadSince >= this.deadSessionTtlMs) {
+        this.releaseSessionState(ptyId, state);
+        evicted += 1;
+      } else {
+        retainedDead.push(state);
+      }
+    }
+
+    if (retainedDead.length > this.maxRetainedDeadSessions) {
+      retainedDead.sort((a, b) => {
+        const aSub = a.subscribers.size > 0 ? 1 : 0;
+        const bSub = b.subscribers.size > 0 ? 1 : 0;
+        if (aSub !== bSub) return aSub - bSub;
+        const aTs = a.deadAt ?? a.lastActivityAt;
+        const bTs = b.deadAt ?? b.lastActivityAt;
+        return aTs - bTs;
+      });
+      const overflow = retainedDead.length - this.maxRetainedDeadSessions;
+      for (let i = 0; i < overflow; i += 1) {
+        const victim = retainedDead[i]!;
+        this.releaseSessionState(victim.ptyId, victim);
+        evicted += 1;
+      }
+    }
+
+    const hasRemainingDead = Array.from(this.sessions.values()).some((s) => !s.alive);
+    if (!hasRemainingDead) {
+      this.stopDeadSweepTimer();
+    }
+    return evicted;
+  }
+
+  private releaseSessionState(ptyId: string, state: PtySessionState): void {
+    for (const subscriber of state.subscribers) {
+      subscriber.active = false;
+    }
+    state.subscribers.clear();
+    state.frames.length = 0;
+    state.bufferBytes = 0;
+    this.sessions.delete(ptyId);
   }
 
   getRingBufferLimitBytes(): number {
@@ -388,10 +517,11 @@ export class PersistentPtyPool {
             group,
             worktreeBranch,
             alive: true,
+            deadAt: undefined,
             ringBufferBytes: limitBytes,
             cols,
             rows,
-            lastActivityAt: Date.now(),
+            lastActivityAt: this.now(),
             killInitiated: false
           })
         : this.createSessionState({
@@ -429,8 +559,8 @@ export class PersistentPtyPool {
         return;
       }
       finalized = true;
-      state.alive = false;
       state.child = undefined;
+      this.markSessionDead(state);
       resolveClose?.();
     };
 
@@ -697,7 +827,7 @@ export class PersistentPtyPool {
       if (!state.alive) {
         return false;
       }
-      state.alive = false;
+      this.markSessionDead(state);
       return true;
     }
 
@@ -872,6 +1002,7 @@ export class PersistentPtyPool {
   }
 
   async dispose(): Promise<void> {
+    this.stopDeadSweepTimer();
     const killTasks: Array<Promise<boolean>> = [];
     for (const [ptyId, state] of this.sessions.entries()) {
       for (const subscriber of state.subscribers) {
@@ -885,6 +1016,7 @@ export class PersistentPtyPool {
       }
     }
     await Promise.all(killTasks);
+    this.stopDeadSweepTimer();
     for (const state of this.sessions.values()) {
       state.alive = false;
     }
@@ -901,7 +1033,7 @@ export class PersistentPtyPool {
     cols: number;
     rows: number;
   }): PtySessionState {
-    const now = Date.now();
+    const now = this.now();
     return {
       ptyId: init.ptyId,
       cwd: init.cwd,
@@ -909,6 +1041,7 @@ export class PersistentPtyPool {
       group: init.group,
       worktreeBranch: init.worktreeBranch,
       alive: init.alive,
+      ...(init.alive ? {} : { deadAt: now }),
       ringBufferBytes: init.ringBufferBytes,
       frames: [],
       bufferBytes: 0,

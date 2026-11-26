@@ -47,6 +47,10 @@ import { PortScannerService } from "./system/PortScannerService.js";
 import { PrismuxProviderProbeService } from "./system/PrismuxProviderProbeService.js";
 import { ResourceMonitorService } from "./system/ResourceMonitorService.js";
 import { ServiceDiagnosticsService } from "./system/ServiceDiagnosticsService.js";
+import {
+  StorageQuotaService,
+  type StorageQuotaServiceOptions
+} from "./system/StorageQuotaService.js";
 import { SystemFontService } from "./system/SystemFontService.js";
 import { AppUpdater } from "./updater/AppUpdater.js";
 import { WallpaperMediaService } from "./wallpapers/WallpaperMediaService.js";
@@ -81,6 +85,7 @@ export * from "./system/PortScannerService.js";
 export * from "./system/PrismuxProviderProbeService.js";
 export * from "./system/ResourceMonitorService.js";
 export * from "./system/ServiceDiagnosticsService.js";
+export * from "./system/StorageQuotaService.js";
 export * from "./system/SystemFontService.js";
 export * from "./system/WindowsEnvRefresh.js";
 export * from "./updater/AppUpdater.js";
@@ -189,6 +194,10 @@ export interface DaemonStartOptions {
   officialCatalogPath?: string;
   officialPluginSources?: OfficialPluginSourceConfig;
   steamRootsDiscoverer?: () => Promise<string[]>;
+  storageQuotaOptions?: Omit<
+    StorageQuotaServiceOptions,
+    "dataDir" | "memoryStore" | "appUpdater"
+  >;
   disableAutoUpdateCheck?: boolean;
   onShutdownRequested?: (reason?: string) => void | Promise<void>;
 }
@@ -245,6 +254,7 @@ export class PrismuxDaemon {
   readonly overnightRouteService: OvernightRouteService;
   readonly portScannerService: PortScannerService;
   readonly resourceMonitorService: ResourceMonitorService;
+  readonly storageQuotaService: StorageQuotaService;
   readonly diagnosticsService: ServiceDiagnosticsService;
   readonly cliUpdateService: CliUpdateService;
   readonly quotaService: OfficialQuotaService;
@@ -432,6 +442,12 @@ export class PrismuxDaemon {
         ? { t3ServerUrl: resolvedCoreHealthUrl ?? resolvedCoreUrl }
         : {})
     });
+    this.storageQuotaService = new StorageQuotaService({
+      ...options.storageQuotaOptions,
+      dataDir: options.dataDir,
+      memoryStore: this.memoryStore,
+      appUpdater: this.appUpdater
+    });
     this.diagnosticsService = new ServiceDiagnosticsService({
       dataDir: options.dataDir,
       version: resolvedHostVersion,
@@ -523,6 +539,7 @@ export class PrismuxDaemon {
       quotaService: this.quotaService,
       portScannerService: this.portScannerService,
       resourceMonitorService: this.resourceMonitorService,
+      storageQuotaService: this.storageQuotaService,
       subscriptionWaiverStore: this.subscriptionWaiverStore,
       dispatchHub: this.dispatchHub,
       startedAt: daemonStartedAt,
@@ -825,6 +842,13 @@ export class PrismuxDaemon {
       this.running = true;
       this.resourceMonitorService.start();
       this.overnightRouteService.startSchedulerIfEnabled();
+      // Non-blocking startup C-drive guardrails: prune old downloaded installers and crashed >24h factory worktrees.
+      void this.appUpdater.cleanupUpdateCache().catch(() => {
+        // Non-fatal startup cache pruning
+      });
+      void this.overnightFactory.sweepStaleWorktrees().catch(() => {
+        // Non-fatal startup worktree sweep
+      });
       if (
         !this.options.disableAutoUpdateCheck &&
         process.env["PRISMUX_DISABLE_AUTO_UPDATE_CHECK"] !== "1"

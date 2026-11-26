@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { basename, isAbsolute, relative, resolve } from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
@@ -20,6 +20,7 @@ const DEFAULT_SCAN_TIMEOUT_MS = 2_500;
 const MAX_PORTS = 200;
 const SLOW_SPAWN_SKIP_METADATA_MS = 2_000;
 const METADATA_REPROBE_INTERVAL_SCANS = 10;
+const METADATA_CACHE_TTL_MS = 15_000;
 const TIMEOUT_BACKOFF_STEPS_MS = [15_000, 30_000, 60_000] as const;
 
 const HTTP_PORTS = new Set<number>([
@@ -91,6 +92,7 @@ export interface ProcessMetadata {
 interface RememberedMetadataEntry {
   meta: ProcessMetadata;
   probedAtScan: number;
+  probedAtMs: number;
 }
 
 export interface KillProtectionCheck {
@@ -195,11 +197,11 @@ function rankBindHostPreference(rawAddress: string): number {
   return 5;
 }
 
-function expandPathAliases(inputPath: string): string[] {
+async function expandPathAliases(inputPath: string): Promise<string[]> {
   const resolved = resolve(inputPath);
   const aliases = [resolved];
   try {
-    const real = realpathSync(resolved);
+    const real = await realpath(resolved);
     if (real !== resolved) {
       aliases.push(real);
     }
@@ -803,6 +805,7 @@ export class PortScannerService {
 
     let metadataMap = new Map<number, ProcessMetadata>();
     let metadataAvailable = true;
+    const inspectNowMs = Date.now();
 
     if (skipMetadata) {
       metadataAvailable = false;
@@ -815,11 +818,46 @@ export class PortScannerService {
           metadataMap.set(pid, cached.meta);
         }
       }
+    } else if (!options.requireMetadata && this.rememberedMetadataByPid.size > 0) {
+      const pidsToQuery: number[] = [];
+      for (const pid of pids) {
+        const cached = this.rememberedMetadataByPid.get(pid);
+        if (
+          cached &&
+          inspectNowMs - cached.probedAtMs < METADATA_CACHE_TTL_MS &&
+          this.scanSequence - cached.probedAtScan < METADATA_REPROBE_INTERVAL_SCANS
+        ) {
+          metadataMap.set(pid, cached.meta);
+        } else {
+          pidsToQuery.push(pid);
+        }
+      }
+      if (pidsToQuery.length > 0) {
+        const freshMap = await this.inspectProcessesFn(pidsToQuery);
+        for (const [pid, meta] of freshMap.entries()) {
+          metadataMap.set(pid, meta);
+        }
+      }
+      const nextRemembered = new Map<number, RememberedMetadataEntry>();
+      for (const [pid, meta] of metadataMap.entries()) {
+        const prev = this.rememberedMetadataByPid.get(pid);
+        const wasFreshlyProbed = pidsToQuery.includes(pid) || prev === undefined;
+        nextRemembered.set(pid, {
+          meta,
+          probedAtScan: wasFreshlyProbed ? this.scanSequence : prev.probedAtScan,
+          probedAtMs: wasFreshlyProbed ? inspectNowMs : prev.probedAtMs
+        });
+      }
+      this.rememberedMetadataByPid = nextRemembered;
     } else {
       metadataMap = await this.inspectProcessesFn(pids);
       const nextRemembered = new Map<number, RememberedMetadataEntry>();
       for (const [pid, meta] of metadataMap.entries()) {
-        nextRemembered.set(pid, { meta, probedAtScan: this.scanSequence });
+        nextRemembered.set(pid, {
+          meta,
+          probedAtScan: this.scanSequence,
+          probedAtMs: inspectNowMs
+        });
       }
       this.rememberedMetadataByPid = nextRemembered;
     }
@@ -839,7 +877,7 @@ export class PortScannerService {
     }
 
     const workspaceAliases =
-      normalizedWorkspace !== null ? expandPathAliases(normalizedWorkspace) : [];
+      normalizedWorkspace !== null ? await expandPathAliases(normalizedWorkspace) : [];
 
     const entries: ListeningPortEntry[] = uniqueSockets.map((sock) => {
       const meta = metadataMap.get(sock.pid);

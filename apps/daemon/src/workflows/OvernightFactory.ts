@@ -7,6 +7,11 @@ import {
   rmSync,
   writeFileSync
 } from "node:fs";
+import {
+  lstat as lstatAsync,
+  readdir as readdirAsync,
+  rm as rmAsync
+} from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
@@ -58,6 +63,84 @@ import {
 import { sanitizeChildEnv } from "../core/CoreServerSupervisor.js";
 
 export const OVERNIGHT_FACTORY_MILESTONE = "M5" as const;
+export const DEFAULT_STALE_FACTORY_WORKTREE_AGE_MS = 24 * 60 * 60 * 1000;
+
+export interface StaleFactoryWorktreesSweepResult {
+  scannedDir: string;
+  removedPaths: string[];
+  freedBytes: number;
+  errors: string[];
+}
+
+async function computeEntryBytesSafe(targetPath: string, depth = 0): Promise<number> {
+  if (depth > 12) return 0;
+  try {
+    const st = await lstatAsync(targetPath);
+    if (st.isSymbolicLink()) return 0;
+    if (st.isFile()) return st.size;
+    if (!st.isDirectory()) return 0;
+    const entries = await readdirAsync(targetPath);
+    let total = 0;
+    for (const entry of entries) {
+      total += await computeEntryBytesSafe(join(targetPath, entry), depth + 1);
+    }
+    return total;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Sweeps crashed `%TEMP%\prismux-factory-worktrees\*` directories older than `maxAgeMs`
+ * (default 24h) asynchronously without following symlinks outside the base directory.
+ */
+export async function sweepStaleFactoryWorktrees(options: {
+  baseDir?: string;
+  maxAgeMs?: number;
+  nowMs?: number;
+} = {}): Promise<StaleFactoryWorktreesSweepResult> {
+  const baseDir = resolve(
+    options.baseDir ?? join(tmpdir(), `${BRAND.appSlug}-factory-worktrees`)
+  );
+  const maxAgeMs = Math.max(
+    0,
+    options.maxAgeMs ?? DEFAULT_STALE_FACTORY_WORKTREE_AGE_MS
+  );
+  const nowMs = options.nowMs ?? Date.now();
+  const removedPaths: string[] = [];
+  const errors: string[] = [];
+  let freedBytes = 0;
+
+  let entries: string[];
+  try {
+    entries = await readdirAsync(baseDir);
+  } catch {
+    return { scannedDir: baseDir, removedPaths, freedBytes, errors };
+  }
+
+  for (const name of entries) {
+    const fullPath = join(baseDir, name);
+    try {
+      const st = await lstatAsync(fullPath);
+      if (st.isSymbolicLink()) {
+        continue;
+      }
+      if (nowMs - st.mtimeMs < maxAgeMs) {
+        continue;
+      }
+      const bytes = st.isDirectory()
+        ? await computeEntryBytesSafe(fullPath)
+        : st.size;
+      await rmAsync(fullPath, { recursive: true, force: true });
+      removedPaths.push(fullPath);
+      freedBytes += bytes;
+    } catch (err) {
+      errors.push(`${fullPath}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  return { scannedDir: baseDir, removedPaths, freedBytes, errors };
+}
 
 export type FactoryInboundMode = "gmail-oauth2" | "imap";
 
@@ -1522,6 +1605,24 @@ export class OvernightFactory {
 
   getProcessedMessageIds(): string[] {
     return [...this.processedMessageIds];
+  }
+
+  getWorktreeBaseDir(): string {
+    return (
+      this.worktreeBaseDir ??
+      join(tmpdir(), `${BRAND.appSlug}-factory-worktrees`)
+    );
+  }
+
+  async sweepStaleWorktrees(options?: {
+    maxAgeMs?: number;
+    nowMs?: number;
+  }): Promise<StaleFactoryWorktreesSweepResult> {
+    return sweepStaleFactoryWorktrees({
+      baseDir: this.getWorktreeBaseDir(),
+      ...(options?.maxAgeMs !== undefined ? { maxAgeMs: options.maxAgeMs } : {}),
+      ...(options?.nowMs !== undefined ? { nowMs: options.nowMs } : {})
+    });
   }
 
   async pollInbound(

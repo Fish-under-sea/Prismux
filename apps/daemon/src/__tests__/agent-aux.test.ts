@@ -38,7 +38,7 @@ test("extractBoardMentions mirrors AGY word-start, prefix, and @all rules", () =
 });
 
 test("AgentAuxService reads AGY native swarm from coordinator and worker sessions", async () => {
-  await withTempRoot((root) => {
+  await withTempRoot(async (root) => {
     const appData = join(root, "antigravity");
     const coordId = "11111111-2222-3333-4444-555555555555";
     const workerId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
@@ -182,7 +182,7 @@ test("AgentAuxService reads AGY native swarm from coordinator and worker session
     });
 
     // Direct lookup by coordinator sessionId
-    const coordSnap = service.inspect({ provider: "antigravity", sessionId: coordId });
+    const coordSnap = await service.inspect({ provider: "antigravity", sessionId: coordId });
     assert.equal(coordSnap.active, true);
     assert.equal(coordSnap.hasLiveWork, true);
     assert.equal(coordSnap.kind, "agy-swarm");
@@ -210,7 +210,7 @@ test("AgentAuxService reads AGY native swarm from coordinator and worker session
     );
 
     // Reverse lookup by worker conversation_id
-    const workerSnap = service.inspect({ provider: "agy", sessionId: workerId });
+    const workerSnap = await service.inspect({ provider: "agy", sessionId: workerId });
     assert.equal(workerSnap.active, true);
     assert.equal(workerSnap.kind, "agy-swarm");
     assert.equal(workerSnap.swarm?.id, coordId);
@@ -219,7 +219,7 @@ test("AgentAuxService reads AGY native swarm from coordinator and worker session
 });
 
 test("AgentAuxService detects AGY detached subagents with transcript steps", async () => {
-  await withTempRoot((root) => {
+  await withTempRoot(async (root) => {
     const appData = join(root, "antigravity-acp");
     const parentId = "12345678-1234-1234-1234-1234567890ab";
     const childId = "abcdef12-3456-7890-abcd-ef1234567890";
@@ -257,7 +257,7 @@ test("AgentAuxService detects AGY detached subagents with transcript steps", asy
       codexHomeDir: join(root, "no-codex")
     });
 
-    const snap = service.inspect({ provider: "antigravity", sessionId: parentId });
+    const snap = await service.inspect({ provider: "antigravity", sessionId: parentId });
     assert.equal(snap.active, true);
     assert.equal(snap.kind, "agy-subagents");
     assert.equal(snap.agySubagents?.length, 1);
@@ -268,7 +268,7 @@ test("AgentAuxService detects AGY detached subagents with transcript steps", asy
 });
 
 test("AgentAuxService reads Claude Code teams, inboxes, and shared tasks with strict project isolation", async () => {
-  await withTempRoot((root) => {
+  await withTempRoot(async (root) => {
     const claudeHome = join(root, ".claude");
     const projectA = join(root, "repo-alpha");
     const projectB = join(root, "repo-beta");
@@ -375,7 +375,7 @@ test("AgentAuxService reads Claude Code teams, inboxes, and shared tasks with st
     });
 
     // Matched by cwd
-    const matched = service.inspect({ provider: "claudeAgent", cwd: projectA });
+    const matched = await service.inspect({ provider: "claudeAgent", cwd: projectA });
     assert.equal(matched.active, true);
     assert.equal(matched.hasLiveWork, true);
     assert.equal(matched.kind, "claude-team");
@@ -390,7 +390,7 @@ test("AgentAuxService reads Claude Code teams, inboxes, and shared tasks with st
     assert.deepEqual(matched.tasks?.[1]?.blockedBy, ["1"]);
 
     // Unrelated project MUST NOT leak alpha-squad!
-    const unrelated = service.inspect({
+    const unrelated = await service.inspect({
       provider: "claudeAgent",
       sessionId: "cc-session-other",
       cwd: projectB
@@ -402,7 +402,7 @@ test("AgentAuxService reads Claude Code teams, inboxes, and shared tasks with st
 });
 
 test("AgentAuxService reads Codex read-only goals_1.sqlite and state_5.sqlite spawn edges", async () => {
-  await withTempRoot((root) => {
+  await withTempRoot(async (root) => {
     const codexHome = join(root, ".codex");
     mkdirSync(codexHome, { recursive: true });
 
@@ -481,7 +481,7 @@ test("AgentAuxService reads Codex read-only goals_1.sqlite and state_5.sqlite sp
       codexHomeDir: codexHome
     });
 
-    const snap = service.inspect({ provider: "codex", sessionId: parentThread });
+    const snap = await service.inspect({ provider: "codex", sessionId: parentThread });
     assert.equal(snap.active, true);
     assert.equal(snap.hasLiveWork, true);
     assert.equal(snap.kind, "codex-collab");
@@ -523,14 +523,14 @@ test("AgentAuxService rejects path traversal and serves HTTP GET /v1/agent-aux/i
     });
 
     for (const badId of ["../etc/passwd", "..\\windows", "foo/bar", "bad%20id", ".hidden"]) {
-      assert.throws(
+      await assert.rejects(
         () => service.inspect({ provider: "antigravity", sessionId: badId }),
         (err: unknown) =>
           err instanceof AgentAuxValidationError && err.statusCode === 400
       );
     }
 
-    const inactive = service.inspect({
+    const inactive = await service.inspect({
       provider: "antigravity",
       sessionId: "00000000-0000-0000-0000-000000000000"
     });

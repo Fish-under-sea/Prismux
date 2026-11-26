@@ -18,10 +18,8 @@ import type { CoreServerSupervisor } from "../core/CoreServerSupervisor.js";
 const execFileAsync = promisify(execFile);
 
 const DEFAULT_SAMPLE_TIMEOUT_MS = 5_000;
-const DEFAULT_TREE_CACHE_TTL_MS = 1_500;
-const DEFAULT_BACKGROUND_SAMPLE_INTERVAL_MS = 2_000;
-const WARMUP_INITIAL_DELAY_MS = 120;
-const WARMUP_SECOND_FRAME_DELAY_MS = 280;
+const DEFAULT_TREE_CACHE_TTL_MS = 10_000;
+const DEFAULT_BACKGROUND_SAMPLE_INTERVAL_MS = 5_000;
 const HOST_METRICS_FRESH_TTL_MS = 15_000;
 const STALE_IDLE_THRESHOLD_MS = 30 * 60 * 1000;
 const MAX_HISTORY_SAMPLES = 30;
@@ -1014,8 +1012,6 @@ export class ResourceMonitorService {
   private inflightProcessTree: Promise<CachedProcessTree> | null = null;
 
   private backgroundTimer: NodeJS.Timeout | undefined;
-  private warmupTimer: NodeJS.Timeout | undefined;
-  private warmupFollowupTimer: NodeJS.Timeout | undefined;
 
   constructor(options: ResourceMonitorServiceOptions) {
     this.sampleTimeoutMs = options.sampleTimeoutMs ?? DEFAULT_SAMPLE_TIMEOUT_MS;
@@ -1045,9 +1041,13 @@ export class ResourceMonitorService {
   }
 
   /**
-   * Starts the lightweight unref'd background CPU sliding-window ticker and
-   * performs a single early OS process-tree baseline warm-up so CPU% deltas
-   * are ready immediately on the first UI read.
+   * Starts the lightweight unref'd background CPU sliding-window ticker using
+   * zero-subprocess `os.cpus()` and `process.cpuUsage()`.
+   *
+   * Note: Does NOT spawn startup PowerShell WMI process-tree warmups on Windows;
+   * desktop metrics arrive via Electron `ingestHostMetrics()` and OS tree queries
+   * run strictly on demand when cache expired without fresh Electron metrics or
+   * when `forceRefresh: true`.
    */
   start(): void {
     if (this.backgroundTimer !== undefined) {
@@ -1059,57 +1059,12 @@ export class ResourceMonitorService {
       this.sampleDaemonCpuPercent(now);
     }, this.backgroundSampleIntervalMs);
     this.backgroundTimer.unref();
-
-    // Only warm up the OS process tree in live mode (skip when unit tests inject custom samplers).
-    // Performs a two-frame warm-up (baseline + follow-up 280ms later) so the first UI popover open
-    // already displays real non-zero OS CPU% deltas instead of cold-start 0.0%.
-    if (!this.customSampleProcessesFn && !this.sampleProcessTreeFn) {
-      this.warmupTimer = setTimeout(() => {
-        this.warmupTimer = undefined;
-        void this.primeProcessTreeBaseline(true);
-      }, WARMUP_INITIAL_DELAY_MS);
-      this.warmupTimer.unref();
-    }
   }
 
   stop(): void {
     if (this.backgroundTimer !== undefined) {
       clearInterval(this.backgroundTimer);
       this.backgroundTimer = undefined;
-    }
-    if (this.warmupTimer !== undefined) {
-      clearTimeout(this.warmupTimer);
-      this.warmupTimer = undefined;
-    }
-    if (this.warmupFollowupTimer !== undefined) {
-      clearTimeout(this.warmupFollowupTimer);
-      this.warmupFollowupTimer = undefined;
-    }
-  }
-
-  private async primeProcessTreeBaseline(scheduleFollowup: boolean): Promise<void> {
-    try {
-      const { entries, sampledAtMs, fromCache } = await this.getProcessTree(true);
-      const cpuCores = Math.max(1, os.cpus().length);
-      for (const entry of entries.values()) {
-        if (entry.cpuSeconds !== null) {
-          this.resolveDerivedCpuPercent(
-            { pid: entry.pid, cpuPercent: entry.cpuPercent, cpuSeconds: entry.cpuSeconds },
-            sampledAtMs,
-            cpuCores,
-            fromCache
-          );
-        }
-      }
-      if (scheduleFollowup && this.backgroundTimer !== undefined) {
-        this.warmupFollowupTimer = setTimeout(() => {
-          this.warmupFollowupTimer = undefined;
-          void this.primeProcessTreeBaseline(false);
-        }, WARMUP_SECOND_FRAME_DELAY_MS);
-        this.warmupFollowupTimer.unref();
-      }
-    } catch {
-      // Non-fatal baseline warm-up
     }
   }
 
@@ -1524,30 +1479,48 @@ export class ResourceMonitorService {
       osSampledAtMs = Date.now();
       osFromCache = false;
     } else {
-      const treeLookup = await this.getProcessTree(forceRefresh);
-      osTree = treeLookup.entries;
-      osSampledAtMs = treeLookup.sampledAtMs;
-      osFromCache = treeLookup.fromCache;
-      // Fallback to targeted Get-Process/ps if full tree came back empty (e.g. restricted WMI).
-      if (osTree.size === 0 && !this.sampleProcessTreeFn) {
-        const fallbackPids = new Set<number>([process.pid]);
-        if (mainPid !== null) fallbackPids.add(mainPid);
-        const hintT3 =
-          parsePositiveInt(t3SupervisorStatus?.pid) ??
-          parsePositiveInt(hostReport?.t3Server?.pid) ??
-          this.configuredT3ServerPid;
-        if (hintT3 !== null) fallbackPids.add(hintT3);
-        for (const info of ptyInfos) {
-          if (info.alive && info.pid !== null && info.pid > 0) {
-            fallbackPids.add(info.pid);
+      // Prefer Electron-pushed hostMetrics + lightweight os.cpus()/process.cpuUsage()
+      // without spawning PowerShell WMI unless `forceRefresh: true`, a test sampler is
+      // injected, or no fresh Electron host metrics exist AND the 10s tree cache expired.
+      const hasFreshCachedTree =
+        this.cachedProcessTree !== null &&
+        now - this.cachedProcessTree.sampledAtMs < this.treeCacheTtlMs;
+      const shouldSkipOsTreeSpawn =
+        !forceRefresh &&
+        !this.sampleProcessTreeFn &&
+        hostReport !== null &&
+        !hasFreshCachedTree;
+
+      if (shouldSkipOsTreeSpawn) {
+        osTree = new Map();
+        osSampledAtMs = now;
+        osFromCache = true;
+      } else {
+        const treeLookup = await this.getProcessTree(forceRefresh);
+        osTree = treeLookup.entries;
+        osSampledAtMs = treeLookup.sampledAtMs;
+        osFromCache = treeLookup.fromCache;
+        // Fallback to targeted Get-Process/ps if full tree came back empty (e.g. restricted WMI).
+        if (osTree.size === 0 && !this.sampleProcessTreeFn) {
+          const fallbackPids = new Set<number>([process.pid]);
+          if (mainPid !== null) fallbackPids.add(mainPid);
+          const hintT3 =
+            parsePositiveInt(t3SupervisorStatus?.pid) ??
+            parsePositiveInt(hostReport?.t3Server?.pid) ??
+            this.configuredT3ServerPid;
+          if (hintT3 !== null) fallbackPids.add(hintT3);
+          for (const info of ptyInfos) {
+            if (info.alive && info.pid !== null && info.pid > 0) {
+              fallbackPids.add(info.pid);
+            }
           }
+          legacySampledMap = await defaultSampleProcesses(
+            [...fallbackPids],
+            this.sampleTimeoutMs
+          );
+          osSampledAtMs = Date.now();
+          osFromCache = false;
         }
-        legacySampledMap = await defaultSampleProcesses(
-          [...fallbackPids],
-          this.sampleTimeoutMs
-        );
-        osSampledAtMs = Date.now();
-        osFromCache = false;
       }
     }
 

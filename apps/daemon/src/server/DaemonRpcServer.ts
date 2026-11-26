@@ -64,6 +64,7 @@ import {
   type ResourceMonitorService
 } from "../system/ResourceMonitorService.js";
 import type { ServiceDiagnosticsService } from "../system/ServiceDiagnosticsService.js";
+import type { StorageQuotaService } from "../system/StorageQuotaService.js";
 import { SystemFontService } from "../system/SystemFontService.js";
 import type { CoreRpcClient } from "../core/CoreRpcClient.js";
 import type { CoreServerSupervisor } from "../core/CoreServerSupervisor.js";
@@ -133,6 +134,7 @@ export interface DaemonRpcServerOptions {
   quotaService?: OfficialQuotaService;
   portScannerService?: PortScannerService;
   resourceMonitorService?: ResourceMonitorService;
+  storageQuotaService?: StorageQuotaService;
   agentAuxService?: AgentAuxService;
   subscriptionWaiverStore?: SubscriptionWaiverStore;
   /** @deprecated Use subscriptionWaiverStore */
@@ -616,6 +618,7 @@ export class DaemonRpcServer {
   private readonly quotaService: OfficialQuotaService | undefined;
   private readonly portScannerService: PortScannerService | undefined;
   private readonly resourceMonitorService: ResourceMonitorService | undefined;
+  private readonly storageQuotaService: StorageQuotaService | undefined;
   private readonly agentAuxService: AgentAuxService;
   private readonly subscriptionWaiverStore: SubscriptionWaiverStore | undefined;
   private readonly dispatchHub: DesktopIpcDispatchHub | undefined;
@@ -666,6 +669,7 @@ export class DaemonRpcServer {
     this.quotaService = options.quotaService;
     this.portScannerService = options.portScannerService;
     this.resourceMonitorService = options.resourceMonitorService;
+    this.storageQuotaService = options.storageQuotaService;
     this.agentAuxService = options.agentAuxService ?? new AgentAuxService();
     this.subscriptionWaiverStore =
       options.subscriptionWaiverStore ?? options.antigravityPolicyStore;
@@ -1840,13 +1844,29 @@ export class DaemonRpcServer {
       const isRefreshPost = method === "POST";
       const forceParam = requestUrl.searchParams.get("force")?.trim().toLowerCase();
       const refreshParam = requestUrl.searchParams.get("refresh")?.trim().toLowerCase();
+      const includeAllParam = requestUrl.searchParams.get("includeAll")?.trim().toLowerCase();
+      const deepScanParam = requestUrl.searchParams.get("deepScan")?.trim().toLowerCase();
+      const hasProvidersParam = requestUrl.searchParams.has("providers");
+      const providersParam = hasProvidersParam
+        ? (requestUrl.searchParams.get("providers") ?? "")
+            .split(",")
+            .map((p) => p.trim())
+            .filter((p) => p.length > 0)
+        : undefined;
       const force =
         isRefreshPost ||
         forceParam === "1" ||
         forceParam === "true" ||
         refreshParam === "1" ||
         refreshParam === "true";
-      const report = await this.diagnosticsService.runDiagnostics(force);
+      const includeAll = includeAllParam === "1" || includeAllParam === "true";
+      const deepScan = deepScanParam === "1" || deepScanParam === "true";
+      const report = await this.diagnosticsService.runDiagnostics({
+        force,
+        ...(providersParam !== undefined ? { providers: providersParam } : {}),
+        ...(includeAll ? { includeAll: true } : {}),
+        ...(deepScan ? { deepScan: true } : {})
+      });
       writeJsonResponse(res, 200, report);
       return true;
     }
@@ -1942,6 +1962,71 @@ export class DaemonRpcServer {
         refreshParam === "1" || refreshParam === "true" || refreshParam === "yes";
       const resources = await this.resourceMonitorService.getResources({ forceRefresh });
       writeJsonResponse(res, 200, resources);
+      return true;
+    }
+
+    if (method === "GET" && pathname === "/v1/system/storage") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (trustedCallerScope !== "owner_chief") {
+        throw new BusinessRouteError(
+          403,
+          "FORBIDDEN_SCOPE",
+          `Scope "${trustedCallerScope}" is not permitted to access /v1/system/storage.`
+        );
+      }
+      if (!this.storageQuotaService) {
+        throw new BusinessRouteError(
+          503,
+          "STORAGE_QUOTA_UNAVAILABLE",
+          "StorageQuotaService is not configured."
+        );
+      }
+      const refreshParam =
+        requestUrl.searchParams.get("refresh") ?? requestUrl.searchParams.get("force");
+      const refresh =
+        refreshParam === "1" || refreshParam === "true" || refreshParam === "yes";
+      const inventory = await this.storageQuotaService.getInventory({ refresh });
+      writeJsonResponse(res, 200, inventory);
+      return true;
+    }
+
+    if (method === "POST" && pathname === "/v1/system/storage/clean") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (trustedCallerScope !== "owner_chief") {
+        throw new BusinessRouteError(
+          403,
+          "FORBIDDEN_SCOPE",
+          `Scope "${trustedCallerScope}" is not permitted to clean local storage.`
+        );
+      }
+      if (!this.storageQuotaService) {
+        throw new BusinessRouteError(
+          503,
+          "STORAGE_QUOTA_UNAVAILABLE",
+          "StorageQuotaService is not configured."
+        );
+      }
+      const rawBody = await readJsonBody(req);
+      if (!isRecord(rawBody)) {
+        throw new BusinessRouteError(
+          400,
+          "INVALID_PARAMS",
+          "Request body must be a JSON object."
+        );
+      }
+      const targetIds = Array.isArray(rawBody["targetIds"])
+        ? rawBody["targetIds"].filter((v): v is string => typeof v === "string")
+        : undefined;
+      const actions = Array.isArray(rawBody["actions"])
+        ? rawBody["actions"].filter((v): v is string => typeof v === "string")
+        : undefined;
+      const result = await this.storageQuotaService.clean({
+        ...(targetIds !== undefined ? { targetIds } : {}),
+        ...(actions !== undefined ? { actions } : {})
+      });
+      writeJsonResponse(res, 200, result);
       return true;
     }
 
@@ -2355,15 +2440,29 @@ export class DaemonRpcServer {
         );
       }
       const providerParam = requestUrl.searchParams.get("provider");
+      const hasProvidersParam = requestUrl.searchParams.has("providers");
+      const providersParam = hasProvidersParam
+        ? (requestUrl.searchParams.get("providers") ?? "")
+            .split(",")
+            .map((p) => p.trim())
+            .filter((p) => p.length > 0)
+        : undefined;
       const refreshParam = requestUrl.searchParams.get("refresh")?.trim().toLowerCase();
       const forceParam = requestUrl.searchParams.get("force")?.trim().toLowerCase();
+      const includeAllParam = requestUrl.searchParams.get("includeAll")?.trim().toLowerCase();
+      const deepScanParam = requestUrl.searchParams.get("deepScan")?.trim().toLowerCase();
       const refresh =
         refreshParam === "1" ||
         refreshParam === "true" ||
         forceParam === "1" ||
         forceParam === "true";
+      const includeAll = includeAllParam === "1" || includeAllParam === "true";
+      const deepScan = deepScanParam === "1" || deepScanParam === "true";
       const result = await this.providerProbeService.probeAll({
         provider: providerParam,
+        ...(providersParam !== undefined ? { providers: providersParam } : {}),
+        ...(includeAll ? { includeAll: true } : {}),
+        ...(deepScan ? { deepScan: true } : {}),
         refresh
       });
       writeJsonResponse(res, 200, result);
@@ -2402,7 +2501,7 @@ export class DaemonRpcServer {
         return true;
       }
       try {
-        const result = this.agentAuxService.inspect({
+        const result = await this.agentAuxService.inspect({
           provider: requestUrl.searchParams.get("provider") ?? undefined,
           sessionId: requestUrl.searchParams.get("sessionId") ?? undefined,
           cwd: requestUrl.searchParams.get("cwd") ?? undefined

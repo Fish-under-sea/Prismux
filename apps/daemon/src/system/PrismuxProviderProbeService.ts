@@ -11,6 +11,9 @@ import type {
 } from "@prismux/protocol";
 import type { CoreRpcClient, CoreProviderSummary } from "../core/CoreRpcClient.js";
 import {
+  CLI_DISCOVERY_NEGATIVE_TTL_MS,
+  CLI_DISCOVERY_POSITIVE_TTL_MS,
+  clearCliDiscoveryCaches,
   defaultCliProbe,
   findPackagedAntigravityCli,
   findPackagedDshDesktopCli,
@@ -25,7 +28,6 @@ import {
   type WindowsEnvRefreshResult
 } from "./WindowsEnvRefresh.js";
 
-const DEFAULT_CACHE_TTL_MS = 15_000;
 const DEFAULT_CLI_TIMEOUT_MS = 1_100;
 
 export const AUTH_LABEL_API_CUSTOM = "API / 自定义端点注入（已放行）" as const;
@@ -149,13 +151,20 @@ export interface ProviderAuthClassificationResult {
 
 export interface PrismuxProviderProbeServiceOptions {
   coreRpcClient?: CoreRpcClient;
+  /** Optional uniform TTL override (used by tests); defaults to 10m positive / 5m negative. */
   cacheTtlMs?: number;
+  positiveCacheTtlMs?: number;
+  negativeCacheTtlMs?: number;
   cliTimeoutMs?: number;
   env?: Record<string, string | undefined>;
   homeDir?: string;
   workspacePath?: string;
   platform?: NodeJS.Platform;
   now?: () => number;
+  /** Optional configured/enabled provider IDs to scope probes unless `includeAll: true`. */
+  configuredProviders?:
+    | readonly string[]
+    | (() => readonly string[] | null | undefined);
   refreshEnv?: () => Promise<WindowsEnvRefreshResult | void> | void;
   cliProbe?: (
     command: string,
@@ -1346,18 +1355,21 @@ function extractServerAuthFromSummary(
  */
 export class PrismuxProviderProbeService {
   private readonly coreRpcClient: CoreRpcClient | undefined;
-  private readonly cacheTtlMs: number;
+  private readonly positiveCacheTtlMs: number;
+  private readonly negativeCacheTtlMs: number;
   private readonly cliTimeoutMs: number;
   private readonly env: Record<string, string | undefined>;
   private readonly homeDir: string;
   private readonly workspacePath: string | undefined;
   private readonly platform: NodeJS.Platform;
   private readonly now: () => number;
+  private readonly customCliProbe: boolean;
   private readonly refreshEnvFn: () => Promise<WindowsEnvRefreshResult | void> | void;
   private readonly cliProbeFn: (
     command: string,
     args: string[],
-    timeoutMs: number
+    timeoutMs: number,
+    options?: { refresh?: boolean; deepScan?: boolean }
   ) => Promise<CliProbeResult>;
   private readonly locateExecutableFn: (
     command: string,
@@ -1366,6 +1378,10 @@ export class PrismuxProviderProbeService {
   ) => string | null;
   private readonly serverAuthResolver:
     | (() => Promise<Partial<Record<string, ServerProviderAuthMetadata>>>)
+    | undefined;
+  private configuredProvidersSource:
+    | readonly string[]
+    | (() => readonly string[] | null | undefined)
     | undefined;
 
   private readonly cache = new Map<
@@ -1376,13 +1392,28 @@ export class PrismuxProviderProbeService {
 
   constructor(options: PrismuxProviderProbeServiceOptions = {}) {
     this.coreRpcClient = options.coreRpcClient;
-    this.cacheTtlMs = Math.max(0, options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS);
+    if (options.cacheTtlMs !== undefined) {
+      const uniform = Math.max(0, options.cacheTtlMs);
+      this.positiveCacheTtlMs = Math.max(0, options.positiveCacheTtlMs ?? uniform);
+      this.negativeCacheTtlMs = Math.max(0, options.negativeCacheTtlMs ?? uniform);
+    } else {
+      this.positiveCacheTtlMs = Math.max(
+        0,
+        options.positiveCacheTtlMs ?? CLI_DISCOVERY_POSITIVE_TTL_MS
+      );
+      this.negativeCacheTtlMs = Math.max(
+        0,
+        options.negativeCacheTtlMs ?? CLI_DISCOVERY_NEGATIVE_TTL_MS
+      );
+    }
     this.cliTimeoutMs = Math.max(200, options.cliTimeoutMs ?? DEFAULT_CLI_TIMEOUT_MS);
     this.env = options.env ?? process.env;
     this.homeDir = options.homeDir ?? homedir();
     this.workspacePath = options.workspacePath;
     this.platform = options.platform ?? process.platform;
     this.now = options.now ?? (() => Date.now());
+    this.configuredProvidersSource = options.configuredProviders;
+    this.customCliProbe = options.cliProbe !== undefined;
     this.refreshEnvFn =
       options.refreshEnv ??
       (() =>
@@ -1390,13 +1421,15 @@ export class PrismuxProviderProbeService {
           targetEnv: this.env,
           platform: this.platform
         }));
-    this.cliProbeFn =
-      options.cliProbe ??
-      ((command, args, timeoutMs) =>
-        defaultCliProbe(command, args, timeoutMs, {
-          env: this.env,
-          platform: this.platform
-        }));
+    this.cliProbeFn = options.cliProbe
+      ? (command, args, timeoutMs) => options.cliProbe!(command, args, timeoutMs)
+      : (command, args, timeoutMs, probeOpts) =>
+          defaultCliProbe(command, args, timeoutMs, {
+            env: this.env,
+            platform: this.platform,
+            refresh: probeOpts?.refresh === true,
+            deepScan: probeOpts?.deepScan === true
+          });
     this.locateExecutableFn =
       options.locateExecutable ??
       ((command, env, platform) => {
@@ -1423,8 +1456,34 @@ export class PrismuxProviderProbeService {
     this.serverAuthResolver = options.serverAuthResolver;
   }
 
+  setConfiguredProviders(providers: readonly string[] | null): void {
+    this.configuredProvidersSource = providers ?? undefined;
+  }
+
+  private resolveConfiguredProviderIds(): string[] | null {
+    const raw =
+      typeof this.configuredProvidersSource === "function"
+        ? this.configuredProvidersSource()
+        : this.configuredProvidersSource;
+    if (raw === undefined || raw === null) {
+      return null;
+    }
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const item of raw) {
+      const canonical = canonicalizeProbeProviderId(item);
+      if (!canonical || seen.has(canonical)) continue;
+      seen.add(canonical);
+      out.push(canonical);
+    }
+    return out;
+  }
+
   clearCache(): void {
     this.cache.clear();
+    if (!this.customCliProbe) {
+      clearCliDiscoveryCaches();
+    }
   }
 
   getProviderSpec(providerId: string): ProviderProbeSpec | undefined {
@@ -1438,7 +1497,8 @@ export class PrismuxProviderProbeService {
     if (!entry) {
       return null;
     }
-    if (this.cacheTtlMs > 0 && this.now() >= entry.expiresAt) {
+    if (this.now() >= entry.expiresAt) {
+      this.cache.delete(canonical);
       return null;
     }
     return entry.snapshot;
@@ -1526,10 +1586,11 @@ export class PrismuxProviderProbeService {
       timeoutMs?: number;
       serverAuth?: ServerProviderAuthMetadata | null;
       skipEnvRefresh?: boolean;
+      deepScan?: boolean;
     } = {}
   ): Promise<PrismuxProviderProbeSnapshot> {
     const canonical = canonicalizeProbeProviderId(providerId);
-    if (!options.refresh && options.serverAuth === undefined) {
+    if (!options.refresh && !options.deepScan && options.serverAuth === undefined) {
       const cached = this.getCachedSnapshot(canonical);
       if (cached) {
         return cached;
@@ -1537,6 +1598,9 @@ export class PrismuxProviderProbeService {
     }
 
     if (options.refresh && !options.skipEnvRefresh) {
+      if (!this.customCliProbe) {
+        clearCliDiscoveryCaches();
+      }
       try {
         await this.refreshEnvFn();
       } catch {
@@ -1554,16 +1618,24 @@ export class PrismuxProviderProbeService {
     return this.probeSingleWithServerAuth(
       canonical,
       serverAuthMap.get(canonical) ?? null,
-      options.timeoutMs ?? this.cliTimeoutMs
+      options.timeoutMs ?? this.cliTimeoutMs,
+      {
+        refresh: options.refresh === true,
+        deepScan: options.deepScan === true
+      }
     );
   }
 
   async probeAll(options: {
     provider?: string | null;
+    providers?: readonly string[] | null;
+    includeAll?: boolean;
     refresh?: boolean;
+    deepScan?: boolean;
     timeoutMs?: number;
   } = {}): Promise<PrismuxProviderProbeResponse> {
     const refresh = options.refresh === true;
+    const deepScan = options.deepScan === true;
     const providerFilter = options.provider?.trim();
     const targetSpecs: readonly ProviderProbeSpec[] = providerFilter
       ? (() => {
@@ -1573,7 +1645,21 @@ export class PrismuxProviderProbeService {
           );
           return matched ? [matched] : [];
         })()
-      : PRISMUX_PROBE_PROVIDER_SPECS;
+      : options.includeAll === true
+        ? PRISMUX_PROBE_PROVIDER_SPECS
+        : (() => {
+            const scoped =
+              options.providers !== undefined && options.providers !== null
+                ? options.providers.map(canonicalizeProbeProviderId).filter(Boolean)
+                : this.resolveConfiguredProviderIds();
+            if (scoped === null) {
+              return PRISMUX_PROBE_PROVIDER_SPECS;
+            }
+            const allowed = new Set(scoped);
+            return PRISMUX_PROBE_PROVIDER_SPECS.filter((s) =>
+              allowed.has(s.providerId)
+            );
+          })();
 
     if (targetSpecs.length === 0) {
       const canonical = providerFilter
@@ -1595,6 +1681,9 @@ export class PrismuxProviderProbeService {
     }
 
     if (refresh) {
+      if (!this.customCliProbe) {
+        clearCliDiscoveryCaches();
+      }
       try {
         await this.refreshEnvFn();
       } catch {
@@ -1603,7 +1692,7 @@ export class PrismuxProviderProbeService {
     }
 
     const needProbe = targetSpecs.some(
-      (spec) => refresh || this.getCachedSnapshot(spec.providerId) === null
+      (spec) => refresh || deepScan || this.getCachedSnapshot(spec.providerId) === null
     );
     const serverAuthMap = needProbe
       ? await this.fetchServerAuthMap()
@@ -1612,7 +1701,7 @@ export class PrismuxProviderProbeService {
     const timeoutMs = options.timeoutMs ?? this.cliTimeoutMs;
     const providers = await Promise.all(
       targetSpecs.map(async (spec) => {
-        if (!refresh) {
+        if (!refresh && !deepScan) {
           const cached = this.getCachedSnapshot(spec.providerId);
           if (cached) {
             return cached;
@@ -1621,7 +1710,8 @@ export class PrismuxProviderProbeService {
         return this.probeSingleWithServerAuth(
           spec.providerId,
           serverAuthMap.get(spec.providerId) ?? null,
-          timeoutMs
+          timeoutMs,
+          { refresh, deepScan }
         );
       })
     );
@@ -1674,7 +1764,8 @@ export class PrismuxProviderProbeService {
   private async probeSingleWithServerAuth(
     canonicalProviderId: string,
     serverAuth: ServerProviderAuthMetadata | null,
-    timeoutMs: number
+    timeoutMs: number,
+    probeOpts?: { refresh?: boolean; deepScan?: boolean }
   ): Promise<PrismuxProviderProbeSnapshot> {
     const spec = this.getProviderSpec(canonicalProviderId);
     if (!spec) {
@@ -1684,7 +1775,8 @@ export class PrismuxProviderProbeService {
     const cliResult = await this.cliProbeFn(
       spec.command,
       [...spec.args],
-      timeoutMs
+      timeoutMs,
+      probeOpts
     );
     const installed = cliResult.found;
     const binaryPath = cliResult.path ?? null;
@@ -1748,10 +1840,12 @@ export class PrismuxProviderProbeService {
       latencyMs: cliResult.latencyMs
     };
 
-    if (this.cacheTtlMs > 0) {
+    const ttlMs =
+      installed && !cliError ? this.positiveCacheTtlMs : this.negativeCacheTtlMs;
+    if (ttlMs > 0) {
       this.cache.set(spec.providerId, {
         snapshot,
-        expiresAt: checkedAtMs + this.cacheTtlMs
+        expiresAt: checkedAtMs + ttlMs
       });
     }
 
