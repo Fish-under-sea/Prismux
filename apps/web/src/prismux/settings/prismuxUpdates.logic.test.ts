@@ -268,13 +268,13 @@ describe("prismuxUpdates.logic", () => {
       "utf8",
     );
 
-    // Real Prismux brand logo (<T3AppIcon />) across all 3 app-update surfaces, zero SparklesIcon
+    // Real Prismux brand logo (<PrismuxAppIcon />) across all 3 app-update surfaces, zero SparklesIcon
     for (const [label, src] of [
       ["PrismuxUpdatesSettingsPage", settingsSrc],
       ["PrismuxUpdateReleaseModal", modalSrc],
       ["PrismuxAutoUpdateHost", hostSrc],
     ] as const) {
-      expect(src, `${label} must render <T3AppIcon />`).toContain("<T3AppIcon");
+      expect(src, `${label} must render <PrismuxAppIcon />`).toContain("<PrismuxAppIcon");
       expect(src, `${label} must not reference SparklesIcon`).not.toContain("SparklesIcon");
     }
 
