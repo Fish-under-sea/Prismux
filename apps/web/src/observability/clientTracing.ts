@@ -54,7 +54,7 @@ const CLIENT_TRACING_RESOURCE = {
     "service.namespace": "prismux",
     "service.instance.id": ClientTracer.serviceInstanceId,
     ...releaseResourceAttributes(RELEASE_CHANNEL),
-    "service.runtime": "t3-web",
+    "service.runtime": "prismux-web",
     "prismux.client.surface": isElectron ? "desktop" : "web",
     "service.version": APP_VERSION,
     ...browserResourceAttributes(),

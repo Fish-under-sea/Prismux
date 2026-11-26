@@ -79,7 +79,7 @@ interface ProviderBatchPublication {
   eventCount: number;
 }
 const CurrentProviderBatch = Context.Reference<ProviderBatchPublication | undefined>(
-  "t3/orchestration-v2/EventSink/CurrentProviderBatch",
+  "prismux/orchestration-v2/EventSink/CurrentProviderBatch",
   { defaultValue: () => undefined },
 );
 // Projecting `provider-thread.updated` also rewrites its app thread's row.

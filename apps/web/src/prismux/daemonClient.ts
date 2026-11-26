@@ -916,7 +916,7 @@ export interface DaemonProcessResourceDto {
     | "electron-renderer"
     | "electron-gpu"
     | "electron-utility"
-    | "t3-server"
+    | "core-server"
     | "daemon"
     | "agent"
     | "terminal"
@@ -971,7 +971,7 @@ export interface DaemonSystemResourcesResponse {
     privateMemoryBytes?: number | null;
     [key: string]: unknown;
   };
-  t3Server?: {
+  coreServer?: {
     pid?: number | null;
     cpuPercent?: number | null;
     memoryBytes?: number | null;

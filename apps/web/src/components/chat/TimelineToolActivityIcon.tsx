@@ -37,7 +37,7 @@ export function isWideToolActivityIcon(
   toolIcon: ToolActivityIcon | undefined,
   fallbackName: WorkEntryIconName | undefined,
 ): boolean {
-  return toolIcon === undefined && fallbackName === "t3-code";
+  return toolIcon === undefined && fallbackName === "prismux";
 }
 
 export type WorkEntryIconName =
@@ -58,7 +58,7 @@ export type WorkEntryIconName =
   | "square-pen"
   | "terminal"
   | "pull-request"
-  | "t3-code"
+  | "prismux"
   | "wrench"
   | "x"
   | "zap";
@@ -251,7 +251,7 @@ function WorkEntryIcon({ name, className }: { name: WorkEntryIconName; className
       return <Code2Icon className={className} aria-hidden />;
     case "device":
       return <SmartphoneIcon className={className} aria-hidden />;
-    case "t3-code":
+    case "prismux":
       return <PrismuxWordmark className={className} aria-hidden />;
     case "check":
       return <CheckIcon className={className} aria-hidden />;

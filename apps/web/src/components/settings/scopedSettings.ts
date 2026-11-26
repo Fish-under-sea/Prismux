@@ -12,7 +12,7 @@ import {
   type ProjectScopedServerSettingKey,
   type ProjectSettingsOverrides,
   ServerSettings,
-  type T3ProjectFile,
+  type PrismuxProjectFile,
   type ServerSettingsPatch,
 } from "@prismux/core-contracts";
 import type { EnvironmentConnectionPhase } from "@prismux/client-runtime/connection";
@@ -188,7 +188,7 @@ export function resolveScopedSettingsTargets(
   scope: ResolvedSettingsScope,
   connectedEnvironments: readonly ScopedSettingsEnvironment[],
   // A member absent here has no file tier yet; null is a missing or invalid file.
-  projectFiles?: ReadonlyMap<string, T3ProjectFile | null>,
+  projectFiles?: ReadonlyMap<string, PrismuxProjectFile | null>,
 ): readonly ScopedSettingsTarget[] {
   const byId = new Map(
     connectedEnvironments.map((environment) => [environment.environmentId, environment]),
@@ -284,8 +284,8 @@ export function scopedSettingsSource(
     ? "mixed"
     : sources.has("project")
       ? "project"
-      : sources.has("t3.json")
-        ? "t3.json"
+      : sources.has("prismux.json")
+        ? "prismux.json"
         : "environment";
 }
 

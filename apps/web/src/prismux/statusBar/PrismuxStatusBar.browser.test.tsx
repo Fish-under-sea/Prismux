@@ -96,7 +96,7 @@ describe("PrismuxStatusBar (browser)", () => {
 
     // Never performs any unsolicited Antigravity / remote quota fetch.
     const fetchedUrls = fetchSpy.mock.calls.map(([input]) => String(input));
-    expect(fetchedUrls.filter((url) => !url.includes("/.well-known/t3/environment"))).toEqual([]);
+    expect(fetchedUrls.filter((url) => !url.includes("/.well-known/prismux/environment"))).toEqual([]);
   });
 
   it("highlights the active option in ResourcesStatusPopover [内存 | CPU | 名称] segmented switcher across clicks", async () => {
@@ -108,7 +108,7 @@ describe("PrismuxStatusBar (browser)", () => {
           totalMemoryBytes: 620 * 1024 * 1024,
           desktop: { pid: 1000, cpuPercent: 7.4, memoryBytes: 420 * 1024 * 1024, processCount: 2 },
           daemon: { pid: 1050, cpuPercent: 0.3, memoryBytes: 60 * 1024 * 1024 },
-          t3Server: {
+          coreServer: {
             pid: 2000,
             cpuPercent: 1.0,
             memoryBytes: 140 * 1024 * 1024,

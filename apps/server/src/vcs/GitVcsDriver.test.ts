@@ -396,7 +396,7 @@ it.effect.each(["failure", "interrupt"] as const)(
       assert.strictEqual((yield* git(["show-ref"])).stdout, previous);
       assert.deepEqual(
         (yield* fs.readDirectory(path.join(cwd, ".git/objects"))).filter((name) =>
-          name.startsWith("tmp_objdir-t3-checkpoint-"),
+          name.startsWith("tmp_objdir-prismux-checkpoint-"),
         ),
         [],
       );
@@ -1803,7 +1803,7 @@ it.effect.each(["missing", "invalid"] as const)(
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const driver = yield* GitVcsDriver.makeVcsDriverShape();
-      const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-checkpoint-index-" });
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "prismux-checkpoint-index-" });
       const { git, checkpointRef } = yield* makeCheckpointFixture(driver, cwd);
       const indexPath = path.join(cwd, ".git", "index");
       if (indexState === "missing") {
@@ -1938,7 +1938,7 @@ it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       assert.deepEqual(yield* fileSystem.readFile(path.join(cwd, ".git", "index")), originalIndex);
       assert.deepStrictEqual(
         (yield* fileSystem.readDirectory(path.join(cwd, ".git"))).filter((name) =>
-          name.startsWith("t3-checkpoint-index-"),
+          name.startsWith("prismux-checkpoint-index-"),
         ),
         [],
       );

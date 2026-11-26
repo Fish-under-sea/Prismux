@@ -179,13 +179,13 @@ function BrandingVerificationStage() {
   const completedMcp = makeDynamicToolEntry({
     id: "mcp-1",
     label: "已获取可用代理与子线程能力",
-    toolName: "mcp__t3-code__orchestrator_capabilities",
+    toolName: "mcp__prismux__orchestrator_capabilities",
     status: "completed",
   });
   const runningMcp = makeDynamicToolEntry({
     id: "mcp-2",
     label: "正在委托 DS 付费组子 agent 执行任务",
-    toolName: "mcp__t3-code__delegate_task",
+    toolName: "mcp__prismux__delegate_task",
     status: "inProgress",
   });
   const createdItem: OrchestrationV2TurnItem = {

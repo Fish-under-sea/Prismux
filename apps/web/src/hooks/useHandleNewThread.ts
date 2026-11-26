@@ -44,7 +44,7 @@ import {
   threadHasStarted,
 } from "../lib/chatThreadActions";
 import type { EnvironmentProject } from "@prismux/client-runtime/state/shell";
-import { readT3ProjectFile } from "../lib/t3ProjectFileDefaults";
+import { readPrismuxProjectFile } from "../lib/prismuxProjectFileDefaults";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentSummaries } from "../state/presentation";
 import { environmentServerConfigsAtom } from "../state/server";
@@ -219,7 +219,7 @@ export function createNewThreadHandler(router: AnyRouter) {
           .get(environmentSummaries.connectedEnvironmentIdsAtom)
           .includes(project.environmentId);
       const projectFile = consultProjectFile
-        ? await readT3ProjectFile(project.environmentId, project.workspaceRoot)
+        ? await readPrismuxProjectFile(project.environmentId, project.workspaceRoot)
         : null;
       return resolveNewThreadEnvMode({
         projectSettings: resolveProjectSettings(

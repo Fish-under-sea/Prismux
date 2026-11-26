@@ -29,9 +29,9 @@ it.each([1])("blocks legacy launcher protocol %i with exact recovery steps", (la
   expect(reason).toMatch(new RegExp(`\\b${SERVICE_LAUNCHER_PROTOCOL}\\b`));
   expect(reason).toContain("https://github.com/Fish-under-sea/Prismux/releases");
   expect(reason).toContain("9.8.7");
-  expect(reason).toContain("~/.local/bin/t3 service install");
-  expect(reason).toContain("t3 --version");
-  expect(reason).toContain("which -a t3");
+  expect(reason).toContain("~/.local/bin/prismux service install");
+  expect(reason).toContain("prismux --version");
+  expect(reason).toContain("which -a prismux");
 });
 
 // regression: #34502 every installed launcher was protocol 3, so protocol 4 blocked every remote update

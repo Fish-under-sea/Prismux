@@ -150,7 +150,7 @@ interface ChiefStateView {
   readonly reasoningEffort: string;
   readonly dialMode: DialModeValue;
   readonly availableProviders: readonly string[];
-  readonly t3Connected: boolean;
+  readonly coreConnected: boolean;
   readonly updatedAt: number | null;
 }
 
@@ -162,7 +162,7 @@ interface ChiefCommittedSummary {
   readonly model: string;
   readonly reasoningEffort: string;
   readonly dialMode: DialModeValue;
-  readonly t3Connected: boolean;
+  readonly coreConnected: boolean;
 }
 
 type MemorySyncDaemonSubset = Pick<
@@ -277,7 +277,7 @@ function createInitialChiefState(
     reasoningEffort: "",
     dialMode: runtimeDialMode,
     availableProviders: [],
-    t3Connected: false,
+    coreConnected: false,
     updatedAt: null,
   };
 }
@@ -299,7 +299,7 @@ function sameChiefSummary(a: ChiefCommittedSummary, b: ChiefCommittedSummary): b
     a.model === b.model &&
     a.reasoningEffort === b.reasoningEffort &&
     a.dialMode === b.dialMode &&
-    a.t3Connected === b.t3Connected
+    a.coreConnected === b.coreConnected
   );
 }
 
@@ -883,7 +883,7 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
         reasoningEffort,
         dialMode: mode,
         availableProviders: nextAvailableProviders,
-        t3Connected: asBoolean(root?.t3Connected, false),
+        coreConnected: asBoolean(root?.coreConnected ?? root?.t3Connected, false),
         updatedAt: typeof slot?.updatedAt === "number" ? slot.updatedAt : null,
       };
       chiefStateCache.set(daemon as object, nextChief);
@@ -910,7 +910,7 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
           model,
           reasoningEffort,
           dialMode: mode,
-          t3Connected: nextChief.t3Connected,
+          coreConnected: nextChief.coreConnected,
         });
       });
 
@@ -1060,7 +1060,7 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
           model: trimmedModel,
           reasoningEffort: trimmedEffort,
           dialMode: selectedDial,
-          t3Connected: chief.t3Connected,
+          coreConnected: chief.coreConnected,
         });
       });
       await loadChiefState();
@@ -1072,7 +1072,7 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
   }, [
     agentsMdPathRef,
     agyAllowed,
-    chief.t3Connected,
+    chief.coreConnected,
     daemon,
     effectiveSelectedProvider,
     loadChiefState,
@@ -1328,7 +1328,7 @@ const PrismuxMemorySyncSettingsPageShell = memo(function PrismuxMemorySyncSettin
     model: cachedChief?.model ?? "",
     reasoningEffort: cachedChief?.reasoningEffort ?? "",
     dialMode: cachedChief?.dialMode ?? runtimeDialMode,
-    t3Connected: cachedChief?.t3Connected ?? false,
+    coreConnected: cachedChief?.coreConnected ?? false,
   }));
 
   const activeSlotRef = useRef<ActiveChiefSlotSnapshot>({
@@ -1530,9 +1530,9 @@ const PrismuxMemorySyncSettingsPageShell = memo(function PrismuxMemorySyncSettin
             <Badge variant={daemonReady ? "success" : "warning"} size="sm">
               {daemonReady ? "服务在线" : "服务未连接"}
             </Badge>
-            <Badge variant={chiefSummary.t3Connected ? "info" : "outline"} size="sm" className="gap-1">
+            <Badge variant={chiefSummary.coreConnected ? "info" : "outline"} size="sm" className="gap-1">
               <BotIcon className="size-3" />
-              {chiefSummary.t3Connected ? "已桥接" : "本地模式"}
+              {chiefSummary.coreConnected ? "已桥接" : "本地模式"}
             </Badge>
           </div>
           <p className="text-xs text-muted-foreground">

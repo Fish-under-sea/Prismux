@@ -128,12 +128,12 @@ export interface NormalizedResourcesSummary {
   readonly daemonPid: number | null;
   readonly daemonCpuPercent: number | null;
   readonly daemonMemoryBytes: number | null;
-  readonly t3ServerPid: number | null;
-  readonly t3ServerCpuPercent: number | null;
-  readonly t3ServerMemoryBytes: number | null;
-  readonly t3ServerState: string | null;
-  readonly t3ServerHostedBy: string | null;
-  readonly t3ServerLabel: string;
+  readonly coreServerPid: number | null;
+  readonly coreServerCpuPercent: number | null;
+  readonly coreServerMemoryBytes: number | null;
+  readonly coreServerState: string | null;
+  readonly coreServerHostedBy: string | null;
+  readonly coreServerLabel: string;
   readonly workspaces: readonly NormalizedResourceWorkspaceGroup[];
   readonly processes: readonly NormalizedProcessResource[];
   readonly coreProcesses: readonly NormalizedProcessResource[];
@@ -223,12 +223,12 @@ export function normalizeResourcesSummary(
       daemonPid: null,
       daemonCpuPercent: null,
       daemonMemoryBytes: null,
-      t3ServerPid: null,
-      t3ServerCpuPercent: null,
-      t3ServerMemoryBytes: null,
-      t3ServerState: null,
-      t3ServerHostedBy: null,
-      t3ServerLabel: "Prismux Server",
+      coreServerPid: null,
+      coreServerCpuPercent: null,
+      coreServerMemoryBytes: null,
+      coreServerState: null,
+      coreServerHostedBy: null,
+      coreServerLabel: "Prismux Server",
       workspaces: [],
       processes: [],
       coreProcesses: [],
@@ -355,15 +355,15 @@ export function normalizeResourcesSummary(
       ? Math.round((memoryBytes / hostMemoryTotalBytes) * 1000) / 10
       : null;
 
-  const t3ServerHostedBy =
-    typeof raw.t3Server?.hostedBy === "string" && raw.t3Server.hostedBy.trim().length > 0
-      ? raw.t3Server.hostedBy.trim()
+  const coreServerHostedBy =
+    typeof raw.coreServer?.hostedBy === "string" && raw.coreServer.hostedBy.trim().length > 0
+      ? raw.coreServer.hostedBy.trim()
       : null;
 
-  const t3ServerLabel =
-    typeof raw.t3Server?.label === "string" && raw.t3Server.label.trim().length > 0
-      ? raw.t3Server.label.trim()
-      : t3ServerHostedBy === "electron-in-process"
+  const coreServerLabel =
+    typeof raw.coreServer?.label === "string" && raw.coreServer.label.trim().length > 0
+      ? raw.coreServer.label.trim()
+      : coreServerHostedBy === "electron-in-process"
         ? "Prismux Server (宿主同进程)"
         : "Prismux Server";
 
@@ -393,20 +393,20 @@ export function normalizeResourcesSummary(
         : null,
     daemonCpuPercent: finiteNumberOrNull(raw.daemon?.cpuPercent),
     daemonMemoryBytes: finiteNumberOrNull(raw.daemon?.memoryBytes),
-    t3ServerPid:
-      typeof raw.t3Server?.pid === "number" &&
-      Number.isInteger(raw.t3Server.pid) &&
-      raw.t3Server.pid > 0
-        ? raw.t3Server.pid
+    coreServerPid:
+      typeof raw.coreServer?.pid === "number" &&
+      Number.isInteger(raw.coreServer.pid) &&
+      raw.coreServer.pid > 0
+        ? raw.coreServer.pid
         : null,
-    t3ServerCpuPercent: finiteNumberOrNull(raw.t3Server?.cpuPercent),
-    t3ServerMemoryBytes: finiteNumberOrNull(raw.t3Server?.memoryBytes),
-    t3ServerState:
-      typeof raw.t3Server?.state === "string" && raw.t3Server.state.trim().length > 0
-        ? raw.t3Server.state.trim()
+    coreServerCpuPercent: finiteNumberOrNull(raw.coreServer?.cpuPercent),
+    coreServerMemoryBytes: finiteNumberOrNull(raw.coreServer?.memoryBytes),
+    coreServerState:
+      typeof raw.coreServer?.state === "string" && raw.coreServer.state.trim().length > 0
+        ? raw.coreServer.state.trim()
         : null,
-    t3ServerHostedBy,
-    t3ServerLabel,
+    coreServerHostedBy,
+    coreServerLabel,
     workspaces: workspaceGroups,
     processes,
     coreProcesses,

@@ -172,7 +172,7 @@ export type PullRequestError = PullRequestUnavailableError | PullRequestOperatio
 const routingCredential = Context.Reference<{
   readonly credentialFingerprint: string;
   readonly viewer: string;
-} | null>("t3/PullRequestService/routingCredential", { defaultValue: () => null });
+} | null>("prismux/PullRequestService/routingCredential", { defaultValue: () => null });
 const credentialNamespace = Symbol("pullRequestCredentialNamespace");
 type CredentialRef = PullRequestRef & { readonly [credentialNamespace]?: string };
 
@@ -379,7 +379,7 @@ interface WorkspaceProjects {
 const sharedProjectReads = Context.Reference<{
   open: boolean;
   readonly reads: Map<string, Effect.Effect<WorkspaceProjects, PullRequestError>>;
-} | null>("t3/PullRequestService/sharedProjectReads", { defaultValue: () => null });
+} | null>("prismux/PullRequestService/sharedProjectReads", { defaultValue: () => null });
 
 interface RepositoryBatch {
   readonly key: string;

@@ -2496,7 +2496,7 @@ describe("PreviewManager", () => {
             message: JSON.stringify({
               id: 1,
               method: "Page.captureScreenshot",
-              sessionId: "t3-preview-page",
+              sessionId: "prismux-preview-page",
             }),
           }),
         );
@@ -2565,7 +2565,7 @@ describe("PreviewManager", () => {
               id: 1,
               method: "Runtime.evaluate",
               params: { expression: "document.querySelector('a').click()" },
-              sessionId: "t3-preview-page",
+              sessionId: "prismux-preview-page",
             }),
           }),
         );

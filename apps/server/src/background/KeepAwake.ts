@@ -21,7 +21,7 @@ import * as Settings from "../serverSettings.ts";
 const RELEASE_GRACE = Duration.seconds(60);
 
 // ES_CONTINUOUS | ES_SYSTEM_REQUIRED, held by the calling thread until the script ends.
-const WINDOWS_HOLD_SCRIPT = `$t = Add-Type -Name Power -Namespace T3 -PassThru -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint f);'; [void]$t::SetThreadExecutionState([uint32]2147483649); [Console]::Out.WriteLine()`;
+const WINDOWS_HOLD_SCRIPT = `$t = Add-Type -Name Power -Namespace Prismux -PassThru -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint f);'; [void]$t::SetThreadExecutionState([uint32]2147483649); [Console]::Out.WriteLine()`;
 
 /**
  * Each command writes a line to stdout once it holds its inhibitor, holds it until it exits, and

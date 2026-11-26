@@ -7,7 +7,7 @@ import type { RelayManagedEndpoint } from "@prismux/core-contracts/relay";
 
 import { msg } from "gt-react";
 
-import { isManagedTunnelActive, t3ConnectMcpUrl } from "~/cloud/t3ConnectState";
+import { isManagedTunnelActive, prismuxConnectMcpUrl } from "~/cloud/prismuxConnectState";
 import { m, type MessageResolver } from "~/i18n/messages";
 
 type Unreachable = Extract<EnvironmentConnectReachability, { readonly status: "unreachable" }>;
@@ -90,7 +90,7 @@ export function resolveMcpGate(
   }
   const { reachability } = input;
   if (reachability === "checking") return { kind: "checking" };
-  const mcpUrl = t3ConnectMcpUrl({
+  const mcpUrl = prismuxConnectMcpUrl({
     thisMachine: input.thisMachine,
     tunnelHostname: linkState.tunnelHostname,
     relayEndpoint: endpoint,

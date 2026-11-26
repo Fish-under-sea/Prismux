@@ -101,7 +101,7 @@ it.layer(NodeServices.layer)("removeAntigravitySessionFiles", (it) => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-antigravity-setup-" });
+        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "prismux-antigravity-setup-" });
         const realCwd = yield* fs.realPath(cwd);
         const fixture = yield* makeNativeSessionFixture({
           workspacePaths: [realCwd, cwd],

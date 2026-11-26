@@ -84,14 +84,14 @@ export function classifyReachability(
     fix: string,
     hint: string | null = null,
   ): Unreachable => ({ status: "unreachable", checkedAt, cause, reason, hint, fix });
-  const restart = "Restart Prismux. If it stays, run `t3 connect` again.";
+  const restart = "Restart Prismux. If it stays, run `prismux connect` again.";
 
   if (!facts.managedTunnelConfigured) {
-    // A running server reads the link `t3 connect` stores only at startup.
+    // A running server reads the link `prismux connect` stores only at startup.
     return fail(
       "not_linked",
       "The server has not set up a Prismux Connect tunnel.",
-      "Run `t3 connect`, then restart Prismux so it applies the link.",
+      "Run `prismux connect`, then restart Prismux so it applies the link.",
     );
   }
   if (connector === null) {
@@ -155,7 +155,7 @@ export function classifyReachability(
     return fail(
       "dns_failed",
       "The Prismux Connect address no longer points to this machine's tunnel (Cloudflare error 1016). Prismux Connect may have removed this environment.",
-      "Link this environment again. Turn Prismux Connect off and on in Settings > Sharing & access, or run `t3 connect link` and then restart Prismux.",
+      "Link this environment again. Turn Prismux Connect off and on in Settings > Sharing & access, or run `prismux connect link` and then restart Prismux.",
     );
   }
   if (status !== null) {
@@ -303,7 +303,7 @@ const make = Effect.gen(function* () {
   const probeEndpoint = Effect.fn("ConnectReachability.probeEndpoint")(
     function* (hostname: string) {
       const response = yield* httpClient
-        .get(`https://${hostname}/.well-known/t3/environment`, { acceptJson: true })
+        .get(`https://${hostname}/.well-known/prismux/environment`, { acceptJson: true })
         .pipe(Effect.timeoutOption(ENDPOINT_REQUEST_TIMEOUT));
       if (Option.isNone(response)) return { kind: "timeout" } satisfies EndpointProbe;
       const { status } = response.value;

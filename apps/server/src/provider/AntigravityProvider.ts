@@ -55,7 +55,7 @@ const SIGN_IN_MESSAGE =
 const AUTH_UNCHECKED_MESSAGE =
   "Antigravity is installed. Connect with Local agy CLI to load models.";
 // Set while a finished quota read republishes, so that health check does not read again.
-const PublishingUsage = Context.Reference<boolean>("t3/provider/AntigravityPublishingUsage", {
+const PublishingUsage = Context.Reference<boolean>("prismux/provider/AntigravityPublishingUsage", {
   defaultValue: () => false,
 });
 

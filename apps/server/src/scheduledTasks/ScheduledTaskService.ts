@@ -129,7 +129,7 @@ export function relayHookBaseUrl(input: {
 }
 
 export class ScheduledTaskWebhookOrigin extends Context.Reference<Effect.Effect<WebhookOrigin>>(
-  "t3/scheduledTasks/ScheduledTaskWebhookOrigin",
+  "prismux/scheduledTasks/ScheduledTaskWebhookOrigin",
   {
     defaultValue: () => Effect.succeed({ relayHookBaseUrl: null }),
   },

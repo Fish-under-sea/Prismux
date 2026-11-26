@@ -17,19 +17,28 @@ export function materializeReplayTranscriptRuntimeInstructions(
             ? "acpRegistry"
             : undefined;
   if (harness === undefined) return transcript;
-  const instructions = buildRuntimeInstructions({ harness, model: runtime.model });
   // The notes name the model, so each prompt expects the ones for its session's current model.
   const sessionModels = new Map<unknown, string>();
-  const notesFor = (sessionId: unknown) => {
+  const deliveredNotes = new Map<unknown, string>();
+  const notesFor = (sessionId: unknown, userPrompt?: string) => {
     const model = sessionModels.get(sessionId) ?? runtime.model;
-    return model === runtime.model ? instructions : buildRuntimeInstructions({ harness, model });
+    const prLinkingAlreadySent =
+      deliveredNotes.get(sessionId)?.includes("<pull_request_linking>") ?? false;
+    return buildRuntimeInstructions({
+      harness,
+      model,
+      ...(prLinkingAlreadySent
+        ? { pullRequestLinking: true }
+        : userPrompt !== undefined
+          ? { prompt: userPrompt }
+          : {}),
+    });
   };
   // Grok's flavor sets `supportsCompaction`; Kiro compacts through its own request instead.
   const compactsThroughPrompt = runtime.driver === "grok";
   // Like the adapter: notes go out until a prompt carrying that text succeeds, and a new runtime
   // or compaction resets that. Not mirrored, as no recording has them: Copilot compaction events,
   // child-session compactions, and ACP v2 prompts that settle through an idle `state_update`.
-  const deliveredNotes = new Map<unknown, string>();
   // A prompt's success records delivery only if no compaction completed after it was sent.
   const compactionCounts = new Map<unknown, number>();
   const completedCompactionIds = new Set<string>();
@@ -214,8 +223,7 @@ export function materializeReplayTranscriptRuntimeInstructions(
               isRecord(options?.model) && typeof options.model.id === "string"
                 ? options.model.id
                 : runtime.model;
-            const expected =
-              model === runtime.model ? instructions : buildRuntimeInstructions({ harness, model });
+            const expected = buildRuntimeInstructions({ harness, model });
             const recorded = frame.message.endsWith(expected);
             const resend = !recorded && deliveredNotes.get(cursorSessionKey) !== expected;
             interruptedCursorNotes = undefined;
@@ -298,7 +306,7 @@ export function materializeReplayTranscriptRuntimeInstructions(
           return entry;
         }
         const lastText = promptPartText(prompt.at(-1));
-        const expected = notesFor(promptSessionId);
+        const expected = notesFor(promptSessionId, extractUserPromptText(firstText));
         // A recording that switched models mid-thread already carries the
         // instructions for the model each prompt ran on.
         const recordedNotes =
@@ -326,6 +334,12 @@ export function materializeReplayTranscriptRuntimeInstructions(
       return entry;
     }),
   };
+}
+
+function extractUserPromptText(text: string | undefined): string | undefined {
+  if (text === undefined) return undefined;
+  const match = /<user_request>\n([\s\S]*?)\n<\/user_request>/.exec(text);
+  return match !== null ? match[1] : text;
 }
 
 function promptPartText(part: unknown): string | undefined {

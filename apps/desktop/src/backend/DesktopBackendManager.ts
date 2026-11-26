@@ -50,7 +50,7 @@ export const BACKEND_QUIT_STOP_TIMEOUT = Duration.sum(
   Duration.seconds(2),
 );
 const DEFAULT_BACKEND_OUTPUT_DRAIN_TIMEOUT = Duration.seconds(5);
-const BACKEND_READINESS_PATH = "/.well-known/t3/environment";
+const BACKEND_READINESS_PATH = "/.well-known/prismux/environment";
 // Three restarts without readiness is about 2 s of backoff: past a blip, early enough to help.
 const STARTUP_FAILURE_RESTART_ATTEMPTS = 3;
 const STARTUP_FAILURE_OUTPUT_CHARS = 4_000;
@@ -84,7 +84,7 @@ export interface DesktopBackendStartConfig extends BackendProcessContext {
   readonly preflightFailure: Option.Option<PreflightFailure>;
   readonly runningDistro?: string;
   readonly wslRuntimeId?: string;
-  readonly wslT3Home?: string | null;
+  readonly wslPrismuxHome?: string | null;
 }
 
 export interface PreflightFailure {
@@ -993,7 +993,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               yield* wslEnvironment.pruneRuntimes(
                 config.value.runningDistro,
                 config.value.wslRuntimeId,
-                config.value.wslT3Home ?? null,
+                config.value.wslPrismuxHome ?? null,
               );
             }
           }),

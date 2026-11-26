@@ -14,20 +14,20 @@ import { installCli, isForegroundProcStat, isForegroundPs, offerCliInstall } fro
 
 const VERSION = packageJson.version;
 
-/** A standalone runtime in a temp T3 home, started by the npm launcher from an npx cache. */
+/** A standalone runtime in a temp Prismux home, started by the npm launcher from an npx cache. */
 const setup = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-install-" });
-  const runtimeDir = path.join(root, ".t3/runtime");
-  const executable = path.join(runtimeDir, "versions", VERSION, "t3");
+  const root = yield* fs.makeTempDirectoryScoped({ prefix: "prismux-install-" });
+  const runtimeDir = path.join(root, ".prismux/runtime");
+  const executable = path.join(runtimeDir, "versions", VERSION, "prismux");
   yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
   yield* fs.writeFileString(executable, "");
-  const npmPackage = path.join(root, ".npm/_npx/abc/node_modules/t3");
+  const npmPackage = path.join(root, ".npm/_npx/abc/node_modules/prismux");
   yield* fs.makeDirectory(path.join(npmPackage, "bin"), { recursive: true });
   yield* fs.writeFileString(
     path.join(npmPackage, "package.json"),
-    JSON.stringify({ name: "t3", version: VERSION }),
+    JSON.stringify({ name: "prismux", version: VERSION }),
   );
   const binDir = path.join(root, "bin");
   const provide = <A, E, R>(effect: Effect.Effect<A, E, R>, env: NodeJS.ProcessEnv = {}) =>
@@ -40,11 +40,11 @@ const setup = Effect.gen(function* () {
         PATH: "/usr/bin",
         SHELL: "/bin/zsh",
         PRISMUX_INSTALL_BIN_DIR: binDir,
-        PRISMUX_NPM_LAUNCHER_PATH: path.join(npmPackage, "bin/t3.mjs"),
+        PRISMUX_NPM_LAUNCHER_PATH: path.join(npmPackage, "bin/prismux.mjs"),
         ...env,
       }),
     );
-  return { root, npmPackage, runtimeDir, executable, link: path.join(binDir, "t3"), provide };
+  return { root, npmPackage, runtimeDir, executable, link: path.join(binDir, "prismux"), provide };
 });
 
 it.layer(NodeServices.layer)("t3 install", (it) => {
@@ -211,17 +211,17 @@ it.layer(NodeServices.layer)("t3 install", (it) => {
       yield* offer(false, { args: ["status", "--json=true"] });
       const globalBin = path.join(root, "global-bin");
       yield* fs.makeDirectory(globalBin);
-      yield* fs.writeFileString(path.join(globalBin, "t3"), "");
+      yield* fs.writeFileString(path.join(globalBin, "prismux"), "");
       yield* offer(false, { env: { PATH: globalBin } });
       assert.equal(asked, 0);
       assert.isFalse(yield* fs.exists(link));
 
-      // A runner's own .bin on PATH is not an installed t3.
+      // A runner's own .bin on PATH is not an installed prismux.
       const npxBin = path.join(npmPackage, "../.bin");
       const pnpmBin = path.join(root, ".cache/pnpm/dlx/abc/node_modules/.bin");
       for (const bin of [npxBin, pnpmBin]) {
         yield* fs.makeDirectory(bin, { recursive: true });
-        yield* fs.writeFileString(path.join(bin, "t3"), "");
+        yield* fs.writeFileString(path.join(bin, "prismux"), "");
       }
       assert.isFalse(yield* offer(undefined, { env: { PATH: `${npxBin}:${pnpmBin}` } }));
       assert.equal(asked, 1);

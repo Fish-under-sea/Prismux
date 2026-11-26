@@ -305,7 +305,7 @@ it.effect("mints a Prismux Connect credential under the host's device approval s
         typ: RELAY_MINT_REQUEST_TYP,
         payload: {
           iss: "https://relay.test",
-          aud: "t3-env:environment-1",
+          aud: "prismux-env:environment-1",
           sub: "cloud-user-1",
           // Longer than a file name can be, and not one: the marker is named by a digest.
           jti: "../mint-jti-1".padEnd(300, "x"),

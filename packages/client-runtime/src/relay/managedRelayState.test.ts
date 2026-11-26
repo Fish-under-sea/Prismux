@@ -142,7 +142,7 @@ describe("createManagedRelayQueryManager", () => {
       yield* Effect.promise(() => failed.promise);
       for (const unsubscribe of readers) unsubscribe();
 
-      expect(logs).toEqual([["[t3-cloud] Relay device listing failed"]]);
+      expect(logs).toEqual([["[prismux-cloud] Relay device listing failed"]]);
     }),
   );
 

@@ -108,8 +108,8 @@ const promptThenCancel = (input: {
       spawn: {
         ...mockRuntimeOptions.spawn,
         env: {
-          T3_ACP_COMPLETE_FIRST_PROMPT_ON_CANCEL: "1",
-          T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+          PRISMUX_ACP_COMPLETE_FIRST_PROMPT_ON_CANCEL: "1",
+          PRISMUX_ACP_REQUEST_LOG_PATH: requestLogPath,
         },
       },
       cancelBehavior: input.cancelBehavior,
@@ -192,7 +192,7 @@ describe("AcpSessionRuntime", () => {
             ? {
                 spawn: {
                   ...mockRuntimeOptions.spawn,
-                  env: { T3_ACP_SESSION_LIFECYCLE: "1" },
+                  env: { PRISMUX_ACP_SESSION_LIFECYCLE: "1" },
                 },
                 resumeSessionId: "mock-session-1",
                 resumeMethod: "resume" as const,
@@ -264,7 +264,7 @@ describe("AcpSessionRuntime", () => {
         ...mockRuntimeOptions,
         spawn: {
           ...mockRuntimeOptions.spawn,
-          env: { T3_ACP_COMPLETE_FIRST_PROMPT_ON_CANCEL: "1" },
+          env: { PRISMUX_ACP_COMPLETE_FIRST_PROMPT_ON_CANCEL: "1" },
         },
         cancelBehavior: "wait-for-prompt",
         requestLogger: (event) =>
@@ -404,7 +404,7 @@ describe("AcpSessionRuntime", () => {
         ...mockRuntimeOptions,
         spawn: {
           ...mockRuntimeOptions.spawn,
-          env: { T3_ACP_COMPLETE_FIRST_PROMPT_ON_CANCEL: "1" },
+          env: { PRISMUX_ACP_COMPLETE_FIRST_PROMPT_ON_CANCEL: "1" },
         },
         cancelBehavior: "wait-for-prompt",
       });
@@ -445,7 +445,7 @@ describe("AcpSessionRuntime", () => {
       });
       const runtime = yield* AcpSessionRuntime.make({
         ...mockRuntimeOptions,
-        spawn: { ...mockRuntimeOptions.spawn, env: { T3_ACP_FLOOD_STDERR: "1" } },
+        spawn: { ...mockRuntimeOptions.spawn, env: { PRISMUX_ACP_FLOOD_STDERR: "1" } },
         onStderr: () => Effect.fail(failure),
       });
       expect(yield* runtime.start().pipe(Effect.flip)).toBe(failure);
@@ -514,7 +514,7 @@ describe("AcpSessionRuntime", () => {
         yield* Effect.gen(function* () {
           const runtime = yield* AcpSessionRuntime.make({
             ...mockRuntimeOptions,
-            spawn: { ...mockRuntimeOptions.spawn, env: { T3_ACP_FLOOD_STDERR: "1" } },
+            spawn: { ...mockRuntimeOptions.spawn, env: { PRISMUX_ACP_FLOOD_STDERR: "1" } },
             ...(logStderr
               ? {
                   onStderr: (text: string) =>
@@ -566,7 +566,7 @@ describe("AcpSessionRuntime", () => {
   it.effect("does not restore ambient variables to a sanitized child environment", () =>
     Effect.gen(function* () {
       yield* Effect.acquireRelease(
-        Effect.sync(() => setProcessEnv("T3_ACP_RUNTIME_AMBIENT", "sentinel")),
+        Effect.sync(() => setProcessEnv("PRISMUX_ACP_RUNTIME_AMBIENT", "sentinel")),
         (restore) => Effect.sync(restore),
       );
       const runtime = yield* AcpSessionRuntime.make({
@@ -575,7 +575,7 @@ describe("AcpSessionRuntime", () => {
           command: process.execPath,
           args: mockAgentArgs,
           extendEnv: false,
-          env: { T3_ACP_RUNTIME_EXPLICIT: "kept" },
+          env: { PRISMUX_ACP_RUNTIME_EXPLICIT: "kept" },
         },
       });
       yield* runtime.initialize();
@@ -607,7 +607,7 @@ describe("AcpSessionRuntime", () => {
         (event) => event.method === "session/new" && event.status === "started",
       );
       expect(created?.payload).toMatchObject({
-        mcpServers: [{ type: "acp", name: "t3-code", serverId: "t3-code" }],
+        mcpServers: [{ type: "acp", name: "prismux", serverId: "prismux" }],
       });
       // This agent does not advertise additional directories, so the thread's other folders stay out.
       expect(created?.payload).not.toHaveProperty("additionalDirectories");
@@ -617,13 +617,13 @@ describe("AcpSessionRuntime", () => {
           spawn: {
             command: mockAgentCommand,
             args: mockAgentArgs,
-            env: { T3_ACP_MCP_ACP: "1" },
+            env: { PRISMUX_ACP_MCP_ACP: "1" },
           },
           cwd: process.cwd(),
           clientInfo: { name: "t3-test", version: "0.0.0" },
           authMethodId: "test",
-          mcpServers: [{ type: "stdio", name: "t3-code", command: "/usr/bin/node", args: [] }],
-          acpMcpServers: [{ type: "acp", name: "t3-code", serverId: "t3-code" }],
+          mcpServers: [{ type: "stdio", name: "prismux", command: "/usr/bin/node", args: [] }],
+          acpMcpServers: [{ type: "acp", name: "prismux", serverId: "prismux" }],
           extraRoots: ["/tmp/t3-tracked"],
           requestLogger: (event) =>
             Effect.sync(() => {
@@ -672,7 +672,7 @@ describe("AcpSessionRuntime", () => {
           spawn: {
             command: mockAgentCommand,
             args: mockAgentArgs,
-            env: { T3_ACP_V2_MANAGEMENT: "1" },
+            env: { PRISMUX_ACP_V2_MANAGEMENT: "1" },
           },
           cwd: process.cwd(),
           clientInfo: { name: "t3-test", version: "0.0.0" },
@@ -715,8 +715,8 @@ describe("AcpSessionRuntime", () => {
             command: mockAgentCommand,
             args: mockAgentArgs,
             env: {
-              T3_ACP_AUTH_METHOD_ID: "test",
-              T3_ACP_REQUIRE_AUTH: "1",
+              PRISMUX_ACP_AUTH_METHOD_ID: "test",
+              PRISMUX_ACP_REQUIRE_AUTH: "1",
             },
           },
           cwd: process.cwd(),
@@ -753,8 +753,8 @@ describe("AcpSessionRuntime", () => {
             command: mockAgentCommand,
             args: mockAgentArgs,
             env: {
-              T3_ACP_AUTH_METHOD_ID: "test",
-              T3_ACP_REQUIRE_AUTH: "1",
+              PRISMUX_ACP_AUTH_METHOD_ID: "test",
+              PRISMUX_ACP_REQUIRE_AUTH: "1",
             },
           },
           cwd: process.cwd(),
@@ -899,7 +899,7 @@ describe("AcpSessionRuntime", () => {
             command: mockAgentCommand,
             args: mockAgentArgs,
             env: {
-              T3_ACP_EMIT_FOREIGN_SESSION_UPDATES: "1",
+              PRISMUX_ACP_EMIT_FOREIGN_SESSION_UPDATES: "1",
             },
           },
           cwd: process.cwd(),
@@ -960,7 +960,7 @@ describe("AcpSessionRuntime", () => {
             command: mockAgentCommand,
             args: mockAgentArgs,
             env: {
-              T3_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS: "1",
+              PRISMUX_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS: "1",
             },
           },
           cwd: process.cwd(),
@@ -1007,7 +1007,7 @@ describe("AcpSessionRuntime", () => {
           spawn: {
             command: mockAgentCommand,
             args: mockAgentArgs,
-            env: { T3_ACP_EMIT_BACKGROUND_TOOL_DURING_ANSWER: "1" },
+            env: { PRISMUX_ACP_EMIT_BACKGROUND_TOOL_DURING_ANSWER: "1" },
           },
           cwd: process.cwd(),
           clientInfo: { name: "t3-test", version: "0.0.0" },
@@ -1053,7 +1053,7 @@ describe("AcpSessionRuntime", () => {
             command: mockAgentCommand,
             args: mockAgentArgs,
             env: {
-              T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS: "1",
+              PRISMUX_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS: "1",
             },
           },
           cwd: process.cwd(),
@@ -1125,7 +1125,7 @@ describe("AcpSessionRuntime", () => {
             command: mockAgentCommand,
             args: mockAgentArgs,
             env: {
-              T3_ACP_SESSION_LIFECYCLE: "1",
+              PRISMUX_ACP_SESSION_LIFECYCLE: "1",
             },
           },
           additionalDirectories: ["/tmp/t3-attachments"],
@@ -1181,8 +1181,8 @@ describe("AcpSessionRuntime", () => {
             command: mockAgentCommand,
             args: mockAgentArgs,
             env: {
-              T3_ACP_REQUIRE_AUTH: "1",
-              T3_ACP_SESSION_LIFECYCLE: "1",
+              PRISMUX_ACP_REQUIRE_AUTH: "1",
+              PRISMUX_ACP_SESSION_LIFECYCLE: "1",
             },
           },
           cwd: process.cwd(),
@@ -1210,7 +1210,7 @@ describe("AcpSessionRuntime", () => {
             command: mockAgentCommand,
             args: mockAgentArgs,
             env: {
-              T3_ACP_FAIL_LOAD_SESSION: "1",
+              PRISMUX_ACP_FAIL_LOAD_SESSION: "1",
             },
           },
           cwd: process.cwd(),
@@ -1231,8 +1231,8 @@ describe("AcpSessionRuntime", () => {
         spawn: {
           ...mockRuntimeOptions.spawn,
           env: {
-            T3_ACP_DELAY_LOAD_SESSION_AFTER_REPLAY: "1",
-            T3_ACP_LOAD_SESSION_DELAY_MS: "500",
+            PRISMUX_ACP_DELAY_LOAD_SESSION_AFTER_REPLAY: "1",
+            PRISMUX_ACP_LOAD_SESSION_DELAY_MS: "500",
           },
         },
         resumeSessionId: "mock-session-1",
@@ -1240,7 +1240,7 @@ describe("AcpSessionRuntime", () => {
         sessionLoadReplayIdleReadiness: true,
       });
       const started = yield* runtime.start();
-      expect(started.sessionSetupResult._meta).toMatchObject({ t3SessionLoadReady: "replay_idle" });
+      expect(started.sessionSetupResult._meta).toMatchObject({ prismuxSessionLoadReady: "replay_idle" });
 
       yield* runtime.getEvents().pipe(
         Stream.filter((event) => event._tag === "ConfigOptionsUpdated"),
@@ -1264,9 +1264,9 @@ describe("AcpSessionRuntime", () => {
         spawn: {
           ...mockRuntimeOptions.spawn,
           env: {
-            T3_ACP_DELAY_LOAD_SESSION_AFTER_REPLAY: "1",
-            T3_ACP_LOAD_SESSION_DELAY_MS: "500",
-            T3_ACP_HOLD_SET_CONFIG_OPTION_UNTIL_LOAD_REPLY: "1",
+            PRISMUX_ACP_DELAY_LOAD_SESSION_AFTER_REPLAY: "1",
+            PRISMUX_ACP_LOAD_SESSION_DELAY_MS: "500",
+            PRISMUX_ACP_HOLD_SET_CONFIG_OPTION_UNTIL_LOAD_REPLY: "1",
           },
         },
         resumeSessionId: "mock-session-1",
@@ -1300,9 +1300,9 @@ describe("AcpSessionRuntime", () => {
         spawn: {
           ...mockRuntimeOptions.spawn,
           env: {
-            T3_ACP_DELAY_LOAD_SESSION_AFTER_REPLAY: "1",
-            T3_ACP_LOAD_SESSION_DELAY_MS: "500",
-            T3_ACP_NOTIFY_MODE_BEFORE_LOAD_REPLY: "code",
+            PRISMUX_ACP_DELAY_LOAD_SESSION_AFTER_REPLAY: "1",
+            PRISMUX_ACP_LOAD_SESSION_DELAY_MS: "500",
+            PRISMUX_ACP_NOTIFY_MODE_BEFORE_LOAD_REPLY: "code",
           },
         },
         resumeSessionId: "mock-session-1",
@@ -1310,7 +1310,7 @@ describe("AcpSessionRuntime", () => {
         sessionLoadReplayIdleReadiness: true,
         // The mock speaks ACP v2, which has no current_mode_update; decode it as a v1 agent's.
         transformSessionUpdate: (notification) =>
-          notification.update.sessionUpdate === "_t3_unknown" &&
+          notification.update.sessionUpdate === "_prismux_unknown" &&
           notification.update.originalSessionUpdate === "current_mode_update"
             ? {
                 ...notification,
@@ -1345,8 +1345,8 @@ describe("AcpSessionRuntime", () => {
         spawn: {
           ...mockRuntimeOptions.spawn,
           env: {
-            T3_ACP_DELAY_LOAD_SESSION_AFTER_REPLAY: "1",
-            T3_ACP_LOAD_SESSION_DELAY_MS: "500",
+            PRISMUX_ACP_DELAY_LOAD_SESSION_AFTER_REPLAY: "1",
+            PRISMUX_ACP_LOAD_SESSION_DELAY_MS: "500",
           },
         },
         resumeSessionId: "mock-session-1",
@@ -1397,7 +1397,7 @@ describe("AcpSessionRuntime", () => {
             command: mockAgentCommand,
             args: mockAgentArgs,
             env: {
-              T3_ACP_FAIL_LOAD_SESSION_AFTER_CONFIG_REPLAY: "1",
+              PRISMUX_ACP_FAIL_LOAD_SESSION_AFTER_CONFIG_REPLAY: "1",
             },
           },
           cwd: process.cwd(),
@@ -1433,7 +1433,7 @@ describe("AcpSessionRuntime", () => {
             command: mockAgentCommand,
             args: mockAgentArgs,
             env: {
-              T3_ACP_EMIT_LOAD_REPLAY: "1",
+              PRISMUX_ACP_EMIT_LOAD_REPLAY: "1",
             },
           },
           cwd: process.cwd(),
@@ -1464,9 +1464,9 @@ describe("AcpSessionRuntime", () => {
             command: mockAgentCommand,
             args: mockAgentArgs,
             env: {
-              T3_ACP_EMIT_LOAD_REPLAY: "1",
-              T3_ACP_LOAD_REPLY_DELAY_MS: "500",
-              T3_ACP_REJECT_PROMPT_UNTIL_LOADED: "1",
+              PRISMUX_ACP_EMIT_LOAD_REPLAY: "1",
+              PRISMUX_ACP_LOAD_REPLY_DELAY_MS: "500",
+              PRISMUX_ACP_REJECT_PROMPT_UNTIL_LOADED: "1",
             },
           },
           cwd: process.cwd(),
@@ -1486,7 +1486,7 @@ describe("AcpSessionRuntime", () => {
       const started = yield* runtime.start();
 
       expect(started.sessionSetupResult._meta).toMatchObject({
-        t3SessionLoadReady: "replay_idle",
+        prismuxSessionLoadReady: "replay_idle",
       });
     }).pipe(
       Effect.provide(
@@ -1496,8 +1496,8 @@ describe("AcpSessionRuntime", () => {
             command: mockAgentCommand,
             args: mockAgentArgs,
             env: {
-              T3_ACP_EMIT_LOAD_REPLAY: "1",
-              T3_ACP_LOAD_NEVER_REPLIES: "1",
+              PRISMUX_ACP_EMIT_LOAD_REPLAY: "1",
+              PRISMUX_ACP_LOAD_NEVER_REPLIES: "1",
             },
           },
           cwd: process.cwd(),
@@ -1549,7 +1549,7 @@ describe("AcpSessionRuntime", () => {
             command: mockAgentCommand,
             args: mockAgentArgs,
             env: {
-              T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+              PRISMUX_ACP_REQUEST_LOG_PATH: requestLogPath,
             },
           },
           cwd: process.cwd(),
@@ -1588,7 +1588,7 @@ describe("AcpSessionRuntime", () => {
           spawn: {
             command: mockAgentCommand,
             args: mockAgentArgs,
-            env: { T3_ACP_REQUEST_LOG_PATH: requestLogPath },
+            env: { PRISMUX_ACP_REQUEST_LOG_PATH: requestLogPath },
           },
           customModels: ["cline-free/custom-model"],
         }),
@@ -1653,7 +1653,7 @@ describe("AcpSessionRuntime", () => {
         let promptsStarted = 0;
         const runtime = yield* AcpSessionRuntime.make({
           ...mockRuntimeOptions,
-          spawn: { ...mockRuntimeOptions.spawn, env: { T3_ACP_REQUEST_LOG_PATH: requestLogPath } },
+          spawn: { ...mockRuntimeOptions.spawn, env: { PRISMUX_ACP_REQUEST_LOG_PATH: requestLogPath } },
           interruptPromptOnCancel: false,
           // The cancel spends a test-clock second in its outgoing record, the window in which the
           // next prompt could overtake it.

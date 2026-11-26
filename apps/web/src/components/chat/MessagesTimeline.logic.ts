@@ -86,7 +86,10 @@ import {
   type DshActivityCategory,
   type WorkStepsPresentationPolicy,
 } from "./dshWorkSteps.logic";
-import { resolveT3McpToolDefinition } from "@prismux/core-shared/t3McpToolPresentation";
+import {
+  formatPrismuxMcpToolDisplayName,
+  resolvePrismuxMcpToolDefinition,
+} from "@prismux/core-shared/prismuxMcpToolPresentation";
 import { compactDynamicToolOutput } from "@prismux/core-shared/toolOutput";
 import { htmlRenderReferencesEqual, type HtmlRenderReference } from "@prismux/core-shared/htmlRender";
 import { mcpAppReferencesEqual, type McpAppReference } from "@prismux/core-shared/mcpApp";
@@ -231,14 +234,16 @@ export function workEntryDisplayLabel(
   if (action === "read" && !entry.viewedImagePath) {
     return resolve(msg("Read file"));
   }
-  const heading = normalizeCompactToolLabel(entry.toolTitle || entry.label);
+  const heading = formatPrismuxMcpToolDisplayName(
+    normalizeCompactToolLabel(entry.toolTitle || entry.label),
+  );
   return `${heading.charAt(0).toUpperCase()}${heading.slice(1)}`;
 }
 
 export function threadReadTargetId(entry: Pick<WorkLogEntry, "structuredPayload">) {
   const item = entry.structuredPayload;
   if (item?.type !== "dynamic_tool") return null;
-  if (resolveT3McpToolDefinition(item.toolName)?.summaryAction !== "thread-read") return null;
+  if (resolvePrismuxMcpToolDefinition(item.toolName)?.summaryAction !== "thread-read") return null;
   const input = item.input;
   const threadId =
     input !== null && typeof input === "object" && "threadId" in input ? input.threadId : null;
@@ -1535,7 +1540,7 @@ function withoutSubagentDelegationRows(entries: ReadonlyArray<TimelineEntry>) {
       item?.type !== "dynamic_tool" ||
       item.runId === null ||
       (item.status !== "running" && item.status !== "completed") ||
-      resolveT3McpToolDefinition(item.toolName)?.summaryAction !== "delegate"
+      resolvePrismuxMcpToolDefinition(item.toolName)?.summaryAction !== "delegate"
     )
       return true;
     const output = compactDynamicToolOutput(item.output);

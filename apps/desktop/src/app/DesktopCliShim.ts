@@ -32,11 +32,11 @@ export type CliShimTarget =
 export const renderCliShim = (input: {
   readonly target: CliShimTarget;
   readonly shimPath: string;
-  readonly t3Home: string;
+  readonly prismuxHome: string;
 }) => {
   const { target } = input;
   if (target.kind === "windows") {
-    const utf8 = [target.executable, target.entry, input.shimPath, input.t3Home].some((value) =>
+    const utf8 = [target.executable, target.entry, input.shimPath, input.prismuxHome].some((value) =>
       [...value].some((character) => character.codePointAt(0)! > 0x7f),
     );
     const restore = utf8 ? ["chcp %prismux_codepage% >nul"] : [];
@@ -53,7 +53,7 @@ export const renderCliShim = (input: {
           ]
         : []),
       `set "PRISMUX_CLI_PATH=${cmdText(input.shimPath)}"`,
-      `if not defined PRISMUX_HOME set "PRISMUX_HOME=${cmdText(input.t3Home)}"`,
+      `if not defined PRISMUX_HOME set "PRISMUX_HOME=${cmdText(input.prismuxHome)}"`,
       'set "ELECTRON_RUN_AS_NODE=1"',
       // Electron's Windows executable starts without stdin; this tells the CLI to reopen the console.
       'set "PRISMUX_DESKTOP_CLI_LAUNCHER=1"',
@@ -74,7 +74,7 @@ export const renderCliShim = (input: {
     "#!/bin/sh",
     `# ${MARKER}`,
     `export PRISMUX_CLI_PATH=${shellWord(input.shimPath)}`,
-    `home=${shellWord(input.t3Home)}`,
+    `home=${shellWord(input.prismuxHome)}`,
     'export PRISMUX_HOME="${PRISMUX_HOME:-$home}"',
     "export ELECTRON_RUN_AS_NODE=1",
     `app=${shellWord(target.kind === "appimage" ? target.appImage : target.executable)}`,
@@ -182,7 +182,7 @@ export const install = Effect.gen(function* () {
     destination: string,
     label: string,
   ) {
-    const content = renderCliShim({ target, shimPath: destination, t3Home: environment.baseDir });
+    const content = renderCliShim({ target, shimPath: destination, prismuxHome: environment.baseDir });
     const existing = yield* fs.readFileString(destination).pipe(Effect.option);
     if (Option.isSome(existing) && !isManagedCliShimContent(existing.value)) {
       yield* logWarning(`leaving a ${label} launcher the app did not write`, {

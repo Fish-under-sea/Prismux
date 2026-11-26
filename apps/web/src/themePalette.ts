@@ -13,9 +13,9 @@ import {
   GROVE_THEME,
   IRIS_THEME,
   OCEAN_THEME,
-  T3_CHAT_THEME,
-  T3_CODE_LIGHT_THEME_COLORS,
-  T3_CODE_DARK_THEME_COLORS,
+  PRISMUX_CHAT_THEME,
+  PRISMUX_LIGHT_THEME_COLORS,
+  PRISMUX_DARK_THEME_COLORS,
   RESERVED_THEME_IDS,
   THEME_COLOR_ROLES,
   type ThemeAppearance,
@@ -36,10 +36,10 @@ import { applyThemeBackground } from "./themeBackground";
 import { applyThemeCss } from "./themeCss";
 import { themeServerEnvironmentThemesAtom } from "./state/server";
 
-export { EMBER_THEME, GROVE_THEME, IRIS_THEME, OCEAN_THEME, T3_CHAT_THEME, THEME_COLOR_ROLES };
+export { EMBER_THEME, GROVE_THEME, IRIS_THEME, OCEAN_THEME, PRISMUX_CHAT_THEME, THEME_COLOR_ROLES };
 export type { ThemeAppearance, ThemeColorRole, ThemeColors, ThemeDefinition, ThemeVariants };
 
-const T3_CHAT_THEME_ID = "t3-chat" as const;
+const PRISMUX_CHAT_THEME_ID = "prismux-chat" as const;
 const GROVE_THEME_ID = "grove" as const;
 const OCEAN_THEME_ID = "ocean" as const;
 const EMBER_THEME_ID = "ember" as const;
@@ -51,7 +51,7 @@ export const THEME_APPEARANCE_MODE_STORAGE_KEY = "prismux:theme-appearance-mode"
 export const THEME_HALVES_STORAGE_KEY = "prismux:theme-halves:v1";
 export const ENVIRONMENT_THEMES_STORAGE_KEY = "prismux:environment-themes:v1";
 
-const LEGACY_T3_CHAT_DARK_THEME_ID = "t3-chat-dark";
+const LEGACY_CHAT_DARK_THEME_ID = "t3-chat-dark";
 
 export const ThemePreference = Schema.String;
 export type ThemePreference = typeof ThemePreference.Type;
@@ -407,7 +407,8 @@ export function subscribeToCustomThemes(listener: () => void): () => void {
 }
 
 const LEGACY_THEME_ID_ALIASES: Readonly<Record<string, string>> = {
-  [LEGACY_T3_CHAT_DARK_THEME_ID]: T3_CHAT_THEME_ID,
+  "t3-chat": PRISMUX_CHAT_THEME_ID,
+  [LEGACY_CHAT_DARK_THEME_ID]: PRISMUX_CHAT_THEME_ID,
   "t3-grove": GROVE_THEME_ID,
   "t3-ocean": OCEAN_THEME_ID,
   "t3-ember": EMBER_THEME_ID,
@@ -421,7 +422,7 @@ function normalizeThemeId(themeId: string): string {
 }
 
 export function canonicalThemePreference(theme: string): string {
-  return theme === LEGACY_T3_CHAT_DARK_THEME_ID ? theme : normalizeThemeId(theme);
+  return theme === LEGACY_CHAT_DARK_THEME_ID ? theme : normalizeThemeId(theme);
 }
 
 function themeIdFromPreference(theme: ThemePreference): string {
@@ -429,17 +430,17 @@ function themeIdFromPreference(theme: ThemePreference): string {
 }
 
 function legacyThemeMode(theme: ThemePreference): ThemeAppearance | null {
-  return theme === LEGACY_T3_CHAT_DARK_THEME_ID ? "dark" : null;
+  return theme === LEGACY_CHAT_DARK_THEME_ID ? "dark" : null;
 }
 
 export function getStandardThemeColors(appearance: ThemeAppearance): ThemeColors {
   if (appearance === "dark") {
     return (standardDarkThemeColors ??= decodeThemeColors({
-      ...T3_CODE_DARK_THEME_COLORS,
+      ...PRISMUX_DARK_THEME_COLORS,
       canvas: "#000000",
     }));
   }
-  return (standardLightThemeColors ??= decodeThemeColors(T3_CODE_LIGHT_THEME_COLORS));
+  return (standardLightThemeColors ??= decodeThemeColors(PRISMUX_LIGHT_THEME_COLORS));
 }
 
 // index.css paints the light bubble a step darker than the shared palette mobile uses.
@@ -1025,7 +1026,7 @@ function standardMutedThemeText(
 }
 
 export function getDefaultThemeColors(appearance: ThemeAppearance): ThemeColors {
-  return appearance === "dark" ? T3_CHAT_THEME.variants!.dark! : T3_CHAT_THEME.colors;
+  return appearance === "dark" ? PRISMUX_CHAT_THEME.variants!.dark! : PRISMUX_CHAT_THEME.colors;
 }
 
 export function updateThemeColorFamily(

@@ -47,13 +47,13 @@ export function runServicePreflight(input: {
     return {
       status: "blocked",
       version,
-      // A stale `t3` earlier on PATH (an old npm/nvm global) makes `t3 service install`
+      // A stale `t3` earlier on PATH (an old npm/nvm global) makes `prismux service install`
       // reinstall itself and report success, so name the exact install and the path check.
       reason: [
         `The installed service launcher speaks protocol ${launcherProtocol}, but Prismux CLI ${version} requires protocol ${SERVICE_LAUNCHER_PROTOCOL}.`,
         `On the server machine, install Prismux CLI v${version} from https://github.com/Fish-under-sea/Prismux/releases.`,
-        `Check that \`t3 --version\` prints ${version} and that \`which -a t3\` lists no older CLI binary (such as an npm or nvm install) first, then run \`~/.local/bin/t3 service install\` (the installer's default path).`,
-        "Updating the desktop app does not update this CLI, and `t3 service update` only repairs the service with whichever CLI runs it.",
+        `Check that \`prismux --version\` prints ${version} and that \`which -a prismux\` lists no older CLI binary (such as an npm or nvm install) first, then run \`~/.local/bin/prismux service install\` (the installer's default path).`,
+        "Updating the desktop app does not update this CLI, and `prismux service update` only repairs the service with whichever CLI runs it.",
       ].join(" "),
     };
   }
@@ -63,7 +63,7 @@ export function runServicePreflight(input: {
     return {
       status: "blocked",
       version,
-      reason: `Could not read this database to confirm t3@${version} supports it.`,
+      reason: `Could not read this database to confirm prismux@${version} supports it.`,
     };
   }
   const newer = recorded
@@ -73,7 +73,7 @@ export function runServicePreflight(input: {
     return {
       status: "blocked",
       version,
-      reason: `This database has migrations that t3@${version} does not know: ${newer.join(", ")}. A newer build wrote them, and running t3@${version} on this database is not safe. Stay on the newer release, or wait for a release that includes these migrations.`,
+      reason: `This database has migrations that prismux@${version} does not know: ${newer.join(", ")}. A newer build wrote them, and running prismux@${version} on this database is not safe. Stay on the newer release, or wait for a release that includes these migrations.`,
     };
   }
 

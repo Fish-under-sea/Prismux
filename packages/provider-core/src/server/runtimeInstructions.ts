@@ -1,4 +1,5 @@
 import type { ProviderAdapterV2RuntimePolicy } from "./ProviderAdapter.ts";
+import { detectPrismuxPromptIntent } from "./orchestrationInstructions.ts";
 
 /** Session-invariant; harnesses with a native system-prompt append can carry it once per session. */
 export const PULL_REQUEST_LINKING_INSTRUCTIONS = `<pull_request_linking>
@@ -6,14 +7,35 @@ Link each PR you create, take over, or push to: link_pull_request, or link_pull_
 If available, call link_issue for each issue you take on or file, even via CLI; skip issues you only read.
 </pull_request_linking>`;
 
+export function shouldIncludePullRequestLinking(input: {
+  readonly pullRequestLinking?: boolean | undefined;
+  readonly prompt?: string | undefined;
+  readonly isSubagent?: boolean | undefined;
+  readonly isGitProject?: boolean | undefined;
+}): boolean {
+  if (input.pullRequestLinking === false) return false;
+  if (input.pullRequestLinking === true) return true;
+  if (input.isGitProject === false) return false;
+  if (input.prompt !== undefined) {
+    return detectPrismuxPromptIntent(input.prompt).needsPullRequestLinking;
+  }
+  return input.isSubagent !== true;
+}
+
 /** Omit model and effort when the harness manages them dynamically. */
 export function buildRuntimeInstructions(runtime: {
   readonly harness: string;
   readonly model?: string | undefined;
   readonly modelName?: string | undefined;
   readonly reasoningEffort?: string | undefined;
-  /** False when the session's system prompt already carries the linking instructions. */
-  readonly pullRequestLinking?: boolean;
+  /** Explicitly controls PR linking; when omitted, inferred on demand from prompt & thread role. */
+  readonly pullRequestLinking?: boolean | undefined;
+  /** Prompt text used to decide whether PR/issue linking guidance is relevant for this turn. */
+  readonly prompt?: string | undefined;
+  /** Delegated subagent threads omit PR/issue linking unless the task prompt involves PR/git work. */
+  readonly isSubagent?: boolean | undefined;
+  /** False skips PR/issue linking on non-git projects. */
+  readonly isGitProject?: boolean | undefined;
   /** Adds the folder list of a multi-folder thread. */
   readonly runtimePolicy?: Pick<ProviderAdapterV2RuntimePolicy, "cwd" | "workspace"> | undefined;
 }): string {
@@ -26,11 +48,17 @@ export function buildRuntimeInstructions(runtime: {
   const modelInfo = model && model !== "auto" && model !== "default" ? `, as ${modelLabel}` : "";
   const effortInfo = effort ? ` with ${effort} reasoning effort` : "";
   const runtimeInfo = `<runtime_info>In case you're asked: you are running in Prismux through the ${harness} harness${modelInfo}${effortInfo}. No need to mention this otherwise. You can embed images, video, and audio using Markdown image syntax with absolute file paths. Link every other file you cite or produce by its absolute path, as in [http.ts:42](/abs/path/http.ts:42), so the user can open it in Prismux's files viewer.</runtime_info>`;
+  const includePullRequestLinking = shouldIncludePullRequestLinking({
+    pullRequestLinking: runtime.pullRequestLinking,
+    prompt: runtime.prompt,
+    isSubagent: runtime.isSubagent,
+    isGitProject: runtime.isGitProject,
+  });
   const workspace =
     runtime.runtimePolicy === undefined ? "" : buildWorkspaceInstructions(runtime.runtimePolicy);
   return [
     runtimeInfo,
-    ...(runtime.pullRequestLinking === false ? [] : [PULL_REQUEST_LINKING_INSTRUCTIONS]),
+    ...(includePullRequestLinking ? [PULL_REQUEST_LINKING_INSTRUCTIONS] : []),
     ...(workspace === "" ? [] : [workspace]),
   ].join("\n\n");
 }

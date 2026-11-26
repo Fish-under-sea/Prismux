@@ -101,7 +101,7 @@ export function createBrowserPcmCapture(
         audioContext = context;
         await context.audioWorklet.addModule(workletUrl);
         captureSignal.throwIfAborted();
-        const node = new AudioWorkletNode(context, "t3-pcm-capture", { channelCount: 1 });
+        const node = new AudioWorkletNode(context, "prismux-pcm-capture", { channelCount: 1 });
         worklet = node;
         node.port.onmessage = ({
           data,

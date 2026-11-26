@@ -139,9 +139,9 @@ describe("Azure DevOps repository keys", () => {
 
   it("gives a repository the same key over SSH as over HTTPS", () => {
     for (const remote of [
-      "git@ssh.dev.azure.com:v3/T3Tools/Platform/Prismux",
-      "ssh://git@ssh.dev.azure.com:22/v3/T3Tools/Platform/Prismux",
-      "https://T3Tools@dev.azure.com/T3Tools/Platform/_git/Prismux",
+      "git@ssh.dev.azure.com:v3/PrismuxTools/Platform/Prismux",
+      "ssh://git@ssh.dev.azure.com:22/v3/PrismuxTools/Platform/Prismux",
+      "https://PrismuxTools@dev.azure.com/PrismuxTools/Platform/_git/Prismux",
     ]) {
       expect(registry.repositoryKeyFromRemote(remote), remote).toBe(
         "dev.azure.com/t3tools/platform/_git/prismux",
@@ -210,8 +210,8 @@ describe("Azure DevOps repository keys", () => {
 
   it("keeps the organization in the host for the legacy visualstudio.com remotes", () => {
     for (const remote of [
-      "T3Tools@vs-ssh.visualstudio.com:v3/T3Tools/Platform/Prismux",
-      "https://T3Tools.visualstudio.com/Platform/_git/Prismux",
+      "PrismuxTools@vs-ssh.visualstudio.com:v3/PrismuxTools/Platform/Prismux",
+      "https://PrismuxTools.visualstudio.com/Platform/_git/Prismux",
     ]) {
       expect(registry.repositoryKeyFromRemote(remote), remote).toBe(
         "t3tools.visualstudio.com/platform/_git/prismux",

@@ -256,7 +256,7 @@ const startLocalBackend = Effect.gen(function* () {
     !(yield* DesktopHomeOwner.awaitHomeOwnershipRelease())
   ) {
     const owner = yield* DesktopHomeOwner.readLiveHomeOwner();
-    yield* logBootstrapWarning("bootstrap found another server owning the T3 home", {
+    yield* logBootstrapWarning("bootstrap found another server owning the Prismux home", {
       owner: Option.getOrNull(owner),
     });
     yield* (yield* ElectronDialog.ElectronDialog).showErrorBox(
@@ -314,8 +314,8 @@ const startLocalBackend = Effect.gen(function* () {
   yield* primaryBackend.start;
   yield* logBootstrapInfo("bootstrap backend start requested");
   const localEnvironmentAuth = yield* DesktopLocalEnvironmentAuth.DesktopLocalEnvironmentAuth;
-  const daemonT3Url = PrismuxDaemonService.normalizeT3WebSocketUrl(backendConfig.httpBaseUrl.href);
-  const daemonT3HttpUrl = PrismuxDaemonService.normalizeT3HttpUrl(backendConfig.httpBaseUrl.href);
+  const daemonCoreUrl = PrismuxDaemonService.normalizeCoreWebSocketUrl(backendConfig.httpBaseUrl.href);
+  const daemonCoreHttpUrl = PrismuxDaemonService.normalizeCoreHttpUrl(backendConfig.httpBaseUrl.href);
   // Exchange the unsigned desktop bootstrap credential for a signed session access_token before
   // starting the daemon (this also pre-warms the cached bearer token for the renderer).
   yield* Effect.forkScoped(
@@ -325,7 +325,7 @@ const startLocalBackend = Effect.gen(function* () {
         Effect.matchEffect({
           onFailure: (error) =>
             logBootstrapWarning(
-              "bootstrap failed to obtain signed bearer token for prismux daemon; starting daemon without t3Token",
+              "bootstrap failed to obtain signed bearer token for prismux daemon; starting daemon without coreToken",
               {
                 error: error instanceof Error ? error.message : String(error),
               },
@@ -337,9 +337,9 @@ const startLocalBackend = Effect.gen(function* () {
         }),
       );
       yield* prismuxDaemon.start({
-        t3Url: daemonT3Url,
-        t3HttpUrl: daemonT3HttpUrl,
-        ...(signedBearerToken ? { t3Token: signedBearerToken } : {}),
+        coreUrl: daemonCoreUrl,
+        coreHttpUrl: daemonCoreHttpUrl,
+        ...(signedBearerToken ? { coreToken: signedBearerToken } : {}),
       });
     }),
   );
@@ -372,7 +372,7 @@ const bootstrap = Effect.fn("desktop.bootstrap")(function* (backendStarted: bool
       Effect.flatMap((found) =>
         found || environment.platform === "win32"
           ? installCli
-          : logBootstrapInfo("skipped installing the t3 command without the shell PATH"),
+          : logBootstrapInfo("skipped installing the prismux command without the shell PATH"),
       ),
     ),
   );

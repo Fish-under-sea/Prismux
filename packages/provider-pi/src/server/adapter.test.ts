@@ -58,7 +58,7 @@ import {
 } from "./adapter.ts";
 import { makePiRpcConnection, type PiRpcRecord } from "./rpc.ts";
 import { loadMcpBridge } from "./mcpBridge.testkit.ts";
-import { PI_T3_SERVICE_TIER_COMMAND } from "./mcpExtensionSource.ts";
+import { PI_PRISMUX_SERVICE_TIER_COMMAND } from "./mcpExtensionSource.ts";
 import { turnItemOutputText } from "../../../client-runtime/src/work-log/itemDetail.ts";
 
 const layerTest = Layer.mergeAll(
@@ -257,7 +257,7 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
   let serviceTier: string | null = null;
   let promptDisposition = true;
   let currentModel = "default";
-  const serviceTierCommand = `/${PI_T3_SERVICE_TIER_COMMAND}`;
+  const serviceTierCommand = `/${PI_PRISMUX_SERVICE_TIER_COMMAND}`;
 
   const emit = (record: PiRpcRecord, chunkBytes?: number) =>
     Effect.gen(function* () {
@@ -2173,10 +2173,10 @@ describe("PiAdapterV2", () => {
       // A thread's long-lived process keeps Pi's startup model refresh unless the user opts out.
       assert.notInclude(spawn.args, "--offline");
       assert.isUndefined(spawn.env.PI_OFFLINE);
-      assert.isTrue(extensions.some((path) => path?.endsWith("pi-t3-mcp-extension.ts")));
-      assert.equal(spawn.env.T3_MCP_URL, "http://127.0.0.1:43123/mcp");
-      assert.equal(spawn.env.T3_MCP_BEARER_TOKEN, "secret-pi-token");
-      assert.equal(spawn.env.T3_PI_RUNTIME_MODE, "full-access");
+      assert.isTrue(extensions.some((path) => path?.endsWith("pi-prismux-mcp-extension.ts")));
+      assert.equal(spawn.env.PRISMUX_MCP_URL, "http://127.0.0.1:43123/mcp");
+      assert.equal(spawn.env.PRISMUX_MCP_BEARER_TOKEN, "secret-pi-token");
+      assert.equal(spawn.env.PRISMUX_PI_RUNTIME_MODE, "full-access");
       assert.equal(spawn.env.PRISMUX_THREAD_ID, THREAD_ID);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
@@ -2811,15 +2811,15 @@ describe("PiAdapterV2", () => {
         fake
           .allRequests()
           .flatMap((request) =>
-            String(request["message"]).startsWith(`/${PI_T3_SERVICE_TIER_COMMAND}`)
+            String(request["message"]).startsWith(`/${PI_PRISMUX_SERVICE_TIER_COMMAND}`)
               ? [request["message"]]
               : [],
           ),
         [
-          `/${PI_T3_SERVICE_TIER_COMMAND} priority`,
-          `/${PI_T3_SERVICE_TIER_COMMAND} priority`,
-          `/${PI_T3_SERVICE_TIER_COMMAND} ultrafast`,
-          `/${PI_T3_SERVICE_TIER_COMMAND}`,
+          `/${PI_PRISMUX_SERVICE_TIER_COMMAND} priority`,
+          `/${PI_PRISMUX_SERVICE_TIER_COMMAND} priority`,
+          `/${PI_PRISMUX_SERVICE_TIER_COMMAND} ultrafast`,
+          `/${PI_PRISMUX_SERVICE_TIER_COMMAND}`,
         ],
       );
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
@@ -3504,11 +3504,11 @@ describe("PiAdapterV2", () => {
             expected: { content, structuredContent: structured },
           },
           {
-            toolName: "mcp__t3-code__preview_snapshot",
+            toolName: "mcp__prismux__preview_snapshot",
             result: {
               content,
               structuredContent: scriptResult,
-              details: { server: "t3-code", tool: "preview_snapshot" },
+              details: { server: "prismux", tool: "preview_snapshot" },
             },
             expected: { content, structuredContent: { threadId: "child-thread" } },
           },
@@ -3523,7 +3523,7 @@ describe("PiAdapterV2", () => {
             expected: { content, structuredContent: { content: ["domain content"], ready: true } },
           },
           {
-            toolName: "mcp__t3-code__preview_snapshot",
+            toolName: "mcp__prismux__preview_snapshot",
             result: {
               content: [
                 { type: "text", text: "first" },
@@ -3535,7 +3535,7 @@ describe("PiAdapterV2", () => {
                   { type: "text", text: "second" },
                 ],
               },
-              details: { server: "t3-code", tool: "preview_snapshot" },
+              details: { server: "prismux", tool: "preview_snapshot" },
             },
             expected: {
               content: [
@@ -3709,7 +3709,7 @@ describe("PiAdapterV2", () => {
           const bridge = yield* Effect.promise(() =>
             loadMcpBridge({ modern: true, result: { content, structuredContent: metadata } }),
           );
-          const tool = bridge.tools.find((tool) => tool.name === "mcp__t3-code__preview_snapshot")!;
+          const tool = bridge.tools.find((tool) => tool.name === "mcp__prismux__preview_snapshot")!;
           const result = yield* Effect.promise(() => tool.execute("screenshot", {}));
           assert.deepEqual(result.structuredContent, { content, structuredContent: metadata });
           yield* fake.emit(
@@ -7112,7 +7112,7 @@ describe("PiAdapterV2", () => {
               yield* fake.takeRequest("get_state");
             }
             yield* fake.emit({
-              type: "t3.settle_probe",
+              type: "prismux.settle_probe",
               providerTurnId,
               settleProbeGeneration: 2,
               data: { isStreaming: false, isCompacting: false, pendingMessageCount: 0 },

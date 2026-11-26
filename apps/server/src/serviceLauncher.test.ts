@@ -143,7 +143,7 @@ it("rejects contradictory service state", () => {
 });
 
 const unitPlan = (root: string, version: string) => ({
-  program: [`${root}/runtime/versions/${version}/t3`, "__service-launcher"],
+  program: [`${root}/runtime/versions/${version}/prismux`, "__service-launcher"],
   baseDir: root,
   logPath: `${root}/logs/boot-service.log`,
   unitPath: `${root}/unit/prismux.service`,
@@ -156,7 +156,7 @@ const writeFakeRuntime = (
   childSource: string,
 ) =>
   Effect.gen(function* () {
-    const entryPath = path.join(versionDir, "t3");
+    const entryPath = path.join(versionDir, "prismux");
     yield* fs.makeDirectory(versionDir, { recursive: true });
     yield* fs.writeFileString(entryPath, `#!${process.execPath}\n${childSource}`);
     yield* fs.chmod(entryPath, 0o755);
@@ -232,7 +232,7 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
       yield* fs.writeFileString(databasePath, "before trial");
       const childSource = `
 const fs = require("node:fs");
-const context = JSON.parse(process.env.T3_SERVICE_LAUNCHER_CONTEXT);
+const context = JSON.parse(process.env.PRISMUX_SERVICE_LAUNCHER_CONTEXT);
 if (context.update?.status === "pending") {
   if (context.childVersion !== context.update.targetVersion) throw new Error("wrong trial version");
   if (fs.readFileSync(${JSON.stringify(path.dirname(backupPath))} + "/" + context.update.id + "/database", "utf8") !== "before trial") {
@@ -419,8 +419,8 @@ setInterval(() => {}, 1_000);
         const inherited = Object.freeze({
           PATH: "inherited-path",
           PRISMUX_HOME: root,
-          T3_BOOT_SERVICE_UNIT: "managed-unit",
-          T3_SERVICE_LAUNCHER_CONTEXT: "managed-context",
+          PRISMUX_BOOT_SERVICE_UNIT: "managed-unit",
+          PRISMUX_SERVICE_LAUNCHER_CONTEXT: "managed-context",
           PRISMUX_PORT: "ambient",
         });
         assert.deepEqual(
@@ -439,10 +439,10 @@ setInterval(() => {}, 1_000);
             "Path=/bad",
             "PRISMUX_HOME=/bad",
             "prismux_home=/bad",
-            "T3_BOOT_SERVICE_UNIT=bad",
-            "t3_boot_service_unit=bad",
-            "T3_SERVICE_LAUNCHER_CONTEXT=bad",
-            "t3_service_launcher_context=bad",
+            "PRISMUX_BOOT_SERVICE_UNIT=bad",
+            "prismux_boot_service_unit=bad",
+            "PRISMUX_SERVICE_LAUNCHER_CONTEXT=bad",
+            "prismux_service_launcher_context=bad",
           ].join("\n"),
         );
         assert.deepEqual(yield* Effect.promise(() => readServiceEnvironment(root, inherited)), {
@@ -516,7 +516,7 @@ setInterval(() => {}, 1_000);
         }),
       );
       vi.stubEnv("HOME", home);
-      vi.stubEnv("T3_BOOT_SERVICE_UNIT", "prismux.plist");
+      vi.stubEnv("PRISMUX_BOOT_SERVICE_UNIT", "prismux.plist");
 
       yield* Effect.promise(() =>
         expect(runLauncher(root)).rejects.toThrow("Active child exited unexpectedly (0)."),
@@ -579,7 +579,7 @@ setInterval(() => {}, 1_000);
         vi.stubEnv("HOME", home);
         // environment.d changes what services inherit, not where the manager reads units.
         vi.stubEnv("XDG_CONFIG_HOME", path.join(home, "service-config"));
-        vi.stubEnv("T3_BOOT_SERVICE_UNIT", "prismux.service");
+        vi.stubEnv("PRISMUX_BOOT_SERVICE_UNIT", "prismux.service");
 
         yield* Effect.promise(() =>
           expect(runLauncher(root)).rejects.toThrow("Active child exited unexpectedly (0)."),
@@ -620,7 +620,7 @@ setInterval(() => {}, 1_000);
         }),
       );
       vi.stubEnv("HOME", home);
-      vi.stubEnv("T3_BOOT_SERVICE_UNIT", "prismux.plist");
+      vi.stubEnv("PRISMUX_BOOT_SERVICE_UNIT", "prismux.plist");
 
       yield* Effect.promise(() =>
         expect(runLauncher(root)).rejects.toThrow("Active child exited unexpectedly (0)."),
@@ -749,7 +749,7 @@ process.exit(0);
 
       yield* Effect.promise(() =>
         expect(runLauncher(root)).rejects.toThrow(
-          "Selected t3@1.0.0 runtime is missing or incomplete.",
+          "Selected prismux@1.0.0 runtime is missing or incomplete.",
         ),
       );
       assert.equal(yield* fs.readFileString(statePath), contents);
@@ -757,7 +757,7 @@ process.exit(0);
     }),
   );
 
-  it.effect("a fresh launcher clears a restart deferred by t3 update", () =>
+  it.effect("a fresh launcher clears a restart deferred by prismux update", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -989,7 +989,7 @@ process.exit(0);
               `const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(ownerPath)});`,
               `try { db.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;"); }`,
               `catch { process.exit(${SERVER_EXIT_CODE_STATE_DIR_OWNED}); }`,
-              "const context = JSON.parse(process.env.T3_SERVICE_LAUNCHER_CONTEXT);",
+              "const context = JSON.parse(process.env.PRISMUX_SERVICE_LAUNCHER_CONTEXT);",
               `require("node:fs").appendFileSync(${JSON.stringify(startsPath)}, context.childVersion + "\\n");`,
               'if (context.update?.status === "pending") {',
               `  require("node:fs").writeFileSync(${JSON.stringify(databasePath)}, "migrated by failed trial");`,
@@ -1172,7 +1172,7 @@ process.exit(0);
       const childSource = `
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-const context = JSON.parse(process.env.T3_SERVICE_LAUNCHER_CONTEXT);
+const context = JSON.parse(process.env.PRISMUX_SERVICE_LAUNCHER_CONTEXT);
 assert.equal(context.protocol, ${SERVICE_LAUNCHER_PROTOCOL});
 if (context.update?.status === "pending") {
   const state = JSON.parse(readFileSync(${JSON.stringify(statePath)}, "utf8"));
@@ -1329,7 +1329,7 @@ if (context.update?.status === "pending") {
       const encodedDatabasePath = JSON.stringify(databasePath);
       const childSource = `
 import { appendFileSync, writeFileSync } from "node:fs";
-const context = JSON.parse(process.env.T3_SERVICE_LAUNCHER_CONTEXT);
+const context = JSON.parse(process.env.PRISMUX_SERVICE_LAUNCHER_CONTEXT);
 appendFileSync(${JSON.stringify(observationsPath)}, JSON.stringify({
   token: process.env.PRISMUX_TEST_SERVICE_TOKEN,
   update: context.update?.status ?? "active",
@@ -1426,7 +1426,7 @@ if (context.update?.status === "pending") {
         const encodedDatabasePath = JSON.stringify(databasePath);
         const childSource = `
 import { realpathSync, unlinkSync, writeFileSync } from "node:fs";
-const context = JSON.parse(process.env.T3_SERVICE_LAUNCHER_CONTEXT);
+const context = JSON.parse(process.env.PRISMUX_SERVICE_LAUNCHER_CONTEXT);
 if (context.update?.status === "pending") {
   writeFileSync(context.update.dbPath, "database after migration");
   writeFileSync(context.update.dbPath + "-wal", "trial wal");
@@ -1507,7 +1507,7 @@ if (context.update?.status === "pending") {
 import { readdirSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 const paths = ${encoded};
-const context = JSON.parse(process.env.T3_SERVICE_LAUNCHER_CONTEXT);
+const context = JSON.parse(process.env.PRISMUX_SERVICE_LAUNCHER_CONTEXT);
 if (context.update?.status === "pending") {
   writeFileSync(paths.observationsPath + ".trial", JSON.stringify(
     readdirSync(paths.root + "/runtime/db-backup/" + context.update.id).sort(),
@@ -1614,7 +1614,7 @@ if (context.update?.status === "pending") {
       const childSource = `
 import { writeFileSync } from "node:fs";
 const paths = ${encoded};
-const context = JSON.parse(process.env.T3_SERVICE_LAUNCHER_CONTEXT);
+const context = JSON.parse(process.env.PRISMUX_SERVICE_LAUNCHER_CONTEXT);
 if (context.update?.status === "pending") {
   writeFileSync(paths.trialMarker, "started");
   process.exit(1);

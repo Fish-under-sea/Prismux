@@ -7,7 +7,7 @@ import { CommandBlock } from "./CommandBlock";
  * Setup steps for another computer: install `prismux`, then run `command`. Both installers are
  * shown because the browser showing this is often not the computer being set up.
  */
-export function InstallT3Commands({
+export function InstallPrismuxCommands({
   command,
   className,
 }: {

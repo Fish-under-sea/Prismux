@@ -643,9 +643,9 @@ export function withMessageSenderNote(
   const agent = message.createdBy === "agent";
   const note =
     agent && message.linkedSender !== undefined
-      ? `[Prismux: the agent in T3 thread ${JSON.stringify(message.linkedSender.threadId)} on linked environment ${JSON.stringify(message.linkedSender.environmentId)} sent this message, not the user.]`
+      ? `[Prismux: the agent in Prismux thread ${JSON.stringify(message.linkedSender.threadId)} on linked environment ${JSON.stringify(message.linkedSender.environmentId)} sent this message, not the user.]`
       : agent && message.senderThreadId !== undefined
-        ? `[Prismux: the agent in T3 thread ${JSON.stringify(message.senderThreadId)} sent this message, not the user.]`
+        ? `[Prismux: the agent in Prismux thread ${JSON.stringify(message.senderThreadId)} sent this message, not the user.]`
         : message.scheduledTaskId !== undefined
           ? `[Prismux: scheduled task ${JSON.stringify(message.scheduledTaskId)} sent this prompt, not the user typing in this chat.]`
           : agent && message.creationSource === "mcp"

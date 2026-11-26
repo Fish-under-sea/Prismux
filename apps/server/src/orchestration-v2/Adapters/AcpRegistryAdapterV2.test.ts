@@ -46,7 +46,7 @@ import * as AcpRegistrySupport from "@prismux/provider-acp-registry/server/AcpRe
 import * as AcpRegistryRuntimeCoordinator from "@prismux/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import { ACP_SESSION_MODE_OPTION_ID } from "@prismux/provider-acp/server/sessionConfig";
 import * as AcpSessionRuntime from "@prismux/provider-acp/server/AcpSessionRuntime";
-import { t3AcpPromptWithInstructions } from "@prismux/provider-core/server/orchestrationInstructions";
+import { prismuxAcpPromptWithInstructions } from "@prismux/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@prismux/provider-core/server/runtimeInstructions";
 import * as IdAllocator from "@prismux/provider-core/server/IdAllocator";
 import {
@@ -718,7 +718,7 @@ describe("AcpRegistryAdapterV2", () => {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const replayDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-stored-picks-",
+        prefix: "prismux-acp-registry-stored-picks-",
       });
       const statusPath = path.join(replayDir, "status.json");
       const transcript = yield* decodeAcpReplayTranscript(
@@ -1523,7 +1523,7 @@ describe("AcpRegistryAdapterV2", () => {
                   spawn: {
                     command: process.execPath,
                     args: [mockAgentPath],
-                    env: { T3_ACP_SESSION_LIFECYCLE: "1", ...agentEnvironment },
+                    env: { PRISMUX_ACP_SESSION_LIFECYCLE: "1", ...agentEnvironment },
                   },
                 }),
             }),
@@ -1568,7 +1568,7 @@ describe("AcpRegistryAdapterV2", () => {
       const plainHttp = (authorization: string) => [
         {
           type: "http",
-          name: "t3-code",
+          name: "prismux",
           url: endpoint,
           headers: [{ name: "Authorization", value: authorization }],
         },
@@ -1576,36 +1576,36 @@ describe("AcpRegistryAdapterV2", () => {
       const http = (authorization: string) => [
         {
           type: "http",
-          name: "t3-code",
+          name: "prismux",
           url: endpoint,
           headers: [
             { name: "Authorization", value: authorization },
-            { name: "t3-tool-exposure", value: "deferred" },
+            { name: "prismux-tool-exposure", value: "deferred" },
           ],
         },
       ];
       const stdio = (authorization: string) => [
         {
-          name: "t3-code",
+          name: "prismux",
           command: selfInvocation.command,
           args: [...selfInvocationArgs(selfInvocation, ["acp-mcp-bridge"])],
           env: [
             { name: "ELECTRON_RUN_AS_NODE", value: "1" },
-            { name: "T3_ACP_MCP_ENDPOINT", value: endpoint },
-            { name: "T3_ACP_MCP_AUTHORIZATION", value: authorization },
+            { name: "PRISMUX_ACP_MCP_ENDPOINT", value: endpoint },
+            { name: "PRISMUX_ACP_MCP_AUTHORIZATION", value: authorization },
           ],
         },
       ];
 
       assert.deepEqual(
-        yield* sessionMcpServers({ agentId: "github-copilot-cli" }, { T3_ACP_MCP_HTTP: "1" }),
+        yield* sessionMcpServers({ agentId: "github-copilot-cli" }, { PRISMUX_ACP_MCP_HTTP: "1" }),
         { new: http("Bearer opened-token"), load: http("Bearer rotated-token") },
       );
-      const acp = [{ type: "acp", name: "t3-code", serverId: "t3-code" }];
+      const acp = [{ type: "acp", name: "prismux", serverId: "prismux" }];
       assert.deepEqual(
         yield* sessionMcpServers(
           { agentId: "github-copilot-cli" },
-          { T3_ACP_MCP_HTTP: "1", T3_ACP_MCP_ACP: "1" },
+          { PRISMUX_ACP_MCP_HTTP: "1", PRISMUX_ACP_MCP_ACP: "1" },
         ),
         { new: acp, load: acp },
       );
@@ -1613,7 +1613,7 @@ describe("AcpRegistryAdapterV2", () => {
         new: stdio("Bearer opened-token"),
         load: stdio("Bearer rotated-token"),
       });
-      assert.deepEqual(yield* sessionMcpServers({ agentId: "gemini" }, { T3_ACP_MCP_HTTP: "1" }), {
+      assert.deepEqual(yield* sessionMcpServers({ agentId: "gemini" }, { PRISMUX_ACP_MCP_HTTP: "1" }), {
         new: stdio("Bearer opened-token"),
         load: stdio("Bearer rotated-token"),
       });
@@ -1625,7 +1625,7 @@ describe("AcpRegistryAdapterV2", () => {
         commandArgs: ["acp"],
       };
       // Command Code is not Copilot: no deferred tool-exposure header.
-      assert.deepEqual(yield* sessionMcpServers(commandCode, { T3_ACP_MCP_HTTP: "1" }), {
+      assert.deepEqual(yield* sessionMcpServers(commandCode, { PRISMUX_ACP_MCP_HTTP: "1" }), {
         new: plainHttp("Bearer opened-token"),
         load: plainHttp("Bearer rotated-token"),
       });
@@ -1637,7 +1637,7 @@ describe("AcpRegistryAdapterV2", () => {
       assert.deepEqual(
         yield* sessionMcpServers(
           { source: "local", commandPath: "C:\\tools\\node.exe", commandArgs: ["agent.mjs"] },
-          { T3_ACP_MCP_HTTP: "1" },
+          { PRISMUX_ACP_MCP_HTTP: "1" },
         ),
         { new: stdio("Bearer opened-token"), load: stdio("Bearer rotated-token") },
       );
@@ -1691,7 +1691,7 @@ describe("AcpRegistryAdapterV2", () => {
                   spawn: {
                     command: process.execPath,
                     args: [mockAgentPath],
-                    env: { T3_ACP_SESSION_LIFECYCLE: "1" },
+                    env: { PRISMUX_ACP_SESSION_LIFECYCLE: "1" },
                   },
                 }),
             }),
@@ -1714,12 +1714,12 @@ describe("AcpRegistryAdapterV2", () => {
       );
       yield* withCapturedSpawns(runtime.ensureThread({ threadId, modelSelection, runtimePolicy }));
       const agentEnvironment = spawnEnvironments.find(
-        (environment) => environment?.T3_ACP_SESSION_LIFECYCLE === "1",
+        (environment) => environment?.PRISMUX_ACP_SESSION_LIFECYCLE === "1",
       );
       assert.isDefined(agentEnvironment, "the agent itself must have been spawned");
       assert.equal(agentEnvironment?.PRISMUX_THREAD_ID, "thread-acp-registry-thread-env");
-      assert.equal(agentEnvironment?.T3_ACP_MCP_ENDPOINT, endpoint);
-      assert.equal(agentEnvironment?.T3_ACP_MCP_AUTHORIZATION, "Bearer thread-env-token");
+      assert.equal(agentEnvironment?.PRISMUX_ACP_MCP_ENDPOINT, endpoint);
+      assert.equal(agentEnvironment?.PRISMUX_ACP_MCP_AUTHORIZATION, "Bearer thread-env-token");
     }).pipe(Effect.provide(layerTest)),
   );
 
@@ -1729,16 +1729,20 @@ describe("AcpRegistryAdapterV2", () => {
       Effect.gen(function* () {
         const runtimeInstructions = {
           type: "text",
-          text: buildRuntimeInstructions({ harness: "acpRegistry", model: "default" }),
+          text: buildRuntimeInstructions({
+            harness: "acpRegistry",
+            model: "default",
+            prompt: "test prompt",
+          }),
         };
         const promptBlocks = (ordinal: number) => [
           {
             type: "text",
             text:
               ordinal === 1
-                ? t3AcpPromptWithInstructions({
+                ? prismuxAcpPromptWithInstructions({
                     prompt: "test prompt",
-                    state: { interactionMode: "default", hasT3Mcp: false, hasDeviceTools: false },
+                    state: { interactionMode: "default", hasPrismuxMcp: false, hasDeviceTools: false },
                   })
                 : "test prompt",
           },
@@ -3445,7 +3449,7 @@ describe("AcpRegistryAdapterV2", () => {
               event.turnItem.nativeItemRef?.nativeId ===
                 "agent-1:session:grandchild:tool:terminal-tool" &&
               event.turnItem.threadId === row.subagent.childThreadId &&
-              event.turnItem.toolName === "t3-code.orchestrator_capabilities",
+              event.turnItem.toolName === "prismux.orchestrator_capabilities",
           ),
           "embedded agent-terminal commands preserve nested MCP identity",
         );

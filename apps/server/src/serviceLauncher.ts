@@ -75,7 +75,7 @@ interface ManagedChild {
 const runtimePaths = (baseDir: string, version: string) => {
   const versionDir = NodePath.join(baseDir, "runtime", "versions", version);
   // oxlint-disable-next-line prismux/no-global-process-runtime -- Standalone launcher has no Effect runtime.
-  const executableName = process.platform === "win32" ? "t3.exe" : "t3";
+  const executableName = process.platform === "win32" ? "prismux.exe" : "prismux";
   return {
     versionDir,
     entryPath: NodePath.join(versionDir, executableName),
@@ -125,7 +125,7 @@ function appendOutput(source: NodeJS.ReadableStream, fd: number): void {
 }
 
 /**
- * The unit or launch agent that `t3 service install` wrote. Its program names
+ * The unit or launch agent that `prismux service install` wrote. Its program names
  * the runtime that ran the install, and a remote update never replaces it, so
  * after a commit the launcher points it at the committed runtime. Otherwise the
  * next start lands on a runtime that nothing in the service state records.
@@ -244,14 +244,14 @@ async function serviceUnitFromEnvironment(
 // Only the version segment changes, so quoted or escaped paths stay as rendered.
 // The launch agent's PATH names a versions directory without the executable; leave it.
 const SERVICE_UNIT_PROGRAMS = [
-  /^(ExecStart=.*?[\\/]runtime[\\/]versions[\\/])([^\\/\s"]+)([\\/]t3)(?=["\s])/m,
-  /(<string>[^<]*?[\\/]runtime[\\/]versions[\\/])([^\\/<]+)([\\/]t3<\/string>\s*<string>__service-launcher<\/string>)/,
-  /(<Arguments>--headless "[^"<]*?[\\/]runtime[\\/]versions[\\/])([^\\/"<]+)([\\/]t3\.exe" "__service-launcher")/,
+  /^(ExecStart=.*?[\\/]runtime[\\/]versions[\\/])([^\\/\s"]+)([\\/](?:prismux|t3))(?=["\s])/m,
+  /(<string>[^<]*?[\\/]runtime[\\/]versions[\\/])([^\\/<]+)([\\/](?:prismux|t3)<\/string>\s*<string>__service-launcher<\/string>)/,
+  /(<Arguments>--headless "[^"<]*?[\\/]runtime[\\/]versions[\\/])([^\\/"<]+)([\\/](?:prismux|t3)\.exe" "__service-launcher")/,
 ] as const;
 
 /**
  * The unit contents with their program pointed at `version`'s runtime. A unit
- * already at that version or a newer one is returned unchanged: `t3 update`
+ * already at that version or a newer one is returned unchanged: `prismux update`
  * may have repointed it to a later version while this commit was in flight.
  */
 function repointServiceUnit(contents: string, version: string): string {
@@ -322,7 +322,7 @@ async function pathExists(target: string): Promise<boolean> {
 const MANAGED_SERVICE_ENV_NAMES = new Set([
   "PATH",
   "PRISMUX_HOME",
-  "T3_BOOT_SERVICE_UNIT",
+  "PRISMUX_BOOT_SERVICE_UNIT",
   SERVICE_LAUNCHER_CONTEXT_ENV,
 ]);
 
@@ -1205,7 +1205,7 @@ export class Launcher {
     )
       return;
     if (!(await runtimeExists(this.#baseDir, version))) {
-      throw new Error(`Selected t3@${version} runtime is missing or incomplete.`);
+      throw new Error(`Selected prismux@${version} runtime is missing or incomplete.`);
     }
     if (this.#stopping) return;
     const paths = runtimePaths(this.#baseDir, version);
@@ -1426,7 +1426,7 @@ export class Launcher {
       }
     } catch (error) {
       process.stderr.write(
-        `[service-launcher] Could not point ${unit.path} at t3@${version}: ${error instanceof Error ? error.message : String(error)}\n`,
+        `[service-launcher] Could not point ${unit.path} at prismux@${version}: ${error instanceof Error ? error.message : String(error)}\n`,
       );
     }
   }
@@ -1598,7 +1598,7 @@ export async function main(options: LauncherOptions = {}): Promise<void> {
       state = adoptLegacyServiceState(contents);
       if (state === undefined) throw new Error("Service state is invalid or unsupported.");
       if (!(await runtimeExists(baseDir, state.activeVersion))) {
-        throw new Error(`Selected t3@${state.activeVersion} runtime is missing or incomplete.`);
+        throw new Error(`Selected prismux@${state.activeVersion} runtime is missing or incomplete.`);
       }
     }
     const serviceUnit = await serviceUnitFromEnvironment(managerEnvironment);

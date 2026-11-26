@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 
 import { APP_VERSION } from "../../branding";
-import { T3AppIcon } from "../../components/T3AppIcon";
+import { PrismuxAppIcon } from "../../components/PrismuxAppIcon";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import {
@@ -588,7 +588,7 @@ export function PrismuxUpdatesSettingsPage({
           className="flex flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-5"
         >
           <div className="flex min-w-0 items-center gap-3.5">
-            <T3AppIcon className="size-10 shrink-0 rounded-xl object-contain shadow-sm ring-1 ring-border/40 [[data-pmx-glass='1']_&]:ring-foreground/15" />
+            <PrismuxAppIcon className="size-10 shrink-0 rounded-xl object-contain shadow-sm ring-1 ring-border/40 [[data-pmx-glass='1']_&]:ring-foreground/15" />
             <div className="min-w-0 space-y-0.5">
               <div className="flex flex-wrap items-baseline gap-2">
                 <span className="text-base font-semibold tracking-tight text-foreground">

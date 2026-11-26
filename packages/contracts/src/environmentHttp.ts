@@ -512,21 +512,21 @@ export function formatConnectReachable(
  * Sections of docs/user/t3-connect-troubleshooting.md. Each is the GitHub anchor of a
  * heading there; the test fails when a heading is renamed without updating this list.
  */
-export const T3_CONNECT_TROUBLESHOOTING_SECTIONS = [
+export const PRISMUX_CONNECT_TROUBLESHOOTING_SECTIONS = [
   "the-hosts-tunnel-is-offline",
   "port-7844-is-blocked-on-the-host",
-  "the-tunnel-works-but-t3-code-does-not-answer",
-  "the-t3-connect-address-does-not-resolve-or-answer",
-  "this-device-cant-reach-t3-connect",
+  "the-tunnel-works-but-prismux-does-not-answer",
+  "the-prismux-connect-address-does-not-resolve-or-answer",
+  "this-device-cant-reach-prismux-connect",
   "sign-in-account-or-link-problems",
   "the-clock-is-off",
-  "the-host-runs-an-older-t3-code",
-  "t3-connect-returned-an-error",
+  "the-host-runs-an-older-prismux",
+  "prismux-connect-returned-an-error",
 ] as const;
-export type T3ConnectTroubleshootingSection = (typeof T3_CONNECT_TROUBLESHOOTING_SECTIONS)[number];
+export type PrismuxConnectTroubleshootingSection = (typeof PRISMUX_CONNECT_TROUBLESHOOTING_SECTIONS)[number];
 
 /** Clients, the CLI, and server logs link here as "More info". */
-export function t3ConnectTroubleshootingUrl(section: T3ConnectTroubleshootingSection): string {
+export function prismuxConnectTroubleshootingUrl(section: PrismuxConnectTroubleshootingSection): string {
   return `https://github.com/Fish-under-sea/Prismux/blob/main/README.md#${section}`;
 }
 
@@ -536,14 +536,14 @@ const REACHABILITY_SECTION = {
   connector_not_ready: "the-hosts-tunnel-is-offline",
   no_connector: "the-hosts-tunnel-is-offline",
   edge_unreachable: "port-7844-is-blocked-on-the-host",
-  origin_unreachable: "the-tunnel-works-but-t3-code-does-not-answer",
-  unexpected_response: "the-tunnel-works-but-t3-code-does-not-answer",
-  dns_failed: "the-t3-connect-address-does-not-resolve-or-answer",
-  timeout: "the-t3-connect-address-does-not-resolve-or-answer",
-} satisfies Record<EnvironmentConnectReachabilityCause, T3ConnectTroubleshootingSection>;
+  origin_unreachable: "the-tunnel-works-but-prismux-does-not-answer",
+  unexpected_response: "the-tunnel-works-but-prismux-does-not-answer",
+  dns_failed: "the-prismux-connect-address-does-not-resolve-or-answer",
+  timeout: "the-prismux-connect-address-does-not-resolve-or-answer",
+} satisfies Record<EnvironmentConnectReachabilityCause, PrismuxConnectTroubleshootingSection>;
 
 export function connectReachabilityHelpUrl(cause: EnvironmentConnectReachabilityCause): string {
-  return t3ConnectTroubleshootingUrl(REACHABILITY_SECTION[cause]);
+  return prismuxConnectTroubleshootingUrl(REACHABILITY_SECTION[cause]);
 }
 
 export const EnvironmentCloudLinkStateResult = Schema.Struct({
@@ -586,7 +586,7 @@ export const AuthOtherClientSessionsRevokeResult = Schema.Struct({
 export type AuthOtherClientSessionsRevokeResult = typeof AuthOtherClientSessionsRevokeResult.Type;
 
 class EnvironmentMetadataHttpApi extends HttpApiGroup.make("metadata").add(
-  HttpApiEndpoint.get("descriptor", "/.well-known/t3/environment", {
+  HttpApiEndpoint.get("descriptor", "/.well-known/prismux/environment", {
     success: ExecutionEnvironmentDescriptor,
   }),
 ) {}
@@ -1041,14 +1041,14 @@ class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
-    HttpApiEndpoint.post("health", "/api/t3-connect/health", {
+    HttpApiEndpoint.post("health", "/api/prismux-connect/health", {
       payload: RelayCloudEnvironmentHealthRequest,
       success: RelayEnvironmentHealthResponse,
       error: EnvironmentHttpCloudErrors,
     }),
   )
   .add(
-    HttpApiEndpoint.post("t3MintCredential", "/api/t3-connect/mint-credential", {
+    HttpApiEndpoint.post("prismuxMintCredential", "/api/prismux-connect/mint-credential", {
       payload: RelayCloudMintCredentialRequest,
       success: RelayEnvironmentMintResponse,
       error: EnvironmentHttpCloudErrors,

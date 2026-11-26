@@ -59,7 +59,7 @@ export class ResourceMonitorBinary extends Context.Service<
 >()("@prismux/server/resourceTelemetry/ResourceMonitorBinary") {}
 
 function binaryName(platform: NodeJS.Platform): string {
-  return platform === "win32" ? "t3-resource-monitor.exe" : "t3-resource-monitor";
+  return platform === "win32" ? "prismux-resource-monitor.exe" : "prismux-resource-monitor";
 }
 
 function resourceMonitorPlatformKey(

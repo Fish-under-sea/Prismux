@@ -37,8 +37,8 @@ import {
   type LinearReaction,
   type LinearTeamLabel,
   type LinearUser,
-  type T3Issue,
-  type T3Team,
+  type PrismuxIssue,
+  type PrismuxTeam,
   type Template,
 } from "./LinearApi.graphql.ts";
 
@@ -77,8 +77,8 @@ export interface LinearTemplate extends Omit<Template, "templateData"> {
   readonly templateData: LinearTemplateData;
 }
 
-type LinearTeamDetail = T3Team.Result["teams"]["nodes"][number];
-type LinearIssueDetail = NonNullable<T3Issue.Result["issue"]>;
+type LinearTeamDetail = PrismuxTeam.Result["teams"]["nodes"][number];
+type LinearIssueDetail = NonNullable<PrismuxIssue.Result["issue"]>;
 
 /** The team with the workspace-wide labels that any of its issues may also carry. */
 export interface LinearTeamScope {
@@ -296,7 +296,7 @@ export const make = Effect.gen(function* () {
       : Effect.fail(fail(operation, "failed", "Linear did not apply the change."));
 
   const viewer: LinearApi["Service"]["viewer"] = (token) =>
-    call("viewer", (linear) => linear.T3Viewer(), token).pipe(
+    call("viewer", (linear) => linear.PrismuxViewer(), token).pipe(
       Effect.map((data) => ({
         viewer: data.viewer,
         workspace: data.organization.urlKey,
@@ -306,7 +306,7 @@ export const make = Effect.gen(function* () {
 
   const listIssues: LinearApi["Service"]["listIssues"] = (input) =>
     call("listIssues", (linear) =>
-      linear.T3Issues({
+      linear.PrismuxIssues({
         first: input.first,
         after: input.after ?? null,
         filter: input.filter,
@@ -320,7 +320,7 @@ export const make = Effect.gen(function* () {
     );
 
   const getIssue: LinearApi["Service"]["getIssue"] = (identifier, comments) =>
-    call("getIssue", (linear) => linear.T3Issue({ id: identifier, comments })).pipe(
+    call("getIssue", (linear) => linear.PrismuxIssue({ id: identifier, comments })).pipe(
       Effect.map((data) => data.issue),
       // Linear answers an unknown identifier with an error and no data, not with null.
       Effect.catchIf(
@@ -331,7 +331,7 @@ export const make = Effect.gen(function* () {
 
   const getComments: LinearApi["Service"]["getComments"] = (input) =>
     call("getComments", (linear) =>
-      linear.T3Comments({ id: input.identifier, first: input.first, after: input.after }),
+      linear.PrismuxComments({ id: input.identifier, first: input.first, after: input.after }),
     ).pipe(
       Effect.flatMap((data) =>
         data.issue === null
@@ -344,7 +344,7 @@ export const make = Effect.gen(function* () {
     );
 
   const getTeam: LinearApi["Service"]["getTeam"] = (key) =>
-    call("getTeam", (linear) => linear.T3Team({ key })).pipe(
+    call("getTeam", (linear) => linear.PrismuxTeam({ key })).pipe(
       Effect.map((data) => {
         const team = data.teams.nodes[0];
         if (team === undefined) return null;
@@ -372,7 +372,7 @@ export const make = Effect.gen(function* () {
     );
 
   const createIssue: LinearApi["Service"]["createIssue"] = (input) =>
-    call("createIssue", (linear) => linear.T3IssueCreate({ input })).pipe(
+    call("createIssue", (linear) => linear.PrismuxIssueCreate({ input })).pipe(
       Effect.flatMap(({ issueCreate }) =>
         issueCreate.success && issueCreate.issue !== null
           ? Effect.succeed(issueCreate.issue)
@@ -381,18 +381,18 @@ export const make = Effect.gen(function* () {
     );
 
   const updateIssue: LinearApi["Service"]["updateIssue"] = (identifier, input) =>
-    call("updateIssue", (linear) => linear.T3IssueUpdate({ id: identifier, input })).pipe(
+    call("updateIssue", (linear) => linear.PrismuxIssueUpdate({ id: identifier, input })).pipe(
       Effect.flatMap(({ issueUpdate }) => applied("updateIssue", issueUpdate)),
     );
 
   const createComment: LinearApi["Service"]["createComment"] = (input) =>
-    call("createComment", (linear) => linear.T3CommentCreate({ input })).pipe(
+    call("createComment", (linear) => linear.PrismuxCommentCreate({ input })).pipe(
       Effect.flatMap(({ commentCreate }) => applied("createComment", commentCreate)),
     );
 
   const createReaction: LinearApi["Service"]["createReaction"] = (input) =>
     call("createReaction", (linear) =>
-      linear.T3ReactionCreate({
+      linear.PrismuxReactionCreate({
         input:
           input.commentId === undefined
             ? { issueId: input.issueId ?? null, emoji: input.emoji }
@@ -401,14 +401,14 @@ export const make = Effect.gen(function* () {
     ).pipe(Effect.flatMap(({ reactionCreate }) => applied("createReaction", reactionCreate)));
 
   const deleteReaction: LinearApi["Service"]["deleteReaction"] = (id) =>
-    call("deleteReaction", (linear) => linear.T3ReactionDelete({ id })).pipe(
+    call("deleteReaction", (linear) => linear.PrismuxReactionDelete({ id })).pipe(
       Effect.flatMap(({ reactionDelete }) => applied("deleteReaction", reactionDelete)),
     );
 
   const listReactions: LinearApi["Service"]["listReactions"] = (input) =>
     input.commentId === undefined
       ? call("listReactions", (linear) =>
-          linear.T3IssueReactions({ id: input.issueId ?? "" }),
+          linear.PrismuxIssueReactions({ id: input.issueId ?? "" }),
         ).pipe(
           Effect.map((data) => ({
             issueId: input.issueId ?? null,
@@ -416,7 +416,7 @@ export const make = Effect.gen(function* () {
           })),
         )
       : call("listReactions", (linear) =>
-          linear.T3CommentReactions({ id: input.commentId ?? "" }),
+          linear.PrismuxCommentReactions({ id: input.commentId ?? "" }),
         ).pipe(
           Effect.map((data) => ({
             issueId: data.comment.issue?.id ?? null,

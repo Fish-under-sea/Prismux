@@ -32,7 +32,7 @@ const DEFAULT_ISSUE_LIST_PREFERENCES = {
   status: "open",
 } as const satisfies IssueListPreferences;
 
-const STORAGE_KEY = "t3.issues.preferences";
+const STORAGE_KEY = "prismux.issues.preferences";
 
 const BoundedPreference = Schema.String.check(Schema.isMaxLength(200));
 export const IssueListPreferencesSchema = Schema.Struct({

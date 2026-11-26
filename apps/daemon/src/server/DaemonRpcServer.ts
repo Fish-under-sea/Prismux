@@ -657,11 +657,6 @@ export class DaemonRpcServer {
     };
   }
 
-  /** @deprecated Use getCoreBridgeStatus */
-  getT3BridgeStatus(): CoreBridgeStatus {
-    return this.getCoreBridgeStatus();
-  }
-
   async start(): Promise<void> {
     if (this.activeStopPromise !== undefined) {
       await this.activeStopPromise;
@@ -1973,7 +1968,7 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           400,
           "INVALID_HOST_METRICS",
-          "Request body must contain valid mainPid, electronProcesses, or t3Server metrics.",
+          "Request body must contain valid mainPid, electronProcesses, or coreServer metrics.",
         );
       }
       const result = this.resourceMonitorService.ingestHostMetrics(normalized);
@@ -2977,7 +2972,7 @@ export class DaemonRpcServer {
             response: {
               id: envelope.id,
               ok: true,
-              result: { status: this.getT3BridgeStatus() },
+              result: { status: this.getCoreBridgeStatus() },
             },
           };
         }

@@ -1,32 +1,32 @@
 // No T3 imports inside the string; resolve Pi and typebox from the user's Pi install.
-import { T3_CODE_ORCHESTRATION_INSTRUCTIONS } from "@prismux/provider-core/server/orchestrationInstructions";
+import { PRISMUX_ORCHESTRATION_INSTRUCTIONS } from "@prismux/provider-core/server/orchestrationInstructions";
 import { PULL_REQUEST_LINKING_INSTRUCTIONS } from "@prismux/provider-core/server/runtimeInstructions";
 
-export const PI_T3_MCP_EXTENSION_FILENAME = "pi-t3-mcp-extension.ts";
+export const PI_PRISMUX_MCP_EXTENSION_FILENAME = "pi-prismux-mcp-extension.ts";
 
-export const T3_MCP_URL_ENV = "T3_MCP_URL";
-export const T3_MCP_BEARER_ENV = "T3_MCP_BEARER_TOKEN";
-export const T3_PI_RUNTIME_MODE_ENV = "T3_PI_RUNTIME_MODE";
-export const T3_PI_MCP_EXTENSION_PATH_ENV = "T3_PI_MCP_EXTENSION_PATH";
-export const PI_T3_SERVICE_TIER_COMMAND = "t3-service-tier";
+export const PRISMUX_MCP_URL_ENV = "PRISMUX_MCP_URL";
+export const PRISMUX_MCP_BEARER_ENV = "PRISMUX_MCP_BEARER_TOKEN";
+export const PRISMUX_PI_RUNTIME_MODE_ENV = "PRISMUX_PI_RUNTIME_MODE";
+export const PRISMUX_PI_MCP_EXTENSION_PATH_ENV = "PRISMUX_PI_MCP_EXTENSION_PATH";
+export const PI_PRISMUX_SERVICE_TIER_COMMAND = "prismux-service-tier";
 
 // These tools trigger file-change approvals, bypassed by Auto-accept edits.
 export const PI_FILE_CHANGE_TOOLS = ["edit", "write"] as const;
 
-export const PI_T3_MCP_EXTENSION_SOURCE = `\
+export const PI_PRISMUX_MCP_EXTENSION_SOURCE = `\
 import { stripFrontmatter, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import { Type } from "typebox";
 
-const URL_ENV = ${JSON.stringify(T3_MCP_URL_ENV)};
-const TOKEN_ENV = ${JSON.stringify(T3_MCP_BEARER_ENV)};
-const RUNTIME_MODE_ENV = ${JSON.stringify(T3_PI_RUNTIME_MODE_ENV)};
-const EXTENSION_PATH_ENV = ${JSON.stringify(T3_PI_MCP_EXTENSION_PATH_ENV)};
-const ORCHESTRATION_INSTRUCTIONS = ${JSON.stringify(T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim())};
+const URL_ENV = ${JSON.stringify(PRISMUX_MCP_URL_ENV)};
+const TOKEN_ENV = ${JSON.stringify(PRISMUX_MCP_BEARER_ENV)};
+const RUNTIME_MODE_ENV = ${JSON.stringify(PRISMUX_PI_RUNTIME_MODE_ENV)};
+const EXTENSION_PATH_ENV = ${JSON.stringify(PRISMUX_PI_MCP_EXTENSION_PATH_ENV)};
+const ORCHESTRATION_INSTRUCTIONS = ${JSON.stringify(PRISMUX_ORCHESTRATION_INSTRUCTIONS.trim())};
 const PULL_REQUEST_LINKING_INSTRUCTIONS = ${JSON.stringify(PULL_REQUEST_LINKING_INSTRUCTIONS)};
-const SERVICE_TIER_COMMAND = ${JSON.stringify(PI_T3_SERVICE_TIER_COMMAND)};
+const SERVICE_TIER_COMMAND = ${JSON.stringify(PI_PRISMUX_SERVICE_TIER_COMMAND)};
 const PROTOCOL = "2025-06-18";
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const FILE_CHANGE_TOOLS = new Set(${JSON.stringify(PI_FILE_CHANGE_TOOLS)});
@@ -226,7 +226,7 @@ function createMcpClient(endpoint: string, token: string) {
         {
           protocolVersion: PROTOCOL,
           capabilities: {},
-          clientInfo: { name: "t3-pi-mcp", version: "1.0.0" },
+          clientInfo: { name: "prismux-pi-mcp", version: "1.0.0" },
         },
         signal,
       );
@@ -252,7 +252,7 @@ function createMcpClient(endpoint: string, token: string) {
   };
 }
 
-export default async function t3McpExtension(pi: ExtensionAPI) {
+export default async function prismuxMcpExtension(pi: ExtensionAPI) {
   // RPC has no trust prompt, so Pi skips an untrusted folder's protected resources. Session
   // replacement reruns this factory without project_trust, and T3 drops notices outside a turn,
   // so check each session's first turn. An explicit --no-approve is deliberate and stays quiet.
@@ -386,7 +386,7 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
   if (endpoint === undefined || token === undefined) {
     pi.on("session_start", async (_event, ctx) => {
       ctx.ui.notify(
-        "t3-code MCP unavailable: T3_MCP_URL or T3_MCP_BEARER_TOKEN is missing.",
+        "prismux MCP unavailable: PRISMUX_MCP_URL or PRISMUX_MCP_BEARER_TOKEN is missing.",
         "warning",
       );
     });
@@ -397,70 +397,48 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
   // bridge as the credential owner: mcp.json overrides native registrations.
   const supportsExposure = "registerMcpServer" in pi && typeof pi.registerMcpServer === "function";
   const directTools = new Set(["orchestrator_capabilities", "delegate_task", "task_status"]);
-  const ALIAS_PREFIX = "mcp__t3_code__";
+  const TOOL_PREFIX = "mcp__prismux__";
   let deferOptionalTools = supportsExposure;
   const isDeferred = (name: string) => deferOptionalTools && !directTools.has(name);
-  // An alias follows its public tool: gone when --exclude-tools removed it,
-  // off while a direct one is off.
-  const followsPublicTool = (
-    name: string,
-    registered: ReadonlySet<string>,
-    active: ReadonlyArray<string>,
-  ) =>
-    registered.has("mcp__t3-code__" + name) &&
-    (isDeferred(name) || active.includes("mcp__t3-code__" + name));
   let catalog: ReadonlyArray<McpTool> = [];
 
   const client = createMcpClient(endpoint, token);
   let started: Promise<void> | undefined;
 
   const registerTools = () => {
-    // Preserve public names for saved loadouts and tool selectors. The alias,
-    // Pi's own MCP name for T3, reserves it against Pi's configured MCP servers.
-    // model-only keeps it out of codemode; it hides its own declaration.
-    const prefixes = supportsExposure ? ["mcp__t3-code__", ALIAS_PREFIX] : ["mcp__t3-code__"];
+    // Register canonical mcp__prismux__* tool names once so Pi owns the
+    // Prismux namespace directly without duplicate alias declarations.
     readOnlyMcpTools.clear();
     for (const tool of catalog) {
       const name = tool.name;
-      for (const prefix of prefixes) {
-        const toolName = \`\${prefix}\${name}\`;
-        if (tool.annotations?.readOnlyHint === true) readOnlyMcpTools.add(toolName);
-        const isAlias = prefix === ALIAS_PREFIX;
-        const exposure = isAlias ? "model-only" : isDeferred(name) ? "deferred" : "direct";
-        pi.registerTool({
-          name: toolName,
-          label: name,
-          description: tool.description ?? name,
-          parameters: jsonSchemaToTypebox(tool.inputSchema),
-          ...(supportsExposure ? { outputSchema: mcpOutputSchema(tool) } : {}),
-          ...(supportsExposure ? { exposure } : {}),
-          ...(isAlias ? { prepareLoadout: () => ({ hiddenDeclarations: [toolName] }) } : {}),
-          async execute(_toolCallId, params, signal) {
-            // Another extension may switch the public tool off after reconciliation.
-            if (
-              isAlias &&
-              !followsPublicTool(name, new Set(pi.getAllTools().map((tool) => tool.name)), pi.getActiveTools())
-            ) {
-              return { content: [{ type: "text", text: \`Tool \${toolName} not found\` }], details: {}, isError: true };
-            }
-            const result = await client.callTool(
-              name,
-              (params ?? {}) as Record<string, unknown>,
-              signal,
-            );
-            const content = mcpModelContent(result);
-            if (isMcpToolError(result) && !content.some((part) => part.type === "text" && part.text.length > 0)) {
-              content.push({ type: "text", text: "MCP tool t3-code/" + name + " returned an error" });
-            }
-            return {
-              content,
-              structuredContent: mcpScriptResult(result),
-              details: { server: "t3-code", tool: name },
-              ...(isMcpToolError(result) ? { isError: true } : {}),
-            };
-          },
-        });
-      }
+      const toolName = \`\${TOOL_PREFIX}\${name}\`;
+      if (tool.annotations?.readOnlyHint === true) readOnlyMcpTools.add(toolName);
+      const exposure = isDeferred(name) ? "deferred" : "direct";
+      pi.registerTool({
+        name: toolName,
+        label: name,
+        description: tool.description ?? name,
+        parameters: jsonSchemaToTypebox(tool.inputSchema),
+        ...(supportsExposure ? { outputSchema: mcpOutputSchema(tool) } : {}),
+        ...(supportsExposure ? { exposure } : {}),
+        async execute(_toolCallId, params, signal) {
+          const result = await client.callTool(
+            name,
+            (params ?? {}) as Record<string, unknown>,
+            signal,
+          );
+          const content = mcpModelContent(result);
+          if (isMcpToolError(result) && !content.some((part) => part.type === "text" && part.text.length > 0)) {
+            content.push({ type: "text", text: "MCP tool prismux/" + name + " returned an error" });
+          }
+          return {
+            content,
+            structuredContent: mcpScriptResult(result),
+            details: { server: "prismux", tool: name },
+            ...(isMcpToolError(result) ? { isError: true } : {}),
+          };
+        },
+      });
     }
   };
 
@@ -480,8 +458,8 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
   };
 
   // CLI extensions load before builtins, and Pi keeps the first registration
-  // of a tool name. Register now so the bridge owns the T3 namespace even when
-  // mcp.json configures it; retry a failed connection at session_start.
+  // of a tool name. Register now so the bridge owns the Prismux namespace even
+  // when mcp.json configures it; retry a failed connection at session_start.
   await ensureStarted().catch(() => undefined);
 
   const reconcileDiscovery = (ctx: Pick<ExtensionContext, "model">) => {
@@ -492,25 +470,16 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
     deferOptionalTools = hasToolSearch;
     if (exposureChanged) registerTools();
     // Completion gateways can silently drop calls to undeclared tools named
-    // in history or guidance. Eagerly load T3 schemas, including after tree
-    // restores, while retaining deferred exposure for Pi's allowlist rules.
+    // in history or guidance. Eagerly load Prismux schemas, including after
+    // tree restores, while retaining deferred exposure for Pi's allowlist rules.
     // Pi still applies --tools/--exclude-tools to this active loadout.
     const required = [
       ...(hasToolSearch ? ["tool_search"] : []),
-      ...(ctx.model?.api === "openai-completions" ? catalog.map((tool) => "mcp__t3-code__" + tool.name) : []),
+      ...(ctx.model?.api === "openai-completions" ? catalog.map((tool) => TOOL_PREFIX + tool.name) : []),
     ];
     const current = pi.getActiveTools();
     const missing = required.filter((name) => !current.includes(name));
     if (missing.length > 0) pi.setActiveTools([...current, ...missing]);
-    // An alias is callable only while active.
-    const registered = new Set(pi.getAllTools().map((tool) => tool.name));
-    const loaded = pi.getActiveTools();
-    const aliases = catalog
-      .filter((tool) => registered.has(ALIAS_PREFIX + tool.name) && followsPublicTool(tool.name, registered, loaded))
-      .map((tool) => ALIAS_PREFIX + tool.name);
-    const kept = loaded.filter((name) => !name.startsWith(ALIAS_PREFIX) || aliases.includes(name));
-    const added = aliases.filter((name) => !loaded.includes(name));
-    if (added.length > 0 || kept.length !== loaded.length) pi.setActiveTools([...kept, ...added]);
   };
 
   // Tree navigation restores its saved loadout after session_start.
@@ -522,7 +491,7 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
       await ensureStarted();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      ctx.ui.notify(\`t3-code MCP unavailable: \${message}\`, "warning");
+      ctx.ui.notify(\`prismux MCP unavailable: \${message}\`, "warning");
     }
   });
 
@@ -533,7 +502,7 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
     const sections = event.systemPromptOptions?.sections;
     if (sections && typeof sections === "object" && event.systemPromptOptions?.forceSystemPrompt === undefined) {
       // A full prompt override bypasses Pi's later section rendering.
-      sections.t3_code_orchestration = instructions;
+      sections.prismux_orchestration = instructions;
       return undefined;
     }
     return { systemPrompt: event.systemPrompt + "\\n\\n" + instructions };

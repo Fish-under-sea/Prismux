@@ -62,14 +62,14 @@ export const installCli = Effect.fn("cli.install.install")(function* () {
   // cmd.exe expands `%` and reads the shim in the OEM code page, so such a path would not run.
   if (windows && /[%\u0080-\uffff]/.test(executable)) {
     return yield* new CliInstallError({
-      reason: `A t3.cmd cannot run ${executable}, because the path has % or non-ASCII characters. Keep using npx t3.`,
+      reason: `A prismux.cmd cannot run ${executable}, because the path has % or non-ASCII characters. Keep using npx prismux.`,
     });
   }
   // Absolute, so the PATH hint never adds a folder that changes with the working directory.
   const binDir = path.resolve(
     environment.PRISMUX_INSTALL_BIN_DIR?.trim() || path.join(home, ".local", "bin"),
   );
-  const name = windows ? "t3.cmd" : "t3";
+  const name = windows ? "prismux.cmd" : "prismux";
   const link = path.join(binDir, name);
   const failed = (reason: string) => (cause: unknown) => new CliInstallError({ reason, cause });
 
@@ -106,7 +106,7 @@ export const installCli = Effect.fn("cli.install.install")(function* () {
     )
   ) {
     return yield* new CliInstallError({
-      reason: `Another t3 is already at ${link}. Remove it, then run this again.`,
+      reason: `Another prismux is already at ${link}. Remove it, then run this again.`,
     });
   }
 
@@ -152,7 +152,7 @@ export const installCli = Effect.fn("cli.install.install")(function* () {
     for (const entry of entries) {
       if (same(entry)) return undefined;
       if (!path.isAbsolute(entry) || detectCliRunner(`${entry}/`) !== null) continue;
-      for (const name of windows ? ["t3.cmd", "t3.exe"] : ["t3"]) {
+      for (const name of windows ? ["prismux.cmd", "prismux.exe"] : ["prismux"]) {
         const candidate = path.join(entry, name);
         if (yield* resolveCommandPath(candidate, { env: environment })) return candidate;
       }
@@ -257,7 +257,7 @@ export const isForegroundPs = (output: string) => {
 };
 
 /**
- * A background job (`npx t3 serve &`) that reads the terminal is stopped by the shell, so only
+ * A background job (`npx prismux serve &`) that reads the terminal is stopped by the shell, so only
  * the terminal's foreground process group may prompt. Unknown counts as background.
  */
 export const inTerminalForeground = Effect.gen(function* () {
@@ -315,13 +315,13 @@ export const offerCliInstall = Effect.fn("cli.install.offer")(function* <E, R, E
   // Any t3 already installed means no prompt: ours (even when off PATH) or another on PATH.
   // Runners put their own cache's node_modules/.bin on PATH, so skip those.
   const windows = platform === "win32";
-  const names = windows ? ["t3.cmd", "t3.exe"] : ["t3"];
+  const names = windows ? ["prismux.cmd", "prismux.exe"] : ["prismux"];
   const launchers = yield* fs
     .readFileString(path.join(runtimeDir, "launchers"))
     .pipe(Effect.orElseSucceed(() => ""));
   const candidates = [
     ...launchers.split(/\r?\n/).filter(Boolean),
-    path.join(path.dirname(runtimeDir), "bin", windows ? "t3.cmd" : "t3"),
+    path.join(path.dirname(runtimeDir), "bin", windows ? "prismux.cmd" : "prismux"),
     ...(environment.PATH ?? environment.Path ?? "")
       .split(windows ? ";" : ":")
       .filter(

@@ -171,7 +171,7 @@ export const AntigravityDriver: ProviderDriver<
     );
     const profileDirectory = directories.profile;
     // Only a session reports whether agy offers Auto, so keep the last answer across restarts.
-    const runtimeModesPath = path.join(profileDirectory, "t3-runtime-modes.json");
+    const runtimeModesPath = path.join(profileDirectory, "prismux-runtime-modes.json");
     const rememberedRuntimeModes = yield* fileSystem.readFileString(runtimeModesPath).pipe(
       Effect.map((contents) =>
         decodeRememberedRuntimeModes(contents).pipe(
@@ -342,7 +342,7 @@ export const AntigravityDriver: ProviderDriver<
     const makeDisposableRuntime = Effect.fn("AntigravityDriver.makeDisposableRuntime")(
       function* () {
         const cwd = yield* fileSystem
-          .makeTempDirectoryScoped({ prefix: "t3-antigravity-setup-" })
+          .makeTempDirectoryScoped({ prefix: "prismux-antigravity-setup-" })
           .pipe(
             Effect.mapError(
               () =>

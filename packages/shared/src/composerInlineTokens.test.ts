@@ -174,9 +174,9 @@ describe("collectComposerInlineTokens", () => {
 
   it("leaves a context reference link alone", () => {
     expect(
-      collectComposerInlineTokens("see [checkout.png](t3-context://v1/image/ctx_abc) ok"),
+      collectComposerInlineTokens("see [checkout.png](prismux-context://v1/image/ctx_abc) ok"),
     ).toEqual([]);
-    expect(collectComposerInlineTokens("see ![ctx_abc](t3-context://v1/image/ctx_abc) ok")).toEqual(
+    expect(collectComposerInlineTokens("see ![ctx_abc](prismux-context://v1/image/ctx_abc) ok")).toEqual(
       [],
     );
   });

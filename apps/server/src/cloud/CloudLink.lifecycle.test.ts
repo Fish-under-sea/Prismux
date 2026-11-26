@@ -318,7 +318,7 @@ describe("releaseManagedTunnelOnShutdown", () => {
           publicKey: environmentKeys.publicKey,
           token: proof,
           typ: RELAY_LINK_PROOF_TYP,
-          issuer: "t3-env:env_123",
+          issuer: "prismux-env:env_123",
           audience: relayIssuer,
         });
 

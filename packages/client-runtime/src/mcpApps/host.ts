@@ -239,7 +239,7 @@ export function makeMcpAppHost(options: McpAppHostOptions): McpAppHost {
         respond(id, {
           protocolVersion:
             requested === MCP_APP_PROTOCOL_VERSION ? requested : MCP_APP_PROTOCOL_VERSION,
-          hostInfo: { name: "t3-code", version: options.hostVersion },
+          hostInfo: { name: "prismux", version: options.hostVersion },
           hostCapabilities: {
             openLinks: {},
             serverTools: {},
@@ -480,7 +480,7 @@ export function makeMcpAppHost(options: McpAppHostOptions): McpAppHost {
           finish();
           return;
         }
-        const id = `t3-host-${nextHostRequestId++}`;
+        const id = `prismux-host-${nextHostRequestId++}`;
         hostRequests.set(id, finish);
         timer = setTimeout(() => {
           hostRequests.delete(id);

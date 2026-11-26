@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { ArrowUpIcon, XIcon } from "lucide-react";
 
 import { APP_VERSION } from "../../branding";
-import { T3AppIcon } from "../../components/T3AppIcon";
+import { PrismuxAppIcon } from "../../components/PrismuxAppIcon";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { useStableCallback } from "../../hooks/useStableCallback";
@@ -372,7 +372,7 @@ function PrismuxUpdateToastCardPortal({ update }: { readonly update: UpdateCheck
       )}
     >
       <div className="flex items-start gap-2.5">
-        <T3AppIcon className="mt-0.5 size-7 shrink-0 rounded-lg object-contain ring-1 ring-border/35 [[data-pmx-glass='1']_&]:ring-foreground/15" />
+        <PrismuxAppIcon className="mt-0.5 size-7 shrink-0 rounded-lg object-contain ring-1 ring-border/35 [[data-pmx-glass='1']_&]:ring-foreground/15" />
 
         <div className="min-w-0 flex-1 cursor-pointer space-y-1" onClick={handleOpen}>
           <div className="flex flex-wrap items-center gap-1.5 pr-6">

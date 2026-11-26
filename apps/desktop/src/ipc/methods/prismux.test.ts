@@ -13,8 +13,8 @@ import { vi } from "vite-plus/test";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import {
   buildPrismuxDaemonChildEnv,
-  normalizeT3HttpUrl,
-  normalizeT3WebSocketUrl,
+  normalizeCoreHttpUrl,
+  normalizeCoreWebSocketUrl,
 } from "../../prismux/PrismuxDaemonService.ts";
 import {
   computeFileSha256Hex,
@@ -311,25 +311,25 @@ describe("Prismux installDownloadedUpdate security & lifecycle", () => {
     });
   });
 
-  it("injects PRISMUX_T3_SERVER_URL, PRISMUX_SERVER_URL, PRISMUX_T3_WS_URL and PRISMUX_MAIN_PID into daemon child env", () => {
-    assert.equal(normalizeT3HttpUrl("ws://127.0.0.1:3773/ws"), "http://127.0.0.1:3773");
-    assert.equal(normalizeT3HttpUrl("http://127.0.0.1:3773/"), "http://127.0.0.1:3773");
-    assert.equal(normalizeT3WebSocketUrl("http://127.0.0.1:3773/"), "ws://127.0.0.1:3773/ws");
+  it("injects PRISMUX_CORE_SERVER_URL, PRISMUX_SERVER_URL, PRISMUX_CORE_WS_URL and PRISMUX_MAIN_PID into daemon child env", () => {
+    assert.equal(normalizeCoreHttpUrl("ws://127.0.0.1:3773/ws"), "http://127.0.0.1:3773");
+    assert.equal(normalizeCoreHttpUrl("http://127.0.0.1:3773/"), "http://127.0.0.1:3773");
+    assert.equal(normalizeCoreWebSocketUrl("http://127.0.0.1:3773/"), "ws://127.0.0.1:3773/ws");
 
     const env = buildPrismuxDaemonChildEnv({
       hostEnv: { PATH: "C:\\Windows" },
       catalogPath: "C:\\Prismux\\catalog\\official.json",
       mainPid: 4242,
-      t3HttpUrl: "http://127.0.0.1:3773/",
-      t3WsUrl: "ws://127.0.0.1:3773/ws",
+      coreHttpUrl: "http://127.0.0.1:3773/",
+      coreWsUrl: "ws://127.0.0.1:3773/ws",
     });
 
     assert.equal(env.ELECTRON_RUN_AS_NODE, "1");
     assert.equal(env.PRISMUX_CATALOG_PATH, "C:\\Prismux\\catalog\\official.json");
     assert.equal(env.PRISMUX_MAIN_PID, "4242");
-    assert.equal(env.PRISMUX_T3_SERVER_URL, "http://127.0.0.1:3773");
+    assert.equal(env.PRISMUX_CORE_SERVER_URL, "http://127.0.0.1:3773");
     assert.equal(env.PRISMUX_SERVER_URL, "http://127.0.0.1:3773");
-    assert.equal(env.PRISMUX_T3_WS_URL, "ws://127.0.0.1:3773/ws");
+    assert.equal(env.PRISMUX_CORE_WS_URL, "ws://127.0.0.1:3773/ws");
   });
 
   it("handles reload, forceReload (reloadIgnoringCache), and toggleDevTools IPC on main BrowserWindow", async () => {

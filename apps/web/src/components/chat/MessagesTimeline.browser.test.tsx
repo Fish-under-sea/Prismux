@@ -1903,7 +1903,7 @@ describe("MessagesTimeline thread find", () => {
 
     await screen.rerender(element(0, 2));
     await vi.waitFor(() => {
-      const [match] = CSS.highlights.get("t3-thread-find-active") ?? [];
+      const [match] = CSS.highlights.get("prismux-thread-find-active") ?? [];
       if (!(match instanceof Range)) throw new Error("Missing active match range");
       expect(match.startContainer.parentElement?.closest("td")).toBe(viewport.querySelector("td"));
       expect(match.getBoundingClientRect().left).toBeGreaterThanOrEqual(clip.left - 1);
@@ -1947,7 +1947,7 @@ describe("MessagesTimeline thread find", () => {
       />,
     );
     await vi.waitFor(() => {
-      const [match] = CSS.highlights.get("t3-thread-find-active") ?? [];
+      const [match] = CSS.highlights.get("prismux-thread-find-active") ?? [];
       if (!(match instanceof Range)) throw new Error("Missing active match range");
       const bounds = match.getBoundingClientRect();
       const clip = outerViewport.getBoundingClientRect();

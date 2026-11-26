@@ -18,20 +18,20 @@ import {
 
 describe("normalizeGitRemoteUrl", () => {
   it("canonicalizes equivalent GitHub remotes across protocol variants", () => {
-    expect(normalizeGitRemoteUrl("git@github.com:T3Tools/Prismux.git")).toBe(
-      "github.com/t3tools/prismux",
+    expect(normalizeGitRemoteUrl("git@github.com:PrismuxTools/Prismux.git")).toBe(
+      "github.com/prismuxtools/prismux",
     );
-    expect(normalizeGitRemoteUrl("https://github.com/T3Tools/Prismux.git")).toBe(
-      "github.com/t3tools/prismux",
+    expect(normalizeGitRemoteUrl("https://github.com/PrismuxTools/Prismux.git")).toBe(
+      "github.com/prismuxtools/prismux",
     );
-    expect(normalizeGitRemoteUrl("ssh://git@github.com/T3Tools/Prismux")).toBe(
-      "github.com/t3tools/prismux",
+    expect(normalizeGitRemoteUrl("ssh://git@github.com/PrismuxTools/Prismux")).toBe(
+      "github.com/prismuxtools/prismux",
     );
-    expect(normalizeGitRemoteUrl("https://github.com/T3Tools/Prismux.git?view=compact")).toBe(
-      "github.com/t3tools/prismux",
+    expect(normalizeGitRemoteUrl("https://github.com/PrismuxTools/Prismux.git?view=compact")).toBe(
+      "github.com/prismuxtools/prismux",
     );
-    expect(normalizeGitRemoteUrl("https://github.com/T3Tools/Prismux.git#section")).toBe(
-      "github.com/t3tools/prismux",
+    expect(normalizeGitRemoteUrl("https://github.com/PrismuxTools/Prismux.git#section")).toBe(
+      "github.com/prismuxtools/prismux",
     );
     expect(normalizeGitRemoteUrl("https://code.example.test/team/%C3%84pp.git")).toBe(
       normalizeGitRemoteUrl("git@code.example.test:team/Äpp.git"),
@@ -52,11 +52,11 @@ describe("normalizeGitRemoteUrl", () => {
   });
 
   it("preserves nested group paths for providers like GitLab", () => {
-    expect(normalizeGitRemoteUrl("git@gitlab.com:T3Tools/platform/Prismux.git")).toBe(
-      "gitlab.com/t3tools/platform/prismux",
+    expect(normalizeGitRemoteUrl("git@gitlab.com:PrismuxTools/platform/Prismux.git")).toBe(
+      "gitlab.com/prismuxtools/platform/prismux",
     );
-    expect(normalizeGitRemoteUrl("https://gitlab.com/T3Tools/platform/Prismux.git")).toBe(
-      "gitlab.com/t3tools/platform/prismux",
+    expect(normalizeGitRemoteUrl("https://gitlab.com/PrismuxTools/platform/Prismux.git")).toBe(
+      "gitlab.com/prismuxtools/platform/prismux",
     );
   });
 

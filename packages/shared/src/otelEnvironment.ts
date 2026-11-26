@@ -252,7 +252,7 @@ const endpointSignal = (name: OtlpSignalName, own: Settings, generic: Settings):
 };
 
 const sdkFlags = {
-  t3: flag(
+  prismux: flag(
     "PRISMUX_OTEL_SDK_DISABLED",
     PRISMUX_TRUE,
     PRISMUX_FALSE,
@@ -281,8 +281,8 @@ export const load: Effect.Effect<OtelEnvironment> = Config.all({
     logs: exporter("OTEL_LOGS_EXPORTER"),
   }),
 }).pipe(
-  Effect.map(({ t3, spec, resource, generic, exporters, ...own }) => {
-    const disabled = t3.value ?? spec.value ?? false;
+  Effect.map(({ prismux, spec, resource, generic, exporters, ...own }) => {
+    const disabled = prismux.value ?? spec.value ?? false;
     const signals = disabled
       ? undefined
       : {
@@ -294,14 +294,14 @@ export const load: Effect.Effect<OtelEnvironment> = Config.all({
       signals === undefined ? [] : Object.values(signals).flatMap((resolved) => resolved.used),
     );
     const warnings = [
-      t3.warning,
+      prismux.warning,
       spec.warning,
       resource.warning,
       ...Array.from(used, (setting) => setting.warning),
     ].filter((warning) => warning !== undefined);
     if (disabled) {
       warnings.push(
-        t3.value
+        prismux.value
           ? "PRISMUX_OTEL_SDK_DISABLED is set, so no telemetry is exported, whatever configured it"
           : "OTEL_SDK_DISABLED is set, so no telemetry is exported, whatever configured it; set PRISMUX_OTEL_SDK_DISABLED=false to export anyway",
       );
@@ -339,17 +339,17 @@ export interface SignalEndpoint {
 export const resolveSignalEndpoint = (
   otel: OtelEnvironment,
   signal: SignalName,
-  t3: { readonly url: string | undefined; readonly export: SignalExport },
+  prismux: { readonly url: string | undefined; readonly export: SignalExport },
   fallback: { readonly bootstrapUrl: string | undefined; readonly settingsUrl: string | undefined },
 ): SignalEndpoint | undefined => {
   if (otel.disabled) {
     return undefined;
   }
-  const t3Url = blankAsUnset(t3.url);
-  if (t3Url !== undefined) {
+  const prismuxUrl = blankAsUnset(prismux.url);
+  if (prismuxUrl !== undefined) {
     return {
-      url: t3Url,
-      export: t3.export,
+      url: prismuxUrl,
+      export: prismux.export,
       source: "environment",
       variable: `PRISMUX_OTLP_${signal.toUpperCase()}_URL`,
     };
@@ -357,7 +357,7 @@ export const resolveSignalEndpoint = (
   return OtelSignal.$match(otel[signal], {
     Export: ({ url, variable, protocol, headers }): SignalEndpoint => ({
       url,
-      export: { protocol, headers, exportIntervalMs: t3.export.exportIntervalMs },
+      export: { protocol, headers, exportIntervalMs: prismux.export.exportIntervalMs },
       source: "environment",
       variable,
     }),
@@ -368,7 +368,7 @@ export const resolveSignalEndpoint = (
       // the desktop's own.
       const url = blankAsUnset(fallback.bootstrapUrl) ?? settingsUrl;
       if (url === undefined) return undefined;
-      return { url, export: t3.export, source: url === settingsUrl ? "settings" : "bootstrap" };
+      return { url, export: prismux.export, source: url === settingsUrl ? "settings" : "bootstrap" };
     },
   });
 };

@@ -15,7 +15,11 @@ import {
   dedupeSubagentBodies,
   dedupeTurnItemBodies,
 } from "@prismux/core-shared/orchestrationV2DedupedBodies";
-import { MCP_APP_OUTPUT_KEY, readMcpAppReference } from "@prismux/core-shared/mcpApp";
+import {
+  MCP_APP_LEGACY_OUTPUT_KEY,
+  MCP_APP_OUTPUT_KEY,
+  readMcpAppReference,
+} from "@prismux/core-shared/mcpApp";
 import {
   commandIndicatesFailure,
   compactDynamicToolOutput,
@@ -242,7 +246,11 @@ function boundToolOutput(output: unknown): unknown {
     return boundToolResult(output);
   }
   const app =
-    MCP_APP_OUTPUT_KEY in output ? readMcpAppReference(output[MCP_APP_OUTPUT_KEY]) : undefined;
+    MCP_APP_OUTPUT_KEY in output
+      ? readMcpAppReference(output[MCP_APP_OUTPUT_KEY])
+      : MCP_APP_LEGACY_OUTPUT_KEY in output
+        ? readMcpAppReference(output[MCP_APP_LEGACY_OUTPUT_KEY])
+        : undefined;
   if (app === undefined) return boundToolResult(output);
   // The app receives this result, so its image data stays unless it is too large to send.
   const fits = boundDynamicValue(output.result) === output.result;

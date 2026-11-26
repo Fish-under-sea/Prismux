@@ -132,7 +132,7 @@ describe("AcpRuntimeModel", () => {
     } as EffectAcpSchema.InitializeResponse);
 
     expect(response.modes).toBeUndefined();
-    expect(response._meta).toMatchObject({ t3SessionLoadReady: "replay_idle" });
+    expect(response._meta).toMatchObject({ prismuxSessionLoadReady: "replay_idle" });
   });
 
   it("keeps initialize mode state whose modes have null descriptions", () => {
@@ -1036,7 +1036,7 @@ describe("AcpRuntimeModel", () => {
   it("turns future ACP content and session updates into explicit placeholders", () => {
     expect(
       acpContentBlockDisplayText({
-        type: "_t3_unknown",
+        type: "_prismux_unknown",
         originalType: "chart",
         raw: { type: "chart", points: [] },
       }),
@@ -1046,7 +1046,7 @@ describe("AcpRuntimeModel", () => {
       parseSessionUpdateEvent({
         sessionId: "session-1",
         update: {
-          sessionUpdate: "_t3_unknown",
+          sessionUpdate: "_prismux_unknown",
           originalSessionUpdate: "timeline_update",
           raw: { sessionUpdate: "timeline_update", entries: [] },
         },
@@ -1370,14 +1370,14 @@ describe("extractMcpToolCallIdentity", () => {
       sessionUpdate: "tool_call",
       toolCallId: "exec-f4591587-0754-4bb4-990b-f2767894ba93",
       kind: "execute",
-      title: "mcp.t3-code.orchestrator_capabilities",
+      title: "mcp.prismux.orchestrator_capabilities",
       status: "in_progress",
-      rawInput: { server: "t3-code", tool: "orchestrator_capabilities", arguments: {} },
+      rawInput: { server: "prismux", tool: "orchestrator_capabilities", arguments: {} },
       _meta: { is_mcp_tool_call: true },
     });
 
     expect(extractMcpToolCallIdentity(toolCall)).toEqual({
-      server: "t3-code",
+      server: "prismux",
       tool: "orchestrator_capabilities",
     });
   });
@@ -1419,7 +1419,7 @@ describe("extractMcpToolCallIdentity", () => {
           '/usr/bin/node /srv/t3/bin.ts acp-mcp-call delegate_task {"task":"x"}',
         ],
       }),
-    ).toEqual({ server: "t3-code", tool: "delegate_task", input: { task: "x" } });
+    ).toEqual({ server: "prismux", tool: "delegate_task", input: { task: "x" } });
   });
 
   it("recovers T3 identity from pi-acp title-only fallback execs", () => {
@@ -1428,7 +1428,7 @@ describe("extractMcpToolCallIdentity", () => {
       toolCallId: "call_JdxnvzjHHrbvyASTLVekLYWV|fc_08f5a805a7159aa6016a7ec4afad548191",
       kind: "execute",
       title:
-        '"$T3_ACP_MCP_NODE" "$T3_ACP_MCP_ENTRYPOINT" acp-mcp-call orchestrator_capabilities \'{}\'',
+        '"$PRISMUX_ACP_MCP_NODE" "$PRISMUX_ACP_MCP_ENTRYPOINT" acp-mcp-call orchestrator_capabilities \'{}\'',
       status: "in_progress",
       rawInput: null,
       content: [
@@ -1441,7 +1441,7 @@ describe("extractMcpToolCallIdentity", () => {
 
     expect(toolCall.title).toBe("Ran command");
     expect(extractMcpToolCallIdentity(toolCall)).toEqual({
-      server: "t3-code",
+      server: "prismux",
       tool: "orchestrator_capabilities",
       input: {},
     });
@@ -1467,7 +1467,7 @@ describe("extractMcpToolCallIdentity", () => {
 
     expect(merged.title).toBe(created.title);
     expect(extractMcpToolCallIdentity(merged)).toEqual({
-      server: "t3-code",
+      server: "prismux",
       tool: "orchestrator_capabilities",
     });
   });
@@ -1476,10 +1476,10 @@ describe("extractMcpToolCallIdentity", () => {
     for (const title of [
       "t3-code___delegate_task",
       "t3-code-delegate_task",
-      'mcp__t3_code__delegate_task: {"mode":"async"}',
+      'mcp__prismux__delegate_task: {"mode":"async"}',
       't3-code__delegate_task: {"mode":"async"}',
       "delegate_task_t3-code",
-      "t3-code/delegate_task",
+      "prismux/delegate_task",
       "delegate_task",
       'delegate_task: {"mode":"async"}',
       // Kimi retitles with partial JSON and middle-truncates args over 50 characters.
@@ -1487,8 +1487,8 @@ describe("extractMcpToolCallIdentity", () => {
       'delegate_task: {"mode":"async","task":"Ru...cho child-result-42\'"}',
       // Antigravity: "Running <tool>" before agy 1.5.8, "Run mcp_<server>_<tool>" since, "?" on prompts.
       "Running delegate_task",
-      "Run mcp_t3-code_delegate_task",
-      "Run mcp_t3-code_delegate_task?",
+      "Run mcp_prismux_delegate_task",
+      "Run mcp_prismux_delegate_task?",
     ]) {
       const toolCall = toolCallFromUpdate({
         sessionUpdate: "tool_call",
@@ -1498,7 +1498,7 @@ describe("extractMcpToolCallIdentity", () => {
         status: "pending",
       });
       expect(extractMcpToolCallIdentity(toolCall), title).toEqual({
-        server: "t3-code",
+        server: "prismux",
         tool: "delegate_task",
       });
     }
@@ -1518,7 +1518,7 @@ describe("extractMcpToolCallIdentity", () => {
       );
 
     expect(identityFor("mcp__editor_t3_code_f6129534__html_render")).toEqual({
-      server: "t3-code",
+      server: "prismux",
       tool: "html_render",
     });
     expect(identityFor("mcp__editor_github_1234abcd__html_render")).toEqual({
@@ -1528,16 +1528,16 @@ describe("extractMcpToolCallIdentity", () => {
   });
 
   it("recovers T3 identity from Kiro's @-scoped titles", () => {
-    for (const tool of ["html_render", "t3_thread_read", "delegate_task"]) {
+    for (const tool of ["html_render", "prismux_thread_read", "delegate_task"]) {
       const toolCall = toolCallFromUpdate({
         sessionUpdate: "tool_call",
         toolCallId: "kiro-1",
         kind: "other",
-        title: `@t3-code/${tool}`,
+        title: `@prismux/${tool}`,
         status: "pending",
         rawInput: { tool_id: `t3-code::${tool}`, arguments: { threadId: "thread-1" } },
       });
-      expect(extractMcpToolCallIdentity(toolCall), tool).toEqual({ server: "t3-code", tool });
+      expect(extractMcpToolCallIdentity(toolCall), tool).toEqual({ server: "prismux", tool });
     }
   });
 
@@ -1575,7 +1575,7 @@ describe("extractMcpToolCallIdentity", () => {
               args,
               tier: "write",
               inner: {
-                serverName: "t3-code",
+                serverName: "prismux",
                 mcpToolName: "html_render",
                 rawContent: [{ type: "text", text }],
                 provider: "acp",
@@ -1597,7 +1597,7 @@ describe("extractMcpToolCallIdentity", () => {
       rawInput: { path: "xd://mcp__t3_code_html_render" },
     });
 
-    const expected = { server: "t3-code", tool: "html_render", input: args };
+    const expected = { server: "prismux", tool: "html_render", input: args };
     expect(extractMcpToolCallIdentity(created), "pending write").toEqual(expected);
     expect(extractMcpToolCallIdentity(completed), "completed write").toEqual(expected);
     expect(extractMcpToolCallIdentity(docRead), "doc read").toBeUndefined();
@@ -1623,14 +1623,14 @@ describe("extractMcpToolCallIdentity", () => {
       status: "in_progress",
       _meta: {
         goose: {
-          toolCall: { toolName: "t3-code__task_status", extensionName: "t3-code" },
+          toolCall: { toolName: "t3-code__task_status", extensionName: "prismux" },
           messageId: "message-1",
         },
       },
     });
 
     expect(extractMcpToolCallIdentity(toolCall)).toEqual({
-      server: "t3-code",
+      server: "prismux",
       tool: "task_status",
     });
   });
@@ -1643,12 +1643,12 @@ describe("extractMcpToolCallIdentity", () => {
       kind: "other",
       title: "unrelated display title",
       status: "pending",
-      _meta: { toolName: "mcp::t3-code::t3_thread_send", serverId: "t3-code", provenance: "mcp" },
+      _meta: { toolName: "mcp::t3-code::prismux_thread_send", serverId: "prismux", provenance: "mcp" },
     });
 
     expect(extractMcpToolCallIdentity(toolCall)).toEqual({
-      server: "t3-code",
-      tool: "t3_thread_send",
+      server: "prismux",
+      tool: "prismux_thread_send",
     });
   });
 
@@ -1707,9 +1707,9 @@ describe("extractMcpToolCallIdentity", () => {
 
   it("does not brand path-like or unknown-tool titles", () => {
     for (const title of [
-      "t3-code/README.md",
+      "prismux/README.md",
       "t3-code_not_a_real_tool",
-      "Run mcp_t3-code_not_a_real_tool",
+      "Run mcp_prismux_not_a_real_tool",
       "Run manage_task",
     ]) {
       const toolCall = toolCallFromUpdate({
@@ -1763,12 +1763,12 @@ describe("embeddedTerminalIdsFromSessionUpdate", () => {
           toolCallId: "call_1",
           status: "in_progress",
           content: [
-            { type: "terminal", terminalId: "t3-term-9" },
+            { type: "terminal", terminalId: "prismux-term-9" },
             { type: "content", content: { type: "text", text: "noise" } },
           ],
         },
       }),
-    ).toEqual({ toolCallId: "call_1", terminalIds: ["t3-term-9"] });
+    ).toEqual({ toolCallId: "call_1", terminalIds: ["prismux-term-9"] });
     expect(
       embeddedTerminalIdsFromSessionUpdate({
         sessionId: "session-1",

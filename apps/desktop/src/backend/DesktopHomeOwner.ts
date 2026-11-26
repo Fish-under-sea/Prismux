@@ -96,7 +96,7 @@ export const homeOwnedMessage = (owner: Option.Option<HomeOwner>): string =>
     onNone: () =>
       m(
         msg(
-          "Another Prismux server, such as the background service, is using this data directory, or an older background service is set up for it. Stop that server or try `prismux update`. If the older launcher cannot update, run `prismux service uninstall` and optionally reinstall with `prismux service install` from a current CLI. Use `npx t3@latest` if the CLI is missing or outdated, and pass `--base-dir` with the service's Prismux home to each command. Then reopen Prismux. You can also set a separate PRISMUX_HOME and pair with the running server.",
+          "Another Prismux server, such as the background service, is using this data directory, or an older background service is set up for it. Stop that server or try `prismux update`. If the older launcher cannot update, run `prismux service uninstall` and optionally reinstall with `prismux service install` from a current CLI. Use `npx prismux@latest` if the CLI is missing or outdated, and pass `--base-dir` with the service's Prismux home to each command. Then reopen Prismux. You can also set a separate PRISMUX_HOME and pair with the running server.",
         ),
       ),
     onSome: (owner) => {

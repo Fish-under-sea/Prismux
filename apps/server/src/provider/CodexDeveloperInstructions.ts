@@ -2,9 +2,10 @@ import type { V2TurnStartParams__AdditionalContextEntry } from "@prismux/effect-
 import { buildRuntimeInstructions } from "@prismux/provider-core/server/runtimeInstructions";
 
 import {
-  T3_CODE_BROWSER_TOOL_INSTRUCTIONS,
-  T3_CODE_DEVICE_TOOL_INSTRUCTIONS,
-  T3_CODE_ORCHESTRATION_SECTIONS,
+  buildPrismuxOrchestrationSections,
+  detectPrismuxPromptIntent,
+  PRISMUX_BROWSER_TOOL_INSTRUCTIONS,
+  PRISMUX_DEVICE_TOOL_INSTRUCTIONS,
 } from "@prismux/provider-core/server/orchestrationInstructions";
 
 /** Codex silently truncates additionalContext values over 1,000 tokens, counted as UTF-8 bytes / 4. */
@@ -13,6 +14,13 @@ export const CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES = 4_000;
 export interface PrismuxToolAvailability {
   readonly browser: boolean;
   readonly device: boolean;
+  readonly prompt?: string | undefined;
+  readonly isSubagent?: boolean | undefined;
+  readonly hasOpenPreview?: boolean | undefined;
+  readonly hasOpenDeviceSession?: boolean | undefined;
+  readonly hasLinkedEnvironments?: boolean | undefined;
+  readonly isGitProject?: boolean | undefined;
+  readonly pullRequestLinking?: boolean | undefined;
 }
 
 const normalizeAvailability = (
@@ -20,12 +28,18 @@ const normalizeAvailability = (
 ): PrismuxToolAvailability =>
   typeof availability === "boolean" ? { browser: availability, device: false } : availability;
 
-/** Instructions for unavailable tools would steer the model away from its remaining automation. */
+/** Instructions for unavailable or irrelevant tools would waste context and steer the model wrong. */
 const toolInstructions = (availability: boolean | PrismuxToolAvailability): string => {
   const tools = normalizeAvailability(availability);
+  const intent =
+    tools.prompt === undefined ? undefined : detectPrismuxPromptIntent(tools.prompt);
+  const includeBrowser =
+    tools.browser && (tools.hasOpenPreview === true || intent?.needsBrowser === true);
+  const includeDevice =
+    tools.device && (tools.hasOpenDeviceSession === true || intent?.needsDevice === true);
   return [
-    tools.browser ? T3_CODE_BROWSER_TOOL_INSTRUCTIONS : "",
-    tools.device ? T3_CODE_DEVICE_TOOL_INSTRUCTIONS : "",
+    includeBrowser ? PRISMUX_BROWSER_TOOL_INSTRUCTIONS.trim() : "",
+    includeDevice ? PRISMUX_DEVICE_TOOL_INSTRUCTIONS : "",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -42,19 +56,39 @@ export function buildCodexAdditionalContext(
   runtime: CodexRuntimeInfo,
   toolsAvailable: boolean | PrismuxToolAvailability = true,
 ): Record<string, V2TurnStartParams__AdditionalContextEntry> {
-  const tools = toolInstructions(toolsAvailable);
+  const normalized = normalizeAvailability(toolsAvailable);
+  const tools = toolInstructions(normalized);
+  const orchestrationSections = buildPrismuxOrchestrationSections({
+    prompt: normalized.prompt,
+    isSubagent: normalized.isSubagent,
+    hasLinkedEnvironments: normalized.hasLinkedEnvironments,
+    hasOpenPreview: normalized.hasOpenPreview,
+  });
   // Split values to fit per-entry caps; number keys because Codex emits them in key order.
   return {
     ...Object.fromEntries(
-      T3_CODE_ORCHESTRATION_SECTIONS.map((section, index) => [
-        `t3_code_orchestration_${String(index + 1).padStart(2, "0")}`,
+      orchestrationSections.map((section, index) => [
+        `prismux_orchestration_${String(index + 1).padStart(2, "0")}`,
         { kind: "application" as const, value: section },
       ]),
     ),
-    t3_code_runtime: {
+    prismux_runtime: {
       kind: "application",
-      value: buildRuntimeInstructions({ harness: "Codex", ...runtime }),
+      value: buildRuntimeInstructions({
+        harness: "Codex",
+        ...runtime,
+        ...(normalized.prompt !== undefined ? { prompt: normalized.prompt } : {}),
+        ...(normalized.isSubagent !== undefined ? { isSubagent: normalized.isSubagent } : {}),
+        ...(normalized.isGitProject !== undefined
+          ? { isGitProject: normalized.isGitProject }
+          : {}),
+        ...(normalized.pullRequestLinking !== undefined
+          ? { pullRequestLinking: normalized.pullRequestLinking }
+          : normalized.prompt === undefined
+            ? { pullRequestLinking: false }
+            : {}),
+      }),
     },
-    ...(tools ? { t3_code_tools: { kind: "application", value: tools } } : {}),
+    ...(tools ? { prismux_tools: { kind: "application", value: tools } } : {}),
   };
 }

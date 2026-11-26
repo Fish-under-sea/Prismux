@@ -97,10 +97,10 @@ describe("terminatePosixOwnedProcessTree", () => {
       };
       const deadPid = 2_147_483_646;
       const liveForeignPid = 2_147_483_645;
-      const staleEmpty = writeSibling(`t3-acp-${deadPid}-aaaa`, "0");
-      const currentPidSibling = writeSibling(`t3-acp-${process.pid}-bbbb`, "0");
-      const liveForeignSibling = writeSibling(`t3-acp-${liveForeignPid}-cccc`, "0");
-      const stalePopulated = writeSibling(`t3-acp-${deadPid}-dddd`, "1");
+      const staleEmpty = writeSibling(`prismux-acp-${deadPid}-aaaa`, "0");
+      const currentPidSibling = writeSibling(`prismux-acp-${process.pid}-bbbb`, "0");
+      const liveForeignSibling = writeSibling(`prismux-acp-${liveForeignPid}-cccc`, "0");
+      const stalePopulated = writeSibling(`prismux-acp-${deadPid}-dddd`, "1");
       const unrelated = writeSibling("other-lease", "0");
       const isProcessAlive = (pid: number) => pid === process.pid || pid === liveForeignPid;
       try {
@@ -117,7 +117,7 @@ describe("terminatePosixOwnedProcessTree", () => {
         expect(NodeFS.existsSync(liveForeignSibling)).toBe(true);
         expect(NodeFS.existsSync(stalePopulated)).toBe(true);
         expect(NodeFS.existsSync(unrelated)).toBe(true);
-        writeSibling(`t3-acp-${deadPid}-eeee`, null);
+        writeSibling(`prismux-acp-${deadPid}-eeee`, null);
         AcpSessionRuntime.sweepStaleLinuxCgroupSiblings(parent, {
           isProcessAlive,
           readPopulated: (path) => populatedByPath.get(path),
@@ -126,7 +126,7 @@ describe("terminatePosixOwnedProcessTree", () => {
             NodeFS.rmdirSync(path);
           },
         });
-        expect(NodeFS.existsSync(NodePath.join(parent, `t3-acp-${deadPid}-eeee`))).toBe(true);
+        expect(NodeFS.existsSync(NodePath.join(parent, `prismux-acp-${deadPid}-eeee`))).toBe(true);
         expect(NodeFS.existsSync(currentPidSibling)).toBe(true);
       } finally {
         NodeFS.rmSync(parent, { recursive: true, force: true });
@@ -183,7 +183,7 @@ describe("terminatePosixOwnedProcessTree", () => {
         "fs.writeFileSync(process.argv[1], JSON.stringify({",
         "  args: process.argv.slice(2),",
         "  electron: process.env.ELECTRON_RUN_AS_NODE,",
-        "  wrapper: process.env.T3_ACP_CGROUP_WRAPPER,",
+        "  wrapper: process.env.PRISMUX_ACP_CGROUP_WRAPPER,",
         "}));",
       ].join("\n");
       const wrapped = AcpSessionRuntime.wrapCommandForLinuxCgroup(lease, linkedNode, [
@@ -200,7 +200,7 @@ describe("terminatePosixOwnedProcessTree", () => {
           env: {
             ...process.env,
             ELECTRON_RUN_AS_NODE: "1",
-            T3_ACP_CGROUP_WRAPPER: "1",
+            PRISMUX_ACP_CGROUP_WRAPPER: "1",
           },
         });
         expect(result.status, result.stderr).toBe(0);
@@ -240,7 +240,7 @@ describe("terminatePosixOwnedProcessTree", () => {
     try {
       const wrapped = AcpSessionRuntime.wrapCommandForLinuxCgroup(lease, "/bin/sh", [
         "-c",
-        'printf "%s\\n" "$0" "$1" "$2" "$3" "${ELECTRON_RUN_AS_NODE-}" "${T3_ACP_CGROUP_WRAPPER-}" > "$4"',
+        'printf "%s\\n" "$0" "$1" "$2" "$3" "${ELECTRON_RUN_AS_NODE-}" "${PRISMUX_ACP_CGROUP_WRAPPER-}" > "$4"',
         "packaged-target",
         "space value",
         "single'quote",
@@ -252,7 +252,7 @@ describe("terminatePosixOwnedProcessTree", () => {
         env: {
           ...process.env,
           ELECTRON_RUN_AS_NODE: "1",
-          T3_ACP_CGROUP_WRAPPER: "1",
+          PRISMUX_ACP_CGROUP_WRAPPER: "1",
         },
       });
       expect(result.status, result.stderr).toBe(0);
@@ -318,8 +318,8 @@ describe("terminatePosixOwnedProcessTree", () => {
     const lease: AcpSessionRuntime.AcpLinuxCgroupLease = {
       contains: () => true,
       exists: () => true,
-      path: "/test/t3-acp-root",
-      relativePath: "/test/t3-acp-root",
+      path: "/test/prismux-acp-root",
+      relativePath: "/test/prismux-acp-root",
       kill: () => undefined,
       populated: () => true,
       remove: () => undefined,

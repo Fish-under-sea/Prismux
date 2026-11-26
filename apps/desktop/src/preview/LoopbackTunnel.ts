@@ -138,7 +138,7 @@ const isTunnelEndpoint = (tunnelUrl: string, port: number) => {
 
 /** Opens a connection to the destination; `ws` pauses its socket, so a slow page slows the tunnel. */
 /** Set by the environment's /api/preview/tunnel when it reached the port and nothing listens. */
-const PORT_REFUSED_HEADER = "x-t3-tunnel-port-refused";
+const PORT_REFUSED_HEADER = "x-prismux-tunnel-port-refused";
 
 const dialDestination = Effect.fn("LoopbackTunnel.dialDestination")(function* (
   tunnelUrl: string,

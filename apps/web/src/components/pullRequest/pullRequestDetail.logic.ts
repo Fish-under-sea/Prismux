@@ -1649,8 +1649,8 @@ const pullRequestDetailSnapshotKey = (
   reference: PullRequestDetailSnapshotRef,
 ) =>
   reference.host
-    ? `t3.pullRequests.detail:${JSON.stringify([environmentId, reference.projectId, reference.host.toLowerCase(), reference.repository.toLowerCase(), reference.number])}`
-    : `t3.pullRequests.detail:${environmentId}:${reference.projectId}:${reference.repository}#${reference.number}`;
+    ? `prismux.pullRequests.detail:${JSON.stringify([environmentId, reference.projectId, reference.host.toLowerCase(), reference.repository.toLowerCase(), reference.number])}`
+    : `prismux.pullRequests.detail:${environmentId}:${reference.projectId}:${reference.repository}#${reference.number}`;
 
 const decodeDetailSnapshot = Schema.decodeUnknownOption(PullRequestDetail);
 
@@ -1677,7 +1677,7 @@ export function readPullRequestDetailSnapshot(
   }
 }
 
-const PULL_REQUEST_DETAIL_SNAPSHOT_INDEX_KEY = "t3.pullRequests.recentDetails";
+const PULL_REQUEST_DETAIL_SNAPSHOT_INDEX_KEY = "prismux.pullRequests.recentDetails";
 const PULL_REQUEST_DETAIL_SNAPSHOT_LIMIT = 20;
 
 function readPullRequestDetailSnapshotIndex(storage: SnapshotStorage): string[] {

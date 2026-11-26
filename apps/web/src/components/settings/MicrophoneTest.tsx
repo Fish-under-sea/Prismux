@@ -152,7 +152,7 @@ export function MicrophoneTest({
       current.context = context;
       await context.audioWorklet.addModule(workletUrl);
       if (capture.current !== current) return;
-      const worklet = new AudioWorkletNode(context, "t3-pcm-capture", {
+      const worklet = new AudioWorkletNode(context, "prismux-pcm-capture", {
         channelCount: 1,
         processorOptions: { meterOnly: true },
       });

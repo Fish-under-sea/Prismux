@@ -936,7 +936,7 @@ describe("EnvironmentRegistry", () => {
         const profile = new BearerConnectionProfile({
           ...BEARER_PROFILE,
           learned: true,
-          authorization: "t3-connect",
+          authorization: "prismux-connect",
         });
         const harness = yield* makeHarness(
           learned ? [relay, BEARER_TARGET] : [relay],

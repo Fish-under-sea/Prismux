@@ -225,14 +225,14 @@ const probeFailure = (
     );
   }
   return new PeerLinkError({
-    reason: "not_a_t3_environment",
+    reason: "not_a_prismux_environment",
     message: `${origin} answered, but not as a Prismux environment this version understands.`,
   });
 };
 
 /** Whether a host is this machine's own loopback. Tests serve their peers there, so they narrow it. */
 export const LoopbackHost = Context.Reference<(host: string) => boolean>(
-  "t3/peer/PeerLinks/LoopbackHost",
+  "prismux/peer/PeerLinks/LoopbackHost",
   { defaultValue: () => isLocalLoopbackHost },
 );
 
@@ -682,7 +682,7 @@ const make = Effect.gen(function* () {
     function* (environmentId) {
       const notLinked = new PeerLinkError({
         reason: "unknown_link",
-        message: `This environment is not linked to ${environmentId}. t3_environment_links lists the linked ones.`,
+        message: `This environment is not linked to ${environmentId}. prismux_environment_links lists the linked ones.`,
       });
       const row = yield* readRow(environmentId);
       if (Option.isNone(row)) return yield* notLinked;

@@ -702,7 +702,7 @@ export class GhosttyTerminalSurface {
     canvas.setAttribute("aria-hidden", "true");
 
     const input = document.createElement("textarea");
-    input.className = "t3-ghostty-input";
+    input.className = "prismux-ghostty-input";
     input.setAttribute("aria-label", m(msg("Terminal input")));
     input.autocapitalize = "off";
     input.autocomplete = "off";

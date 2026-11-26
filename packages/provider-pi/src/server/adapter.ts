@@ -78,10 +78,10 @@ import {
 } from "./rpc.ts";
 import {
   buildPiRpcLaunch,
-  materializePiT3McpExtension,
+  materializePiPrismuxMcpExtension,
   resolvePiLaunchArgs,
 } from "./mcpInjection.ts";
-import { PI_FILE_CHANGE_TOOLS, PI_T3_SERVICE_TIER_COMMAND } from "./mcpExtensionSource.ts";
+import { PI_FILE_CHANGE_TOOLS, PI_PRISMUX_SERVICE_TIER_COMMAND } from "./mcpExtensionSource.ts";
 import { PI_STANDARD_SERVICE_TIER } from "./modelCapabilities.ts";
 
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
@@ -674,7 +674,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         );
       // Always inject the permission hook even without MCP credentials; otherwise Supervised becomes unrestricted.
       const extensionPath = yield* provideCacheFs(
-        materializePiT3McpExtension(host.paths.providerStatusCacheDir),
+        materializePiPrismuxMcpExtension(host.paths.providerStatusCacheDir),
       );
       const resolvedLaunchArgs = resolvePiLaunchArgs(options.settings.launchArgs);
       if (!resolvedLaunchArgs.ok) {
@@ -895,7 +895,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           heldPrompts.push(prompt);
           return;
         }
-        const id = `t3-prompt-${nextPromptId++}`;
+        const id = `prismux-prompt-${nextPromptId++}`;
         yield* connection.send({ ...prompt.record, id });
         pendingPromptResponsesDrained ??= yield* Deferred.make<
           void,
@@ -1124,7 +1124,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           return yield* Effect.gen(function* () {
             // RPC responses bypass the pump. Reset after all earlier native notifications.
             if (
-              !(yield* Queue.offer(connection.events, { type: "t3.extension_status_reset", reset }))
+              !(yield* Queue.offer(connection.events, { type: "prismux.extension_status_reset", reset }))
             )
               return yield* protocolError("Pi transport closed during status reset");
             yield* Deferred.await(reset.ready);
@@ -2218,7 +2218,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           ).pipe(
             Effect.andThen(
               Queue.offer(connection.events, {
-                type: "t3.ui_request_expired",
+                type: "prismux.ui_request_expired",
                 requestId: String(requestId),
                 pending,
               }),
@@ -2457,7 +2457,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           Effect.matchEffect({
             onSuccess: (data) =>
               Queue.offer(connection.events, {
-                type: "t3.settle_probe",
+                type: "prismux.settle_probe",
                 providerTurnId,
                 settleAfterAgentActivity,
                 settleProbeGeneration,
@@ -2467,7 +2467,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             // Failed probes must reach the pump; command-only turns emit no agent events to settle them.
             onFailure: () =>
               Queue.offer(connection.events, {
-                type: "t3.settle_probe",
+                type: "prismux.settle_probe",
                 providerTurnId,
                 settleAfterAgentActivity,
                 settleProbeGeneration,
@@ -2489,7 +2489,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       });
 
       const handleSessionEvent = Effect.fnUntraced(function* (event: PiRpcRecord) {
-        if (event["type"] === "t3.extension_status_reset") {
+        if (event["type"] === "prismux.extension_status_reset") {
           const reset = extensionStatusReset;
           if (reset !== null && event["reset"] === reset) {
             reset.previous = sessionEntity.extensionStatuses ?? [];
@@ -2512,7 +2512,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           threadState?.activeTurn === null &&
           pendingWake !== null &&
           !interactiveUiRequest &&
-          !String(event["type"]).startsWith("t3.") &&
+          !String(event["type"]).startsWith("prismux.") &&
           event["type"] !== "response"
         ) {
           pendingWake.events.push(event);
@@ -2979,7 +2979,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             }
             return;
           }
-          case "t3.ui_request_expired": {
+          case "prismux.ui_request_expired": {
             const requestId = recordString(event, "requestId");
             if (requestId === undefined) return;
             const pending = pendingPrompts.get(requestId);
@@ -2988,18 +2988,18 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             yield* cancelPrompt(pending, yield* DateTime.now);
             return;
           }
-          case "t3.flush_extension_errors": {
+          case "prismux.flush_extension_errors": {
             for (const extensionError of outOfTurnExtensionErrors.splice(0)) {
               yield* emitExtensionError(extensionError);
             }
             return;
           }
-          case "t3.rollback_barrier": {
+          case "prismux.rollback_barrier": {
             if (rollbackBarrier !== null && event["barrier"] === rollbackBarrier)
               yield* Deferred.succeed(rollbackBarrier, undefined);
             return;
           }
-          case "t3.settle_probe": {
+          case "prismux.settle_probe": {
             const data = event["data"];
             const probeFailed = event["probeFailed"] === true;
             const settleAfterAgentActivity = event["settleAfterAgentActivity"] === true;
@@ -3554,7 +3554,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           serviceTierMayBeSet = true;
           const result = yield* request({
             type: "prompt",
-            message: `/${PI_T3_SERVICE_TIER_COMMAND} ${serviceTier ?? ""}`.trimEnd(),
+            message: `/${PI_PRISMUX_SERVICE_TIER_COMMAND} ${serviceTier ?? ""}`.trimEnd(),
           });
           // Pi before 0.99 acknowledges a handled extension command without a disposition.
           const disposition = recordString(result, "disposition");
@@ -3818,7 +3818,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                   yield* finalizeTurn(state);
                 }
                 if (outOfTurnExtensionErrors.length > 0) {
-                  yield* Queue.offer(connection.events, { type: "t3.flush_extension_errors" });
+                  yield* Queue.offer(connection.events, { type: "prismux.flush_extension_errors" });
                 }
                 return null;
               }).pipe(
@@ -4211,7 +4211,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                   const leafId = recordString(entriesData, "leafId") ?? null;
                   // RPC responses bypass the pump; drain prior native events before replacing their binding.
                   const queued = yield* Queue.offer(connection.events, {
-                    type: "t3.rollback_barrier",
+                    type: "prismux.rollback_barrier",
                     barrier,
                   });
                   if (!queued) return yield* protocolError("Pi transport closed during rollback");

@@ -1150,7 +1150,7 @@ describe("recordingEncoderScript download Blob URL lifecycle", () => {
       };
 
       NodeVM.runInNewContext(ServerBrowserPage.recordingEncoderScript(30), sandbox);
-      const recorderApi = fakeWindow.__t3Recorder as {
+      const recorderApi = fakeWindow.__prismuxRecorder as {
         frame: (base64: string, cssWidth: number) => Promise<boolean>;
         download: () => void;
       };

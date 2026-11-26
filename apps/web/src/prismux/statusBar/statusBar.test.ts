@@ -1824,7 +1824,7 @@ describe("statusBarResources and PrismuxDaemonClient unified APIs", () => {
             processCount: 3,
           },
           daemon: { pid: 1050, cpuPercent: 1.5, memoryBytes: 64 * 1024 * 1024 },
-          t3Server: {
+          coreServer: {
             pid: 2000,
             cpuPercent: 3.0,
             memoryBytes: 128 * 1024 * 1024,
@@ -1854,7 +1854,7 @@ describe("statusBarResources and PrismuxDaemonClient unified APIs", () => {
               pid: 2000,
               name: "T3 Server",
               processName: "node.exe",
-              role: "t3-server",
+              role: "core-server",
               category: "core",
               cpuPercent: 3.0,
               memoryBytes: 128 * 1024 * 1024,
@@ -1939,7 +1939,7 @@ describe("statusBarResources and PrismuxDaemonClient unified APIs", () => {
         {
           pid: 3,
           name: "gamma",
-          role: "t3-server",
+          role: "core-server",
           category: "core",
           cpuPercent: 2.1,
           memoryBytes: 500,

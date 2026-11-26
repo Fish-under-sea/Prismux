@@ -69,8 +69,13 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
         }),
       ).toBe(`sudo env "PATH=$PATH" prismux browser setup --base-dir '/srv/t3 home'`);
       expect(
-        yield* rootCommand({ node: "/opt/t3/t3", entry: "/opt/t3/t3", executable: true, args }),
-      ).toBe("sudo /opt/t3/t3 browser setup --base-dir '/srv/t3 home'");
+        yield* rootCommand({
+          node: "/opt/prismux/prismux",
+          entry: "/opt/prismux/prismux",
+          executable: true,
+          args,
+        }),
+      ).toBe("sudo /opt/prismux/prismux browser setup --base-dir '/srv/t3 home'");
     }),
   );
 
@@ -108,7 +113,7 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
           entry: "/opt/t3/t3",
           executable: true,
         }),
-      ).toBe("sudo /opt/t3/t3 browser setup");
+      ).toBe("sudo /opt/t3/prismux browser setup");
 
       // A standalone executable started directly (systemd, no launcher) is still this install.
       expect(
@@ -118,7 +123,7 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
           executable: true,
           path: yield* pathWithT3,
         }),
-      ).toBe("sudo /opt/t3/t3 browser setup");
+      ).toBe("sudo /opt/t3/prismux browser setup");
 
       // A global npm launcher runs the downloaded executable; PATH's `t3` is that launcher.
       const prefix = path.join(home, "npm");
@@ -195,23 +200,23 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const root = yield* fs.makeTempDirectoryScoped();
-      const executable = path.join(root, ".t3/runtime/versions/1.0.0/t3");
+      const executable = path.join(root, ".prismux/runtime/versions/1.0.0/prismux");
       yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
       yield* fs.writeFileString(executable, "");
       for (const [relative, kind] of [
-        ["npm/_npx/hash/node_modules/t3/dist/bin.mjs", "npx"],
-        ["npm/_npx/hash/node_modules/t3/bin/t3.mjs", "npx"],
-        ["pnpm/dlx/hash/node_modules/t3/dist/bin.mjs", "pnpm-dlx"],
-        [".bun/install/cache/t3/dist/bin.mjs", "bunx"],
+        ["npm/_npx/hash/node_modules/prismux/dist/bin.mjs", "npx"],
+        ["npm/_npx/hash/node_modules/prismux/bin/prismux.mjs", "npx"],
+        ["pnpm/dlx/hash/node_modules/prismux/dist/bin.mjs", "pnpm-dlx"],
+        [".bun/install/cache/prismux/dist/bin.mjs", "bunx"],
       ] as const) {
         const entry = path.join(root, relative);
         yield* fs.makeDirectory(path.dirname(entry), { recursive: true });
         yield* fs.writeFileString(entry, "");
         yield* fs.writeFileString(
           path.join(path.dirname(entry), "../package.json"),
-          `{"name":"t3","version":"${packageJson.version}","bin":{"t3":"./bin/t3.mjs"}}`,
+          `{"name":"prismux","version":"${packageJson.version}","bin":{"prismux":"./bin/prismux.mjs"}}`,
         );
-        const launchedBy = entry.endsWith("t3.mjs");
+        const launchedBy = entry.endsWith("prismux.mjs");
         const installation = yield* resolveServerInstallation.pipe(
           Effect.provideService(HostProcess.Arguments, [launchedBy ? executable : "node", entry]),
           Effect.provideService(HostProcess.ExecutablePath, executable),
@@ -232,15 +237,15 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       const path = yield* Path.Path;
       const root = yield* fs.makeTempDirectoryScoped();
       const prefix = path.join(root, "bunx-tools");
-      const packageRoot = path.join(prefix, "lib/node_modules/t3");
+      const packageRoot = path.join(prefix, "lib/node_modules/prismux");
       const entry = path.join(packageRoot, "dist/bin.mjs");
-      const globalBin = path.join(prefix, "bin/t3");
+      const globalBin = path.join(prefix, "bin/prismux");
       yield* fs.makeDirectory(path.dirname(entry), { recursive: true });
       yield* fs.makeDirectory(path.dirname(globalBin), { recursive: true });
       yield* fs.writeFileString(entry, "");
       yield* fs.writeFileString(
         path.join(packageRoot, "package.json"),
-        '{"name":"t3","version":"0.0.45","bin":{"t3":"./dist/bin.mjs"}}',
+        '{"name":"prismux","version":"0.0.45","bin":{"prismux":"./dist/bin.mjs"}}',
       );
       const resolve = resolveServerInstallation.pipe(
         Effect.provideService(HostProcess.Arguments, ["node", entry]),
@@ -323,8 +328,8 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
         );
       const baseDir = path.join(root, ".t3");
 
-      expect(yield* resolve("t3")).toEqual({ kind: "t3-launcher", launcher, baseDir });
-      expect(yield* resolve(launcher)).toEqual({ kind: "t3-launcher", launcher, baseDir });
+      expect(yield* resolve("t3")).toEqual({ kind: "prismux-launcher", launcher, baseDir });
+      expect(yield* resolve(launcher)).toEqual({ kind: "prismux-launcher", launcher, baseDir });
       expect(yield* resolve(executable)).toBeNull();
       expect(yield* resolve(copy)).toBeNull();
 
@@ -336,7 +341,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
         { mode: 0o755 },
       );
       expect(yield* resolve(executable, path.join(root, "bin"))).toEqual({
-        kind: "t3-launcher",
+        kind: "prismux-launcher",
         launcher,
         baseDir,
       });

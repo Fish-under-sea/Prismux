@@ -70,7 +70,7 @@ const layerPlatformTest = Layer.merge(
 );
 
 const layerServerConfig = ServerConfig.layerTest(process.cwd(), {
-  prefix: "t3-orchestration-v2-delegated-completion-",
+  prefix: "prismux-orchestration-v2-delegated-completion-",
 });
 
 const modelSelection = {
@@ -2811,7 +2811,7 @@ it.layer(Layer.merge(layerTest, ProviderContinuationRequests.layer))(
         }),
     );
 
-    // The child's follow-up run sends `t3_thread_send` to its own thread before it ends.
+    // The child's follow-up run sends `prismux_thread_send` to its own thread before it ends.
     const startSelfQueuedFollowup = (name: string) =>
       Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;

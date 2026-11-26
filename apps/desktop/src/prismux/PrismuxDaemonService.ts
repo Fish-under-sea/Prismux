@@ -59,7 +59,7 @@ const STDERR_TAIL_MAX_CHARS = 2_048;
 const { logInfo: logDaemonInfo, logWarning: logDaemonWarning } =
   makeComponentLogger("prismux-daemon");
 
-export function normalizeT3WebSocketUrl(rawUrl: string): string {
+export function normalizeCoreWebSocketUrl(rawUrl: string): string {
   const trimmed = rawUrl.trim();
   if (trimmed.length === 0) {
     return trimmed;
@@ -80,7 +80,7 @@ export function normalizeT3WebSocketUrl(rawUrl: string): string {
   }
 }
 
-export function normalizeT3HttpUrl(rawUrl: string): string {
+export function normalizeCoreHttpUrl(rawUrl: string): string {
   const trimmed = rawUrl.trim();
   if (trimmed.length === 0) {
     return trimmed;
@@ -105,35 +105,35 @@ export function buildPrismuxDaemonChildEnv(input: {
   readonly hostEnv: NodeJS.ProcessEnv;
   readonly catalogPath: string;
   readonly mainPid: number;
-  readonly t3ServerPid?: number | undefined;
-  readonly t3HttpUrl?: string | undefined;
-  readonly t3WsUrl?: string | undefined;
+  readonly coreServerPid?: number | undefined;
+  readonly coreHttpUrl?: string | undefined;
+  readonly coreWsUrl?: string | undefined;
 }): NodeJS.ProcessEnv {
-  const normalizedHttpUrl = input.t3HttpUrl
-    ? normalizeT3HttpUrl(input.t3HttpUrl)
-    : input.t3WsUrl
-      ? normalizeT3HttpUrl(input.t3WsUrl)
+  const normalizedHttpUrl = input.coreHttpUrl
+    ? normalizeCoreHttpUrl(input.coreHttpUrl)
+    : input.coreWsUrl
+      ? normalizeCoreHttpUrl(input.coreWsUrl)
       : undefined;
-  const normalizedWsUrl = input.t3WsUrl ? normalizeT3WebSocketUrl(input.t3WsUrl) : undefined;
-  const validT3Pid =
-    typeof input.t3ServerPid === "number" &&
-    Number.isInteger(input.t3ServerPid) &&
-    input.t3ServerPid > 0
-      ? input.t3ServerPid
+  const normalizedWsUrl = input.coreWsUrl ? normalizeCoreWebSocketUrl(input.coreWsUrl) : undefined;
+  const validCorePid =
+    typeof input.coreServerPid === "number" &&
+    Number.isInteger(input.coreServerPid) &&
+    input.coreServerPid > 0
+      ? input.coreServerPid
       : undefined;
   return {
     ...input.hostEnv,
     ELECTRON_RUN_AS_NODE: "1",
     PRISMUX_CATALOG_PATH: input.catalogPath,
     PRISMUX_MAIN_PID: String(input.mainPid),
-    ...(validT3Pid !== undefined ? { PRISMUX_T3_SERVER_PID: String(validT3Pid) } : {}),
+    ...(validCorePid !== undefined ? { PRISMUX_CORE_SERVER_PID: String(validCorePid) } : {}),
     ...(normalizedHttpUrl
       ? {
-          PRISMUX_T3_SERVER_URL: normalizedHttpUrl,
+          PRISMUX_CORE_SERVER_URL: normalizedHttpUrl,
           PRISMUX_SERVER_URL: normalizedHttpUrl,
         }
       : {}),
-    ...(normalizedWsUrl ? { PRISMUX_T3_WS_URL: normalizedWsUrl } : {}),
+    ...(normalizedWsUrl ? { PRISMUX_CORE_WS_URL: normalizedWsUrl } : {}),
   };
 }
 
@@ -143,9 +143,9 @@ function appendTailBuffer(current: string, chunk: string, maxChars: number): str
 }
 
 export interface PrismuxDaemonStartInput {
-  readonly t3Url?: string | undefined;
-  readonly t3HttpUrl?: string | undefined;
-  readonly t3Token?: string | undefined;
+  readonly coreUrl?: string | undefined;
+  readonly coreHttpUrl?: string | undefined;
+  readonly coreToken?: string | undefined;
 }
 
 interface PrismuxDaemonState {
@@ -467,7 +467,7 @@ const make = Effect.gen(function* () {
 
   const pushHostMetricsOnce =
     /* Periodic host metrics loop; avoid a span per telemetry tick. */
-    Effect.fnUntraced(function* (baseUrl: string, token: string, t3HttpUrl: string | undefined) {
+    Effect.fnUntraced(function* (baseUrl: string, token: string, coreHttpUrl: string | undefined) {
       const metrics = yield* Option.match(electronAppOption, {
         onNone: () => Effect.succeed([] as const),
         onSome: (electronApp) =>
@@ -482,8 +482,8 @@ const make = Effect.gen(function* () {
         metrics,
         mainPid: process.pid,
         collectedAt,
-        t3BackendSnapshot: backendSnapshot,
-        t3HttpUrl: t3HttpUrl ?? null,
+        coreBackendSnapshot: backendSnapshot,
+        coreHttpUrl: coreHttpUrl ?? null,
       });
       return yield* postHostMetricsToDaemon({
         baseUrl,
@@ -497,7 +497,7 @@ const make = Effect.gen(function* () {
     child: NodeChildProcess.ChildProcess,
     baseUrl: string,
     token: string,
-    t3HttpUrl: string | undefined,
+    coreHttpUrl: string | undefined,
   ): Effect.Effect<void> => {
     if (Option.isNone(electronAppOption) && Option.isNone(backendPoolOption)) {
       return Effect.void;
@@ -515,7 +515,7 @@ const make = Effect.gen(function* () {
     const loop = Effect.gen(function* () {
       // Immediate first push delivers Electron memory & T3 Server PID within <100ms,
       // and primes Electron app.getAppMetrics() CPU interval.
-      yield* pushHostMetricsOnce(baseUrl, token, t3HttpUrl);
+      yield* pushHostMetricsOnce(baseUrl, token, coreHttpUrl);
       // Short follow-up push (300ms) yields real non-zero CPU% deltas on startup.
       yield* Effect.sleep(HOST_METRICS_WARMUP_DELAY);
       while (yield* isActive) {
@@ -526,7 +526,7 @@ const make = Effect.gen(function* () {
           yield* Queue.take(activityWakeQueue);
           continue;
         }
-        yield* pushHostMetricsOnce(baseUrl, token, t3HttpUrl);
+        yield* pushHostMetricsOnce(baseUrl, token, coreHttpUrl);
         // @effect-diagnostics-next-line raceFirstWithSleepToTimeout:off - races window/power wakeups against the active/background cadence interval.
         yield* Effect.raceFirst(Queue.take(activityWakeQueue), Effect.sleep(cadence.interval));
       }
@@ -646,21 +646,21 @@ const make = Effect.gen(function* () {
           "--auth-token",
           token,
         ];
-        const normalizedT3Url = input?.t3Url
-          ? normalizeT3WebSocketUrl(input.t3Url)
-          : input?.t3HttpUrl
-            ? normalizeT3WebSocketUrl(input.t3HttpUrl)
+        const normalizedCoreUrl = input?.coreUrl
+          ? normalizeCoreWebSocketUrl(input.coreUrl)
+          : input?.coreHttpUrl
+            ? normalizeCoreWebSocketUrl(input.coreHttpUrl)
             : undefined;
-        const normalizedT3HttpUrl = input?.t3HttpUrl
-          ? normalizeT3HttpUrl(input.t3HttpUrl)
-          : input?.t3Url
-            ? normalizeT3HttpUrl(input.t3Url)
+        const normalizedCoreHttpUrl = input?.coreHttpUrl
+          ? normalizeCoreHttpUrl(input.coreHttpUrl)
+          : input?.coreUrl
+            ? normalizeCoreHttpUrl(input.coreUrl)
             : undefined;
-        if (normalizedT3Url) {
-          args.push("--t3-url", normalizedT3Url);
+        if (normalizedCoreUrl) {
+          args.push("--prismux-url", normalizedCoreUrl);
         }
-        if (input?.t3Token) {
-          args.push("--t3-token", input.t3Token);
+        if (input?.coreToken) {
+          args.push("--prismux-token", input.coreToken);
         }
 
         const catalogPath = environment.isPackaged
@@ -673,7 +673,7 @@ const make = Effect.gen(function* () {
           : environment.path.resolve(environment.rootDir, "plugins-official/catalog/official.json");
 
         const initialBackendSnapshot = yield* readPrimaryBackendSnapshot;
-        const initialT3Pid =
+        const initialCorePid =
           initialBackendSnapshot !== null
             ? Option.getOrUndefined(initialBackendSnapshot.activePid)
             : undefined;
@@ -683,9 +683,9 @@ const make = Effect.gen(function* () {
           hostEnv,
           catalogPath,
           mainPid: process.pid,
-          t3ServerPid: initialT3Pid,
-          t3HttpUrl: normalizedT3HttpUrl,
-          t3WsUrl: normalizedT3Url,
+          coreServerPid: initialCorePid,
+          coreHttpUrl: normalizedCoreHttpUrl,
+          coreWsUrl: normalizedCoreUrl,
         });
 
         const child = yield* Effect.try({
@@ -769,8 +769,8 @@ const make = Effect.gen(function* () {
           baseUrl,
           entryPath,
           catalogPath,
-          t3Url: normalizedT3Url ?? null,
-          hasT3Token: Boolean(input?.t3Token),
+          coreUrl: normalizedCoreUrl ?? null,
+          hasCoreToken: Boolean(input?.coreToken),
         });
 
         const healthy = yield* waitForDaemonHealth(baseUrl, child);
@@ -778,7 +778,7 @@ const make = Effect.gen(function* () {
           yield* Ref.update(stateRef, (state) =>
             state.child === child ? { ...state, ready: true } : state,
           );
-          yield* startHostMetricsReporter(child, baseUrl, token, normalizedT3HttpUrl);
+          yield* startHostMetricsReporter(child, baseUrl, token, normalizedCoreHttpUrl);
           yield* logDaemonInfo("prismux daemon ready", { baseUrl });
         } else {
           yield* logDaemonWarning(

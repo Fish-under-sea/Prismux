@@ -1,5 +1,5 @@
-import { type EnvironmentId, T3_PROJECT_FILE_NAME, type T3ProjectFile } from "@prismux/core-contracts";
-import { parseT3ProjectFile } from "@prismux/core-shared/t3ProjectFile";
+import { type EnvironmentId, PRISMUX_PROJECT_FILE_NAME, type PrismuxProjectFile } from "@prismux/core-contracts";
+import { parsePrismuxProjectFile } from "@prismux/core-shared/prismuxProjectFile";
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { useMessages } from "gt-react";
@@ -27,20 +27,20 @@ type ProjectFileMember = readonly [
 const memberProjectFilesAtom = Atom.family((membersKey: string) => {
   const members = JSON.parse(membersKey) as ReadonlyArray<ProjectFileMember>;
   return Atom.make((get) => {
-    const files = new Map<string, T3ProjectFile | null>();
+    const files = new Map<string, PrismuxProjectFile | null>();
     for (const [environmentId, workspaceRoot, physicalProjectKey] of members) {
       const result = get(
-        getProjectFileQueryAtom(environmentId, workspaceRoot, T3_PROJECT_FILE_NAME),
+        getProjectFileQueryAtom(environmentId, workspaceRoot, PRISMUX_PROJECT_FILE_NAME),
       );
       if (result.waiting) continue;
       const data =
-        get(optimisticFileAtom(environmentId, workspaceRoot, T3_PROJECT_FILE_NAME))?.data ??
+        get(optimisticFileAtom(environmentId, workspaceRoot, PRISMUX_PROJECT_FILE_NAME))?.data ??
         AsyncResult.getOrElse(result, () => null);
       files.set(
         physicalProjectKey,
         data === null || data.exists === false || data.truncated
           ? null
-          : parseT3ProjectFile(data.contents),
+          : parsePrismuxProjectFile(data.contents),
       );
     }
     return files;

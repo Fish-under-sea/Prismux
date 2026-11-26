@@ -621,7 +621,7 @@ function providerConstraints(
   return constraints;
 }
 
-/** t3_thread_launch keeps a selection as given, so it can hold options its model does not have. */
+/** prismux_thread_launch keeps a selection as given, so it can hold options its model does not have. */
 function knownOptions(
   options: ReadonlyArray<ProviderOptionSelection> | undefined,
   descriptors: ReadonlyArray<ProviderOptionDescriptor> | undefined,

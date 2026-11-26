@@ -236,7 +236,7 @@ describe("AcpRegistrySupport", () => {
     const requests: Array<string> = [];
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
-      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-acp-local-" });
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "prismux-acp-local-" });
       const commandPath = `${cacheDir}/dsh`;
       yield* fileSystem.writeFileString(commandPath, "#!/bin/sh\n");
       yield* fileSystem.chmod(commandPath, 0o755);
@@ -287,7 +287,7 @@ describe("AcpRegistrySupport", () => {
   it.effect("resolves a local executable path and inherits the host environment", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
-      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-acp-local-path-" });
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "prismux-acp-local-path-" });
       const commandPath = `${cacheDir}/dsh wrapper`;
       yield* fileSystem.writeFileString(commandPath, "#!/bin/sh\n");
       yield* fileSystem.chmod(commandPath, 0o755);
@@ -341,7 +341,7 @@ describe("AcpRegistrySupport", () => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-command-code-",
+        prefix: "prismux-acp-command-code-",
       });
       const catalog = (executable: string) =>
         AcpRegistrySupport.makeAcpRegistryCatalog({
@@ -389,7 +389,7 @@ describe("AcpRegistrySupport", () => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-local-missing-",
+        prefix: "prismux-acp-local-missing-",
       });
       const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
         cacheDir,
@@ -443,7 +443,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-override-",
+        prefix: "prismux-acp-registry-override-",
       });
       const commandPath = `${cacheDir}/example-agent`;
       yield* fileSystem.writeFileString(commandPath, "#!/bin/sh\n");
@@ -490,7 +490,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-global-package-",
+        prefix: "prismux-acp-registry-global-package-",
       });
       const toolchain = yield* makeFakeNpmToolchain(cacheDir);
       const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
@@ -548,7 +548,7 @@ describe("AcpRegistrySupport", () => {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-user-global-package-",
+        prefix: "prismux-acp-registry-user-global-package-",
       });
       const toolchain = yield* makeFakeNpmToolchain(cacheDir);
       const systemPrefix = path.join(cacheDir, "system-global");
@@ -587,7 +587,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-windows-npm-prefix-",
+        prefix: "prismux-acp-registry-windows-npm-prefix-",
       });
       const toolchain = yield* makeFakeNpmToolchain(cacheDir);
       const environment = { ...toolchain.environment, NPM_CONFIG_PREFIX: "C:\\inherited-npm" };
@@ -637,7 +637,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-failed-install-",
+        prefix: "prismux-acp-registry-failed-install-",
       });
       const toolchain = yield* makeFakeNpmToolchain(cacheDir);
       const environment = { ...toolchain.environment, FAKE_NPM_INSTALL_FAILURE_LINES: "40000" };
@@ -673,7 +673,7 @@ describe("AcpRegistrySupport", () => {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-uv-path-collision-",
+        prefix: "prismux-acp-registry-uv-path-collision-",
       });
       const toolchain = yield* makeFakeUvToolchain(cacheDir);
       const userBin = path.join(cacheDir, "user-bin");
@@ -710,7 +710,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-windows-package-path-",
+        prefix: "prismux-acp-registry-windows-package-path-",
       });
       const toolchain = yield* makeFakeUvToolchain(cacheDir);
       const linuxResolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
@@ -772,7 +772,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-install-",
+        prefix: "prismux-acp-registry-install-",
       });
       const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
         cacheDir,
@@ -821,7 +821,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-runtime-temp-",
+        prefix: "prismux-acp-registry-runtime-temp-",
       });
       const runtimeTempDir = `${cacheDir}/antigravity-tmp/acp-registry`;
       yield* fileSystem.makeDirectory(`${runtimeTempDir}/run-killed/_MEI123`, { recursive: true });
@@ -869,7 +869,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-dot-name-",
+        prefix: "prismux-acp-registry-dot-name-",
       });
       const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
         cacheDir,
@@ -912,7 +912,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-advance-",
+        prefix: "prismux-acp-registry-advance-",
       });
       const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
         cacheDir,
@@ -979,10 +979,10 @@ describe("AcpRegistrySupport", () => {
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-acp-registry-system-",
+          prefix: "prismux-acp-registry-system-",
         });
         const systemBinDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-acp-registry-system-bin-",
+          prefix: "prismux-acp-registry-system-bin-",
         });
         const systemBinary = path.join(systemBinDir, "example-agent");
         yield* fileSystem.writeFileString(systemBinary, "#!/bin/sh\necho system\n");
@@ -1051,7 +1051,7 @@ describe("AcpRegistrySupport", () => {
     });
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
-      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-acp-root-entry-" });
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "prismux-acp-root-entry-" });
       const source = `${cacheDir}/source`;
       yield* fileSystem.makeDirectory(source);
       yield* fileSystem.writeFileString(`${source}/agent`, "#!/bin/sh\necho managed\n");
@@ -1123,7 +1123,7 @@ describe("AcpRegistrySupport", () => {
       return Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-acp-outside-link-",
+          prefix: "prismux-acp-outside-link-",
         });
         const outsideFile = `${cacheDir}/outside`;
         yield* fileSystem.writeFileString(outsideFile, "private\n");
@@ -1209,7 +1209,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-search-",
+        prefix: "prismux-acp-registry-search-",
       });
       const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
         cacheDir,
@@ -1251,7 +1251,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-refresh-",
+        prefix: "prismux-acp-registry-refresh-",
       });
       const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
         cacheDir,
@@ -1290,7 +1290,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-retry-",
+        prefix: "prismux-acp-registry-retry-",
       });
       yield* fileSystem.makeDirectory(`${cacheDir}/acp-registry`, { recursive: true });
       yield* fileSystem.writeFileString(
@@ -1335,7 +1335,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-refresh-fallback-",
+        prefix: "prismux-acp-registry-refresh-fallback-",
       });
       const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
         cacheDir,
@@ -1386,7 +1386,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-runner-filter-",
+        prefix: "prismux-acp-registry-runner-filter-",
       });
       const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
         cacheDir,
@@ -1428,7 +1428,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-blank-fields-",
+        prefix: "prismux-acp-registry-blank-fields-",
       });
       const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
         cacheDir,
@@ -1463,7 +1463,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-unpinned-",
+        prefix: "prismux-acp-registry-unpinned-",
       });
       const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
         cacheDir,
@@ -1494,7 +1494,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-runner-syntax-",
+        prefix: "prismux-acp-registry-runner-syntax-",
       });
       const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
         cacheDir,
@@ -1542,7 +1542,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-checksum-",
+        prefix: "prismux-acp-registry-checksum-",
       });
       const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
         cacheDir,
@@ -1579,7 +1579,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-cache-",
+        prefix: "prismux-acp-registry-cache-",
       });
       const registryDirectory = `${cacheDir}/acp-registry`;
       yield* fileSystem.makeDirectory(registryDirectory, { recursive: true });
@@ -1627,7 +1627,7 @@ describe("AcpRegistrySupport", () => {
       return Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-acp-registry-stale-",
+          prefix: "prismux-acp-registry-stale-",
         });
         yield* fileSystem.makeDirectory(`${cacheDir}/acp-registry`, { recursive: true });
         yield* fileSystem.writeFileString(
@@ -1675,7 +1675,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-invalid-",
+        prefix: "prismux-acp-registry-invalid-",
       });
       const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
         cacheDir,
@@ -1705,7 +1705,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-cold-inspect-",
+        prefix: "prismux-acp-registry-cold-inspect-",
       });
       const registryDirectory = `${cacheDir}/acp-registry`;
       yield* fileSystem.makeDirectory(registryDirectory, { recursive: true });
@@ -1740,7 +1740,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-offline-",
+        prefix: "prismux-acp-registry-offline-",
       });
       yield* fileSystem.makeDirectory(`${cacheDir}/acp-registry`, { recursive: true });
       yield* fileSystem.writeFileString(`${cacheDir}/acp-registry/registry.json`, "{not json");
@@ -1784,7 +1784,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-effective-env-",
+        prefix: "prismux-acp-registry-effective-env-",
       });
       const registryDirectory = `${cacheDir}/acp-registry`;
       yield* fileSystem.makeDirectory(registryDirectory, { recursive: true });
@@ -1831,7 +1831,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-non-file-",
+        prefix: "prismux-acp-registry-non-file-",
       });
       const registryDirectory = `${cacheDir}/acp-registry`;
       const fakeExecutable = `${cacheDir}/tools/example-agent/1.2.3/linux-x86_64/bin/example-agent`;
@@ -1878,7 +1878,7 @@ describe("AcpRegistrySupport", () => {
       return Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-acp-registry-uninstall-",
+          prefix: "prismux-acp-registry-uninstall-",
         });
         const agentRoot = `${cacheDir}/tools/example-agent`;
         const runnerCache = `${cacheDir}/external-npx-cache/example-agent/package.json`;
@@ -1939,7 +1939,7 @@ describe("AcpRegistrySupport", () => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-uninstall-packages-",
+        prefix: "prismux-acp-uninstall-packages-",
       });
       const versionRoot = `${cacheDir}/tools/example-agent/1.2.3`;
       yield* fileSystem.makeDirectory(`${versionRoot}/linux-x86_64`, { recursive: true });
@@ -1985,7 +1985,7 @@ describe("AcpRegistrySupport", () => {
       return yield* Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-acp-registry-uninstall-race-",
+          prefix: "prismux-acp-registry-uninstall-race-",
         });
         const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
           cacheDir,
@@ -2082,7 +2082,7 @@ describe("AcpRegistrySupport", () => {
       return yield* Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-acp-registry-parallel-install-",
+          prefix: "prismux-acp-registry-parallel-install-",
         });
         const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
           cacheDir,
@@ -2145,7 +2145,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-uninstall-reservation-",
+        prefix: "prismux-acp-registry-uninstall-reservation-",
       });
       const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
         cacheDir,
@@ -2187,7 +2187,7 @@ describe("acpRegistryManagedBinaryDirectories", () => {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-bins-",
+        prefix: "prismux-acp-registry-bins-",
       });
       const install = (agent: string, version: string, target: string, commandDirectory = "") =>
         fileSystem.makeDirectory(

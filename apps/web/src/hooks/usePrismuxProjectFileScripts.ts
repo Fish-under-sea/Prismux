@@ -1,26 +1,26 @@
 import {
-  T3_PROJECT_FILE_NAME,
+  PRISMUX_PROJECT_FILE_NAME,
   type EnvironmentId,
-  type T3ProjectFile,
-  type T3ProjectFileScript,
+  type PrismuxProjectFile,
+  type PrismuxProjectFileScript,
 } from "@prismux/core-contracts";
-import { parseT3ProjectFile } from "@prismux/core-shared/t3ProjectFile";
+import { parsePrismuxProjectFile } from "@prismux/core-shared/prismuxProjectFile";
 
 import { useProjectFileQuery } from "~/components/files/projectFilesQueryState";
 
-const NO_SCRIPTS: ReadonlyArray<T3ProjectFileScript> = [];
+const NO_SCRIPTS: ReadonlyArray<PrismuxProjectFileScript> = [];
 
-export interface T3ProjectFileState {
+export interface PrismuxProjectFileState {
   status: "loading" | "missing" | "invalid" | "valid";
-  file: T3ProjectFile | null;
-  scripts: ReadonlyArray<T3ProjectFileScript>;
+  file: PrismuxProjectFile | null;
+  scripts: ReadonlyArray<PrismuxProjectFileScript>;
 }
 
-export function useT3ProjectFileState(
+export function usePrismuxProjectFileState(
   environmentId: EnvironmentId,
   cwd: string | null,
-): T3ProjectFileState {
-  const query = useProjectFileQuery(environmentId, cwd ?? "", T3_PROJECT_FILE_NAME, cwd !== null);
+): PrismuxProjectFileState {
+  const query = useProjectFileQuery(environmentId, cwd ?? "", PRISMUX_PROJECT_FILE_NAME, cwd !== null);
   const contents = query.data && !query.data.truncated ? query.data.contents : null;
   const isPending = query.isPending;
   if (contents === null) {
@@ -30,16 +30,16 @@ export function useT3ProjectFileState(
       scripts: NO_SCRIPTS,
     } as const;
   }
-  const file = parseT3ProjectFile(contents);
+  const file = parsePrismuxProjectFile(contents);
   if (file === null) {
     return { status: "invalid", file: null, scripts: NO_SCRIPTS } as const;
   }
   return { status: "valid", file, scripts: file.scripts ?? NO_SCRIPTS } as const;
 }
 
-export function useT3ProjectFileScripts(
+export function usePrismuxProjectFileScripts(
   environmentId: EnvironmentId,
   cwd: string | null,
-): ReadonlyArray<T3ProjectFileScript> {
-  return useT3ProjectFileState(environmentId, cwd).scripts;
+): ReadonlyArray<PrismuxProjectFileScript> {
+  return usePrismuxProjectFileState(environmentId, cwd).scripts;
 }

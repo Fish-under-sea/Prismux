@@ -43,7 +43,7 @@ const TUNNEL_HOSTNAME = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i;
  * tunnel hostname; a saved machine's comes from T3 Connect, and only a tunnel counts there,
  * since a publish-only link registers its local address as `manual`.
  */
-export function t3ConnectMcpUrl(input: {
+export function prismuxConnectMcpUrl(input: {
   readonly thisMachine: boolean;
   readonly tunnelHostname: string | undefined;
   readonly relayEndpoint: RelayManagedEndpoint | undefined;
@@ -59,7 +59,7 @@ export function t3ConnectMcpUrl(input: {
 }
 
 /** Where T3 Connect can be turned on for an environment: from here, only by policy, or on its host. */
-export type T3ConnectTurnOn =
+export type PrismuxConnectTurnOn =
   | { readonly kind: "here" }
   | { readonly kind: "policy"; readonly reason: string }
   | { readonly kind: "on-host" };
@@ -68,13 +68,13 @@ export type T3ConnectTurnOn =
  * Settings and the MCP wizard share this, so a Turn on control shows only where linking works.
  * `linkableHere` is the environment's own answer for this session (its link state).
  */
-export function resolveT3ConnectTurnOn(input: {
+export function resolvePrismuxConnectTurnOn(input: {
   readonly linkableHere: boolean;
   readonly cloudConfigured: boolean;
   readonly canReadRelay: boolean;
   readonly canWriteRelay: boolean;
   readonly connectDenial: string | undefined;
-}): T3ConnectTurnOn {
+}): PrismuxConnectTurnOn {
   if (input.connectDenial !== undefined) return { kind: "policy", reason: input.connectDenial };
   return input.linkableHere && input.cloudConfigured && input.canReadRelay && input.canWriteRelay
     ? { kind: "here" }

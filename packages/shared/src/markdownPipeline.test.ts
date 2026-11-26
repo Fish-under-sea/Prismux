@@ -415,7 +415,7 @@ it("preserves in-app thread links through the shared Markdown sanitizer", () => 
     .use(CHAT_MARKDOWN_REHYPE_PLUGINS);
   const tree = processor.runSync(
     processor.parse(
-      '[Open thread](t3-thread://v1/thread)\n\n<t3-thread://v2/environment/thread:a%3A1>\n\n<a href="javascript:alert(1)">Unsafe</a>',
+      '[Open thread](prismux-thread://v1/thread)\n\n<prismux-thread://v2/environment/thread:a%3A1>\n\n<a href="javascript:alert(1)">Unsafe</a>',
     ),
   );
   expect(tree.children[0]).toMatchObject({
@@ -423,7 +423,7 @@ it("preserves in-app thread links through the shared Markdown sanitizer", () => 
     children: [
       {
         tagName: "a",
-        properties: { href: "t3-thread://v1/thread" },
+        properties: { href: "prismux-thread://v1/thread" },
         children: [{ type: "text", value: "Open thread" }],
       },
     ],
@@ -433,8 +433,8 @@ it("preserves in-app thread links through the shared Markdown sanitizer", () => 
     children: [
       {
         tagName: "a",
-        properties: { href: "t3-thread://v2/environment/thread:a%3A1" },
-        children: [{ type: "text", value: "t3-thread://v2/environment/thread:a%3A1" }],
+        properties: { href: "prismux-thread://v2/environment/thread:a%3A1" },
+        children: [{ type: "text", value: "prismux-thread://v2/environment/thread:a%3A1" }],
       },
     ],
   });
@@ -917,7 +917,7 @@ it("moves a <picture>'s color-scheme sources onto its <img>, which the renderer 
 
 it("links complete absolute paths in prose and skips shortened ones", () => {
   const path =
-    "/tmp/claude-1000/-home-user--t3-worktrees-app-t3-abc123/session/scratchpad/notes.md";
+    "/tmp/claude-1000/-home-user--prismux-worktrees-app-t3-abc123/session/scratchpad/notes.md";
   const processor = unified().use(remarkParse).use(CHAT_MARKDOWN_REMARK_PLUGINS);
   const links = (markdown: string) => {
     const urls: string[] = [];

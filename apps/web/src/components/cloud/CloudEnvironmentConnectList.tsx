@@ -197,7 +197,7 @@ export function CloudEnvironmentConnectRows({
     const message =
       thrownErrorMessage(cause, m) ?? gt("Could not connect the T3 Connect environment.");
     const traceId = findErrorTraceId(cause);
-    console.error("[t3-connect] Could not connect environment", { message, traceId, cause });
+    console.error("[prismux-connect] Could not connect environment", { message, traceId, cause });
     toastManager.add({
       type: "error",
       title: gt("Could not connect environment"),

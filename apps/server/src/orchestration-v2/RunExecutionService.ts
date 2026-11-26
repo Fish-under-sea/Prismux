@@ -2054,7 +2054,7 @@ export const layer: Layer.Layer<
                     cause: new ProviderAdapter.ProviderAdapterEventStreamError({
                       driver: input.providerThread.driver,
                       providerSessionId: input.providerSessionId,
-                      raisedByT3: true,
+                      raisedByPrismux: true,
                       cause: "Provider event stream ended without a root terminal.",
                     }),
                   });
@@ -2121,7 +2121,7 @@ export const layer: Layer.Layer<
                   const runtimeLost =
                     isRunExecutionIngestError(squashed) &&
                     isProviderEventStreamError(squashed.cause) &&
-                    squashed.cause.raisedByT3 !== true;
+                    squashed.cause.raisedByPrismux !== true;
                   if (yield* Ref.get(rootRunFinalized)) {
                     if (runtimeLost) yield* endWorkLostAfterRootRun(completedAt);
                     return;

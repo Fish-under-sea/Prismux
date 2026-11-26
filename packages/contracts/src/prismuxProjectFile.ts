@@ -115,7 +115,7 @@ export const PrismuxProjectFile = Schema.Struct({
       create: trimmedNonEmpty(
         {
           description:
-            "Shell command that lays out a thread's folder for a project tracking several repositories, in place of Prismux's own worktrees and links. It runs in the project folder with T3_WORKTREE_ROOT (the folder to fill), T3_WORKTREE_PROJECT_PATH (where the project folder goes inside it), T3_WORKTREE_BRANCH, T3_WORKTREE_BASE, T3_WORKTREE_REPOSITORIES (the chosen repositories, one path per line) and T3_PROJECT_ROOT set. Each of the project's repositories it checks out at the same relative place is adopted as the thread's checkout of it, and must be a git worktree of that repository on T3_WORKTREE_BRANCH. It runs again when the folder goes missing, so it must cope with the branch already existing. It has ten minutes.",
+            "Shell command that lays out a thread's folder for a project tracking several repositories, in place of Prismux's own worktrees and links. It runs in the project folder with PRISMUX_WORKTREE_ROOT (the folder to fill), PRISMUX_WORKTREE_PROJECT_PATH (where the project folder goes inside it), PRISMUX_WORKTREE_BRANCH, PRISMUX_WORKTREE_BASE, PRISMUX_WORKTREE_REPOSITORIES (the chosen repositories, one path per line) and PRISMUX_PROJECT_ROOT set. Each of the project's repositories it checks out at the same relative place is adopted as the thread's checkout of it, and must be a git worktree of that repository on PRISMUX_WORKTREE_BRANCH. It runs again when the folder goes missing, so it must cope with the branch already existing. It has ten minutes.",
         },
         PRISMUX_PROJECT_FILE_COMMAND_MAX_LENGTH,
       ),
@@ -155,14 +155,6 @@ export const PrismuxProjectFile = Schema.Struct({
     "Checked-in project configuration for Prismux (prismux.json at the repository root). See https://prismux.app for documentation.",
 });
 export type PrismuxProjectFile = typeof PrismuxProjectFile.Type;
-
-// Phase 1 compatibility aliases for existing callers in web/desktop until Phase 2 consolidation.
-export const T3_PROJECT_FILE_NAME = PRISMUX_PROJECT_FILE_NAME;
-export const T3_PROJECT_FILE_SCHEMA_URL = PRISMUX_PROJECT_FILE_SCHEMA_URL;
-export const T3ProjectFileScript = PrismuxProjectFileScript;
-export type T3ProjectFileScript = PrismuxProjectFileScript;
-export const T3ProjectFile = PrismuxProjectFile;
-export type T3ProjectFile = PrismuxProjectFile;
 
 /** Keys must be nullable in ServerSettings so both environment and project overrides can inherit prismux.json. */
 export const PROJECT_FILE_BACKED_SETTINGS = {

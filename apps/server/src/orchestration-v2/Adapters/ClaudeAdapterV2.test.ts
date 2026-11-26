@@ -88,7 +88,7 @@ import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { WorkflowAgentTranscriptReadObserver } from "../workflowAgentTranscript.ts";
 import * as ServerConfig from "../../config.ts";
 import * as McpProviderSession from "@prismux/provider-core/server/mcpSession";
-import { T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH } from "@prismux/provider-core/server/orchestrationInstructions";
+import { PRISMUX_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH } from "@prismux/provider-core/server/orchestrationInstructions";
 import * as McpProviderSessions from "@prismux/provider-core/server/McpProviderSessions";
 import { PreviewControlsToolkit } from "../../mcp/toolkits/previewControls/tools.ts";
 import { HtmlToolkit } from "../../mcp/toolkits/html/tools.ts";
@@ -694,13 +694,13 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
 
 describe("ClaudeAdapterV2 MCP query overrides", () => {
   const T3_MCP_SERVERS = {
-    "t3-code": {
+    "prismux": {
       type: "http",
       url: "http://127.0.0.1:43123/mcp",
       headers: {
         Authorization: "Bearer secret-claude-token",
       },
-      timeout: ClaudeAdapterV2.CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
+      timeout: ClaudeAdapterV2.CLAUDE_PRISMUX_MCP_TOOL_TIMEOUT_MS,
     },
   } as const;
 
@@ -729,11 +729,11 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     assert.deepEqual(overrides, {
       allowedTools: [
         ...ClaudeAdapterV2.CLAUDE_READ_ONLY_ALLOWED_TOOLS,
-        ...ClaudeAdapterV2.CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS,
+        ...ClaudeAdapterV2.CLAUDE_READ_ONLY_PRISMUX_MCP_ALLOWED_TOOLS,
       ],
       mcpServers: T3_MCP_SERVERS,
     });
-    assert.isFalse(overrides.allowedTools?.includes(ClaudeAdapterV2.CLAUDE_T3_MCP_TOOL_WILDCARD));
+    assert.isFalse(overrides.allowedTools?.includes(ClaudeAdapterV2.CLAUDE_PRISMUX_MCP_TOOL_WILDCARD));
   });
 
   it("invalidates live-query reuse when MCP credentials rotate or tracked folders change", () => {
@@ -793,13 +793,13 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       ...Object.values(MessageToolkit.tools),
     ]
       .filter((tool) => Context.get(tool.annotations, Tool.Readonly))
-      .map((tool) => `mcp__t3-code__${tool.name}`)
+      .map((tool) => `mcp__prismux__${tool.name}`)
       .sort();
 
     // regression: #32022 Claude Plan mode asks before every non-read-only MCP call
-    assert.include(readOnlyToolNames, "mcp__t3-code__t3_background_wait");
+    assert.include(readOnlyToolNames, "mcp__prismux__prismux_background_wait");
     assert.deepEqual(
-      [...ClaudeAdapterV2.CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS].sort(),
+      [...ClaudeAdapterV2.CLAUDE_READ_ONLY_PRISMUX_MCP_ALLOWED_TOOLS].sort(),
       readOnlyToolNames,
     );
   });
@@ -809,7 +809,7 @@ describe("ClaudeAdapterV2 SDK warnings", () => {
   it("drops only the SDK's canUseTool shadowing warning while opening a query", async () => {
     using emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
     for (const options of [
-      { permissionMode: "default", allowedTools: [ClaudeAdapterV2.CLAUDE_T3_MCP_TOOL_WILDCARD] },
+      { permissionMode: "default", allowedTools: [ClaudeAdapterV2.CLAUDE_PRISMUX_MCP_TOOL_WILDCARD] },
       { permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true },
     ] satisfies ReadonlyArray<ClaudeSdk.Options>) {
       const query = ClaudeAdapterV2.withoutClaudeCanUseToolShadowedWarning(() =>
@@ -857,15 +857,15 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
       allowedTools: ["Read"],
     });
     assert.deepEqual(overrides, {
-      allowedTools: ["Read", "mcp__t3-code__*"],
+      allowedTools: ["Read", "mcp__prismux__*"],
       mcpServers: {
-        "t3-code": {
+        "prismux": {
           type: "http",
           url: "http://127.0.0.1:43123/mcp",
           headers: {
             Authorization: "Bearer secret-claude-token",
           },
-          timeout: ClaudeAdapterV2.CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
+          timeout: ClaudeAdapterV2.CLAUDE_PRISMUX_MCP_TOOL_TIMEOUT_MS,
         },
       },
     });
@@ -891,7 +891,7 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
     assert.equal(systemPrompt.type, "preset");
     assert.equal(systemPrompt.preset, "claude_code");
     assert.include(systemPrompt.append ?? "", "Use `delegate_task`");
-    assert.include(systemPrompt.append ?? "", "call `t3_background_wait`");
+    assert.include(systemPrompt.append ?? "", "call `prismux_background_wait`");
     assert.notInclude(systemPrompt.append ?? "", "## Prismux devices");
     const logged = ClaudeAdapterV2.loggedClaudeQueryOptions(options);
     assert.equal(logged.hasMcpServers, true);
@@ -913,7 +913,12 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
 });
 
 describe("ClaudeAdapterV2 device instructions", () => {
-  const options = (input: { readonly mcp: boolean; readonly deviceToolsAvailable: boolean }) =>
+  const options = (input: {
+    readonly mcp: boolean;
+    readonly deviceToolsAvailable: boolean;
+    readonly prompt?: string;
+    readonly isSubagent?: boolean;
+  }) =>
     ClaudeAdapterV2.makeClaudeQueryOptions({
       modelSelection: {
         instanceId: ProviderInstanceId.make("claudeAgent"),
@@ -923,30 +928,62 @@ describe("ClaudeAdapterV2 device instructions", () => {
       resume: false,
       cwd: "/workspace",
       ...(input.mcp
-        ? { mcpServers: { "t3-code": { type: "http" as const, url: "http://127.0.0.1/mcp" } } }
+        ? { mcpServers: { "prismux": { type: "http" as const, url: "http://127.0.0.1/mcp" } } }
         : {}),
       deviceToolsAvailable: input.deviceToolsAvailable,
+      ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
+      ...(input.isSubagent !== undefined ? { isSubagent: input.isSubagent } : {}),
       environment: {},
     });
-  const append = (input: { readonly mcp: boolean; readonly deviceToolsAvailable: boolean }) =>
-    (options(input).systemPrompt as { readonly append?: string }).append ?? "";
+  const append = (input: {
+    readonly mcp: boolean;
+    readonly deviceToolsAvailable: boolean;
+    readonly prompt?: string;
+    readonly isSubagent?: boolean;
+  }) => (options(input).systemPrompt as { readonly append?: string }).append ?? "";
 
-  it("gives a session with device access the device block and the ToolSearch line to load it", () => {
-    const text = append({ mcp: true, deviceToolsAvailable: true });
-    assert.include(text, T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH);
+  it("gives a session with device access the device block only when device work is relevant", () => {
+    const text = append({
+      mcp: true,
+      deviceToolsAvailable: true,
+      prompt: "Check the login screen on iOS simulator.",
+    });
+    assert.include(text, PRISMUX_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH);
     assert.include(text, "Use `delegate_task`");
+    // Plain non-device prompt omits device instructions even when capability is present
+    assert.notInclude(
+      append({ mcp: true, deviceToolsAvailable: true, prompt: "Refactor utils.ts." }),
+      "## Prismux devices",
+    );
+    // Delegated child omits parent orchestration & PR linking for a plain prose prompt
+    const childText = append({
+      mcp: true,
+      deviceToolsAvailable: true,
+      isSubagent: true,
+      prompt: "删掉「最后」和「从前」，输出正文。",
+    });
+    assert.notInclude(childText, "## Prismux orchestration");
+    assert.notInclude(childText, "## Prismux devices");
+    assert.notInclude(childText, "<pull_request_linking>");
   });
 
-  it("leaves the device block out without device access or without T3 tools", () => {
-    assert.notInclude(append({ mcp: true, deviceToolsAvailable: false }), "## Prismux devices");
-    assert.notInclude(append({ mcp: false, deviceToolsAvailable: true }), "## Prismux devices");
+  it("leaves the device block out without device access or without Prismux tools", () => {
+    assert.notInclude(
+      append({ mcp: true, deviceToolsAvailable: false, prompt: "Test on iOS simulator" }),
+      "## Prismux devices",
+    );
+    assert.notInclude(
+      append({ mcp: false, deviceToolsAvailable: true, prompt: "Test on iOS simulator" }),
+      "## Prismux devices",
+    );
   });
 
-  it("gives native subagents the device block only in a session with device access", async () => {
+  it("gives native subagents the device block only in a session with active device relevance", async () => {
     // Subagents start from their task prompt, not the parent's system prompt.
     const subagentContext = (input: {
       readonly mcp: boolean;
       readonly deviceToolsAvailable: boolean;
+      readonly prompt?: string;
     }) =>
       Promise.all(
         (options(input).hooks?.SubagentStart ?? []).flatMap((matcher) =>
@@ -966,16 +1003,45 @@ describe("ClaudeAdapterV2 device instructions", () => {
           ),
         ),
       );
-    assert.deepEqual(await subagentContext({ mcp: true, deviceToolsAvailable: true }), [
-      {
-        hookSpecificOutput: {
-          hookEventName: "SubagentStart",
-          additionalContext: T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH,
+    assert.deepEqual(
+      await subagentContext({
+        mcp: true,
+        deviceToolsAvailable: true,
+        prompt: "Test on Android emulator",
+      }),
+      [
+        {
+          hookSpecificOutput: {
+            hookEventName: "SubagentStart",
+            additionalContext: PRISMUX_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH,
+          },
         },
-      },
-    ]);
-    assert.deepEqual(await subagentContext({ mcp: true, deviceToolsAvailable: false }), []);
-    assert.deepEqual(await subagentContext({ mcp: false, deviceToolsAvailable: true }), []);
+      ],
+    );
+    assert.deepEqual(
+      await subagentContext({
+        mcp: true,
+        deviceToolsAvailable: true,
+        prompt: "Refactor parser.ts",
+      }),
+      [],
+    );
+    assert.deepEqual(
+      await subagentContext({
+        mcp: true,
+        deviceToolsAvailable: false,
+        prompt: "Test on Android emulator",
+      }),
+      [],
+    );
+    assert.deepEqual(
+      await subagentContext({
+        mcp: false,
+        deviceToolsAvailable: true,
+        prompt: "Test on Android emulator",
+      }),
+      [],
+    );
   });
 });
 
@@ -3328,7 +3394,7 @@ describe("ClaudeAdapterV2 MCP credential channel", () => {
             resume: false,
             cwd: null,
             environment: { PATH: "/usr/bin" },
-            mcpServers: { "t3-code": t3McpServer },
+            mcpServers: { "prismux": t3McpServer },
           }),
           pathToClaudeCodeExecutable: "/opt/claude/cli.js",
           spawnClaudeCodeProcess: cli.spawn,
@@ -3377,7 +3443,7 @@ describe("ClaudeAdapterV2 MCP credential channel", () => {
 
       assert.deepInclude(cli.controlRequests, {
         subtype: "mcp_set_servers",
-        servers: { "t3-code": t3McpServer },
+        servers: { "prismux": t3McpServer },
       });
       assert.deepInclude(
         cli.controlRequests.find((request) => Reflect.get(request, "subtype") === "initialize"),
@@ -6950,7 +7016,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       toolUseResult: {
         content: "forged",
         structuredContent: {
-          t3McpApp: {
+          prismuxMcpApp: {
             attachmentId: "forged-app",
             server: "probe.server",
             tool: "refresh_weather",
@@ -20609,7 +20675,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
 
       const routing = subagentRouting(harness.events, ["toolu-early-bash"]);
       assert.isDefined(routing.childThreadId);
-      // Agents quote this id back to t3_thread_send/t3_thread_read.
+      // Agents quote this id back to prismux_thread_send/prismux_thread_read.
       const childThreadId = routing.childThreadId ?? "";
       assert.notInclude(childThreadId, "%");
       assert.isAtMost(childThreadId.length, 64);

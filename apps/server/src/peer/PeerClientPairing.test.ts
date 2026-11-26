@@ -58,7 +58,7 @@ const serveBox = (descriptor: ExecutionEnvironmentDescriptor = box) =>
 /** The laptop: its links, its own clients, and what answers a client asking to pair with a link. */
 const makeLaptop = Effect.gen(function* () {
   const linking = yield* Layer.build(layerLinkingEnvironment(laptop));
-  const authContext = yield* Layer.build(layerEnvironmentAuth("t3-peer-link-here-auth-"));
+  const authContext = yield* Layer.build(layerEnvironmentAuth("prismux-peer-link-here-auth-"));
   const auth = Context.get(authContext, EnvironmentAuth.EnvironmentAuth);
   const pairing = yield* PeerClientPairing.layer.pipe(
     Layer.provide(Layer.succeedContext(linking)),

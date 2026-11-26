@@ -37,7 +37,7 @@ export class DatabaseStorage extends Context.Service<
 
 /** Stops this server so its desktop app or background service starts it again; null when run by hand. */
 export const ServerRestart = Context.Reference<Effect.Effect<void> | null>(
-  "t3/persistence/DatabaseStorage/ServerRestart",
+  "prismux/persistence/DatabaseStorage/ServerRestart",
   { defaultValue: () => null },
 );
 

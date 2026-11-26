@@ -2393,7 +2393,7 @@ it.effect.each(["auto", "deferred", "promote-edited"] as const)(
           const text = `${"x".repeat(80_000)}${citation}`;
           // Context excerpts are not part of the limit, matching the web composer's check.
           const largeContextText =
-            "Read [one](t3-context://v1/terminal/one) and [two](t3-context://v1/terminal/two)";
+            "Read [one](prismux-context://v1/terminal/one) and [two](prismux-context://v1/terminal/two)";
           const context = {
             version: 1 as const,
             records: (["one", "two"] as const).map((id) => ({

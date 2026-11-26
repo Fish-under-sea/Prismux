@@ -1,11 +1,11 @@
-export type T3McpToolLogo = "t3-code";
+export type PrismuxMcpToolLogo = "prismux";
 
-export interface T3McpToolPresentation {
+export interface PrismuxMcpToolPresentation {
   readonly displayName: string;
-  readonly logo: T3McpToolLogo;
+  readonly logo: PrismuxMcpToolLogo;
 }
 
-export type T3McpToolSummaryAction =
+export type PrismuxMcpToolSummaryAction =
   | "capabilities"
   | "delegate"
   | "task-status"
@@ -90,24 +90,25 @@ export type T3McpToolSummaryAction =
   | "html-render"
   | "send-to-user";
 
-export interface T3McpToolDefinition {
+export interface PrismuxMcpToolDefinition {
   readonly displayName: string;
   readonly labels: readonly [action: string, running: string, completed: string, detail: string];
-  readonly icon: "t3-code" | "browser" | "device" | "pull-request";
-  readonly summaryAction: T3McpToolSummaryAction;
+  readonly icon: "prismux" | "browser" | "device" | "pull-request";
+  readonly summaryAction: PrismuxMcpToolSummaryAction;
 }
 
 function tool(
-  labels: T3McpToolDefinition["labels"],
-  summaryAction: T3McpToolSummaryAction,
-  icon: T3McpToolDefinition["icon"] = "t3-code",
+  labels: PrismuxMcpToolDefinition["labels"],
+  summaryAction: PrismuxMcpToolSummaryAction,
+  icon: PrismuxMcpToolDefinition["icon"] = "prismux",
   displayName = `${labels[0]} ${labels[3]}`,
-): T3McpToolDefinition {
+): PrismuxMcpToolDefinition {
   return { displayName, labels, icon, summaryAction };
 }
 
-// Codex registers "t3-code-direct" for T3 tools kept out of Code Mode.
-const T3_MCP_SERVER_ALIASES = new Set([
+// Codex registers "prismux-direct" for Prismux tools kept out of Code Mode.
+// Legacy aliases remain read-only so pre-v0.2.3-rc.3 SQLite history rows still normalize cleanly.
+const PRISMUX_MCP_SERVER_ALIASES = new Set([
   "prismux",
   "prismux-direct",
   "prismux_direct",
@@ -117,7 +118,7 @@ const T3_MCP_SERVER_ALIASES = new Set([
   "t3_code_direct",
 ]);
 
-const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
+const PRISMUX_MCP_TOOLS: Readonly<Record<string, PrismuxMcpToolDefinition>> = {
   link_pull_request: tool(
     ["Link", "Linking", "Linked", "a pull request"],
     "link-pr",
@@ -228,29 +229,32 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     "schedule-delete",
   ),
   request_secret: tool(["Ask for", "Asking for", "Asked for", "a secret"], "secret-request"),
-  create_threads: tool(["Create", "Creating", "Created", "T3 threads"], "thread-create"),
-  t3_thread_start: tool(["Start", "Starting", "Started", "a T3 thread"], "thread-create"),
-  t3_thread_list: tool(["List", "Listing", "Listed", "T3 threads"], "thread-list"),
-  t3_thread_read: tool(["Read", "Reading", "Read", "a T3 thread"], "thread-read"),
-  t3_thread_send: tool(["Send", "Sending", "Sent", "to a T3 thread"], "thread-send"),
-  t3_thread_wait: tool(["Wait", "Waiting", "Waited", "for a T3 thread"], "thread-wait"),
-  t3_workflow_stop: tool(
+  create_threads: tool(["Create", "Creating", "Created", "Prismux threads"], "thread-create"),
+  prismux_thread_start: tool(["Start", "Starting", "Started", "a Prismux thread"], "thread-create"),
+  prismux_thread_list: tool(["List", "Listing", "Listed", "Prismux threads"], "thread-list"),
+  prismux_thread_read: tool(["Read", "Reading", "Read", "a Prismux thread"], "thread-read"),
+  prismux_thread_send: tool(["Send", "Sending", "Sent", "to a Prismux thread"], "thread-send"),
+  prismux_thread_wait: tool(["Wait", "Waiting", "Waited", "for a Prismux thread"], "thread-wait"),
+  prismux_workflow_stop: tool(
     ["Stop", "Stopping", "Requested a stop for", "a workflow"],
     "workflow-stop",
   ),
-  t3_background_wait: tool(
+  prismux_background_wait: tool(
     ["Update", "Updating", "Updated", "background waits"],
     "background-wait",
   ),
-  t3_thread_interrupt: tool(
-    ["Interrupt", "Interrupting", "Requested an interrupt of", "a T3 thread"],
+  prismux_thread_interrupt: tool(
+    ["Interrupt", "Interrupting", "Requested an interrupt of", "a Prismux thread"],
     "thread-interrupt",
   ),
-  t3_worktree_handoff: tool(
+  prismux_worktree_handoff: tool(
     ["Hand off", "Handing off", "Handed off", "thread to a git worktree"],
     "worktree-handoff",
   ),
-  t3_worktree_status: tool(["Get", "Getting", "Got", "thread worktree status"], "worktree-status"),
+  prismux_worktree_status: tool(
+    ["Get", "Getting", "Got", "thread worktree status"],
+    "worktree-status",
+  ),
   preview_status: tool(["Get", "Getting", "Got", "preview browser status"], "browser", "browser"),
   preview_open: tool(
     ["Open", "Opening", "Opened", "a page in the preview browser"],
@@ -356,97 +360,190 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     ["Run", "Running", "Requested a run of", "a scheduled task"],
     "schedule-run",
   ),
-  t3_queue: tool(["Manage", "Managing", "Managed", "queued messages"], "queue-edit"),
-  t3_pending_request: tool(
+  prismux_queue: tool(["Manage", "Managing", "Managed", "queued messages"], "queue-edit"),
+  prismux_pending_request: tool(
     ["Handle", "Handling", "Handled", "pending questions"],
     "question-respond",
   ),
-  t3_submit_output: tool(["Submit", "Submitting", "Submitted", "the result"], "thread-send"),
-  t3_queue_list: tool(["List", "Listing", "Listed", "queued messages"], "queue-list"),
-  t3_queue_read: tool(["Read", "Reading", "Read", "a queued message"], "queue-read"),
-  t3_queue_edit: tool(["Edit", "Editing", "Edited", "a queued message"], "queue-edit"),
-  t3_queue_cancel: tool(
+  prismux_submit_output: tool(["Submit", "Submitting", "Submitted", "the result"], "thread-send"),
+  prismux_queue_list: tool(["List", "Listing", "Listed", "queued messages"], "queue-list"),
+  prismux_queue_read: tool(["Read", "Reading", "Read", "a queued message"], "queue-read"),
+  prismux_queue_edit: tool(["Edit", "Editing", "Edited", "a queued message"], "queue-edit"),
+  prismux_queue_cancel: tool(
     ["Cancel", "Canceling", "Requested cancellation of", "a queued run"],
     "queue-cancel",
   ),
-  t3_queue_reorder: tool(["Reorder", "Reordering", "Reordered", "a queued run"], "queue-reorder"),
-  t3_queue_promote_to_steer: tool(
+  prismux_queue_reorder: tool(["Reorder", "Reordering", "Reordered", "a queued run"], "queue-reorder"),
+  prismux_queue_promote_to_steer: tool(
     ["Steer with", "Steering with", "Requested steering with", "a queued message"],
     "queue-steer",
   ),
-  t3_pending_request_list: tool(
+  prismux_pending_request_list: tool(
     ["List", "Listing", "Listed", "pending questions"],
     "question-list",
   ),
-  t3_pending_request_read: tool(["Read", "Reading", "Read", "pending questions"], "question-read"),
-  t3_pending_request_respond: tool(
+  prismux_pending_request_read: tool(
+    ["Read", "Reading", "Read", "pending questions"],
+    "question-read",
+  ),
+  prismux_pending_request_respond: tool(
     ["Answer", "Answering", "Answered", "pending questions"],
     "question-respond",
   ),
-  t3_thread_configuration: tool(
+  prismux_thread_configuration: tool(
     ["Read", "Reading", "Read", "thread configuration"],
     "thread-configuration",
   ),
-  t3_thread_configure: tool(["Use", "Using", "Used", "thread model settings"], "thread-configure"),
-  t3_thread_transfer: tool(["Use", "Using", "Used", "thread transfers"], "thread-fork"),
-  t3_thread_fork: tool(["Fork", "Forking", "Requested a fork of", "this thread"], "thread-fork"),
-  t3_thread_merge_back: tool(
+  prismux_thread_configure: tool(
+    ["Use", "Using", "Used", "thread model settings"],
+    "thread-configure",
+  ),
+  prismux_thread_transfer: tool(["Use", "Using", "Used", "thread transfers"], "thread-fork"),
+  prismux_thread_fork: tool(
+    ["Fork", "Forking", "Requested a fork of", "this thread"],
+    "thread-fork",
+  ),
+  prismux_thread_merge_back: tool(
     ["Merge", "Merging", "Requested a merge of", "thread context"],
     "thread-merge",
   ),
-  t3_thread_search: tool(["Search", "Searching", "Searched", "thread content"], "thread-search"),
-  t3_thread_transfers: tool(["Read", "Reading", "Read", "thread transfers"], "thread-transfers"),
-  t3_thread_organize: tool(["Organize", "Organizing", "Organized", "a thread"], "thread-organize"),
-  t3_thread_update: tool(["Update", "Updating", "Updated", "T3 thread metadata"], "thread-update"),
-  t3_worktree_list: tool(["List", "Listing", "Listed", "workspace branches"], "worktree-list"),
-  t3_preview_list: tool(["List", "Listing", "Listed", "preview tabs"], "browser", "browser"),
-  t3_preview_close: tool(["Close", "Closing", "Closed", "a preview tab"], "browser", "browser"),
-  t3_environment_read: tool(
+  prismux_thread_search: tool(
+    ["Search", "Searching", "Searched", "thread content"],
+    "thread-search",
+  ),
+  prismux_thread_transfers: tool(
+    ["Read", "Reading", "Read", "thread transfers"],
+    "thread-transfers",
+  ),
+  prismux_thread_organize: tool(
+    ["Organize", "Organizing", "Organized", "a thread"],
+    "thread-organize",
+  ),
+  prismux_thread_update: tool(
+    ["Update", "Updating", "Updated", "Prismux thread metadata"],
+    "thread-update",
+  ),
+  prismux_worktree_list: tool(
+    ["List", "Listing", "Listed", "workspace branches"],
+    "worktree-list",
+  ),
+  prismux_preview_list: tool(["List", "Listing", "Listed", "preview tabs"], "browser", "browser"),
+  prismux_preview_close: tool(
+    ["Close", "Closing", "Closed", "a preview tab"],
+    "browser",
+    "browser",
+  ),
+  prismux_environment_read: tool(
     ["Read", "Reading", "Read", "environment preferences"],
     "environment-read",
   ),
-  t3_environment_links: tool(
+  prismux_environment_links: tool(
     ["List", "Listing", "Listed", "linked environments"],
     "environment-links",
   ),
-  t3_environment_link: tool(
+  prismux_environment_link: tool(
     ["Ask to link", "Asking to link", "Asked to link", "an environment"],
     "environment-link",
   ),
-  t3_environment_unlink: tool(
+  prismux_environment_unlink: tool(
     ["Forget", "Forgetting", "Forgot", "a linked environment"],
     "environment-unlink",
   ),
-  t3_environment_preferences_update: tool(
+  prismux_environment_preferences_update: tool(
     ["Update", "Updating", "Updated", "environment preferences"],
     "environment-update",
   ),
-  t3_theme_read: tool(["Read", "Reading", "Read", "themes"], "theme-read"),
-  t3_theme_set: tool(["Set", "Setting", "Set", "the theme"], "theme-set"),
-  t3_thread_launch: tool(["Launch", "Launching", "Launched", "a project thread"], "thread-create"),
-  t3_project_list: tool(["List", "Listing", "Listed", "projects"], "project-list"),
-  t3_project_read: tool(["Read", "Reading", "Read", "a project"], "project-read"),
-  t3_project_create: tool(["Register", "Registering", "Registered", "a project"], "project-create"),
-  t3_project_update: tool(["Update", "Updating", "Updated", "a project"], "project-update"),
-  t3_project_delete: tool(["Delete", "Deleting", "Deleted", "a project"], "project-delete"),
-  t3_project_clone: tool(["Clone", "Cloning", "Cloned", "a repository"], "project-clone"),
-  t3_attachment_prepare_upload: tool(
+  prismux_theme_read: tool(["Read", "Reading", "Read", "themes"], "theme-read"),
+  prismux_theme_set: tool(["Set", "Setting", "Set", "the theme"], "theme-set"),
+  prismux_thread_launch: tool(
+    ["Launch", "Launching", "Launched", "a project thread"],
+    "thread-create",
+  ),
+  prismux_project_list: tool(["List", "Listing", "Listed", "projects"], "project-list"),
+  prismux_project_read: tool(["Read", "Reading", "Read", "a project"], "project-read"),
+  prismux_project_create: tool(["Register", "Registering", "Registered", "a project"], "project-create"),
+  prismux_project_update: tool(["Update", "Updating", "Updated", "a project"], "project-update"),
+  prismux_project_delete: tool(["Delete", "Deleting", "Deleted", "a project"], "project-delete"),
+  prismux_project_clone: tool(["Clone", "Cloning", "Cloned", "a repository"], "project-clone"),
+  prismux_attachment_prepare_upload: tool(
     ["Prepare", "Preparing", "Prepared", "an attachment upload"],
     "attachment-prepare",
   ),
-  t3_attachment_discard: tool(
+  prismux_attachment_discard: tool(
     ["Discard", "Discarding", "Discarded", "a pending attachment"],
     "attachment-discard",
   ),
-  t3_thread_send_attachments: tool(["Send", "Sending", "Sent", "attachments"], "attachment-send"),
+  prismux_thread_send_attachments: tool(
+    ["Send", "Sending", "Sent", "attachments"],
+    "attachment-send",
+  ),
   html_preview: tool(["Preview", "Previewing", "Previewed", "an HTML page"], "html-preview"),
   html_render: tool(["Render", "Rendering", "Rendered", "an HTML page"], "html-render"),
   send_to_user: tool(["Send", "Sending", "Sent", "a message"], "send-to-user"),
 };
 
-export const T3_MCP_TOOL_NAMES: ReadonlySet<string> = new Set(Object.keys(T3_MCP_TOOLS));
+export const PRISMUX_MCP_TOOL_NAMES: ReadonlySet<string> = new Set(Object.keys(PRISMUX_MCP_TOOLS));
 
-function normalizeT3McpToolLabel(value: string): string {
+function normalizeLegacyPrismuxToolId(candidate: string): string {
+  if (/^t3_/i.test(candidate)) {
+    const mapped = `prismux_${candidate.slice(3)}`;
+    if (Object.hasOwn(PRISMUX_MCP_TOOLS, mapped)) return mapped;
+  }
+  return candidate;
+}
+
+function normalizeLegacyToolIdUnderPrismuxServer(toolName: string): string {
+  return /^t3_/i.test(toolName) ? `prismux_${toolName.slice(3)}` : toolName;
+}
+
+function normalizeLegacyServerName(server: string): string {
+  const lower = server.toLowerCase();
+  if (lower === "t3-code" || lower === "t3_code") return "prismux";
+  if (lower === "t3-code-direct" || lower === "t3_code_direct") return "prismux-direct";
+  return server;
+}
+
+/**
+ * Normalizes raw MCP tool identifiers for UI display so historical SQLite messages
+ * stored with pre-v0.2.3-rc.3 `t3-code` / `t3_*` names render cleanly as `prismux`.
+ */
+export function formatPrismuxMcpToolDisplayName(toolName: string): string {
+  const trimmed = toolName.trim();
+  if (trimmed.length === 0) return toolName;
+
+  const mcpMatch = /^mcp__(?<server>.+?)__(?<tool>.+)$/i.exec(trimmed);
+  if (mcpMatch?.groups?.server && mcpMatch.groups.tool) {
+    const { server, tool: rawTool } = mcpMatch.groups;
+    if (PRISMUX_MCP_SERVER_ALIASES.has(server.toLowerCase())) {
+      const normalizedServer = normalizeLegacyServerName(server);
+      const normalizedTool = normalizeLegacyToolIdUnderPrismuxServer(rawTool);
+      return `mcp__${normalizedServer}__${normalizedTool}`;
+    }
+  }
+
+  const namespaceMatch =
+    /^(?<server>prismux[-_]direct|prismux|t3[-_]code[-_]direct|t3-code|t3_code)(?<sep>[.:/]|\s*·\s*)(?<tool>.+)$/i.exec(
+      trimmed,
+    );
+  if (namespaceMatch?.groups?.server && namespaceMatch.groups.sep && namespaceMatch.groups.tool) {
+    const normalizedServer = normalizeLegacyServerName(namespaceMatch.groups.server);
+    const normalizedTool = normalizeLegacyToolIdUnderPrismuxServer(namespaceMatch.groups.tool);
+    return `${normalizedServer}${namespaceMatch.groups.sep}${normalizedTool}`;
+  }
+
+  const threadScopedMatch = /^t3-code-(?<scope>[^_]+)_(?<tool>.+)$/i.exec(trimmed);
+  if (threadScopedMatch?.groups?.scope && threadScopedMatch.groups.tool) {
+    const normalizedTool = normalizeLegacyToolIdUnderPrismuxServer(threadScopedMatch.groups.tool);
+    return `prismux-${threadScopedMatch.groups.scope}_${normalizedTool}`;
+  }
+
+  const normalizedBare = normalizeLegacyPrismuxToolId(trimmed);
+  if (normalizedBare !== trimmed) return normalizedBare;
+
+  return toolName;
+}
+
+function normalizePrismuxMcpToolLabel(value: string): string {
   return value.replace(/\s+(?:complete|completed)\s*$/i, "").trim();
 }
 
@@ -456,26 +553,29 @@ const toolNameCache = new Map<string, string | null>();
 const TOOL_NAME_CACHE_LIMIT = 10_000;
 const TOOL_NAME_CACHE_MAX_KEY_LENGTH = 256;
 
-function resolveT3McpToolName(value: string): string | null {
-  if (value.length > TOOL_NAME_CACHE_MAX_KEY_LENGTH) return parseT3McpToolName(value);
+function resolvePrismuxMcpToolName(value: string): string | null {
+  if (value.length > TOOL_NAME_CACHE_MAX_KEY_LENGTH) return parsePrismuxMcpToolName(value);
   const cached = toolNameCache.get(value);
   if (cached !== undefined) return cached;
-  const name = parseT3McpToolName(value);
+  const name = parsePrismuxMcpToolName(value);
   if (toolNameCache.size >= TOOL_NAME_CACHE_LIMIT) toolNameCache.clear();
   toolNameCache.set(value, name);
   return name;
 }
 
 // ACP tool prefixes vary; match loosely but require a known display-name entry.
-function parseT3McpToolName(value: string): string | null {
-  const label = normalizeT3McpToolLabel(value);
+function parsePrismuxMcpToolName(value: string): string | null {
+  const label = normalizePrismuxMcpToolLabel(value);
+  const direct = normalizeLegacyPrismuxToolId(label);
+  if (Object.hasOwn(PRISMUX_MCP_TOOLS, direct)) return direct;
+
   const mcpMatch = /^mcp__(?<server>.+?)__(?<tool>.+)$/i.exec(label);
   if (mcpMatch?.groups) {
     const { server, tool } = mcpMatch.groups;
     return server !== undefined &&
       tool !== undefined &&
-      T3_MCP_SERVER_ALIASES.has(server.toLowerCase())
-      ? tool
+      PRISMUX_MCP_SERVER_ALIASES.has(server.toLowerCase())
+      ? normalizeLegacyPrismuxToolId(tool)
       : null;
   }
 
@@ -483,25 +583,33 @@ function parseT3McpToolName(value: string): string | null {
     /^(?<server>prismux[-_]direct|prismux|t3[-_]code[-_]direct|t3-code|t3_code)(?:[.:/]|\s*·\s*)(?<tool>.+)$/i.exec(
       label,
     );
-  if (namespaceMatch?.groups) {
-    return namespaceMatch.groups.tool ?? null;
+  if (namespaceMatch?.groups?.tool !== undefined) {
+    return normalizeLegacyPrismuxToolId(namespaceMatch.groups.tool);
   }
 
-  const prefixed = /^(?:mcp[-_]{1,2})?(?:prismux|t3[-_ ]?code)(?:__|[-_.:/ ])(?<tool>.+)$/i.exec(label);
-  const candidate = prefixed?.groups?.tool ?? label;
-  if (Object.hasOwn(T3_MCP_TOOLS, candidate)) return candidate;
+  const prefixed = /^(?:mcp[-_]{1,2})?(?:prismux|t3[-_ ]?code)(?:__|[-_.:/ ])(?<tool>.+)$/i.exec(
+    label,
+  );
+  const candidate = normalizeLegacyPrismuxToolId(prefixed?.groups?.tool ?? label);
+  if (Object.hasOwn(PRISMUX_MCP_TOOLS, candidate)) return candidate;
   // OpenCode 2 thread prefixes can contain underscores; choose the longest known tool-name suffix.
-  if (!/^t3-code-/i.test(label)) return null;
+  if (!/^(?:prismux|t3-code)-/i.test(label)) return null;
   let longest: string | null = null;
-  for (const tool of Object.keys(T3_MCP_TOOLS)) {
-    if (label.endsWith(`_${tool}`) && tool.length > (longest?.length ?? 0)) longest = tool;
+  for (const toolKey of Object.keys(PRISMUX_MCP_TOOLS)) {
+    const legacyKey = toolKey.startsWith("prismux_") ? `t3_${toolKey.slice("prismux_".length)}` : null;
+    if (
+      (label.endsWith(`_${toolKey}`) || (legacyKey !== null && label.endsWith(`_${legacyKey}`))) &&
+      toolKey.length > (longest?.length ?? 0)
+    ) {
+      longest = toolKey;
+    }
   }
   return longest;
 }
 
-export function resolveT3McpToolId(toolName: string | null | undefined): string | null {
-  const name = toolName == null ? null : resolveT3McpToolName(toolName);
-  return name !== null && Object.hasOwn(T3_MCP_TOOLS, name) ? name : null;
+export function resolvePrismuxMcpToolId(toolName: string | null | undefined): string | null {
+  const name = toolName == null ? null : resolvePrismuxMcpToolName(toolName);
+  return name !== null && Object.hasOwn(PRISMUX_MCP_TOOLS, name) ? name : null;
 }
 
 type SummaryInput = Readonly<Record<string, unknown>>;
@@ -512,53 +620,55 @@ const asSummaryInput = (input: unknown): SummaryInput | undefined =>
 /** Action tools present each call as the single-purpose tool its action replaced. */
 const ACTION_TOOLS: Readonly<Record<string, (action: string) => string | undefined>> = {
   preview_act: (action) => `preview_${action}`,
-  t3_queue: (action) => `t3_queue_${action}`,
-  t3_pending_request: (action) => `t3_pending_request_${action}`,
-  t3_thread_transfer: (action) =>
-    ({ fork: "t3_thread_fork", merge_back: "t3_thread_merge_back", status: "t3_thread_transfers" })[
-      action
-    ],
+  prismux_queue: (action) => `prismux_queue_${action}`,
+  prismux_pending_request: (action) => `prismux_pending_request_${action}`,
+  prismux_thread_transfer: (action) =>
+    ({
+      fork: "prismux_thread_fork",
+      merge_back: "prismux_thread_merge_back",
+      status: "prismux_thread_transfers",
+    })[action],
 };
 
 /** Pass the call's input so an action tool resolves to the labels and summary of its action. */
-export function resolveT3McpToolDefinition(
+export function resolvePrismuxMcpToolDefinition(
   toolName: string | null | undefined,
   input?: unknown,
-): T3McpToolDefinition | null {
-  const name = toolName == null ? null : resolveT3McpToolName(toolName);
-  if (name === null || !Object.hasOwn(T3_MCP_TOOLS, name)) return null;
+): PrismuxMcpToolDefinition | null {
+  const name = toolName == null ? null : resolvePrismuxMcpToolName(toolName);
+  if (name === null || !Object.hasOwn(PRISMUX_MCP_TOOLS, name)) return null;
   const action = asSummaryInput(input)?.action;
   const actionTool = typeof action === "string" ? ACTION_TOOLS[name]?.(action) : undefined;
-  return actionTool !== undefined && Object.hasOwn(T3_MCP_TOOLS, actionTool)
-    ? T3_MCP_TOOLS[actionTool]!
-    : T3_MCP_TOOLS[name]!;
+  return actionTool !== undefined && Object.hasOwn(PRISMUX_MCP_TOOLS, actionTool)
+    ? PRISMUX_MCP_TOOLS[actionTool]!
+    : PRISMUX_MCP_TOOLS[name]!;
 }
 
 /** Tools whose summary depends on which fields a call sets. */
 const ACTION_SUMMARIES: Readonly<
-  Record<string, (input: SummaryInput) => T3McpToolSummaryAction | undefined>
+  Record<string, (input: SummaryInput) => PrismuxMcpToolSummaryAction | undefined>
 > = {
-  t3_thread_configure: ({ modelSelection }) =>
+  prismux_thread_configure: ({ modelSelection }) =>
     modelSelection === undefined ? "thread-configuration" : "thread-configure",
   schedule_task: ({ scheduledTaskId }) =>
     scheduledTaskId === undefined ? "schedule-create" : "schedule-update",
 };
 
-export function resolveT3McpSummaryAction(
+export function resolvePrismuxMcpSummaryAction(
   toolName: string | null | undefined,
   input: unknown,
-): T3McpToolSummaryAction | null {
-  const definition = resolveT3McpToolDefinition(toolName, input);
+): PrismuxMcpToolSummaryAction | null {
+  const definition = resolvePrismuxMcpToolDefinition(toolName, input);
   if (definition === null) return null;
-  const summarize = ACTION_SUMMARIES[resolveT3McpToolName(toolName!) ?? ""];
+  const summarize = ACTION_SUMMARIES[resolvePrismuxMcpToolName(toolName!) ?? ""];
   const fields = asSummaryInput(input);
   return (fields && summarize?.(fields)) ?? definition.summaryAction;
 }
 
-export function resolveT3McpToolPresentation(
+export function resolvePrismuxMcpToolPresentation(
   toolName: string | null | undefined,
   input?: unknown,
-): T3McpToolPresentation | null {
-  const definition = resolveT3McpToolDefinition(toolName, input);
-  return definition === null ? null : { displayName: definition.displayName, logo: "t3-code" };
+): PrismuxMcpToolPresentation | null {
+  const definition = resolvePrismuxMcpToolDefinition(toolName, input);
+  return definition === null ? null : { displayName: definition.displayName, logo: "prismux" };
 }

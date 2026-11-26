@@ -240,7 +240,7 @@ describe("Orca-aligned Prismux sidebar quick-nav logic", () => {
         checkedAt: 1,
         items: [
           {
-            id: "t3-server",
+            id: "core-server",
             category: "core",
             name: "T3 Server",
             status: "error",

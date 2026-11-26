@@ -33,11 +33,11 @@ describe("mergeLegacyLocalStorage", () => {
     mergeLegacyLocalStorage(storage, {
       "prismux:theme": "dark",
       "prismux:prompt-stash:v2": stash("a"),
-      "t3.backgroundActivity.clientId": "v1-client",
+      "prismux.backgroundActivity.clientId": "v1-client",
     });
     assert.equal(storage.getItem("prismux:theme"), "dark");
     assert.equal(storage.getItem("prismux:prompt-stash:v2"), stash("a"));
-    assert.equal(storage.getItem("t3.backgroundActivity.clientId"), null);
+    assert.equal(storage.getItem("prismux.backgroundActivity.clientId"), null);
   });
 
   it("keeps V2 values for plain keys", () => {

@@ -28,7 +28,7 @@ import {
   type AcpSessionModeState,
 } from "@prismux/provider-acp/server/runtimeModel";
 import { isAcpThoughtLevelOption } from "@prismux/provider-acp/server/sessionConfig";
-import { T3_MCP_TOOL_NAMES } from "@prismux/core-shared/t3McpToolPresentation";
+import { PRISMUX_MCP_TOOL_NAMES } from "@prismux/core-shared/prismuxMcpToolPresentation";
 import packageJson from "../../../package.json" with { type: "json" };
 import { normalizeAntigravitySessionUpdate } from "./AntigravityProtocol.ts";
 
@@ -187,20 +187,20 @@ export function antigravitySessionMode(
 
 // Only calls that name T3's server: before agy 1.5.8 "Running <tool>" names no server, so another
 // MCP server's tool of the same name would pass.
-const ANTIGRAVITY_T3_MCP_TITLE = /^Run mcp_t3-code_(?<tool>[A-Za-z0-9_]+)\??$/;
+const ANTIGRAVITY_PRISMUX_MCP_TITLE = /^Run mcp_prismux_(?<tool>[A-Za-z0-9_]+)\??$/;
 
-function isAntigravityT3McpRequest(request: EffectAcpSchema.RequestPermissionRequest): boolean {
+function isAntigravityPrismuxMcpRequest(request: EffectAcpSchema.RequestPermissionRequest): boolean {
   const rawInput = unknownRecord(request.toolCall.rawInput);
   if (rawInput?.ServerName !== undefined) {
     return (
-      rawInput.ServerName === "t3-code" &&
+      rawInput.ServerName === "prismux" &&
       typeof rawInput.ToolName === "string" &&
-      T3_MCP_TOOL_NAMES.has(rawInput.ToolName)
+      PRISMUX_MCP_TOOL_NAMES.has(rawInput.ToolName)
     );
   }
   if (typeof rawInput?.CommandLine === "string") return false;
-  const tool = ANTIGRAVITY_T3_MCP_TITLE.exec(request.toolCall.title?.trim() ?? "")?.groups?.tool;
-  return tool !== undefined && T3_MCP_TOOL_NAMES.has(tool);
+  const tool = ANTIGRAVITY_PRISMUX_MCP_TITLE.exec(request.toolCall.title?.trim() ?? "")?.groups?.tool;
+  return tool !== undefined && PRISMUX_MCP_TOOL_NAMES.has(tool);
 }
 
 export function antigravityPermissionDisposition(
@@ -213,7 +213,7 @@ export function antigravityPermissionDisposition(
   if (
     (policy.runtimeMode === "auto" || policy.runtimeMode === "auto-accept-edits") &&
     (policy.approvalPolicy === undefined || policy.approvalPolicy === "never") &&
-    isAntigravityT3McpRequest(request)
+    isAntigravityPrismuxMcpRequest(request)
   ) {
     return "allow";
   }

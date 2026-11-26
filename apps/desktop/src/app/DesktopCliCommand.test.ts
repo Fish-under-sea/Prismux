@@ -67,8 +67,8 @@ const fakePowerShell = (initial: string, inherited: Record<string, string> = {})
       const env = { ...(options.extendEnv ? inherited : {}), ...options.env };
       let exitCode = 0;
       let stdout = "";
-      if (env.T3_SET === "1") {
-        registry.path = env.T3_PATH ?? "";
+      if (env.PRISMUX_SET === "1") {
+        registry.path = env.PRISMUX_PATH ?? "";
         registry.writes += 1;
       } else if (registry.failReads) {
         exitCode = 1;
@@ -413,8 +413,8 @@ it.layer(NodeServices.layer)("DesktopCliCommand", (it) => {
       expect((yield* Effect.flip(semicolon.install)).message).toContain('has a ";"');
       expect(split.registry).toMatchObject({ path: userPath, writes: 0 });
 
-      // An inherited T3_SET=1 never turns a read into a write of the whole PATH.
-      const inherited = fakePowerShell(userPath, { T3_SET: "1", T3_PATH: "C:\\other" });
+      // An inherited PRISMUX_SET=1 never turns a read into a write of the whole PATH.
+      const inherited = fakePowerShell(userPath, { PRISMUX_SET: "1", PRISMUX_PATH: "C:\\other" });
       const reader = yield* commandIn({ home, platform: "win32" }, inherited.spawner);
       yield* reader.install;
       expect(inherited.registry).toMatchObject({ path: `${userPath};${launcherDir}`, writes: 1 });

@@ -96,7 +96,7 @@ vi.mock("./CommandOutputPanel", () => ({
 vi.mock("./TimelineToolActivityIcon", () => ({
   failedToolIconClassName: "text-destructive",
   isWideToolActivityIcon: (icon: unknown, fallbackName: string | undefined) =>
-    icon === undefined && fallbackName === "t3-code",
+    icon === undefined && fallbackName === "prismux",
   toolIconAcceptsTint: () => true,
   ToolActivityIconView: ({ fallbackName, muted }: { fallbackName: string; muted?: boolean }) => (
     <span data-mock-tool-icon={fallbackName} data-mock-tool-muted={String(Boolean(muted))} />

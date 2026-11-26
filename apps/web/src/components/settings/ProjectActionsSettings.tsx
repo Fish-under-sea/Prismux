@@ -2,7 +2,7 @@ import { thrownErrorMessage } from "@prismux/client-runtime/errors";
 import { m } from "~/i18n/messages";
 import { useScopedSettingsWriteAllowed } from "./useScopedSettings";
 import { AuthSettingsWriteScope } from "@prismux/core-contracts";
-import { EnvironmentId, type T3ProjectFileScript } from "@prismux/core-contracts";
+import { EnvironmentId, type PrismuxProjectFileScript } from "@prismux/core-contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -11,7 +11,7 @@ import { DEFAULT_RESOLVED_KEYBINDINGS } from "@prismux/core-shared/keybindings";
 import { ChevronDownIcon, PlusIcon } from "lucide-react";
 import { T, useGT } from "gt-react";
 import { useState } from "react";
-import { useT3ProjectFileState } from "../../hooks/useT3ProjectFileScripts";
+import { usePrismuxProjectFileState } from "../../hooks/usePrismuxProjectFileScripts";
 import { useEnvironments } from "../../state/environments";
 import {
   EMPTY_PROJECT_SCRIPT_INPUT,
@@ -75,11 +75,11 @@ export function ProjectActionsSettings() {
   );
 
   const representativeMember = target?.projectId ? memberById.get(target.projectId) : undefined;
-  const t3File = useT3ProjectFileState(
+  const prismuxFile = usePrismuxProjectFileState(
     representativeMember?.environmentId ?? EnvironmentId.make("none"),
     representativeMember?.workspaceRoot ?? null,
   );
-  const importableScripts = t3File.scripts.filter(
+  const importableScripts = prismuxFile.scripts.filter(
     (fileScript) =>
       !scripts.some(
         (script) =>
@@ -87,7 +87,7 @@ export function ProjectActionsSettings() {
           script.name.toLowerCase() === fileScript.name.toLowerCase(),
       ),
   );
-  const importFileScript = async (fileScript: T3ProjectFileScript) => {
+  const importFileScript = async (fileScript: PrismuxProjectFileScript) => {
     const payload: NewProjectScriptInput = {
       name: fileScript.name,
       command: fileScript.command,
@@ -195,7 +195,7 @@ export function ProjectActionsSettings() {
           onEdit={(script) => setRequest(editorRequestForScript(script, keybindings))}
         />
       )}
-      {t3File.status === "invalid" ? (
+      {prismuxFile.status === "invalid" ? (
         <SettingsRow
           title={gt("prismux.json is invalid")}
           description={gt(

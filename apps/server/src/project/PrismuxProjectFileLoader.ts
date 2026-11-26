@@ -15,8 +15,8 @@ import { PrismuxProjectFileFromJson } from "@prismux/core-shared/prismuxProjectF
 
 const decodePrismuxProjectFileJson = Schema.decodeEffect(PrismuxProjectFileFromJson);
 
-export class T3ProjectFileLoadError extends Schema.TaggedError<T3ProjectFileLoadError>()(
-  "T3ProjectFileLoadError",
+export class PrismuxProjectFileLoadError extends Schema.TaggedError<PrismuxProjectFileLoadError>()(
+  "PrismuxProjectFileLoadError",
   {
     operation: Schema.Literals(["read", "decode"]),
     workspaceRoot: Schema.String,
@@ -29,15 +29,15 @@ export class T3ProjectFileLoadError extends Schema.TaggedError<T3ProjectFileLoad
   }
 }
 
-export class T3ProjectFileLoader extends Context.Service<
-  T3ProjectFileLoader,
+export class PrismuxProjectFileLoader extends Context.Service<
+  PrismuxProjectFileLoader,
   {
     /** Never fails; missing/unreadable/invalid files return none, with warnings for invalid files. */
     readonly load: (workspaceRoot: string) => Effect.Effect<Option.Option<PrismuxProjectFile>>;
   }
->()("@prismux/server/project/T3ProjectFileLoader") {}
+>()("@prismux/server/project/PrismuxProjectFileLoader") {}
 
-const logT3ProjectFileLoadError = (error: T3ProjectFileLoadError) =>
+const logPrismuxProjectFileLoadError = (error: PrismuxProjectFileLoadError) =>
   Effect.logWarning(error).pipe(
     Effect.annotateLogs({
       operation: error.operation,
@@ -52,7 +52,7 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
 
-  const readProjectFileCandidate = Effect.fn("T3ProjectFileLoader.readCandidate")(function* (
+  const readProjectFileCandidate = Effect.fn("PrismuxProjectFileLoader.readCandidate")(function* (
     workspaceRoot: string,
     fileName: string,
   ): Effect.fn.Return<
@@ -67,8 +67,8 @@ export const make = Effect.gen(function* () {
         PlatformError: (error) =>
           error.reason._tag === "NotFound"
             ? Effect.succeed({ _tag: "not-found" as const })
-            : logT3ProjectFileLoadError(
-                new T3ProjectFileLoadError({
+            : logPrismuxProjectFileLoadError(
+                new PrismuxProjectFileLoadError({
                   operation: "read",
                   workspaceRoot,
                   filePath,
@@ -79,51 +79,51 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const load: T3ProjectFileLoader["Service"]["load"] = Effect.fn("T3ProjectFileLoader.load")(
-    function* (workspaceRoot) {
-      const primary = yield* readProjectFileCandidate(workspaceRoot, PRISMUX_PROJECT_FILE_NAME);
-      let loaded: { readonly filePath: string; readonly raw: string; readonly isLegacy: boolean };
+  const load: PrismuxProjectFileLoader["Service"]["load"] = Effect.fn(
+    "PrismuxProjectFileLoader.load",
+  )(function* (workspaceRoot) {
+    const primary = yield* readProjectFileCandidate(workspaceRoot, PRISMUX_PROJECT_FILE_NAME);
+    let loaded: { readonly filePath: string; readonly raw: string; readonly isLegacy: boolean };
 
-      if (primary._tag === "found") {
-        loaded = { filePath: primary.filePath, raw: primary.raw, isLegacy: false };
-      } else if (primary._tag === "read-error") {
+    if (primary._tag === "found") {
+      loaded = { filePath: primary.filePath, raw: primary.raw, isLegacy: false };
+    } else if (primary._tag === "read-error") {
+      return Option.none<PrismuxProjectFile>();
+    } else {
+      const legacy = yield* readProjectFileCandidate(workspaceRoot, LEGACY_T3_PROJECT_FILE_NAME);
+      if (legacy._tag !== "found") {
         return Option.none<PrismuxProjectFile>();
-      } else {
-        const legacy = yield* readProjectFileCandidate(workspaceRoot, LEGACY_T3_PROJECT_FILE_NAME);
-        if (legacy._tag !== "found") {
-          return Option.none<PrismuxProjectFile>();
-        }
-        yield* Effect.logWarning(
-          `Loaded legacy ${LEGACY_T3_PROJECT_FILE_NAME} read-only; migrate this file to ${PRISMUX_PROJECT_FILE_NAME}.`,
-        ).pipe(
-          Effect.annotateLogs({
-            workspaceRoot,
-            filePath: legacy.filePath,
-            recommendedFileName: PRISMUX_PROJECT_FILE_NAME,
-            migrationFallback: "read-only",
-          }),
-        );
-        loaded = { filePath: legacy.filePath, raw: legacy.raw, isLegacy: true };
       }
-
-      return yield* decodePrismuxProjectFileJson(loaded.raw).pipe(
-        Effect.asSome,
-        Effect.catchTags({
-          SchemaError: (error) =>
-            logT3ProjectFileLoadError(
-              new T3ProjectFileLoadError({
-                operation: "decode",
-                workspaceRoot,
-                filePath: loaded.filePath,
-                cause: error,
-              }),
-            ).pipe(Effect.as(Option.none<PrismuxProjectFile>())),
+      yield* Effect.logWarning(
+        `Loaded legacy ${LEGACY_T3_PROJECT_FILE_NAME} read-only; migrate this file to ${PRISMUX_PROJECT_FILE_NAME}.`,
+      ).pipe(
+        Effect.annotateLogs({
+          workspaceRoot,
+          filePath: legacy.filePath,
+          recommendedFileName: PRISMUX_PROJECT_FILE_NAME,
+          migrationFallback: "read-only",
         }),
       );
-    },
-  );
+      loaded = { filePath: legacy.filePath, raw: legacy.raw, isLegacy: true };
+    }
 
-  return T3ProjectFileLoader.of({ load });
+    return yield* decodePrismuxProjectFileJson(loaded.raw).pipe(
+      Effect.asSome,
+      Effect.catchTags({
+        SchemaError: (error) =>
+          logPrismuxProjectFileLoadError(
+            new PrismuxProjectFileLoadError({
+              operation: "decode",
+              workspaceRoot,
+              filePath: loaded.filePath,
+              cause: error,
+            }),
+          ).pipe(Effect.as(Option.none<PrismuxProjectFile>())),
+      }),
+    );
+  });
+
+  return PrismuxProjectFileLoader.of({ load });
 });
 
-export const layer = Layer.effect(T3ProjectFileLoader, make);
+export const layer = Layer.effect(PrismuxProjectFileLoader, make);

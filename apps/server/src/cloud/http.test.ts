@@ -205,7 +205,7 @@ describe("link proof over a non-loopback transport", () => {
           publicKey: unverified.environmentPublicKey,
           token: proof,
           typ: RELAY_LINK_PROOF_TYP,
-          issuer: "t3-env:wsl-environment",
+          issuer: "prismux-env:wsl-environment",
           audience: proofRequest.relayIssuer,
         });
         expect(verified).toMatchObject({

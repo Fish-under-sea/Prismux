@@ -250,7 +250,7 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
           const inheritedEnvironment = Object.fromEntries(
             Object.entries(options.environment ?? (yield* HostProcess.Environment)).filter(
               ([name]) =>
-                !name.toUpperCase().startsWith("T3_ACP_MCP_") &&
+                !name.toUpperCase().startsWith("PRISMUX_ACP_MCP_") &&
                 name.toUpperCase() !== "PRISMUX_THREAD_ID",
             ),
           );
@@ -295,7 +295,7 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
             ),
           );
 
-          const terminalId = `t3-term-${nextTerminalNumber}`;
+          const terminalId = `prismux-term-${nextTerminalNumber}`;
           nextTerminalNumber += 1;
           const record: ManagedAcpTerminal = {
             terminalId,

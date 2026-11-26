@@ -165,7 +165,7 @@ describe("learned routes", () => {
     expect(ids(routes)).toEqual([`learned:${ENVIRONMENT_ID}:http://192.168.1.10:3773`, "relay"]);
     expect(profileOf(routes![0]!)).toMatchObject({
       learned: true,
-      authorization: "t3-connect",
+      authorization: "prismux-connect",
       wsBaseUrl: "ws://192.168.1.10:3773/",
     });
   });
@@ -322,7 +322,7 @@ describe("learned routes", () => {
     });
     // The stale route is gone; the address is learned again with Prismux Connect's credential.
     expect(ids(routes)).toEqual([`learned:${ENVIRONMENT_ID}:${lanOrigin}`, "public", "relay"]);
-    expect(profileOf(routes![0]!)).toMatchObject({ authorization: "t3-connect" });
+    expect(profileOf(routes![0]!)).toMatchObject({ authorization: "prismux-connect" });
   });
 
   it("keeps plain HTTP routes that don't borrow the active HTTPS-paired token", () => {
@@ -445,7 +445,7 @@ describe("learned routes", () => {
       allowInsecure: true,
     })!;
     for (const route of next.filter((candidate) => connectionRouteKind(candidate) !== "relay")) {
-      expect(profileOf(route)).toMatchObject({ authorization: "t3-connect" });
+      expect(profileOf(route)).toMatchObject({ authorization: "prismux-connect" });
       expect(connectionRouteId(route.target)).not.toContain("@");
     }
   });

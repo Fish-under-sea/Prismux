@@ -51,7 +51,7 @@ const readTogether = Effect.fn("OnePasswordDriver.readTogether")(function* (
   references: ReadonlyArray<string>,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
-  const separator = `__t3-secret-${yield* (yield* SecureRandom.SecureRandom).uuidV4()}__`;
+  const separator = `__prismux-secret-${yield* (yield* SecureRandom.SecureRandom).uuidV4()}__`;
   const templatePath = yield* fileSystem.makeTempFileScoped({ prefix: "prismux-op-inject-" });
   yield* fileSystem.writeFileString(
     templatePath,

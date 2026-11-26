@@ -1,20 +1,23 @@
 import { msg } from "gt-i18n";
 
 /**
- * Whole sentences for each T3 MCP tool row, keyed by the tool's labels from
- * `@prismux/core-shared/t3McpToolPresentation`. Resolve with `{ status }`, and for
+ * Whole sentences for each Prismux MCP tool row, keyed by the tool's labels from
+ * `@prismux/core-shared/prismuxMcpToolPresentation`. Resolve with `{ status }`, and for
  * `changeRequest` also `{ changeRequest, number }`.
  */
-export interface T3ToolSentence {
+export interface PrismuxToolSentence {
   readonly detail: string;
   readonly changeRequest?: string;
 }
 
-export function t3ToolSentence(labels: ReadonlyArray<string>): T3ToolSentence | undefined {
-  return T3_TOOL_SENTENCES.get(labels.join("\n"));
+export function prismuxToolSentence(labels: ReadonlyArray<string>): PrismuxToolSentence | undefined {
+  return PRISMUX_TOOL_SENTENCES.get(labels.join("\n"));
 }
 
-const T3_TOOL_SENTENCES: ReadonlyMap<string, T3ToolSentence> = new Map<string, T3ToolSentence>([
+const PRISMUX_TOOL_SENTENCES: ReadonlyMap<string, PrismuxToolSentence> = new Map<
+  string,
+  PrismuxToolSentence
+>([
   [
     "Link\nLinking\nLinked\na pull request",
     {
@@ -242,50 +245,50 @@ const T3_TOOL_SENTENCES: ReadonlyMap<string, T3ToolSentence> = new Map<string, T
     },
   ],
   [
-    "Create\nCreating\nCreated\nT3 threads",
+    "Create\nCreating\nCreated\nPrismux threads",
     {
       detail: msg(
-        "{status, select, inProgress {Creating T3 threads} completed {Created T3 threads} failed {Failed to create T3 threads} declined {Declined to create T3 threads} stopped {Stopped creating T3 threads} other {Creating T3 threads}}",
+        "{status, select, inProgress {Creating Prismux threads} completed {Created Prismux threads} failed {Failed to create Prismux threads} declined {Declined to create Prismux threads} stopped {Stopped creating Prismux threads} other {Creating Prismux threads}}",
       ),
     },
   ],
   [
-    "Start\nStarting\nStarted\na T3 thread",
+    "Start\nStarting\nStarted\na Prismux thread",
     {
       detail: msg(
-        "{status, select, inProgress {Starting a T3 thread} completed {Started a T3 thread} failed {Failed to start a T3 thread} declined {Declined to start a T3 thread} stopped {Stopped starting a T3 thread} other {Starting a T3 thread}}",
+        "{status, select, inProgress {Starting a Prismux thread} completed {Started a Prismux thread} failed {Failed to start a Prismux thread} declined {Declined to start a Prismux thread} stopped {Stopped starting a Prismux thread} other {Starting a Prismux thread}}",
       ),
     },
   ],
   [
-    "List\nListing\nListed\nT3 threads",
+    "List\nListing\nListed\nPrismux threads",
     {
       detail: msg(
-        "{status, select, inProgress {Listing T3 threads} completed {Listed T3 threads} failed {Failed to list T3 threads} declined {Declined to list T3 threads} stopped {Stopped listing T3 threads} other {Listing T3 threads}}",
+        "{status, select, inProgress {Listing Prismux threads} completed {Listed Prismux threads} failed {Failed to list Prismux threads} declined {Declined to list Prismux threads} stopped {Stopped listing Prismux threads} other {Listing Prismux threads}}",
       ),
     },
   ],
   [
-    "Read\nReading\nRead\na T3 thread",
+    "Read\nReading\nRead\na Prismux thread",
     {
       detail: msg(
-        "{status, select, inProgress {Reading a T3 thread} completed {Read a T3 thread} failed {Failed to read a T3 thread} declined {Declined to read a T3 thread} stopped {Stopped reading a T3 thread} other {Reading a T3 thread}}",
+        "{status, select, inProgress {Reading a Prismux thread} completed {Read a Prismux thread} failed {Failed to read a Prismux thread} declined {Declined to read a Prismux thread} stopped {Stopped reading a Prismux thread} other {Reading a Prismux thread}}",
       ),
     },
   ],
   [
-    "Send\nSending\nSent\nto a T3 thread",
+    "Send\nSending\nSent\nto a Prismux thread",
     {
       detail: msg(
-        "{status, select, inProgress {Sending to a T3 thread} completed {Sent to a T3 thread} failed {Failed to send to a T3 thread} declined {Declined to send to a T3 thread} stopped {Stopped sending to a T3 thread} other {Sending to a T3 thread}}",
+        "{status, select, inProgress {Sending to a Prismux thread} completed {Sent to a Prismux thread} failed {Failed to send to a Prismux thread} declined {Declined to send to a Prismux thread} stopped {Stopped sending to a Prismux thread} other {Sending to a Prismux thread}}",
       ),
     },
   ],
   [
-    "Wait\nWaiting\nWaited\nfor a T3 thread",
+    "Wait\nWaiting\nWaited\nfor a Prismux thread",
     {
       detail: msg(
-        "{status, select, inProgress {Waiting for a T3 thread} completed {Waited for a T3 thread} failed {Failed to wait for a T3 thread} declined {Declined to wait for a T3 thread} stopped {Stopped waiting for a T3 thread} other {Waiting for a T3 thread}}",
+        "{status, select, inProgress {Waiting for a Prismux thread} completed {Waited for a Prismux thread} failed {Failed to wait for a Prismux thread} declined {Declined to wait for a Prismux thread} stopped {Stopped waiting for a Prismux thread} other {Waiting for a Prismux thread}}",
       ),
     },
   ],
@@ -306,10 +309,10 @@ const T3_TOOL_SENTENCES: ReadonlyMap<string, T3ToolSentence> = new Map<string, T
     },
   ],
   [
-    "Interrupt\nInterrupting\nRequested an interrupt of\na T3 thread",
+    "Interrupt\nInterrupting\nRequested an interrupt of\na Prismux thread",
     {
       detail: msg(
-        "{status, select, inProgress {Interrupting a T3 thread} completed {Requested an interrupt of a T3 thread} failed {Failed to interrupt a T3 thread} declined {Declined to interrupt a T3 thread} stopped {Stopped interrupting a T3 thread} other {Interrupting a T3 thread}}",
+        "{status, select, inProgress {Interrupting a Prismux thread} completed {Requested an interrupt of a Prismux thread} failed {Failed to interrupt a Prismux thread} declined {Declined to interrupt a Prismux thread} stopped {Stopped interrupting a Prismux thread} other {Interrupting a Prismux thread}}",
       ),
     },
   ],
@@ -682,10 +685,10 @@ const T3_TOOL_SENTENCES: ReadonlyMap<string, T3ToolSentence> = new Map<string, T
     },
   ],
   [
-    "Update\nUpdating\nUpdated\nT3 thread metadata",
+    "Update\nUpdating\nUpdated\nPrismux thread metadata",
     {
       detail: msg(
-        "{status, select, inProgress {Updating T3 thread metadata} completed {Updated T3 thread metadata} failed {Failed to update T3 thread metadata} declined {Declined to update T3 thread metadata} stopped {Stopped updating T3 thread metadata} other {Updating T3 thread metadata}}",
+        "{status, select, inProgress {Updating Prismux thread metadata} completed {Updated Prismux thread metadata} failed {Failed to update Prismux thread metadata} declined {Declined to update Prismux thread metadata} stopped {Stopped updating Prismux thread metadata} other {Updating Prismux thread metadata}}",
       ),
     },
   ],

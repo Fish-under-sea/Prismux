@@ -68,7 +68,7 @@ import * as OpenCodeRuntime from "../OpenCodeRuntime.ts";
 import { readableProviderErrorMessage } from "../providerErrorMessage.ts";
 import * as McpProviderSessions from "@prismux/provider-core/server/McpProviderSessions";
 import { buildRuntimeInstructions } from "@prismux/provider-core/server/runtimeInstructions";
-import { t3OrchestrationSystemPrompt } from "@prismux/provider-core/server/orchestrationInstructions";
+import { prismuxOrchestrationSystemPrompt } from "@prismux/provider-core/server/orchestrationInstructions";
 import { SKILL_MENTION_PATTERN } from "@prismux/core-shared/composerInlineTokens";
 import { HTML_RENDER_TOOL_NAME } from "@prismux/core-shared/htmlRender";
 import { htmlRenderFromToolItem } from "@prismux/core-shared/toolOutput";
@@ -427,14 +427,14 @@ interface PendingRequest {
 const rule = (action: string, effect: Rule["effect"]): Rule => ({ action, resource: "*", effect });
 
 /** OpenCode hides tools for names over 64 chars and rejects names over 100; hash long thread IDs. */
-export const t3McpServerName = Effect.fn("t3McpServerName")(function* (threadId: string) {
-  const name = `t3-code-${threadId.replaceAll(/[^a-zA-Z0-9_-]/g, "_")}`;
+export const prismuxMcpServerName = Effect.fn("prismuxMcpServerName")(function* (threadId: string) {
+  const name = `prismux-${threadId.replaceAll(/[^a-zA-Z0-9_-]/g, "_")}`;
   if (name.length <= 64) return name;
   const crypto = yield* Digest.Digest;
   const digest = yield* crypto
     .digest(Digest.sha256, new TextEncoder().encode(threadId))
     .pipe(Effect.orDie);
-  return `t3-code-${Hex.encode(digest).slice(0, 16)}`;
+  return `prismux-${Hex.encode(digest).slice(0, 16)}`;
 });
 
 // Last match wins: deny all threads' T3 servers, then allow only this thread's.
@@ -442,7 +442,7 @@ const mcpRules = (mcpServerName: string | null): ReadonlyArray<Rule> =>
   mcpServerName === null
     ? []
     : [
-        { action: "t3-code-*", resource: "*", effect: "deny" },
+        { action: "prismux-*", resource: "*", effect: "deny" },
         { action: `${mcpServerName}_*`, resource: "*", effect: "allow" },
       ];
 
@@ -630,7 +630,7 @@ const isUsageLimit = (error: {
   claudeUsageLimit(error.message) !== undefined;
 
 const INTERRUPT_TIMEOUT = 10_000;
-const INSTRUCTIONS_KEY = "t3-code";
+const INSTRUCTIONS_KEY = "prismux";
 const RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY = "2 seconds";
 const RECONCILE_TIMEOUT = "15 seconds";
@@ -717,10 +717,10 @@ type ModelRef = ReturnType<typeof Model.Ref.make>;
 // msg_ IDs cannot cross sessions; include session identity because T3 IDs repeat across environments.
 // Pre-acknowledgement IDs also establish fork/rollback boundaries.
 const turnPromptId = (sessionId: string, attemptId: string) =>
-  SessionMessage.ID.make(`msg_t3_turn_${sessionId}:${attemptId}`);
+  SessionMessage.ID.make(`msg_prismux_turn_${sessionId}:${attemptId}`);
 const steerPromptId = (sessionId: string, messageId: string) =>
-  SessionMessage.ID.make(`msg_t3_steer_${sessionId}:${messageId}`);
-const isOwnPrompt = (inboxId: string) => inboxId.startsWith("msg_t3_");
+  SessionMessage.ID.make(`msg_prismux_steer_${sessionId}:${messageId}`);
+const isOwnPrompt = (inboxId: string) => inboxId.startsWith("msg_prismux_");
 
 const promptOf = (turn: OrchestrationV2ProviderTurn) => {
   const nativeId = turn.nativeTurnRef?.nativeId;
@@ -836,7 +836,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
   const driver = OPENCODE_PROVIDER;
   let nativeGoalSupport: boolean | undefined;
   const mcpServerNameFor = (threadId: string) =>
-    t3McpServerName(threadId).pipe(Effect.provideService(Digest.Digest, crypto));
+    prismuxMcpServerName(threadId).pipe(Effect.provideService(Digest.Digest, crypto));
 
   const borrow = Effect.gen(function* () {
     const lent = yield* Deferred.make<
@@ -1517,7 +1517,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           turnItem: {
             ...itemBase(state, turn, pageId, "completed", startedAt, updatedAt, updatedAt),
             type: "dynamic_tool",
-            toolName: `t3-code.${HTML_RENDER_TOOL_NAME}`,
+            toolName: `prismux.${HTML_RENDER_TOOL_NAME}`,
             input: { title: page.title, height: page.height },
             output: { htmlRender: page },
           },
@@ -4428,15 +4428,28 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           yield* Effect.sleep(MCP_TOOL_RELOAD_SETTLE);
         }
       }
+      const isSubagent = turnInput.appThread.lineage.relationshipToParent === "subagent";
       const instructions = [
         buildRuntimeInstructions({
           harness: "OpenCode",
           model: turnInput.modelSelection.model,
           runtimePolicy: turnInput.runtimePolicy,
+          prompt: turnInput.message.text,
+          isSubagent,
         }),
-        t3OrchestrationSystemPrompt(mcpAvailable, mcpSession?.capabilities?.has("device") === true),
-        mcpAvailable
-          ? "To wait for a background shell you started (tests, a build), call `t3_background_wait` with its shell ID before you end your turn. Do not mark work you leave running, or PRs."
+        prismuxOrchestrationSystemPrompt(
+          mcpAvailable,
+          mcpSession?.capabilities?.has("device") === true,
+          {
+            prompt: turnInput.message.text,
+            isSubagent,
+            hasOpenDeviceSession: mcpSession?.hasOpenDeviceSession === true,
+            hasOpenPreview: mcpSession?.hasOpenPreview === true,
+            hasLinkedEnvironments: mcpSession?.hasLinkedEnvironments === true,
+          },
+        ),
+        mcpAvailable && !isSubagent
+          ? "To wait for a background shell you started (tests, a build), call `prismux_background_wait` with its shell ID before you end your turn. Do not mark work you leave running, or PRs."
           : undefined,
       ]
         .filter((part) => part !== undefined && part.length > 0)

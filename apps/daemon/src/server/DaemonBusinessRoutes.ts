@@ -158,6 +158,8 @@ export interface DaemonBusinessContext {
   officialCatalogPath?: string;
   chiefManager?: ChiefThreadManager;
   handoffEngine?: HandoffEngine;
+  coreRpcClient?: CoreRpcClient;
+  /** @deprecated Use coreRpcClient */
   t3RpcClient?: CoreRpcClient;
   memoryStore?: SqliteMemoryStore;
   memoryDbPath?: string;
@@ -730,7 +732,7 @@ export class DaemonBusinessService {
       dialMode,
       availableProviders: [...CHIEF_PROVIDER_KINDS],
       availableDialModes: [...DIAL_MODES],
-      t3Connected: this.ctx.t3RpcClient?.isConnected() ?? false
+      t3Connected: (this.ctx.coreRpcClient ?? this.ctx.t3RpcClient)?.isConnected() ?? false
     };
   }
 
@@ -2960,7 +2962,7 @@ export class DaemonBusinessService {
       throw new BusinessRouteError(
         400,
         "INVALID_HOST_METRICS",
-        "Request body must contain valid mainPid, electronProcesses, or t3Server metrics."
+        "Request body must contain valid mainPid, electronProcesses, or coreServer metrics."
       );
     }
     return this.ctx.resourceMonitorService.ingestHostMetrics(normalized);

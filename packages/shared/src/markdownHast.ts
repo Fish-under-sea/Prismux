@@ -105,7 +105,12 @@ export function rehypePreserveImageSourceMeta() {
   };
 }
 
-const IMAGE_SRC_PROTOCOLS = [...(defaultSchema.protocols?.src ?? []), "file", "t3-context"];
+const IMAGE_SRC_PROTOCOLS = [
+  ...(defaultSchema.protocols?.src ?? []),
+  "file",
+  "prismux-context",
+  "t3-context",
+];
 
 // The sanitizer compares schemes case-sensitively, so lowercase accepted editor links first.
 function normalizeLocalEditorHref(href: string): string {
@@ -163,7 +168,8 @@ export const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
     href: [
       ...(defaultSchema.protocols?.href ?? []),
       "file",
-      "t3-citation",
+      "prismux-citation",
+      "prismux-context",
       "t3-context",
       THREAD_LINK_PROTOCOL,
       // Scheme only: the renderer's URL transform checks the rest of the link shape.

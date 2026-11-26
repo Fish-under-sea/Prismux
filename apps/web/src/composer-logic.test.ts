@@ -356,7 +356,7 @@ describe("filterComposerPullRequestMatches", () => {
       host: "github.com",
       number: 8987,
       projectId: "project-1",
-      repository: "T3Tools/Prismux",
+      repository: "PrismuxTools/Prismux",
       updatedAt: "2026-09-03T12:00:00.000Z",
     },
     {

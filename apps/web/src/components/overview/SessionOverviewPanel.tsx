@@ -35,7 +35,7 @@ import { useAssetUrls } from "~/assets/assetUrls";
 import type { ComposerThreadTarget, DraftId } from "~/composerDraftStore";
 import { useDiffPanelStore } from "~/diffPanelStore";
 import { useClientSettings } from "~/hooks/useSettings";
-import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
+import { usePrismuxProjectFileScripts } from "~/hooks/usePrismuxProjectFileScripts";
 import { openSideThread } from "~/lib/sideChatPane";
 import { cn } from "~/lib/utils";
 import { workspaceAreaProps } from "~/lib/workspaceFocus";
@@ -530,7 +530,7 @@ function SessionOverviewPanelContent(
   );
   const gitStatus = gitStatusQuery.data ?? null;
 
-  const fileScripts = useT3ProjectFileScripts(
+  const fileScripts = usePrismuxProjectFileScripts(
     props.environmentId,
     props.activeProjectScripts && visible.scripts ? props.gitCwd : null,
   );

@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 const tempRoot = () => {
-  const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-cli-shim-"));
+  const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "prismux-cli-shim-"));
   directories.push(root);
   return root;
 };
@@ -28,7 +28,7 @@ const writeExecutable = (path: string, content: string) => {
 
 const writeShim = (root: string, target: CliShimTarget) => {
   const shim = NodePath.join(root, "bin", "t3");
-  writeExecutable(shim, renderCliShim({ target, shimPath: shim, t3Home: `${root}/home` }));
+  writeExecutable(shim, renderCliShim({ target, shimPath: shim, prismuxHome: `${root}/home` }));
   return shim;
 };
 
@@ -203,7 +203,7 @@ describe("renderCliShim", () => {
     const script = renderCliShim({
       target: { kind: "windows", executable, entry: "C:\\Apps\\server.asar\\bin.mjs" },
       shimPath: "C:\\Users\\José\\.prismux\\bin\\prismux.cmd",
-      t3Home: "C:\\Users\\José\\.prismux",
+      prismuxHome: "C:\\Users\\José\\.prismux",
     });
     const lines = script.split("\r\n");
     expect(lines).toContain("setlocal EnableExtensions DisableDelayedExpansion");

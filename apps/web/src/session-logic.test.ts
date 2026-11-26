@@ -1372,7 +1372,7 @@ describe("HTML renders in the timeline", () => {
     ...base("render", 2),
     status,
     type: "dynamic_tool",
-    toolName: "mcp__t3-code__html_render",
+    toolName: "mcp__prismux__html_render",
     input: { title: "Chart", height: 420 },
     ...(output === undefined ? {} : { output }),
   });
@@ -1454,7 +1454,7 @@ describe("HTML renders in the timeline", () => {
       ...base("render", 2),
       status,
       type: "dynamic_tool",
-      toolName: "mcp__t3-code__send_to_user",
+      toolName: "mcp__prismux__send_to_user",
       input: { message: sentMessage },
       ...(output === undefined ? {} : { output }),
     });
@@ -1475,7 +1475,7 @@ describe("HTML renders in the timeline", () => {
       tool: "get_weather",
       resourceUri: "ui://weather/dashboard",
     };
-    const call = renderCall("completed", { t3McpApp: mcpApp, result: { content: [] } });
+    const call = renderCall("completed", { prismuxMcpApp: mcpApp, result: { content: [] } });
     const entries = turn(
       call.type === "dynamic_tool" ? { ...call, toolName: "weather.get_weather" } : call,
     );
@@ -1495,7 +1495,7 @@ describe("HTML renders in the timeline", () => {
       resourceUri: "ui://repro/dataviz",
     };
     const result = { content: [{ type: "text", text: "Notice\nview\tcount\n/home\t42" }] };
-    const call = renderCall("completed", { t3McpApp: mcpApp, result });
+    const call = renderCall("completed", { prismuxMcpApp: mcpApp, result });
     const entries = turn(
       call.type === "dynamic_tool" ? { ...call, toolName: "repro.aggregate_rum_events" } : call,
     );
@@ -1525,7 +1525,7 @@ describe("HTML renders in the timeline", () => {
       optimisticMessages: [],
     });
     const previous = deriveTimelineEntriesFromVisibleTurnItemsWithState(
-      input({ t3McpApp: mcpApp, result }),
+      input({ prismuxMcpApp: mcpApp, result }),
     );
     const nextInput = input({ result });
     const next = deriveTimelineEntriesFromVisibleTurnItemsWithState(nextInput, previous);
@@ -1540,7 +1540,7 @@ describe("HTML renders in the timeline", () => {
       resourceUri: "ui://github-mcp-server/pr-create",
     };
     const call = renderCall("failed", {
-      t3McpApp: mcpApp,
+      prismuxMcpApp: mcpApp,
       result: { content: [], isError: true },
     });
     const entries = turn(

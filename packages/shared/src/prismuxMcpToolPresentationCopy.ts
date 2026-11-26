@@ -1,7 +1,10 @@
 import { mFallback, msg } from "gt-i18n";
 import type { MFunctionType } from "gt-i18n/types";
 
-import { resolveT3McpToolDefinition, type T3McpToolPresentation } from "./t3McpToolPresentation.ts";
+import {
+  resolvePrismuxMcpToolDefinition,
+  type PrismuxMcpToolPresentation,
+} from "./prismuxMcpToolPresentation.ts";
 
 // Same English as each tool's displayName; a name missing here shows as authored.
 const DISPLAY_NAMES: ReadonlyMap<string, string> = new Map([
@@ -40,15 +43,15 @@ const DISPLAY_NAMES: ReadonlyMap<string, string> = new Map([
   ["Update a scheduled task", msg("Update a scheduled task")],
   ["Delete a scheduled task", msg("Delete a scheduled task")],
   ["Ask for a secret", msg("Ask for a secret")],
-  ["Create T3 threads", msg("Create T3 threads")],
-  ["Start a T3 thread", msg("Start a T3 thread")],
-  ["List T3 threads", msg("List T3 threads")],
-  ["Read a T3 thread", msg("Read a T3 thread")],
-  ["Send to a T3 thread", msg("Send to a T3 thread")],
-  ["Wait for a T3 thread", msg("Wait for a T3 thread")],
+  ["Create Prismux threads", msg("Create Prismux threads")],
+  ["Start a Prismux thread", msg("Start a Prismux thread")],
+  ["List Prismux threads", msg("List Prismux threads")],
+  ["Read a Prismux thread", msg("Read a Prismux thread")],
+  ["Send to a Prismux thread", msg("Send to a Prismux thread")],
+  ["Wait for a Prismux thread", msg("Wait for a Prismux thread")],
   ["Stop a workflow", msg("Stop a workflow")],
   ["Update background waits", msg("Update background waits")],
-  ["Interrupt a T3 thread", msg("Interrupt a T3 thread")],
+  ["Interrupt a Prismux thread", msg("Interrupt a Prismux thread")],
   ["Hand off thread to a git worktree", msg("Hand off thread to a git worktree")],
   ["Get thread worktree status", msg("Get thread worktree status")],
   ["Get preview browser status", msg("Get preview browser status")],
@@ -95,7 +98,7 @@ const DISPLAY_NAMES: ReadonlyMap<string, string> = new Map([
   ["Search thread content", msg("Search thread content")],
   ["Read thread transfers", msg("Read thread transfers")],
   ["Organize a thread", msg("Organize a thread")],
-  ["Update T3 thread metadata", msg("Update T3 thread metadata")],
+  ["Update Prismux thread metadata", msg("Update Prismux thread metadata")],
   ["List workspace branches", msg("List workspace branches")],
   ["List preview tabs", msg("List preview tabs")],
   ["Close a preview tab", msg("Close a preview tab")],
@@ -122,16 +125,16 @@ const DISPLAY_NAMES: ReadonlyMap<string, string> = new Map([
 ]);
 
 /** @public */
-export function resolveT3McpToolPresentation(
+export function resolvePrismuxMcpToolPresentation(
   toolName: string | null | undefined,
   input?: unknown,
   resolve: MFunctionType = mFallback,
-): T3McpToolPresentation | null {
-  const definition = resolveT3McpToolDefinition(toolName, input);
+): PrismuxMcpToolPresentation | null {
+  const definition = resolvePrismuxMcpToolDefinition(toolName, input);
   if (definition === null) return null;
   const displayName = DISPLAY_NAMES.get(definition.displayName);
   return {
     displayName: displayName === undefined ? definition.displayName : resolve(displayName),
-    logo: "t3-code",
+    logo: "prismux",
   };
 }

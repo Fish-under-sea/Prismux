@@ -7,6 +7,7 @@ const PROMPT_STASH_KEY = "prismux:prompt-stash:v2";
 const COMPOSER_DRAFTS_KEY = "prismux:composer-drafts:v1";
 const NOT_IMPORTED_KEYS = new Set([
   // Identifies one running install to the server; two apps must not share it.
+  "prismux.backgroundActivity.clientId",
   "t3.backgroundActivity.clientId",
   "prismux:snap-shot-setup-resume:v1",
 ]);

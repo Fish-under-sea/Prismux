@@ -37,11 +37,11 @@ function makeProject(
     locator: {
       source: "git-remote",
       remoteName: "origin",
-      remoteUrl: "git@github.com:T3Tools/Prismux.git",
+      remoteUrl: "git@github.com:PrismuxTools/Prismux.git",
     },
     provider: SourceControlProviderKind.make("github"),
-    displayName: "T3Tools/Prismux",
-    owner: "T3Tools",
+    displayName: "PrismuxTools/Prismux",
+    owner: "PrismuxTools",
     name: "Prismux",
   },
 ): OrchestrationProjectShell {
@@ -210,7 +210,7 @@ describe("PullRequestWatchService", () => {
       const missing = new PullRequestUnavailableError({
         reason: "cli-missing",
         provider: SourceControlProviderKind.make("gitlab"),
-        requirement: "Install glab on the T3 server's PATH.",
+        requirement: "Install glab on the Prismux server's PATH.",
       });
       const harness = yield* makeHarness({ readFailure: missing });
       const target = { url: "https://gitlab.example.com/team/project/-/merge_requests/42" };

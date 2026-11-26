@@ -178,10 +178,10 @@ describe("PrismuxWordmark & TimelineToolActivityIcon de-T3 branding", () => {
   });
 
   it("replaces residual T3 icon in ToolActivityIconView with Ciallo～(∠・ω< )⌒★ and flags wide icon layout", () => {
-    expect(isWideToolActivityIcon(undefined, "t3-code")).toBe(true);
+    expect(isWideToolActivityIcon(undefined, "prismux")).toBe(true);
     expect(isWideToolActivityIcon(undefined, "terminal")).toBe(false);
     expect(
-      isWideToolActivityIcon({ _tag: "website", pageUrl: "https://example.com" }, "t3-code"),
+      isWideToolActivityIcon({ _tag: "website", pageUrl: "https://example.com" }, "prismux"),
     ).toBe(false);
 
     const shared = makeSharedState();
@@ -189,7 +189,7 @@ describe("PrismuxWordmark & TimelineToolActivityIcon de-T3 branding", () => {
       <TimelineRowCtx value={shared}>
         <ToolActivityIconView
           icon={undefined}
-          fallbackName="t3-code"
+          fallbackName="prismux"
           className="block size-3.5 shrink-0 stroke-2 text-primary"
           muted={false}
         />
@@ -207,13 +207,13 @@ describe("PrismuxWordmark & TimelineToolActivityIcon de-T3 branding", () => {
     const completedEntry = makeDynamicToolEntry({
       id: "mcp-done",
       label: "已获取可用代理列表",
-      toolName: "mcp__t3-code__orchestrator_capabilities",
+      toolName: "mcp__prismux__orchestrator_capabilities",
       status: "completed",
     });
     const runningEntry = makeDynamicToolEntry({
       id: "mcp-running",
       label: "正在委托子代理执行任务",
-      toolName: "mcp__t3-code__delegate_task",
+      toolName: "mcp__prismux__delegate_task",
       status: "inProgress",
     });
 
@@ -338,5 +338,52 @@ describe("PrismuxWordmark & TimelineToolActivityIcon de-T3 branding", () => {
     expect(html).toContain("DS 付费组子代理");
     expect(html).not.toContain("size-6 overflow-hidden");
     expect(html).not.toContain("T3");
+  });
+
+  it("normalizes historical persisted t3-code.t3_thread_send calls to prismux.prismux_thread_send with Ciallo～(∠・ω< )⌒★ icon", () => {
+    const shared = makeSharedState();
+    const legacyEntry = makeDynamicToolEntry({
+      id: "legacy-t3-thread-send",
+      label: "t3-code.t3_thread_send",
+      toolName: "t3-code.t3_thread_send",
+      status: "completed",
+    });
+    const collapsedHtml = renderToStaticMarkup(
+      <GTProvider locale="zh" translations={{}}>
+        <TimelineRowCtx value={shared}>
+          <TimelineRowActivityCtx value={DEFAULT_ACTIVITY}>
+            <SimpleWorkEntryRow
+              workEntry={legacyEntry}
+              workspaceRoot="D:\\Fish-code\\Prismux"
+            />
+          </TimelineRowActivityCtx>
+        </TimelineRowCtx>
+      </GTProvider>,
+    );
+    expect(collapsedHtml).toContain('data-prismux-wordmark="true"');
+    expect(collapsedHtml).toContain("Ciallo～(∠・ω&lt; )⌒★");
+    expect(collapsedHtml).toContain("Sent to a Prismux thread");
+    expect(collapsedHtml).not.toContain("t3-code");
+    expect(collapsedHtml).not.toContain("t3_thread_send");
+    expect(collapsedHtml).not.toContain("T3");
+
+    const expandedHtml = renderToStaticMarkup(
+      <GTProvider locale="zh" translations={{}}>
+        <TimelineRowCtx value={shared}>
+          <TimelineRowActivityCtx value={DEFAULT_ACTIVITY}>
+            <SimpleWorkEntryRow
+              workEntry={legacyEntry}
+              workspaceRoot="D:\\Fish-code\\Prismux"
+              autoExpandDetails
+            />
+          </TimelineRowActivityCtx>
+        </TimelineRowCtx>
+      </GTProvider>,
+    );
+    expect(expandedHtml).toContain("Sent to a Prismux thread");
+    expect(expandedHtml).toContain("prismux.prismux_thread_send");
+    expect(expandedHtml).not.toContain("t3-code");
+    expect(expandedHtml).not.toContain("t3_thread_send");
+    expect(expandedHtml).not.toContain("T3");
   });
 });

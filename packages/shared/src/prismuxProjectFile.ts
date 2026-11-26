@@ -26,8 +26,3 @@ export function buildPrismuxProjectFileJsonSchema(): Record<string, unknown> {
   }
   return jsonSchema;
 }
-
-// Phase 1 compatibility aliases for callers still importing legacy symbol names.
-export const T3ProjectFileFromJson = PrismuxProjectFileFromJson;
-export const parseT3ProjectFile = parsePrismuxProjectFile;
-export const buildT3ProjectFileJsonSchema = buildPrismuxProjectFileJsonSchema;

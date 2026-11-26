@@ -207,9 +207,9 @@ describe("AntigravityAdapterV2 compaction", () => {
                 args: [mockAgentPath],
                 cwd: input.cwd,
                 env: {
-                  T3_ACP_ANTIGRAVITY: "1",
-                  T3_ACP_AVAILABLE_COMMANDS: compact ? "compact" : "",
-                  T3_ACP_REQUEST_LOG_PATH: requestLog,
+                  PRISMUX_ACP_ANTIGRAVITY: "1",
+                  PRISMUX_ACP_AVAILABLE_COMMANDS: compact ? "compact" : "",
+                  PRISMUX_ACP_REQUEST_LOG_PATH: requestLog,
                 },
               },
             }).pipe(
@@ -379,7 +379,7 @@ describe("AntigravityAdapterV2 client file system", () => {
       // effect-acp keeps the last handler registered per method; so does this.
       let readTextFile: Parameters<RuntimeService["handleReadTextFile"]>[0] | undefined;
       let writeTextFile: Parameters<RuntimeService["handleWriteTextFile"]>[0] | undefined;
-      const logs = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-antigravity-log-" });
+      const logs = yield* fileSystem.makeTempDirectoryScoped({ prefix: "prismux-antigravity-log-" });
       const requestLog = path.join(logs, "requests.ndjson");
       const crypto = yield* SecureRandom.SecureRandom;
       const instanceId = ProviderInstanceId.make("antigravity-containment-test");
@@ -394,7 +394,7 @@ describe("AntigravityAdapterV2 client file system", () => {
               command: process.execPath,
               args: [mockAgentPath],
               cwd: input.cwd,
-              env: { T3_ACP_ANTIGRAVITY: "1", T3_ACP_REQUEST_LOG_PATH: requestLog },
+              env: { PRISMUX_ACP_ANTIGRAVITY: "1", PRISMUX_ACP_REQUEST_LOG_PATH: requestLog },
             },
           }).pipe(
             Effect.provideService(SecureRandom.SecureRandom, crypto),
@@ -414,10 +414,10 @@ describe("AntigravityAdapterV2 client file system", () => {
         defaultModel: Effect.undefined,
       });
       const workspace = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-antigravity-workspace-",
+        prefix: "prismux-antigravity-workspace-",
       });
       const outside = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-antigravity-outside-",
+        prefix: "prismux-antigravity-outside-",
       });
       const outsideFile = path.join(outside, "secret.txt");
       yield* fileSystem.writeFileString(outsideFile, "secret");
@@ -555,7 +555,7 @@ describe("AntigravityAdapterV2 workspace changes", () => {
               command: process.execPath,
               args: [mockAgentPath],
               cwd: input.cwd,
-              env: { T3_ACP_ANTIGRAVITY: "1", T3_ACP_HANG_PROMPT_FOREVER: "1" },
+              env: { PRISMUX_ACP_ANTIGRAVITY: "1", PRISMUX_ACP_HANG_PROMPT_FOREVER: "1" },
             },
           }).pipe(
             Effect.provideService(SecureRandom.SecureRandom, crypto),
@@ -730,7 +730,7 @@ describe("AntigravityAdapterV2 html_render pages", () => {
               command: process.execPath,
               args: [mockAgentPath],
               cwd: input.cwd,
-              env: { T3_ACP_ANTIGRAVITY: "1" },
+              env: { PRISMUX_ACP_ANTIGRAVITY: "1" },
             },
           }).pipe(
             Effect.provideService(SecureRandom.SecureRandom, crypto),
@@ -839,7 +839,7 @@ describe("AntigravityAdapterV2 html_render pages", () => {
                   yield* send({
                     sessionUpdate: "tool_call",
                     toolCallId: "agy-1.5.8",
-                    title: "Run mcp_t3-code_html_render",
+                    title: "Run mcp_prismux_html_render",
                     kind: "other",
                     status: "in_progress",
                     rawInput: { ...telemetry, toolSummary: "Render telemetry" },
@@ -942,25 +942,25 @@ describe("AntigravityAdapterV2 html_render pages", () => {
 
       assert.deepEqual(tool("published"), {
         status: "completed",
-        toolName: "t3-code.html_render",
+        toolName: "prismux.html_render",
         page: page("replacement"),
         output: { htmlRender: page("replacement") },
       });
       assert.deepEqual(tool("unpublished"), {
         status: "completed",
-        toolName: "t3-code.html_render",
+        toolName: "prismux.html_render",
         page: undefined,
         output: "Summary of unpublished",
       });
       assert.deepEqual(tool("failed"), {
         status: "failed",
-        toolName: "t3-code.html_render",
+        toolName: "prismux.html_render",
         page: undefined,
         output: "Summary of failed",
       });
       assert.deepEqual(tool("error"), {
         status: "completed",
-        toolName: "t3-code.html_render",
+        toolName: "prismux.html_render",
         page: undefined,
         output: [],
       });
@@ -978,7 +978,7 @@ describe("AntigravityAdapterV2 html_render pages", () => {
       for (const name of ["failed-retry", "error-retry", "agy-1.5.8"]) {
         assert.deepEqual(tool(name), {
           status: "completed",
-          toolName: "t3-code.html_render",
+          toolName: "prismux.html_render",
           page: page(name),
           output: { htmlRender: page(name) },
         });
@@ -1054,8 +1054,8 @@ const openSessionWithRunningCommand = Effect.fn("openSessionWithRunningCommand")
           args: [mockAgentPath],
           cwd: input.cwd,
           env: {
-            T3_ACP_ANTIGRAVITY: "1",
-            ...(steering === undefined ? {} : { T3_ACP_AGENT_VERSION: steering.agentVersion }),
+            PRISMUX_ACP_ANTIGRAVITY: "1",
+            ...(steering === undefined ? {} : { PRISMUX_ACP_AGENT_VERSION: steering.agentVersion }),
           },
         },
       }).pipe(
@@ -1654,15 +1654,15 @@ describe("AntigravityAdapterV2 work after the prompt ends", () => {
   );
 
   // agy names its background commands `<session>/task-<n>`; the agent passes that to
-  // t3_background_wait, which must not fail since the adapter already holds the run open.
-  it.effect("accepts t3_background_wait for a command it already tracks", () =>
+  // prismux_background_wait, which must not fail since the adapter already holds the run open.
+  it.effect("accepts prismux_background_wait for a command it already tracks", () =>
     Effect.gen(function* () {
       const { session, providerThread, startTurn, throughPromptSettled } =
         yield* openSessionWithRunningCommand({ WaitMsBeforeAsync: 10000 });
       yield* startTurn(1, false);
       yield* throughPromptSettled;
       const taskIds = ["mock-session-1/task-2"];
-      assert.isDefined(session.awaitBackgroundTasks, "t3_background_wait must not be unsupported");
+      assert.isDefined(session.awaitBackgroundTasks, "prismux_background_wait must not be unsupported");
       const result = yield* session.awaitBackgroundTasks!({
         providerThread,
         taskIds,
@@ -1826,7 +1826,7 @@ describe("AntigravityAdapterV2 work after the prompt ends", () => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const profile = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-antigravity-kids-" });
+      const profile = yield* fileSystem.makeTempDirectoryScoped({ prefix: "prismux-antigravity-kids-" });
       const records = (conversationId: string, kind: string) =>
         path.join(profile, "antigravity-acp", "brain", conversationId, ".system_generated", kind);
       const write = (directory: string, name: string, value: unknown) =>
@@ -1898,7 +1898,7 @@ describe("AntigravityAdapterV2 work after the prompt ends", () => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const profile = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-antigravity-kids-" });
+      const profile = yield* fileSystem.makeTempDirectoryScoped({ prefix: "prismux-antigravity-kids-" });
       const records = (conversationId: string, kind: string) =>
         path.join(profile, "antigravity-acp", "brain", conversationId, ".system_generated", kind);
       const write = (directory: string, name: string, value: unknown) =>
@@ -1955,7 +1955,7 @@ describe("AntigravityAdapterV2 work after the prompt ends", () => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       // No records: nothing proves a child is at work, so none may hold a run open.
-      const profile = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-antigravity-kids-" });
+      const profile = yield* fileSystem.makeTempDirectoryScoped({ prefix: "prismux-antigravity-kids-" });
       const { usage, offers, send, startTurn, throughTerminal } =
         yield* openSessionWithRunningCommand({}, profile);
       yield* startTurn(1, false);
@@ -2023,10 +2023,10 @@ describe("AntigravityAdapterV2 subagent reads", () => {
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
       const workspace = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-antigravity-reads-",
+        prefix: "prismux-antigravity-reads-",
       });
       const outside = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-antigravity-reads-outside-",
+        prefix: "prismux-antigravity-reads-outside-",
       });
       const served = path.join(workspace, "served.ts");
       yield* fileSystem.writeFileString(served, "export {};");
@@ -2051,7 +2051,7 @@ describe("AntigravityAdapterV2 subagent reads", () => {
               command: process.execPath,
               args: [mockAgentPath],
               cwd: input.cwd,
-              env: { T3_ACP_ANTIGRAVITY: "1" },
+              env: { PRISMUX_ACP_ANTIGRAVITY: "1" },
             },
           }).pipe(
             Effect.provideService(SecureRandom.SecureRandom, crypto),
@@ -2246,7 +2246,7 @@ describe("AntigravityAdapterV2 runtime mode ceiling", () => {
               command: process.execPath,
               args: [mockAgentPath],
               cwd: input.cwd,
-              env: { T3_ACP_ANTIGRAVITY: "1" },
+              env: { PRISMUX_ACP_ANTIGRAVITY: "1" },
             },
           }).pipe(
             Effect.provideService(SecureRandom.SecureRandom, crypto),
@@ -2320,7 +2320,7 @@ describe("AntigravityAdapterV2 runtime mode ceiling", () => {
               command: process.execPath,
               args: [mockAgentPath],
               cwd: input.cwd,
-              env: { T3_ACP_ANTIGRAVITY: "1" },
+              env: { PRISMUX_ACP_ANTIGRAVITY: "1" },
             },
           }).pipe(
             Effect.provideService(SecureRandom.SecureRandom, crypto),
@@ -2392,7 +2392,7 @@ describe("AntigravityAdapterV2 session system prompt", () => {
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
-        const logs = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-antigravity-log-" });
+        const logs = yield* fileSystem.makeTempDirectoryScoped({ prefix: "prismux-antigravity-log-" });
         const requestLog = path.join(logs, "requests.ndjson");
         type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
         const promptReceived = yield* Deferred.make<Parameters<RuntimeService["prompt"]>[0]>();
@@ -2409,10 +2409,10 @@ describe("AntigravityAdapterV2 session system prompt", () => {
                 args: [mockAgentPath],
                 cwd: input.cwd,
                 env: {
-                  T3_ACP_ANTIGRAVITY: "1",
-                  T3_ACP_AGENT_VERSION: agentVersion,
-                  T3_ACP_REQUEST_LOG_PATH: requestLog,
-                  T3_ACP_HANG_PROMPT_FOREVER: "1",
+                  PRISMUX_ACP_ANTIGRAVITY: "1",
+                  PRISMUX_ACP_AGENT_VERSION: agentVersion,
+                  PRISMUX_ACP_REQUEST_LOG_PATH: requestLog,
+                  PRISMUX_ACP_HANG_PROMPT_FOREVER: "1",
                 },
               },
             }).pipe(

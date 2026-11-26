@@ -128,7 +128,7 @@ export const layer = Layer.effect(
                 Ref.set(
                   preflightErrorRef,
                   Option.some(
-                    "Another Prismux server is using this distro's Prismux home, or an older background service is set up for it. Stop that server or pair with it, or try `prismux update` in the distro. If the older launcher cannot update, run `prismux service uninstall` and optionally reinstall with `prismux service install` from a current CLI in the distro. Use `npx t3@latest` if the CLI is missing or outdated, and pass `--base-dir` with the service's Prismux home to each command.",
+                    "Another Prismux server is using this distro's Prismux home, or an older background service is set up for it. Stop that server or pair with it, or try `prismux update` in the distro. If the older launcher cannot update, run `prismux service uninstall` and optionally reinstall with `prismux service install` from a current CLI in the distro. Use `npx prismux@latest` if the CLI is missing or outdated, and pass `--base-dir` with the service's Prismux home to each command.",
                   ),
                 ),
               ),

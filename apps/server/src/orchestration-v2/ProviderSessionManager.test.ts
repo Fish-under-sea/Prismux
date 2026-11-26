@@ -3415,7 +3415,7 @@ const openSessionWithBackgroundCommand = (fixtureName: string) =>
         completedAt: status === "completed" ? startedAt : null,
         updatedAt: startedAt,
         type: "dynamic_tool",
-        toolName: "mcp__t3-code__t3_worktree_handoff",
+        toolName: "mcp__prismux__prismux_worktree_handoff",
         input: {},
       }) satisfies OrchestrationV2TurnItem;
     const cutOffNodeId = idAllocator.derive.nodeFromProviderItem({
@@ -3658,7 +3658,7 @@ it.effect.each(["detach", "stream failure", "provider stop", "early close"] as c
         assert.equal(
           Exit.isFailure(consumed)
             ? (Cause.squash(consumed.cause) as ProviderAdapter.ProviderAdapterEventStreamError)
-                .raisedByT3
+                .raisedByPrismux
             : undefined,
           Exit.isFailure(consumed) ? true : undefined,
         );
@@ -3772,7 +3772,7 @@ it.effect.each(["stream failure", "detach"] as const)(
           },
           {
             kind: "task",
-            label: "mcp__t3-code__t3_worktree_handoff",
+            label: "mcp__prismux__prismux_worktree_handoff",
             id: seededToolCalls.cutOff.id,
           },
         ];

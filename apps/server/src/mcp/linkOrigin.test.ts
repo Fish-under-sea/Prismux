@@ -255,7 +255,7 @@ const launch = (
   title: string,
   extra: Record<string, unknown> = {},
 ) =>
-  call(scope, "t3_thread_launch", {
+  call(scope, "prismux_thread_launch", {
     projectId,
     title,
     modelSelection: { instanceId, model: "gpt-5" },
@@ -358,7 +358,7 @@ it.layer(Layer.provideMerge(layerTools, layerOrchestration))("work a link starts
       const users = yield* usersOwnThread;
       const ownLaunch = yield* launch(laptop, "The laptop's");
       const rename = (scope: McpInvocationContext.McpInvocationScope, threadId: ThreadId) =>
-        call(scope, "t3_thread_update", {
+        call(scope, "prismux_thread_update", {
           threadId,
           action: "rename",
           title: `Renamed by ${scope.client!.sessionId}`,
@@ -375,8 +375,8 @@ it.layer(Layer.provideMerge(layerTools, layerOrchestration))("work a link starts
       assert.equal((yield* rename(claudeCode, users)).isError, false);
       // Naming this environment's own id is still this environment's thread.
       for (const [name, args] of [
-        ["t3_thread_send", { message: "From the laptop." }],
-        ["t3_thread_interrupt", {}],
+        ["prismux_thread_send", { message: "From the laptop." }],
+        ["prismux_thread_interrupt", {}],
       ] as const) {
         const result = yield* call(laptop, name, {
           ...args,
@@ -393,7 +393,7 @@ it.layer(Layer.provideMerge(layerTools, layerOrchestration))("work a link starts
       );
 
       // Reads are not fenced.
-      const read = yield* call(laptop, "t3_thread_read", { threadId: users });
+      const read = yield* call(laptop, "prismux_thread_read", { threadId: users });
       assert.equal(read.isError, false);
     }),
   );
@@ -409,15 +409,15 @@ it.layer(Layer.provideMerge(layerTools, layerOrchestration))("work a link starts
         access: "full-access",
       });
 
-      const renamed = yield* call(trusted, "t3_thread_update", {
+      const renamed = yield* call(trusted, "prismux_thread_update", {
         threadId: users,
         action: "rename",
         title: "Renamed from the desk",
       });
       assert.equal(renamed.isError, false, JSON.stringify(renamed.content));
       for (const [name, args] of [
-        ["t3_project_update", { projectId, title: "The desk's now" }],
-        ["t3_project_create", { title: "prismux", workspaceRoot: "/p/prismux" }],
+        ["prismux_project_update", { projectId, title: "The desk's now" }],
+        ["prismux_project_create", { title: "prismux", workspaceRoot: "/p/prismux" }],
       ] as const) {
         const changed = yield* call(trusted, name, args);
         assert.equal(changed.isError, false, `${name}: ${JSON.stringify(changed.content)}`);

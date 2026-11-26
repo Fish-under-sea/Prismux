@@ -19,10 +19,10 @@ export interface DaemonCliParsedArgs {
   portableRoot?: string;
   host: string;
   port: number;
-  t3Url?: string;
-  t3Token?: string;
-  t3Command?: string;
-  t3Args?: string[];
+  coreUrl?: string;
+  coreToken?: string;
+  coreCommand?: string;
+  coreArgs?: string[];
   authToken?: string;
 }
 
@@ -49,10 +49,10 @@ export function parseDaemonCliArgs(
   let explicitPortableRoot: string | undefined;
   let host = "127.0.0.1";
   let port = 0;
-  let t3Url: string | undefined;
-  let t3Token: string | undefined;
-  let t3Command: string | undefined;
-  let t3Args: string[] | undefined;
+  let coreUrl: string | undefined;
+  let coreToken: string | undefined;
+  let coreCommand: string | undefined;
+  let coreArgs: string[] | undefined;
   let authToken: string | undefined;
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -86,16 +86,16 @@ export function parseDaemonCliArgs(
       }
       port = parsedPort;
       i += 1;
-    } else if (arg === "--core-url" || arg === "--t3-url") {
-      t3Url = readNextArg(argv, i, arg);
+    } else if (arg === "--core-url" || arg === "--prismux-url") {
+      coreUrl = readNextArg(argv, i, arg);
       i += 1;
-    } else if (arg === "--core-token" || arg === "--t3-token") {
-      t3Token = readNextArg(argv, i, arg);
+    } else if (arg === "--core-token" || arg === "--prismux-token") {
+      coreToken = readNextArg(argv, i, arg);
       i += 1;
-    } else if (arg === "--core-command" || arg === "--t3-command") {
-      t3Command = readNextArg(argv, i, arg);
+    } else if (arg === "--core-command" || arg === "--prismux-command") {
+      coreCommand = readNextArg(argv, i, arg);
       i += 1;
-    } else if (arg === "--core-args" || arg === "--t3-args") {
+    } else if (arg === "--core-args" || arg === "--prismux-args") {
       const rawJson = readNextArg(argv, i, arg);
       const parsed: unknown = JSON.parse(rawJson);
       if (
@@ -104,7 +104,7 @@ export function parseDaemonCliArgs(
       ) {
         throw new Error(`${arg} must be a JSON array of strings.`);
       }
-      t3Args = parsed;
+      coreArgs = parsed;
       i += 1;
     } else if (arg === "--auth-token") {
       authToken = readNextArg(argv, i, "--auth-token");
@@ -155,10 +155,10 @@ export function parseDaemonCliArgs(
     ...(portableRoot !== undefined ? { portableRoot } : {}),
     host,
     port,
-    ...(t3Url !== undefined ? { t3Url } : {}),
-    ...(t3Token !== undefined ? { t3Token } : {}),
-    ...(t3Command !== undefined ? { t3Command } : {}),
-    ...(t3Args !== undefined ? { t3Args } : {}),
+    ...(coreUrl !== undefined ? { coreUrl } : {}),
+    ...(coreToken !== undefined ? { coreToken } : {}),
+    ...(coreCommand !== undefined ? { coreCommand } : {}),
+    ...(coreArgs !== undefined ? { coreArgs } : {}),
     ...(authToken !== undefined ? { authToken } : {})
   };
 }
@@ -207,10 +207,10 @@ export async function runDaemonCli(
     portableRoot: parsed.portableRoot,
     host: parsed.host,
     port: parsed.port,
-    t3Url: parsed.t3Url,
-    t3Token: parsed.t3Token,
-    t3Command: parsed.t3Command,
-    t3Args: parsed.t3Args,
+    coreUrl: parsed.coreUrl,
+    coreToken: parsed.coreToken,
+    coreCommand: parsed.coreCommand,
+    coreArgs: parsed.coreArgs,
     authToken: parsed.authToken,
     onShutdownRequested: () => {
       triggerShutdown();
