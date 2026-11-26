@@ -1171,6 +1171,8 @@ html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#
   let objectFit="cover";
   let masterMuted=true;
   let masterVol=0;
+  let fpsLimit=30;
+  let lastFrameTs=0;
   let readySent=false;
   let rafId=0;
   let stageW=Math.max(1,window.innerWidth||1);
@@ -1360,7 +1362,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#
         v.play().catch(()=>{});
       }else{
         const img=document.createElement("img");
-        img.decoding="sync";
+        img.decoding="async";
         img.alt="";
         const finishImgReady=()=>{
           const p=typeof img.decode==="function"?img.decode().catch(()=>{}):Promise.resolve();
@@ -1404,12 +1406,20 @@ html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#
       cancelAnimationFrame(rafId);
       rafId=0;
     }
+    lastFrameTs=0;
   }
 
   function startLoop(){
     if(paused||reducedMotion||animatedNodes.length===0||rafId)return;
+    lastFrameTs=0;
     const tick=(ts)=>{
       if(paused){rafId=0;return;}
+      const minInterval=fpsLimit>0?(1000/fpsLimit):0;
+      if(minInterval>0&&lastFrameTs>0&&(ts-lastFrameTs)<minInterval-0.5){
+        rafId=requestAnimationFrame(tick);
+        return;
+      }
+      lastFrameTs=ts;
       curPtrX+=(targetPtrX-curPtrX)*0.08;
       curPtrY+=(targetPtrY-curPtrY)*0.08;
       const t=ts*0.001;
@@ -1474,6 +1484,9 @@ html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#
         layoutStage();
       }
       if(m.applyGeneralProperties&&typeof m.applyGeneralProperties==="object"){
+        if(typeof m.applyGeneralProperties.fps==="number"&&Number.isFinite(m.applyGeneralProperties.fps)){
+          fpsLimit=m.applyGeneralProperties.fps<=0?0:Math.max(1,Math.min(120,m.applyGeneralProperties.fps));
+        }
         if(typeof m.applyGeneralProperties.paused==="boolean"){
           setPaused(m.applyGeneralProperties.paused);
         }

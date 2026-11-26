@@ -5,12 +5,15 @@ import {
   type AppearanceConfig,
 } from "@prismux/appearance";
 import {
+  SETTINGS_VP_FIRST,
   WallpaperQuickPanel,
+  WallpaperSettingsView,
   WallpaperStage,
   closeInlineAppearanceInStore,
   createWallpaperStore,
   openInlineAppearanceInStore,
   type WallpaperHostAdapter,
+  type WallpaperItem,
 } from "@prismux/wallpaper";
 import { GTProvider, initializeGT } from "gt-react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -24,6 +27,7 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import {
   PrismuxTopbarControls,
   PrismuxWallpaperQuickPanel,
+  createEngineAwareWallpaperHost,
   resolveWallpaperLiveRuntimeUrl,
 } from "./PrismuxWallpaperBridge";
 import { PrismuxDaemonClient } from "./daemonClient";
@@ -494,6 +498,108 @@ describe("PrismuxWallpaperBridge — In-place InlineAppearanceStudio & Topbar Ch
         expect(fallbackHtml).not.toContain("pmx-wp-stage__iframe");
       } finally {
         store.dispose();
+      }
+
+      // Hard-gate verification: when advancedEngineEnabled is false, both resolveWallpaperLiveRuntimeUrl
+      // and WallpaperStage hard-block Web/Scene live runtimes (0 iframe / 0 WebWallGL canvas).
+      expect(
+        resolveWallpaperLiveRuntimeUrl(client, sceneWallpaper, { advancedEngineEnabled: false }),
+      ).toBeNull();
+      expect(
+        resolveWallpaperLiveRuntimeUrl(client, sceneWallpaper, { advancedEngineEnabled: true }),
+      ).toBe(
+        "http://127.0.0.1:47910/v1/wallpapers/scene-t/scene-tok-123/steam%3A2966081148/index.html",
+      );
+
+      const gatedStore = createWallpaperStore({
+        includeBuiltins: false,
+        wallpapers: [sceneWallpaper],
+        settings: {
+          selectedId: sceneWallpaper.id,
+          advancedEngineEnabled: false,
+          sceneLive: true,
+        },
+      });
+      try {
+        const gatedHtml = renderToStaticMarkup(
+          <WallpaperStage
+            store={gatedStore}
+            resolveLiveRuntimeUrl={(wp, s) => resolveWallpaperLiveRuntimeUrl(client, wp, s)}
+          />,
+        );
+        expect(gatedHtml).toBe("");
+      } finally {
+        gatedStore.dispose();
+      }
+
+      // createEngineAwareWallpaperHost flushes advancedEngineEnabled immediately to daemon & refreshes catalog
+      const savedPayloads: unknown[] = [];
+      let refreshedCount = 0;
+      const wrappedHost = createEngineAwareWallpaperHost(
+        {
+          listWallpapers: async () => ({ wallpapers: [sceneWallpaper] }),
+        },
+        {
+          saveAppearance: async (patch) => {
+            savedPayloads.push(patch);
+            return {} as never;
+          },
+        },
+        {
+          refreshLibrary: async () => {
+            refreshedCount += 1;
+          },
+        },
+      );
+      await wrappedHost.onAdvancedEngineToggle?.(true);
+      expect(savedPayloads).toEqual([{ wallpaper: { advancedEngineEnabled: true } }]);
+      expect(refreshedCount).toBe(1);
+
+      // SSR verification of red gated card, inline guidance banner, and virtualized settings grid (> 24 items)
+      const manyWallpapers: WallpaperItem[] = [
+        sceneWallpaper,
+        ...Array.from({ length: 60 }, (_, idx) => ({
+          id: `img-${idx}`,
+          title: `Static Image ${idx}`,
+          type: "image" as const,
+          source: "custom" as const,
+          previewUrl: `http://127.0.0.1:47910/v1/wallpapers/preview/img-${idx}`,
+          mediaUrl: `http://127.0.0.1:47910/v1/wallpapers/media/img-${idx}`,
+          filePath: null,
+          width: 1920,
+          height: 1080,
+          orientation: "landscape" as const,
+          contentRating: "everyone" as const,
+        })),
+      ];
+      const uiStore = createWallpaperStore({
+        includeBuiltins: false,
+        wallpapers: manyWallpapers,
+      });
+      try {
+        // Attempting to select gated scene leaves selectedId null & populates gatedAttempt banner
+        uiStore.selectWallpaper(sceneWallpaper.id);
+        expect(uiStore.getSnapshot().settings.selectedId).toBeNull();
+        expect(uiStore.getSnapshot().gatedAttempt?.wallpaper.id).toBe(sceneWallpaper.id);
+
+        const quickHtml = renderToStaticMarkup(<WallpaperQuickPanel store={uiStore} />);
+        expect(quickHtml).toContain("pmx-wp-qp__card--gated");
+        expect(quickHtml).toContain('aria-disabled="true"');
+        expect(quickHtml).toContain("渲染引擎未开启");
+        expect(quickHtml).toContain('data-pmx-engine-gate-banner="1"');
+        expect(quickHtml).toContain("开启高级渲染引擎");
+
+        const settingsHtml = renderToStaticMarkup(<WallpaperSettingsView store={uiStore} />);
+        expect(settingsHtml).toContain("pmx-wp-card--gated");
+        expect(settingsHtml).toContain('aria-disabled="true"');
+        expect(settingsHtml).toContain("渲染引擎未开启");
+        expect(settingsHtml).toContain('data-pmx-engine-gate-banner="1"');
+        expect(settingsHtml).toContain('data-pmx-grid-virtualized="1"');
+        // Virtualization caps rendered cards to SETTINGS_VP_FIRST (24) instead of flooding 61 <img> sockets
+        const renderedCards = (settingsHtml.match(/data-pmx-wp-id="/g) ?? []).length;
+        expect(renderedCards).toBe(SETTINGS_VP_FIRST);
+      } finally {
+        uiStore.dispose();
       }
     } finally {
       (globalThis as { __PRISMUX_DAEMON_URL__?: unknown }).__PRISMUX_DAEMON_URL__ = prevUrl;

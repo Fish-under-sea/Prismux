@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from "react";
-import type { ChangeEvent, ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ChangeEvent, ReactNode, RefObject } from "react";
 import {
   CARD_TYPE_LABELS,
   RATING_LABELS,
@@ -22,8 +22,10 @@ import { UserPropsDrillPanel } from "./renderers/UserPropsDrillPanel.js";
 import type { WallpaperStore } from "./store.js";
 import {
   computeFilterCounts,
+  computeVirtualWindow,
   filterVisibleWallpapers,
   findWallpaperById,
+  isWallpaperGatedByEngine,
   useWallpaperStore,
 } from "./store.js";
 import type {
@@ -69,6 +71,166 @@ const SETTINGS_TABS: readonly { id: FocusedWallpaperSettingsTabId; label: string
 
 function normalizeFocusedTab(tab: WallpaperSettingsTabId): FocusedWallpaperSettingsTabId {
   return tab === "appearance" ? "library" : tab;
+}
+
+/** Virtualize the settings thumbnail grid once item count exceeds this threshold so Chromium's 6-socket HTTP/1.1 pool is never flooded. */
+export const SETTINGS_VIRTUALIZE_THRESHOLD = 24;
+export const SETTINGS_VP_FIRST = 24;
+const SETTINGS_GRID_GAP = 10;
+const SETTINGS_CARD_MIN_FIXED = 156;
+const SETTINGS_CARD_MIN_CLASSIC = 112;
+const SETTINGS_VP_OVERSCAN = 4;
+
+function findSettingsScrollContainer(el: HTMLElement): HTMLElement | null {
+  for (
+    let node: HTMLElement | null = el.parentElement;
+    node && node !== document.body && node !== document.documentElement;
+    node = node.parentElement
+  ) {
+    try {
+      const oy = getComputedStyle(node).overflowY;
+      if ((oy === "auto" || oy === "scroll") && node.scrollHeight > node.clientHeight + 1) {
+        return node;
+      }
+    } catch {
+      // Ignore
+    }
+  }
+  return null;
+}
+
+function useSettingsGridVirtualWindow(
+  gridRef: RefObject<HTMLDivElement | null>,
+  count: number,
+  layout: "fixed" | "classic",
+  active: boolean,
+) {
+  const [win, setWin] = useState(() => ({
+    start: 0,
+    end: Math.min(SETTINGS_VP_FIRST, count),
+    cols: 4,
+    layout,
+    measured: false,
+    topSpacerHeight: 0,
+    bottomSpacerHeight: 0,
+  }));
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- virtualizes large settings wallpaper grids via ResizeObserver and scroll container tracking
+  useEffect(() => {
+    if (!active) return;
+    const el = gridRef.current;
+    if (!el || typeof window === "undefined") return;
+
+    let rafId = 0;
+    let boundScroller: HTMLElement | null = null;
+    let lastObservedWidth = -1;
+    let lastObservedViewportH = -1;
+
+    const measure = () => {
+      rafId = 0;
+      const width = el.clientWidth;
+      lastObservedWidth = width;
+      const minW = layout === "classic" ? SETTINGS_CARD_MIN_CLASSIC : SETTINGS_CARD_MIN_FIXED;
+      const cols = Math.max(1, Math.floor((width + SETTINGS_GRID_GAP) / (minW + SETTINGS_GRID_GAP)));
+      const colW =
+        width > 0 ? Math.max(minW, (width - SETTINGS_GRID_GAP * (cols - 1)) / cols) : minW;
+      const rawCardH = Math.max(1, Math.round((colW * 9) / 16));
+      const itemHeight = layout === "classic" ? Math.max(28, rawCardH - 34) : rawCardH;
+
+      const sc = findSettingsScrollContainer(el);
+      if (sc !== boundScroller) {
+        if (boundScroller) {
+          boundScroller.removeEventListener("scroll", schedule);
+          ro?.unobserve(boundScroller);
+        }
+        if (sc) {
+          sc.addEventListener("scroll", schedule, { passive: true });
+          ro?.observe(sc);
+        }
+        boundScroller = sc;
+      }
+
+      let scrollTop = 0;
+      let viewportHeight = window.innerHeight || 800;
+      if (sc) {
+        const scRect = sc.getBoundingClientRect();
+        const elRect = el.getBoundingClientRect();
+        scrollTop = Math.max(0, scRect.top - elRect.top);
+        viewportHeight = scRect.height > 0 ? scRect.height : viewportHeight;
+      } else {
+        const elRect = el.getBoundingClientRect();
+        scrollTop = Math.max(0, -elRect.top);
+      }
+      lastObservedViewportH = viewportHeight;
+
+      const computed = computeVirtualWindow({
+        count,
+        itemHeight,
+        gap: SETTINGS_GRID_GAP,
+        cols,
+        scrollTop,
+        viewportHeight,
+        overscan: SETTINGS_VP_OVERSCAN,
+      });
+
+      setWin((prev) =>
+        prev.start === computed.start &&
+        prev.end === computed.end &&
+        prev.cols === computed.cols &&
+        prev.layout === layout &&
+        prev.measured &&
+        prev.topSpacerHeight === computed.topSpacerHeight &&
+        prev.bottomSpacerHeight === computed.bottomSpacerHeight
+          ? prev
+          : {
+              start: computed.start,
+              end: computed.end,
+              cols: computed.cols,
+              layout,
+              measured: true,
+              topSpacerHeight: computed.topSpacerHeight,
+              bottomSpacerHeight: computed.bottomSpacerHeight,
+            },
+      );
+    };
+
+    const schedule = () => {
+      if (!rafId) rafId = requestAnimationFrame(measure);
+    };
+
+    const handleResize = () => {
+      const nextWidth = el.clientWidth;
+      const nextViewportH = boundScroller
+        ? boundScroller.clientHeight
+        : window.innerHeight || 800;
+      if (
+        lastObservedWidth >= 0 &&
+        Math.abs(nextWidth - lastObservedWidth) < 2 &&
+        Math.abs(nextViewportH - lastObservedViewportH) < 2
+      ) {
+        return;
+      }
+      lastObservedWidth = nextWidth;
+      lastObservedViewportH = nextViewportH;
+      schedule();
+    };
+
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(handleResize) : null;
+    measure();
+    ro?.observe(el);
+    window.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", handleResize, { passive: true });
+
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      if (boundScroller) boundScroller.removeEventListener("scroll", schedule);
+      ro?.disconnect();
+      window.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", handleResize);
+    };
+  }, [gridRef, count, layout, active]);
+
+  return win;
 }
 
 interface RotationDraft {
@@ -119,7 +281,9 @@ export function WallpaperSettingsView({
   const [rotDraft, setRotDraft] = useState<RotationDraft | null>(null);
   const [steamDirDraft, setSteamDirDraft] = useState(settings.steamRootOverride);
   const [customDirDraft, setCustomDirDraft] = useState(settings.customWallpaperDir);
+  const [enablingEngine, setEnablingEngine] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const gridRef = useRef<HTMLDivElement | null>(null);
 
   const current = useMemo(
     () => findWallpaperById(wallpapers, settings.selectedId),
@@ -147,6 +311,47 @@ export function WallpaperSettingsView({
     () => computeFilterCounts(wallpapers, settings),
     [wallpapers, settings.hiddenIds, settings.contentRatingFilter, settings.typeFilter],
   );
+
+  const shouldVirtualizeGrid = visibleList.length > SETTINGS_VIRTUALIZE_THRESHOLD;
+  const gridVWin = useSettingsGridVirtualWindow(
+    gridRef,
+    visibleList.length,
+    settings.pickerLayout,
+    tab === "library" && shouldVirtualizeGrid,
+  );
+  const gridMeasured =
+    shouldVirtualizeGrid &&
+    gridVWin.measured &&
+    gridVWin.layout === settings.pickerLayout &&
+    gridVWin.cols > 0;
+  const gridStart = shouldVirtualizeGrid
+    ? gridMeasured
+      ? Math.min(gridVWin.start, visibleList.length)
+      : 0
+    : 0;
+  const gridEnd = shouldVirtualizeGrid
+    ? gridMeasured
+      ? Math.max(gridStart, Math.min(gridVWin.end, visibleList.length))
+      : Math.min(SETTINGS_VP_FIRST, visibleList.length)
+    : visibleList.length;
+  const renderedGridItems = shouldVirtualizeGrid
+    ? visibleList.slice(gridStart, gridEnd)
+    : visibleList;
+  const gridTopSpacerH = gridMeasured ? gridVWin.topSpacerHeight : 0;
+  const gridBottomSpacerH = gridMeasured ? gridVWin.bottomSpacerHeight : 0;
+
+  const handleQuickEnableEngine = async (targetId: string) => {
+    if (enablingEngine) return;
+    setEnablingEngine(true);
+    try {
+      if (adapter?.onAdvancedEngineToggle) {
+        await adapter.onAdvancedEngineToggle(true);
+      }
+      store.enableAdvancedEngineAndSelect(targetId);
+    } finally {
+      setEnablingEngine(false);
+    }
+  };
 
   const handleLocalFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -600,8 +805,57 @@ export function WallpaperSettingsView({
             </details>
           </div>
 
-          {/* 壁纸网格 */}
-          <div className="pmx-wp-grid">
+          {/* 未开启高级渲染引擎时点击 Web/Scene 卡片的内联引导横幅 */}
+          {snap.gatedAttempt && !settings.advancedEngineEnabled ? (
+            <div
+              className="pmx-wp-gate-banner"
+              role="alert"
+              data-pmx-engine-gate-banner="1"
+            >
+              <div className="pmx-wp-gate-banner__head">
+                <span className="pmx-wp-gate-banner__title">高级壁纸渲染引擎未开启</span>
+                <button
+                  type="button"
+                  className="pmx-wp-gate-banner__close"
+                  aria-label="关闭提示"
+                  onClick={() => store.clearGatedAttempt()}
+                >
+                  ×
+                </button>
+              </div>
+              <p className="pmx-wp-gate-banner__desc">
+                「{snap.gatedAttempt.wallpaper.title}」属于
+                {snap.gatedAttempt.wallpaper.type === "scene" ? " Steam 场景" : "网页"}
+                壁纸，实时渲染会占用更高 GPU 与显存。如需启用，可一键开启高级渲染引擎。
+              </p>
+              <div className="pmx-wp-gate-banner__actions">
+                <button
+                  type="button"
+                  className="pmx-wp-btn pmx-wp-btn--danger-solid"
+                  data-pmx-enable-advanced-engine="1"
+                  disabled={enablingEngine}
+                  onClick={() => void handleQuickEnableEngine(snap.gatedAttempt!.wallpaper.id)}
+                >
+                  {enablingEngine ? "正在开启…" : "开启高级渲染引擎"}
+                </button>
+                <button
+                  type="button"
+                  className="pmx-wp-btn pmx-wp-btn--mini"
+                  data-pmx-open-engine-settings="1"
+                  onClick={() => setTab("playback")}
+                >
+                  前往引擎设置
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {/* 壁纸网格（超过阈值自动虚拟化，避免大量缩略图挤爆 Chromium HTTP 连接池） */}
+          <div
+            ref={gridRef}
+            className="pmx-wp-grid"
+            data-pmx-grid-virtualized={shouldVirtualizeGrid ? "1" : "0"}
+          >
             {visibleList.length === 0 ? (
               <span className="pmx-wp-hint">
                 {snap.settingsSearch.trim()
@@ -609,61 +863,89 @@ export function WallpaperSettingsView({
                   : "当前筛选下没有可播放的壁纸"}
               </span>
             ) : (
-              visibleList.map((w) => {
-                const isSelected = w.id === settings.selectedId;
-                const isChecked = batchMode && batchSelected.includes(w.id);
-                return (
+              <>
+                {gridTopSpacerH > 0 ? (
                   <div
-                    key={w.id}
-                    className={
-                      "pmx-wp-card" +
-                      (isSelected ? " pmx-wp-card--selected" : "") +
-                      (isChecked ? " pmx-wp-card--checked" : "")
-                    }
-                    role="button"
-                    tabIndex={0}
-                    aria-label={w.title}
-                    onPointerDown={() => {
-                      if (w.type === "video" && w.mediaUrl) schedulePrewarmVideo(w.mediaUrl, true);
-                    }}
-                    onClick={() => {
-                      if (batchMode) toggleBatchItem(w.id);
-                      else store.selectWallpaper(w.id);
-                    }}
-                    onKeyDown={cardKeyDown}
-                  >
-                    {w.previewUrl ? (
-                      <img
-                        src={w.previewUrl}
-                        alt={w.title}
-                        loading="lazy"
-                        decoding="async"
-                      />
-                    ) : (
-                      <span className="pmx-wp-card__placeholder">无预览</span>
-                    )}
-                    {!batchMode ? (
-                      <span className="pmx-wp-card__type">{CARD_TYPE_LABELS[w.type]}</span>
-                    ) : (
-                      <span className="pmx-wp-card__check">{isChecked ? "✓" : ""}</span>
-                    )}
-                    <span className="pmx-wp-card__title">{w.title}</span>
-                    {!batchMode ? (
-                      <button
-                        type="button"
-                        className="pmx-wp-card__hide"
-                        title="隐藏此壁纸（不删源文件，可在「轮播与隐藏」恢复）"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          store.hideWallpapers([w.id]);
-                        }}
-                      >
-                        隐藏
-                      </button>
-                    ) : null}
-                  </div>
-                );
-              })
+                    className="pmx-wp-grid__vspacer"
+                    style={{ height: `${gridTopSpacerH}px` }}
+                    aria-hidden="true"
+                  />
+                ) : null}
+                {renderedGridItems.map((w) => {
+                  const isSelected = w.id === settings.selectedId;
+                  const isChecked = batchMode && batchSelected.includes(w.id);
+                  const isGated = isWallpaperGatedByEngine(w, settings);
+                  return (
+                    <div
+                      key={w.id}
+                      data-pmx-wp-id={w.id}
+                      data-pmx-engine-gated={isGated ? "1" : undefined}
+                      className={
+                        "pmx-wp-card" +
+                        (isSelected ? " pmx-wp-card--selected" : "") +
+                        (isChecked ? " pmx-wp-card--checked" : "") +
+                        (isGated && !batchMode ? " pmx-wp-card--gated" : "")
+                      }
+                      role="button"
+                      tabIndex={0}
+                      aria-label={isGated ? `${w.title}（渲染引擎未开启）` : w.title}
+                      aria-disabled={isGated && !batchMode ? "true" : undefined}
+                      onPointerDown={() => {
+                        if (w.type === "video" && w.mediaUrl) {
+                          schedulePrewarmVideo(w.mediaUrl, true);
+                        }
+                      }}
+                      onClick={() => {
+                        if (batchMode) toggleBatchItem(w.id);
+                        else store.selectWallpaper(w.id);
+                      }}
+                      onKeyDown={cardKeyDown}
+                    >
+                      {w.previewUrl ? (
+                        <img
+                          src={w.previewUrl}
+                          alt={w.title}
+                          loading="lazy"
+                          decoding="async"
+                        />
+                      ) : (
+                        <span className="pmx-wp-card__placeholder">无预览</span>
+                      )}
+                      {!batchMode ? (
+                        <span className="pmx-wp-card__type">{CARD_TYPE_LABELS[w.type]}</span>
+                      ) : (
+                        <span className="pmx-wp-card__check">{isChecked ? "✓" : ""}</span>
+                      )}
+                      {isGated && !batchMode ? (
+                        <span className="pmx-wp-card__badge pmx-wp-card__badge--gated">
+                          渲染引擎未开启
+                        </span>
+                      ) : null}
+                      <span className="pmx-wp-card__title">{w.title}</span>
+                      {!batchMode ? (
+                        <button
+                          type="button"
+                          className="pmx-wp-card__hide"
+                          title="隐藏此壁纸（不删源文件，可在「轮播与隐藏」恢复）"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            store.hideWallpapers([w.id]);
+                          }}
+                        >
+                          隐藏
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
+                {gridBottomSpacerH > 0 ? (
+                  <div
+                    className="pmx-wp-grid__vspacer"
+                    style={{ height: `${gridBottomSpacerH}px` }}
+                    aria-hidden="true"
+                  />
+                ) : null}
+              </>
             )}
           </div>
         </section>
@@ -675,6 +957,7 @@ export function WallpaperSettingsView({
         <div className="pmx-wp-tabpanel" data-pmx-settings-tab="playback">
           <PlaybackEffectsSection
             store={store}
+            adapter={adapter}
             surface="settings"
             onPickWallpaper={() => setTab("library")}
           />

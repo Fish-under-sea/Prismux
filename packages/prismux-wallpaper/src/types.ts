@@ -153,6 +153,8 @@ export interface TypographyRoleOverride {
 export interface WallpaperSettingsState {
   // Selection & playback
   selectedId: string | null;
+  /** Optional persisted wallpaper type hint used for smooth upgrade migration before catalog hydration. */
+  selectedWallpaperType?: WallpaperType | null;
   playing: boolean;
   videoAudioEnabled: boolean;
   videoVolume: number;
@@ -175,6 +177,8 @@ export interface WallpaperSettingsState {
   switchTransition: SwitchTransition;
 
   // Live rendering & power saving
+  /** Opt-in gate for heavy Web / Steam Scene live rendering runtimes (default false). */
+  advancedEngineEnabled: boolean;
   sceneLive: boolean;
   liveBootDelay: LiveBootDelayValue;
   sceneLiveFps: SceneLiveFpsValue;
@@ -357,7 +361,14 @@ export interface WallpaperHostAdapter {
   querySystemFonts?: (forceRefresh?: boolean) => Promise<SystemFontsResult>;
   loadUserProperties?: (wallpaper: WallpaperItem) => Promise<UserPropDef[]>;
   saveSettings?: (settings: WallpaperSettingsState) => Promise<void> | void;
+  /** Optional immediate daemon persistence hook invoked when toggling advancedEngineEnabled so live assets unlock before mount. */
+  onAdvancedEngineToggle?: (enabled: boolean) => Promise<void> | void;
   appearanceBridge?: AppearanceBridge;
+}
+
+export interface GatedSelectionAttempt {
+  wallpaper: WallpaperItem;
+  timestamp: number;
 }
 
 export interface WallpaperRuntimeSnapshot {
@@ -370,6 +381,7 @@ export interface WallpaperRuntimeSnapshot {
   loading: boolean;
   inventoryError: string | null;
   videoError: string | null;
+  gatedAttempt: GatedSelectionAttempt | null;
   qpSearch: string;
   settingsSearch: string;
   propsPanelOpen: boolean;

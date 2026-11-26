@@ -364,6 +364,26 @@ function nodeContainsSelector(node: unknown, selector: string): boolean {
   return false;
 }
 
+const CHAT_STREAM_IGNORE_SELECTOR =
+  '[data-pmx-inner-stage="1"], [data-chat-column], [data-message-id], [data-pmx-chat-stream="1"]';
+
+const TRACKED_BODY_MUTATION_ATTRS = new Set([
+  'data-preview-panel-maximized',
+  'data-workspace-unavailable',
+]);
+
+function isStructuralElementNode(node: unknown, selector: string): boolean {
+  if (!node || typeof node !== 'object') return false;
+  const el = node as Partial<ShellCutoutElementLike>;
+  if (typeof el.nodeType === 'number' && el.nodeType !== 1) return false;
+  const hasMatcher = typeof el.matches === 'function' || typeof el.querySelector === 'function';
+  if (!hasMatcher) {
+    // Minimal mock element without DOM selector methods: conservatively treat as structural.
+    return typeof el.nodeType === 'number' && el.nodeType === 1;
+  }
+  return nodeContainsSelector(node, selector);
+}
+
 /**
  * Installs Prismux's single-layer continuous viewport-wide shell backdrop (`[data-pmx-shell-backdrop="1"]`)
  * with an inline SVG `<mask>` cutout synced to `[data-pmx-stage-frame="1"]` via `ResizeObserver`,
@@ -397,7 +417,7 @@ export function installPrismuxShellCutout(
   const maskId = options.maskId?.trim() || PMX_SHELL_CUTOUT_MASK_ID;
   const stageSelector = options.stageFrameSelector || DEFAULT_STAGE_FRAME_SELECTOR;
   const rightSelector = options.rightSidebarSelector || DEFAULT_RIGHT_SIDEBAR_SELECTOR;
-  const combinedSelector = `${stageSelector}, ${rightSelector}`;
+  const structuralSelector = `${stageSelector}, ${rightSelector}, ${SIDEBAR_GAP_SELECTOR}, [data-preview-panel-mode="inline"]`;
   const insetPx = options.insetPx ?? DEFAULT_SHELL_CUTOUT_INSET_PX;
   const maxTransitionTrackMs = Math.max(
     100,
@@ -816,53 +836,51 @@ export function installPrismuxShellCutout(
     }
 
     bodyTreeObserver = new MutationObserverCtor((mutations) => {
-      if (disposed) return;
+      if (disposed || (pendingRafId !== null && targetsDirty)) return;
       let shouldRescan = false;
       for (const mutation of mutations) {
+        if (mutation.type === 'characterData') {
+          continue;
+        }
         const target = mutation.target as unknown;
         if (target === svgEl || target === defsEl || target === maskEl || target === backdropEl) {
           continue;
         }
         if (mutation.type === 'attributes') {
-          shouldRescan = true;
-          break;
+          if (
+            !mutation.attributeName ||
+            TRACKED_BODY_MUTATION_ATTRS.has(mutation.attributeName)
+          ) {
+            shouldRescan = true;
+            break;
+          }
+          continue;
         }
-        // Fast-path skip streaming text/markdown mutations inside inner stage content.
+        if (mutation.type !== 'childList') {
+          continue;
+        }
+        // Ignore streaming text/markdown/subtree mutations strictly inside inner stage / chat message streams.
         const targetEl = target as Partial<ShellCutoutElementLike> | null;
-        const insideInnerStage =
+        if (
           typeof targetEl?.closest === 'function' &&
-          Boolean(targetEl.closest('[data-pmx-inner-stage="1"]'));
+          Boolean(targetEl.closest(CHAT_STREAM_IGNORE_SELECTOR))
+        ) {
+          continue;
+        }
 
+        // Outside inner stage, only rescan when an added or removed Element matches/contains a structural cutout/sidebar boundary.
         let touchesRelevant = false;
-        if (!insideInnerStage) {
-          // Only scan element-level additions/removals (skip text/comment nodes).
-          for (const node of Array.from(mutation.addedNodes)) {
-            if ((node as { nodeType?: number })?.nodeType === 1) {
+        for (const node of Array.from(mutation.addedNodes)) {
+          if (isStructuralElementNode(node, structuralSelector)) {
+            touchesRelevant = true;
+            break;
+          }
+        }
+        if (!touchesRelevant) {
+          for (const node of Array.from(mutation.removedNodes)) {
+            if (isStructuralElementNode(node, structuralSelector)) {
               touchesRelevant = true;
               break;
-            }
-          }
-          if (!touchesRelevant) {
-            for (const node of Array.from(mutation.removedNodes)) {
-              if ((node as { nodeType?: number })?.nodeType === 1) {
-                touchesRelevant = true;
-                break;
-              }
-            }
-          }
-        } else {
-          for (const node of Array.from(mutation.addedNodes)) {
-            if (nodeContainsSelector(node, combinedSelector)) {
-              touchesRelevant = true;
-              break;
-            }
-          }
-          if (!touchesRelevant) {
-            for (const node of Array.from(mutation.removedNodes)) {
-              if (nodeContainsSelector(node, combinedSelector)) {
-                touchesRelevant = true;
-                break;
-              }
             }
           }
         }

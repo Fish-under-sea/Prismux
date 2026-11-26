@@ -120,6 +120,22 @@ function loadInitialUiViewState(
 
 // ── Pure filtering, virtual window & rotation helpers ───────────────────────
 
+/** True for Web / Steam Scene wallpapers gated behind the opt-in `advancedEngineEnabled` switch. */
+export function isAdvancedWallpaperType(
+  type: WallpaperType | string | null | undefined,
+): boolean {
+  return type === "web" || type === "scene";
+}
+
+/** True when a wallpaper requires the opt-in Advanced Rendering Engine and the gate is currently off. */
+export function isWallpaperGatedByEngine(
+  wallpaper: Pick<WallpaperItem, "type"> | null | undefined,
+  settings: Pick<WallpaperSettingsState, "advancedEngineEnabled">,
+): boolean {
+  if (!wallpaper) return false;
+  return !settings.advancedEngineEnabled && isAdvancedWallpaperType(wallpaper.type);
+}
+
 export function matchesOrientationFilter(
   item: Pick<WallpaperItem, "orientation">,
   filter: OrientationFilter,
@@ -299,7 +315,9 @@ export function resolveRotationCandidates(
   wallpapers: readonly WallpaperItem[],
   settings: WallpaperSettingsState,
 ): WallpaperItem[] {
-  const playable = filterPlayableWallpapers(wallpapers, settings);
+  const playable = filterPlayableWallpapers(wallpapers, settings).filter(
+    (w) => settings.advancedEngineEnabled || !isAdvancedWallpaperType(w.type),
+  );
   if (settings.rotationEnabled && settings.rotationGroupId) {
     const group = settings.rotationGroups.find((g) => g.id === settings.rotationGroupId);
     if (group && group.wallpaperIds.length > 0) {
@@ -421,6 +439,7 @@ function buildModuleResetPatch(moduleKey: WallpaperModuleResetKey): Partial<Wall
         backgroundContrast: d.backgroundContrast,
         backgroundSaturate: d.backgroundSaturate,
         switchTransition: d.switchTransition,
+        advancedEngineEnabled: d.advancedEngineEnabled,
         sceneLive: d.sceneLive,
         liveBootDelay: d.liveBootDelay,
         sceneLiveFps: d.sceneLiveFps,
@@ -442,6 +461,8 @@ export interface CreateWallpaperStoreOptions {
   includeBuiltins?: boolean;
   storage?: StorageLike | null;
   onSettingsChange?: (settings: WallpaperSettingsState) => void;
+  /** Invoked when selectWallpaper() blocks a Web/Scene item because advancedEngineEnabled is false. */
+  onGatedSelectionBlocked?: (wallpaper: WallpaperItem) => void;
 }
 
 export interface WallpaperStore {
@@ -461,6 +482,8 @@ export interface WallpaperStore {
     key: "detailOpen" | "glassUiOpen" | "cornersOpen" | "uiColorOpen" | "fontOpen" | "glassDetailOpen",
   ) => void;
   selectWallpaper: (id: string | null) => void;
+  clearGatedAttempt: () => void;
+  enableAdvancedEngineAndSelect: (wallpaperId?: string | null) => void;
   clearWallpaper: () => void;
   togglePlay: () => void;
   setPlaying: (playing: boolean) => void;
@@ -620,6 +643,36 @@ export function createWallpaperStore(
     }
   }
 
+  // Smooth upgrade migration: if persisted settings did not specify `advancedEngineEnabled`,
+  // auto-enable it ONLY when the active `selectedId` is a Web or Steam Scene wallpaper.
+  const hasExplicitAdvancedEngine = Boolean(
+    options.settings &&
+      "advancedEngineEnabled" in options.settings &&
+      typeof options.settings.advancedEngineEnabled === "boolean",
+  );
+  let legacyAdvancedEnginePending = false;
+  if (!hasExplicitAdvancedEngine && initialSettings.selectedId) {
+    const activeInitial = findWallpaperById(initialWallpapers, initialSettings.selectedId);
+    if (activeInitial) {
+      if (isAdvancedWallpaperType(activeInitial.type)) {
+        initialSettings.advancedEngineEnabled = true;
+        initialSettings.selectedWallpaperType = activeInitial.type;
+      }
+    } else if (
+      isAdvancedWallpaperType(initialSettings.selectedWallpaperType) ||
+      /^(?:web|scene):/i.test(initialSettings.selectedId)
+    ) {
+      initialSettings.advancedEngineEnabled = true;
+    } else {
+      legacyAdvancedEnginePending = true;
+    }
+  } else if (initialSettings.selectedId && !initialSettings.selectedWallpaperType) {
+    const activeInitial = findWallpaperById(initialWallpapers, initialSettings.selectedId);
+    if (activeInitial) {
+      initialSettings.selectedWallpaperType = activeInitial.type;
+    }
+  }
+
   let snapshot: WallpaperRuntimeSnapshot = {
     settings: initialSettings,
     ui: loadInitialUiViewState(storage, options.ui),
@@ -630,6 +683,7 @@ export function createWallpaperStore(
     loading: false,
     inventoryError: null,
     videoError: null,
+    gatedAttempt: null,
     qpSearch: "",
     settingsSearch: "",
     propsPanelOpen: false,
@@ -700,11 +754,50 @@ export function createWallpaperStore(
 
     updateSettings(patch) {
       const normalizedPatch = normalizeWallpaperSettingsPatch(patch);
-      const nextSettings: WallpaperSettingsState = {
+      let nextSettings: WallpaperSettingsState = {
         ...snapshot.settings,
         ...normalizedPatch,
       };
-      commit({ ...snapshot, settings: nextSettings }, true);
+      let nextPropsPanelOpen = snapshot.propsPanelOpen;
+      let nextVideoError = snapshot.videoError;
+      let nextGatedAttempt = snapshot.gatedAttempt;
+
+      if (
+        "advancedEngineEnabled" in normalizedPatch &&
+        typeof normalizedPatch.advancedEngineEnabled === "boolean"
+      ) {
+        legacyAdvancedEnginePending = false;
+        if (normalizedPatch.advancedEngineEnabled) {
+          nextGatedAttempt = null;
+        } else {
+          const active = findWallpaperById(snapshot.wallpapers, nextSettings.selectedId);
+          const activeIsAdvanced =
+            (active !== null && isAdvancedWallpaperType(active.type)) ||
+            (active === null && isAdvancedWallpaperType(nextSettings.selectedWallpaperType));
+          if (activeIsAdvanced) {
+            nextSettings = {
+              ...nextSettings,
+              selectedId: null,
+              selectedWallpaperType: null,
+              playing: false,
+            };
+            nextPropsPanelOpen = false;
+            nextVideoError = null;
+            nextGatedAttempt = null;
+          }
+        }
+      }
+
+      commit(
+        {
+          ...snapshot,
+          settings: nextSettings,
+          propsPanelOpen: nextPropsPanelOpen,
+          videoError: nextVideoError,
+          gatedAttempt: nextGatedAttempt,
+        },
+        true,
+      );
       if (
         "rotationEnabled" in normalizedPatch ||
         "rotationGroupId" in normalizedPatch ||
@@ -740,6 +833,13 @@ export function createWallpaperStore(
 
     selectWallpaper(id) {
       const safeId = isLegacyBuiltinWallpaperId(id) ? null : id;
+      const target = safeId ? findWallpaperById(snapshot.wallpapers, safeId) : null;
+      if (target && isWallpaperGatedByEngine(target, snapshot.settings)) {
+        const attempt = { wallpaper: target, timestamp: Date.now() };
+        options.onGatedSelectionBlocked?.(target);
+        commit({ ...snapshot, gatedAttempt: attempt }, false);
+        return;
+      }
       const nextHidden =
         safeId && snapshot.settings.hiddenIds.includes(safeId)
           ? snapshot.settings.hiddenIds.filter((x) => x !== safeId)
@@ -747,16 +847,55 @@ export function createWallpaperStore(
       const nextSettings: WallpaperSettingsState = {
         ...snapshot.settings,
         selectedId: safeId,
+        selectedWallpaperType: target?.type ?? null,
         playing: safeId !== null,
         hiddenIds: nextHidden,
       };
-      commit({ ...snapshot, settings: nextSettings, videoError: null }, true);
+      commit(
+        { ...snapshot, settings: nextSettings, videoError: null, gatedAttempt: null },
+        true,
+      );
+    },
+
+    clearGatedAttempt() {
+      if (snapshot.gatedAttempt === null) return;
+      commit({ ...snapshot, gatedAttempt: null }, false);
+    },
+
+    enableAdvancedEngineAndSelect(wallpaperId) {
+      const targetId =
+        wallpaperId !== undefined ? wallpaperId : (snapshot.gatedAttempt?.wallpaper.id ?? null);
+      legacyAdvancedEnginePending = false;
+      const safeId = isLegacyBuiltinWallpaperId(targetId) ? null : targetId;
+      const target = safeId ? findWallpaperById(snapshot.wallpapers, safeId) : null;
+      const nextHidden =
+        safeId && snapshot.settings.hiddenIds.includes(safeId)
+          ? snapshot.settings.hiddenIds.filter((x) => x !== safeId)
+          : snapshot.settings.hiddenIds;
+      const nextSettings: WallpaperSettingsState = safeId
+        ? {
+            ...snapshot.settings,
+            advancedEngineEnabled: true,
+            selectedId: safeId,
+            selectedWallpaperType: target?.type ?? snapshot.settings.selectedWallpaperType ?? null,
+            playing: true,
+            hiddenIds: nextHidden,
+          }
+        : {
+            ...snapshot.settings,
+            advancedEngineEnabled: true,
+          };
+      commit(
+        { ...snapshot, settings: nextSettings, videoError: null, gatedAttempt: null },
+        true,
+      );
     },
 
     clearWallpaper() {
       const nextSettings: WallpaperSettingsState = {
         ...snapshot.settings,
         selectedId: null,
+        selectedWallpaperType: null,
         playing: false,
       };
       commit(
@@ -765,6 +904,7 @@ export function createWallpaperStore(
           settings: nextSettings,
           propsPanelOpen: false,
           videoError: null,
+          gatedAttempt: null,
         },
         true,
       );
@@ -1046,7 +1186,17 @@ export function createWallpaperStore(
 
     resetAllSettings() {
       const d = createDefaultSettings();
-      commit({ ...snapshot, settings: d, videoError: null }, true);
+      legacyAdvancedEnginePending = false;
+      commit(
+        {
+          ...snapshot,
+          settings: d,
+          propsPanelOpen: false,
+          videoError: null,
+          gatedAttempt: null,
+        },
+        true,
+      );
       stopRotationTimer();
     },
 
@@ -1059,8 +1209,30 @@ export function createWallpaperStore(
         }
       }
       let nextSettings = snapshot.settings;
+      let settingsPersistedChange = false;
       if (isLegacyBuiltinWallpaperId(nextSettings.selectedId)) {
-        nextSettings = { ...nextSettings, selectedId: null };
+        nextSettings = { ...nextSettings, selectedId: null, selectedWallpaperType: null };
+        settingsPersistedChange = true;
+      } else if (nextSettings.selectedId) {
+        const matched = findWallpaperById(merged, nextSettings.selectedId);
+        if (matched) {
+          if (legacyAdvancedEnginePending) {
+            legacyAdvancedEnginePending = false;
+            if (isAdvancedWallpaperType(matched.type) && !nextSettings.advancedEngineEnabled) {
+              nextSettings = {
+                ...nextSettings,
+                advancedEngineEnabled: true,
+                selectedWallpaperType: matched.type,
+              };
+              settingsPersistedChange = true;
+            }
+          } else if (nextSettings.selectedWallpaperType !== matched.type) {
+            nextSettings = {
+              ...nextSettings,
+              selectedWallpaperType: matched.type,
+            };
+          }
+        }
       }
       commit(
         {
@@ -1074,7 +1246,7 @@ export function createWallpaperStore(
           loaded: true,
           loading: false,
         },
-        nextSettings !== snapshot.settings,
+        settingsPersistedChange,
       );
     },
 

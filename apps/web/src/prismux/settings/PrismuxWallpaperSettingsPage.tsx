@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { RefreshCwIcon } from "lucide-react";
 import {
@@ -11,6 +11,7 @@ import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { SettingsPageContainer } from "../../components/settings/settingsLayout";
 import { usePrismuxRuntime } from "../PrismuxRuntimeProvider";
+import { createEngineAwareWallpaperHost } from "../PrismuxWallpaperBridge";
 
 const VALID_TABS: ReadonlySet<WallpaperSettingsTabId> = new Set([
   "library",
@@ -40,10 +41,16 @@ function resolveTabFromLocation(hash: string, searchStr: string): WallpaperSetti
  * and one consolidated rescan action in the Tab bar trailing slot.
  */
 export function PrismuxWallpaperSettingsPage() {
-  const { wallpaperStore, wallpaperHost, daemonInfo, occluded } = usePrismuxRuntime();
+  const { daemon, wallpaperStore, wallpaperHost, daemonInfo, occluded } = usePrismuxRuntime();
   const snap = useWallpaperStore(wallpaperStore);
   const location = useLocation();
   const navigate = useNavigate();
+
+  // oxlint-disable-next-line prismux/no-manual-memo -- preserves stable WallpaperHostAdapter identity for downstream @prismux/wallpaper effects across renders
+  const engineAwareHost = useMemo(
+    () => createEngineAwareWallpaperHost(wallpaperHost, daemon, wallpaperStore),
+    [wallpaperHost, daemon, wallpaperStore],
+  );
 
   const routeTab = resolveTabFromLocation(location.hash, location.searchStr);
   const routeKey = `${location.hash}|${location.searchStr}`;
@@ -87,7 +94,7 @@ export function PrismuxWallpaperSettingsPage() {
       <WallpaperSettingsView
         id="prismux-wallpaper"
         store={wallpaperStore}
-        adapter={wallpaperHost}
+        adapter={engineAwareHost}
         activeTab={activeTab}
         onTabChange={(tab) => setManualTab({ routeKey, tab })}
         onOpenAppearanceSettings={() => {

@@ -24,6 +24,7 @@ import {
   filterPlayableWallpapers,
   filterVisibleWallpapers,
   findWallpaperById,
+  isWallpaperGatedByEngine,
   resolveRotationCandidates,
   useWallpaperStore,
 } from "./store.js";
@@ -245,7 +246,13 @@ function useQuickPanelVirtualWindow(
 }
 
 function formatTypeMeta(w: WallpaperItem, settings: WallpaperSettingsState): string {
-  const live = (w.type === "scene" || w.type === "web") && settings.sceneLive;
+  if (isWallpaperGatedByEngine(w, settings)) {
+    return w.type === "scene" ? "场景 · 渲染引擎未开启" : "网页 · 渲染引擎未开启";
+  }
+  const live =
+    (w.type === "scene" || w.type === "web") &&
+    settings.advancedEngineEnabled &&
+    settings.sceneLive;
   if (w.type === "scene") return live ? "场景 · 实时渲染" : "场景 · 静态帧";
   if (w.type === "web") return live ? "网页 · 实时渲染" : "网页 · 兼容模式";
   return CARD_TYPE_LABELS[w.type] ?? "壁纸";
@@ -268,6 +275,7 @@ export function WallpaperQuickPanel({
   const listRef = useRef<HTMLDivElement | null>(null);
   const lastMediaTabRef = useRef<"wallpaper" | "playback">("wallpaper");
   const savedScrollTopRef = useRef<number>(0);
+  const [enablingEngine, setEnablingEngine] = useState(false);
 
   const effectiveTab: QuickPanelTabId = resolveQuickPanelTab(ui.qpTab);
   const isAppearanceView = effectiveTab === "appearance";
@@ -369,6 +377,19 @@ export function WallpaperQuickPanel({
     ? () => adapter.openSettingsSection?.("appearance")
     : undefined;
 
+  const handleQuickEnableEngine = async (targetId: string) => {
+    if (enablingEngine) return;
+    setEnablingEngine(true);
+    try {
+      if (adapter?.onAdvancedEngineToggle) {
+        await adapter.onAdvancedEngineToggle(true);
+      }
+      store.enableAdvancedEngineAndSelect(targetId);
+    } finally {
+      setEnablingEngine(false);
+    }
+  };
+
   // Prewarm single metadata slot ONLY on intentional pointer-down (never on hover to prevent D3D11 flicker)
   const handleCardPointerDown = (w: WallpaperItem) => {
     if (w.type === "video" && w.mediaUrl) {
@@ -378,16 +399,23 @@ export function WallpaperQuickPanel({
 
   const renderCard = (w: WallpaperItem) => {
     const isCurrent = w.id === settings.selectedId;
+    const isGated = isWallpaperGatedByEngine(w, settings);
     return (
       <div
         key={w.id}
         data-pmx-wp-id={w.id}
-        className={"pmx-wp-qp__card" + (isCurrent ? " pmx-wp-qp__card--current" : "")}
+        data-pmx-engine-gated={isGated ? "1" : undefined}
+        className={
+          "pmx-wp-qp__card" +
+          (isCurrent ? " pmx-wp-qp__card--current" : "") +
+          (isGated ? " pmx-wp-qp__card--gated" : "")
+        }
         role="option"
         tabIndex={0}
         aria-selected={isCurrent}
+        aria-disabled={isGated ? "true" : undefined}
         // oxlint-disable-next-line prismux/no-native-title-tooltip -- standalone @prismux/wallpaper package has no host Tooltip component
-        title={w.title}
+        title={isGated ? `${w.title}（高级壁纸渲染引擎未开启）` : w.title}
         onPointerDown={() => handleCardPointerDown(w)}
         onClick={() => store.selectWallpaper(w.id)}
         onKeyDown={cardKeyDown}
@@ -406,7 +434,11 @@ export function WallpaperQuickPanel({
           <span className="pmx-wp-qp__card-empty">无预览</span>
         )}
         <span className="pmx-wp-qp__card-type">{CARD_TYPE_LABELS[w.type]}</span>
-        {isCurrent ? <span className="pmx-wp-qp__card-badge">当前</span> : null}
+        {isGated ? (
+          <span className="pmx-wp-qp__card-badge pmx-wp-qp__card-badge--gated">渲染引擎未开启</span>
+        ) : isCurrent ? (
+          <span className="pmx-wp-qp__card-badge">当前</span>
+        ) : null}
         <span className="pmx-wp-qp__card-title">{w.title}</span>
       </div>
     );
@@ -414,16 +446,23 @@ export function WallpaperQuickPanel({
 
   const renderListRow = (w: WallpaperItem) => {
     const isCurrent = w.id === settings.selectedId;
+    const isGated = isWallpaperGatedByEngine(w, settings);
     return (
       <div
         key={w.id}
         data-pmx-wp-id={w.id}
-        className={"pmx-wp-qp__item" + (isCurrent ? " pmx-wp-qp__item--current" : "")}
+        data-pmx-engine-gated={isGated ? "1" : undefined}
+        className={
+          "pmx-wp-qp__item" +
+          (isCurrent ? " pmx-wp-qp__item--current" : "") +
+          (isGated ? " pmx-wp-qp__item--gated" : "")
+        }
         role="option"
         tabIndex={0}
         aria-selected={isCurrent}
+        aria-disabled={isGated ? "true" : undefined}
         // oxlint-disable-next-line prismux/no-native-title-tooltip -- standalone @prismux/wallpaper package has no host Tooltip component
-        title={w.title}
+        title={isGated ? `${w.title}（高级壁纸渲染引擎未开启）` : w.title}
         onPointerDown={() => handleCardPointerDown(w)}
         onClick={() => store.selectWallpaper(w.id)}
         onKeyDown={cardKeyDown}
@@ -442,7 +481,11 @@ export function WallpaperQuickPanel({
           ) : null}
         </span>
         <span className="pmx-wp-qp__item-title">{w.title}</span>
-        {isCurrent ? (
+        {isGated ? (
+          <span className="pmx-wp-qp__item-badge pmx-wp-qp__item-badge--gated">
+            渲染引擎未开启
+          </span>
+        ) : isCurrent ? (
           <span className="pmx-wp-qp__item-badge">当前</span>
         ) : (
           <span className="pmx-wp-qp__item-type">{CARD_TYPE_LABELS[w.type]}</span>
@@ -605,6 +648,7 @@ export function WallpaperQuickPanel({
           <>
             <PlaybackEffectsSection
               store={store}
+              adapter={adapter}
               surface="sidebar"
               onPickWallpaper={() => store.setUiState("qpTab", "wallpaper")}
             />
@@ -799,6 +843,61 @@ export function WallpaperQuickPanel({
                       </button>
                     </div>
                   </div>
+
+                  {/* 未开启高级渲染引擎时点击 Web/Scene 卡片的内联引导横幅 */}
+                  {snap.gatedAttempt && !settings.advancedEngineEnabled ? (
+                    <div
+                      className="pmx-wp-gate-banner"
+                      role="alert"
+                      data-pmx-engine-gate-banner="1"
+                    >
+                      <div className="pmx-wp-gate-banner__head">
+                        <span className="pmx-wp-gate-banner__title">
+                          高级壁纸渲染引擎未开启
+                        </span>
+                        <button
+                          type="button"
+                          className="pmx-wp-gate-banner__close"
+                          aria-label="关闭提示"
+                          onClick={() => store.clearGatedAttempt()}
+                        >
+                          ×
+                        </button>
+                      </div>
+                      <p className="pmx-wp-gate-banner__desc">
+                        「{snap.gatedAttempt.wallpaper.title}」属于
+                        {snap.gatedAttempt.wallpaper.type === "scene" ? " Steam 场景" : "网页"}
+                        壁纸，实时渲染会占用更高 GPU 与显存。如需启用，可一键开启高级渲染引擎。
+                      </p>
+                      <div className="pmx-wp-gate-banner__actions">
+                        <button
+                          type="button"
+                          className="pmx-wp-btn pmx-wp-btn--danger-solid"
+                          data-pmx-enable-advanced-engine="1"
+                          disabled={enablingEngine}
+                          onClick={() =>
+                            void handleQuickEnableEngine(snap.gatedAttempt!.wallpaper.id)
+                          }
+                        >
+                          {enablingEngine ? "正在开启…" : "开启高级渲染引擎"}
+                        </button>
+                        <button
+                          type="button"
+                          className="pmx-wp-btn pmx-wp-btn--mini"
+                          data-pmx-open-engine-settings="1"
+                          onClick={() => {
+                            if (adapter?.openSettingsSection) {
+                              adapter.openSettingsSection("playback");
+                            } else {
+                              store.setUiState("qpTab", "playback");
+                            }
+                          }}
+                        >
+                          前往引擎设置
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
 
                   {/* 虚拟滚动壁纸列表 / 卡片网格 */}
                   <div

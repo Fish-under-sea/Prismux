@@ -11,6 +11,8 @@ import type { CSSProperties } from "react";
 import type { WallpaperStore } from "./store.js";
 import {
   findWallpaperById,
+  isAdvancedWallpaperType,
+  isWallpaperGatedByEngine,
   normalizeWallpaperFadeOpacity,
   normalizeWallpaperScrim,
   useWallpaperStore,
@@ -361,11 +363,17 @@ function WebWallGLStageCanvas({
       canvas.dataset.pmxWebwallglBackend = "canvas2d";
     }
 
-    const syncSize = () => {
+    const syncSize = (measuredW?: number, measuredH?: number) => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const rect = canvas.getBoundingClientRect();
-      const targetW = Math.max(1, Math.floor((rect.width || window.innerWidth || 1280) * dpr));
-      const targetH = Math.max(1, Math.floor((rect.height || window.innerHeight || 720) * dpr));
+      let cssW = measuredW ?? 0;
+      let cssH = measuredH ?? 0;
+      if (cssW <= 0 || cssH <= 0) {
+        const rect = canvas.getBoundingClientRect();
+        cssW = rect.width || window.innerWidth || 1280;
+        cssH = rect.height || window.innerHeight || 720;
+      }
+      const targetW = Math.max(1, Math.floor(cssW * dpr));
+      const targetH = Math.max(1, Math.floor(cssH * dpr));
       if (canvas.width !== targetW || canvas.height !== targetH) {
         canvas.width = targetW;
         canvas.height = targetH;
@@ -415,7 +423,6 @@ function WebWallGLStageCanvas({
 
     const paintOnce = (t: number) => {
       const snap = liveRef.current;
-      syncSize();
       if (gl && program) {
         gl.viewport(0, 0, canvas.width, canvas.height);
         const activateProgram = gl.useProgram.bind(gl);
@@ -476,7 +483,8 @@ function WebWallGLStageCanvas({
 
     controllerRef.current = { start, stop, paintCurrent };
 
-    // Always paint initial frame even if starting paused so stage is never blank
+    // Always size once at mount and paint initial frame even if starting paused so stage is never blank
+    syncSize();
     paintOnce(elapsedSec);
     if (!liveRef.current.paused) {
       start();
@@ -484,17 +492,29 @@ function WebWallGLStageCanvas({
 
     const ro =
       typeof ResizeObserver !== "undefined"
-        ? new ResizeObserver(() => {
-            if (!liveRef.current.paused) paintOnce(elapsedSec);
+        ? new ResizeObserver((entries) => {
+            const rect = entries[0]?.contentRect;
+            syncSize(rect?.width, rect?.height);
+            paintOnce(elapsedSec);
           })
         : null;
     ro?.observe(canvas);
+    const onFallbackResize = () => {
+      syncSize();
+      paintOnce(elapsedSec);
+    };
+    if (!ro) {
+      window.addEventListener("resize", onFallbackResize, { passive: true });
+    }
 
     return () => {
       disposed = true;
       stop();
       controllerRef.current = null;
       ro?.disconnect();
+      if (!ro) {
+        window.removeEventListener("resize", onFallbackResize);
+      }
       if (gl) {
         if (posBuffer) gl.deleteBuffer(posBuffer);
         if (program) gl.deleteProgram(program);
@@ -767,6 +787,9 @@ function applyVideoMediaStyle(video: HTMLVideoElement, style: CSSProperties): vo
   video.style.filter = "";
 }
 
+/** Exponential backoff delays (ms) for VideoStage stall recovery when local daemon or network is momentarily busy. */
+export const WATCHDOG_BACKOFF_MS: readonly number[] = [1800, 3500, 7000];
+
 export function VideoStage({
   src,
   poster,
@@ -821,7 +844,7 @@ export function VideoStage({
 
     let disposed = false;
     let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
-    let watchdogRetried = false;
+    let watchdogAttempt = 0;
     autoplayMutedFallbackRef.current = false;
 
     const isDisposed = () => disposed;
@@ -898,6 +921,43 @@ export function VideoStage({
       video.src = src;
     }
 
+    const scheduleWatchdog = () => {
+      if (
+        disposed ||
+        watchdogTimer !== null ||
+        watchdogAttempt >= WATCHDOG_BACKOFF_MS.length ||
+        video.readyState >= 2 ||
+        video.error !== null ||
+        stateRef.current.paused
+      ) {
+        return;
+      }
+      const delayMs = WATCHDOG_BACKOFF_MS[watchdogAttempt]!;
+      watchdogTimer = setTimeout(() => {
+        watchdogTimer = null;
+        if (
+          disposed ||
+          video.readyState >= 2 ||
+          video.error !== null ||
+          stateRef.current.paused
+        ) {
+          return;
+        }
+        watchdogAttempt += 1;
+        try {
+          video.preload = "auto";
+          // 3) Re-assert audio policy across watchdog reload
+          enforceVideoAudio();
+          video.load();
+          enforceVideoAudio();
+          tryPlayVideoElement(video, isDisposed, onAutoplayMutedFallback);
+        } catch {
+          // Ignore reload failure
+        }
+        scheduleWatchdog();
+      }, delayMs);
+    };
+
     const handleContextMenu = (e: Event) => e.preventDefault();
     const handleEnded = () => stateRef.current.onEnded();
     const handleError = () => {
@@ -914,6 +974,7 @@ export function VideoStage({
     };
     const handleReadyToPlay = () => {
       if (disposed) return;
+      watchdogAttempt = 0;
       clearWatchdog();
       // 2b) Re-assert audio policy on loadeddata / canplay
       enforceVideoAudio();
@@ -932,6 +993,7 @@ export function VideoStage({
     };
     const handlePlaying = () => {
       if (disposed) return;
+      watchdogAttempt = 0;
       clearWatchdog();
       // 2c) Re-assert audio policy once playback actually begins
       enforceVideoAudio();
@@ -944,6 +1006,12 @@ export function VideoStage({
       } catch {
         // Ignore unsupported rate
       }
+    };
+    const handleStalled = () => {
+      if (disposed || stateRef.current.paused || video.readyState >= 2 || video.error !== null) {
+        return;
+      }
+      scheduleWatchdog();
     };
     const handleVolumeChange = () => {
       if (disposed) return;
@@ -978,6 +1046,8 @@ export function VideoStage({
     video.addEventListener("loadeddata", handleReadyToPlay);
     video.addEventListener("canplay", handleReadyToPlay);
     video.addEventListener("playing", handlePlaying);
+    video.addEventListener("stalled", handleStalled);
+    video.addEventListener("waiting", handleStalled);
     video.addEventListener("volumechange", handleVolumeChange);
 
     container.replaceChildren(video);
@@ -996,31 +1066,9 @@ export function VideoStage({
       }
     } else if (!latest.paused) {
       tryPlayVideoElement(video, isDisposed, onAutoplayMutedFallback);
-      // Watchdog: when preload transitions metadata -> auto on an adopted element (or huge EOF-moov MP4),
-      // kick video.load() once if readyState stalls at < 2 without error.
-      watchdogTimer = setTimeout(() => {
-        watchdogTimer = null;
-        if (
-          disposed ||
-          watchdogRetried ||
-          video.readyState >= 2 ||
-          video.error !== null ||
-          stateRef.current.paused
-        ) {
-          return;
-        }
-        watchdogRetried = true;
-        try {
-          video.preload = "auto";
-          // 3) Re-assert audio policy across watchdog reload
-          enforceVideoAudio();
-          video.load();
-          enforceVideoAudio();
-          tryPlayVideoElement(video, isDisposed, onAutoplayMutedFallback);
-        } catch {
-          // Ignore reload failure
-        }
-      }, 1800);
+      // Watchdog: when preload transitions metadata -> auto on an adopted element (or huge EOF-moov MP4)
+      // or when the local network is briefly busy, retry with exponential backoff if readyState stalls at < 2.
+      scheduleWatchdog();
     } else {
       video.pause();
     }
@@ -1035,6 +1083,8 @@ export function VideoStage({
       video.removeEventListener("loadeddata", handleReadyToPlay);
       video.removeEventListener("canplay", handleReadyToPlay);
       video.removeEventListener("playing", handlePlaying);
+      video.removeEventListener("stalled", handleStalled);
+      video.removeEventListener("waiting", handleStalled);
       video.removeEventListener("volumechange", handleVolumeChange);
       disposeVideoElement(video, container);
       if (videoRef.current === video) videoRef.current = null;
@@ -1361,6 +1411,20 @@ interface SteamSceneFallbackProps {
   mediaStyle: CSSProperties;
 }
 
+function formatSceneTransform(
+  cfg: { baseTransform: string; extraScale: number; needsAmbient: boolean },
+  x: number,
+  y: number,
+): string {
+  if (cfg.needsAmbient) {
+    return (
+      cfg.baseTransform ||
+      (cfg.extraScale > 1.0001 ? `scale(${cfg.extraScale.toFixed(3)})` : "none")
+    );
+  }
+  return `${cfg.baseTransform} translate3d(${(-x).toFixed(2)}px, ${(-y).toFixed(2)}px, 0) scale(${cfg.extraScale.toFixed(3)})`.trim();
+}
+
 /**
  * Steam Scene fallback: renders preview image / animated preview.gif with ambient backdrop
  * when aspect ratio mismatches (>1.35x) or contain/center fit, else falls back to WebWallGL.
@@ -1379,8 +1443,8 @@ function SteamSceneFallback({
   mediaStyle,
 }: SteamSceneFallbackProps) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
-  const [parallax, setParallax] = useState({ x: 0, y: 0 });
   const [loadedDims, setLoadedDims] = useState<{ url: string; w: number; h: number } | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
   const viewportRatio = useSyncExternalStore(
     subscribeViewportResize,
     getViewportRatioSnapshot,
@@ -1409,14 +1473,47 @@ function SteamSceneFallback({
     (objectFit === "cover" && ratioMismatch);
   const parallaxEnabled = !paused && !previewFailed && Boolean(previewUrl) && !needsAmbient;
 
-  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- subscribes to window pointermove and rAF smoothing for scene preview parallax
+  const [bass] = normalizeAudioTriple(audioReactive, audioEnergy);
+  const baseTransform =
+    typeof mediaStyle.transform === "string" && mediaStyle.transform !== "none"
+      ? mediaStyle.transform
+      : "";
+  const extraScale = needsAmbient ? 1 + bass * 0.015 : 1.04 + bass * 0.02;
+  const staticTransform = needsAmbient
+    ? baseTransform || (bass > 0.01 ? `scale(${extraScale.toFixed(3)})` : "none")
+    : `${baseTransform} translate3d(0.00px, 0.00px, 0) scale(${extraScale.toFixed(3)})`.trim();
+
+  const parallaxPosRef = useRef({ x: 0, y: 0 });
+  const parallaxConfigRef = useRef({
+    baseTransform,
+    extraScale,
+    needsAmbient,
+    fpsLimit,
+  });
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- keeps imperative DOM transform synced with audioEnergy/mediaStyle while preserving current parallax offset
   useEffect(() => {
-    if (!parallaxEnabled) return;
+    parallaxConfigRef.current = { baseTransform, extraScale, needsAmbient, fpsLimit };
+    const img = imgRef.current;
+    if (img) {
+      const pos = parallaxEnabled ? parallaxPosRef.current : { x: 0, y: 0 };
+      img.style.transform = formatSceneTransform(parallaxConfigRef.current, pos.x, pos.y);
+    }
+  }, [baseTransform, extraScale, needsAmbient, fpsLimit, parallaxEnabled]);
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- drives imperative DOM transform parallax directly via ref without React state re-renders
+  useEffect(() => {
+    if (!parallaxEnabled) {
+      parallaxPosRef.current = { x: 0, y: 0 };
+      if (imgRef.current) {
+        imgRef.current.style.transform = formatSceneTransform(parallaxConfigRef.current, 0, 0);
+      }
+      return;
+    }
     let rafId: number | null = null;
-    let targetX = 0;
-    let targetY = 0;
-    let curX = 0;
-    let curY = 0;
+    let targetX = parallaxPosRef.current.x;
+    let targetY = parallaxPosRef.current.y;
+    let lastFrameTs = 0;
 
     const onMove = (e: PointerEvent) => {
       const w = window.innerWidth || 1;
@@ -1428,14 +1525,24 @@ function SteamSceneFallback({
       }
     };
 
-    const step = () => {
-      curX += (targetX - curX) * 0.12;
-      curY += (targetY - curY) * 0.12;
-      setParallax({ x: curX, y: curY });
-      if (Math.abs(targetX - curX) > 0.08 || Math.abs(targetY - curY) > 0.08) {
+    const step = (ts: number) => {
+      const cfg = parallaxConfigRef.current;
+      const pos = parallaxPosRef.current;
+      const minInterval = 1000 / Math.max(1, cfg.fpsLimit || 30);
+      if (lastFrameTs === 0 || ts - lastFrameTs >= minInterval - 0.5) {
+        lastFrameTs = ts;
+        pos.x += (targetX - pos.x) * 0.12;
+        pos.y += (targetY - pos.y) * 0.12;
+        const img = imgRef.current;
+        if (img) {
+          img.style.transform = formatSceneTransform(cfg, pos.x, pos.y);
+        }
+      }
+      if (Math.abs(targetX - pos.x) > 0.08 || Math.abs(targetY - pos.y) > 0.08) {
         rafId = requestAnimationFrame(step);
       } else {
         rafId = null;
+        lastFrameTs = 0;
       }
     };
 
@@ -1447,12 +1554,6 @@ function SteamSceneFallback({
   }, [parallaxEnabled]);
 
   if (previewUrl && !previewFailed) {
-    const activeParallax = parallaxEnabled ? parallax : { x: 0, y: 0 };
-    const [bass] = normalizeAudioTriple(audioReactive, audioEnergy);
-    const baseTransform =
-      typeof mediaStyle.transform === "string" && mediaStyle.transform !== "none"
-        ? mediaStyle.transform
-        : "";
     const smartPosY =
       objectFit === "cover" && !ratioMismatch && layerPositionY === 50 && imgRatio > 0 && imgRatio < viewportRatio
         ? 25
@@ -1460,15 +1561,13 @@ function SteamSceneFallback({
 
     const effectiveObjectFit: CSSProperties["objectFit"] =
       objectFit === "cover" && ratioMismatch ? "contain" : mediaStyle.objectFit;
-    const extraScale = needsAmbient ? 1 + bass * 0.015 : 1.04 + bass * 0.02;
-    const parallaxTransform = needsAmbient
-      ? baseTransform || (bass > 0.01 ? `scale(${extraScale.toFixed(3)})` : "none")
-      : `${baseTransform} translate3d(${(-activeParallax.x).toFixed(2)}px, ${(-activeParallax.y).toFixed(2)}px, 0) scale(${extraScale.toFixed(3)})`.trim();
+    const { transform: _baseTransform, ...mediaStyleWithoutTransform } = mediaStyle;
 
     return (
       <div className="pmx-wp-stage__slot">
         {needsAmbient ? <AmbientBackdrop src={previewUrl} /> : null}
         <img
+          ref={imgRef}
           src={previewUrl}
           alt=""
           decoding="async"
@@ -1482,10 +1581,10 @@ function SteamSceneFallback({
           }}
           onError={() => setFailedUrl(previewUrl)}
           style={{
-            ...mediaStyle,
+            ...mediaStyleWithoutTransform,
             objectFit: effectiveObjectFit,
             objectPosition: `${layerPositionX}% ${smartPosY}%`,
-            transform: parallaxTransform,
+            ...(parallaxEnabled ? {} : { transform: staticTransform }),
           }}
         />
       </div>
@@ -1575,6 +1674,133 @@ function subscribeWindowBlur(cb: () => void): () => void {
     window.removeEventListener("blur", onBlur);
     window.removeEventListener("focus", onFocus);
   };
+}
+
+/** Computes the effective live frame cap by intersecting `sceneLiveFps` with global `fpsCap` (0 = uncapped). */
+export function resolveEffectiveLiveFps(sceneLiveFps: number, fpsCap: number): number {
+  const base = Number.isFinite(sceneLiveFps) && sceneLiveFps > 0 ? sceneLiveFps : 30;
+  if (Number.isFinite(fpsCap) && fpsCap > 0) {
+    return Math.max(1, Math.min(base, fpsCap));
+  }
+  return Math.max(1, base);
+}
+
+interface BatteryManagerLike extends EventTarget {
+  charging: boolean;
+}
+
+type NavigatorWithBattery = Navigator & {
+  getBattery?: () => Promise<BatteryManagerLike>;
+};
+
+function useBatteryDischarging(enabled: boolean): boolean {
+  const [discharging, setDischarging] = useState(false);
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- subscribes to Battery Status API chargingchange events when pauseOnBattery is enabled
+  useEffect(() => {
+    if (!enabled || typeof navigator === "undefined") {
+      return;
+    }
+    const nav = navigator as NavigatorWithBattery;
+    if (typeof nav.getBattery !== "function") {
+      return;
+    }
+    let disposed = false;
+    let batteryRef: BatteryManagerLike | null = null;
+    const onChargingChange = () => {
+      if (!disposed && batteryRef) {
+        setDischarging(!batteryRef.charging);
+      }
+    };
+    nav
+      .getBattery()
+      .then((battery) => {
+        if (disposed) return;
+        batteryRef = battery;
+        setDischarging(!battery.charging);
+        battery.addEventListener("chargingchange", onChargingChange);
+      })
+      .catch(() => {
+        if (!disposed) setDischarging(false);
+      });
+    return () => {
+      disposed = true;
+      batteryRef?.removeEventListener("chargingchange", onChargingChange);
+    };
+  }, [enabled]);
+
+  return enabled ? discharging : false;
+}
+
+let cachedWebglSoftwareRenderer: boolean | null = null;
+
+function probeWebglSoftwareRenderer(): boolean {
+  if (cachedWebglSoftwareRenderer !== null) return cachedWebglSoftwareRenderer;
+  if (typeof document === "undefined") return false;
+  try {
+    const canvas = document.createElement("canvas");
+    const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
+    if (!gl) {
+      cachedWebglSoftwareRenderer = true;
+      return true;
+    }
+    const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
+    const renderer = debugInfo
+      ? String(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) ?? "")
+      : String(gl.getParameter(gl.RENDERER) ?? "");
+    const loseExt = gl.getExtension("WEBGL_lose_context");
+    loseExt?.loseContext();
+    cachedWebglSoftwareRenderer =
+      /swiftshader|llvmpipe|softpipe|microsoft basic render driver|software rasterizer|mesa offscreen/i.test(
+        renderer,
+      );
+  } catch {
+    cachedWebglSoftwareRenderer = false;
+  }
+  return cachedWebglSoftwareRenderer;
+}
+
+function readSoftwareRenderer(): boolean {
+  if (typeof document === "undefined") return false;
+  const root = document.documentElement;
+  const gpuAttr = root.getAttribute("data-pmx-gpu") ?? root.getAttribute("data-prismux-gpu");
+  if (gpuAttr === "0") return true;
+  if (gpuAttr === "1") return false;
+  return probeWebglSoftwareRenderer();
+}
+
+function subscribeGpuFlag(cb: () => void): () => void {
+  if (typeof document === "undefined" || typeof MutationObserver === "undefined") {
+    return () => {};
+  }
+  const observer = new MutationObserver(cb);
+  observer.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["data-pmx-gpu", "data-prismux-gpu"],
+  });
+  return () => observer.disconnect();
+}
+
+function useDeferredLiveBoot(
+  active: boolean,
+  delaySeconds: number,
+  resetKey: string,
+): boolean {
+  const [readyKey, setReadyKey] = useState<string | null>(null);
+  const immediate =
+    typeof window === "undefined" || !active || !Number.isFinite(delaySeconds) || delaySeconds <= 0;
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- schedules deferred boot delay timer for heavy Web/Scene live runtimes
+  useEffect(() => {
+    if (immediate) return;
+    const ms = Math.max(0, Math.round(delaySeconds * 1000));
+    const timer = setTimeout(() => {
+      setReadyKey(resetKey);
+    }, ms);
+    return () => clearTimeout(timer);
+  }, [immediate, delaySeconds, resetKey]);
+
+  return immediate || readyKey === resetKey;
 }
 
 function computePanPercent(position: number, scaleFactor: number): number {
@@ -1683,10 +1909,28 @@ export function WallpaperStage({
     readDocumentIsLight,
     getServerFalse,
   );
+  const isSoftwareRenderer = useSyncExternalStore(
+    subscribeGpuFlag,
+    readSoftwareRenderer,
+    getServerFalse,
+  );
+  const batteryDischarging = useBatteryDischarging(settings.pauseOnBattery);
 
   const currentWallpaper = useMemo(
     () => findWallpaperById(wallpapers, settings.selectedId),
     [wallpapers, settings.selectedId],
+  );
+
+  const engineGated = isWallpaperGatedByEngine(currentWallpaper, settings);
+  const needsLiveBootDelay =
+    Boolean(currentWallpaper) &&
+    !engineGated &&
+    settings.advancedEngineEnabled &&
+    isAdvancedWallpaperType(currentWallpaper?.type);
+  const liveBootReady = useDeferredLiveBoot(
+    needsLiveBootDelay,
+    settings.liveBootDelay,
+    currentWallpaper?.id ?? "",
   );
 
   const occluded =
@@ -1695,7 +1939,10 @@ export function WallpaperStage({
     (settings.pauseOnHidden && docHidden) ||
     (settings.pauseOnBlur && winBlurred);
 
-  const effectivePaused = occluded || !settings.playing;
+  const batteryPaused = settings.pauseOnBattery && batteryDischarging;
+  const softRenderPaused = settings.sceneSoftRenderPause && isSoftwareRenderer;
+  const effectivePaused = occluded || !settings.playing || batteryPaused;
+  const effectiveLiveFps = resolveEffectiveLiveFps(settings.sceneLiveFps, settings.fpsCap);
   const effectiveAudioEnergy = audioEnergyProp ?? snap.audioEnergy;
 
   const resolvedProps = useMemo(() => {
@@ -1733,7 +1980,8 @@ export function WallpaperStage({
     ],
   );
 
-  if (!currentWallpaper) {
+  // Hard gate: never mount any Web or Steam Scene live runtime (or WebWallGL canvas) when advancedEngineEnabled is false.
+  if (!currentWallpaper || engineGated) {
     return null;
   }
 
@@ -1756,11 +2004,16 @@ export function WallpaperStage({
       : currentWallpaper.schemeColor || "#38bdf8";
   const shaderParallax = propMap.get("parallax") !== false;
 
-  const resolvedLiveUrl = resolveLiveRuntimeUrl
-    ? resolveLiveRuntimeUrl(currentWallpaper, settings)
+  const resolvedLiveUrl =
+    settings.advancedEngineEnabled && resolveLiveRuntimeUrl
+      ? resolveLiveRuntimeUrl(currentWallpaper, settings)
+      : null;
+  const liveRuntimeUrl =
+    settings.advancedEngineEnabled && settings.sceneLive ? resolvedLiveUrl : null;
+  const webRuntimeUrl = settings.advancedEngineEnabled
+    ? resolvedLiveUrl || currentWallpaper.mediaUrl
     : null;
-  const liveRuntimeUrl = settings.sceneLive ? resolvedLiveUrl : null;
-  const webRuntimeUrl = resolvedLiveUrl || currentWallpaper.mediaUrl;
+  const liveRuntimePaused = effectivePaused || softRenderPaused;
 
   return (
     <div
@@ -1770,6 +2023,9 @@ export function WallpaperStage({
       data-pmx-wallpaper-type={currentWallpaper.type}
       data-pmx-wallpaper-paused={effectivePaused ? "1" : "0"}
       data-pmx-wallpaper-occluded={occluded ? "1" : "0"}
+      data-pmx-fps-cap={String(effectiveLiveFps)}
+      data-pmx-battery-paused={batteryPaused ? "1" : "0"}
+      data-pmx-soft-render-paused={softRenderPaused ? "1" : "0"}
       className={className ? `pmx-wp-stage ${className}` : "pmx-wp-stage"}
     >
       <div className="pmx-wp-stage__viewport" style={viewportStyle}>
@@ -1801,22 +2057,50 @@ export function WallpaperStage({
           />
         )}
 
-        {currentWallpaper.type === "web" && webRuntimeUrl && (
-          <WebWallpaperStage
-            src={webRuntimeUrl}
-            poster={currentWallpaper.previewUrl}
-            userProps={resolvedProps}
-            paused={effectivePaused || !settings.sceneLive}
-            fpsLimit={settings.sceneLiveFps}
-            muted={!settings.videoAudioEnabled}
-            volume={settings.videoVolume}
-            objectFit={settings.objectFit}
-            mediaStyle={frameMediaStyle}
-          />
-        )}
+        {currentWallpaper.type === "web" &&
+          settings.advancedEngineEnabled &&
+          webRuntimeUrl &&
+          (liveBootReady ? (
+            <WebWallpaperStage
+              src={webRuntimeUrl}
+              poster={currentWallpaper.previewUrl}
+              userProps={resolvedProps}
+              paused={liveRuntimePaused || !settings.sceneLive}
+              fpsLimit={effectiveLiveFps}
+              muted={!settings.videoAudioEnabled}
+              volume={settings.videoVolume}
+              objectFit={settings.objectFit}
+              mediaStyle={frameMediaStyle}
+            />
+          ) : currentWallpaper.previewUrl ? (
+            <div className="pmx-wp-stage__slot" data-pmx-live-boot-deferred="1">
+              <img
+                src={currentWallpaper.previewUrl}
+                alt=""
+                aria-hidden="true"
+                decoding="async"
+                className="pmx-wp-stage__media pmx-wp-stage__poster"
+                style={mediaStyle}
+              />
+            </div>
+          ) : null)}
 
         {currentWallpaper.type === "scene" &&
-          (currentWallpaper.source === "builtin" ? (
+          settings.advancedEngineEnabled &&
+          (!liveBootReady ? (
+            currentWallpaper.previewUrl ? (
+              <div className="pmx-wp-stage__slot" data-pmx-live-boot-deferred="1">
+                <img
+                  src={currentWallpaper.previewUrl}
+                  alt=""
+                  aria-hidden="true"
+                  decoding="async"
+                  className="pmx-wp-stage__media pmx-wp-stage__poster"
+                  style={mediaStyle}
+                />
+              </div>
+            ) : null
+          ) : currentWallpaper.source === "builtin" ? (
             <div className="pmx-wp-stage__slot" style={frameMediaStyle}>
               <WebWallGLStageCanvas
                 sceneIndex={presetToSceneIndex(
@@ -1824,8 +2108,8 @@ export function WallpaperStage({
                   currentWallpaper.id,
                 )}
                 themeMode={settings.themeMode}
-                paused={effectivePaused || !settings.sceneLive}
-                fpsLimit={settings.sceneLiveFps}
+                paused={liveRuntimePaused || !settings.sceneLive}
+                fpsLimit={effectiveLiveFps}
                 audioReactive={settings.audioReactive}
                 audioEnergy={effectiveAudioEnergy}
                 speed={shaderSpeed}
@@ -1839,8 +2123,8 @@ export function WallpaperStage({
               src={liveRuntimeUrl}
               poster={currentWallpaper.previewUrl}
               userProps={resolvedProps}
-              paused={effectivePaused}
-              fpsLimit={settings.sceneLiveFps}
+              paused={liveRuntimePaused}
+              fpsLimit={effectiveLiveFps}
               muted={!settings.videoAudioEnabled}
               volume={settings.videoVolume}
               objectFit={settings.objectFit}
@@ -1850,8 +2134,8 @@ export function WallpaperStage({
             <SteamSceneFallback
               wallpaper={currentWallpaper}
               themeMode={settings.themeMode}
-              paused={effectivePaused || !settings.sceneLive}
-              fpsLimit={settings.sceneLiveFps}
+              paused={liveRuntimePaused || !settings.sceneLive}
+              fpsLimit={effectiveLiveFps}
               audioReactive={settings.audioReactive}
               audioEnergy={effectiveAudioEnergy}
               objectFit={settings.objectFit}
