@@ -12,7 +12,7 @@
 </picture>
 
 <p>
-  <a href="https://github.com/Fish-under-sea/Prismux/releases/tag/v0.2.3-rc.1"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/stat-version-en-dark.png"><img src="assets/readme/stat-version-en-light.png" alt="VERSION: v0.2.3-RC.1 (Zero Telemetry · Win x64)" width="23%"></picture></a>
+  <a href="https://github.com/Fish-under-sea/Prismux/releases/tag/v0.2.3-rc.2"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/stat-version-en-dark.png"><img src="assets/readme/stat-version-en-light.png" alt="VERSION: v0.2.3-RC.2 (Zero Telemetry · Win x64)" width="23%"></picture></a>
   <a href="#preview"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/stat-visual-en-dark.png"><img src="assets/readme/stat-visual-en-light.png" alt="VISUAL: 0 TOKEN (8-Zone Liquid Glass)" width="23%"></picture></a>
   <a href="#features"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/stat-memory-en-dark.png"><img src="assets/readme/stat-memory-en-light.png" alt="MEMORY: SQLITE VEC (Single-File Isolation)" width="23%"></picture></a>
   <a href="#plugins"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/stat-plugins-en-dark.png"><img src="assets/readme/stat-plugins-en-light.png" alt="PLUGINS: 2 PLUGINS (Zero Preinstall)" width="23%"></picture></a>
@@ -24,23 +24,23 @@
   <img src="https://img.shields.io/badge/React-19-8fd6a0?style=flat-square&amp;logo=react&amp;logoColor=white&amp;labelColor=5a544a" alt="React 19">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D24.12-8fd6a0?style=flat-square&amp;logo=nodedotjs&amp;logoColor=white&amp;labelColor=5a544a" alt="Node.js >= 24.12">
   <img src="https://img.shields.io/badge/License-MIT-8fd6a0?style=flat-square&amp;labelColor=5a544a" alt="License MIT">
-  <img src="https://img.shields.io/badge/Release-v0.2.3--RC.1-f08a5d?style=flat-square&amp;labelColor=5a544a" alt="Release Prismux v0.2.3-RC.1">
+  <img src="https://img.shields.io/badge/Release-v0.2.3--RC.2-f08a5d?style=flat-square&amp;labelColor=5a544a" alt="Release Prismux v0.2.3-RC.2">
 </p>
 
 <p><strong>Prismux · Local-First, Zero-Telemetry 8-Zone Liquid-Glass AI Super Workbench &amp; 24/7 Secretary</strong><br>
-Built on a unified first-party <strong><code>@prismux/*</code> Monorepo (Electron 44 + Effect + TypeScript + React 19)</strong>, Prismux commands native-CLI-identity Claude Code, Codex, Antigravity, cross-drive auto-discovered native <code>dsh</code> (DeepSeek Harness), <code>Pi</code>, and OpenCode from one calm window—uniting <strong>Codex→DSH cross-agent multi-agent delegation with unified AGY/OAuth subscription guardrails</strong>, <strong>isolated split-pane threads/models with per-pane Overview &amp; synced right sidebar</strong>, <strong>liquid-glass test-tube context popover &amp; open-gap flowing RGB composer rim</strong>, <strong>secondary sidebar delegated subagent file tree</strong>, 6 poetic liquid-glass theme substrates, WizTree-style Performance &amp; Storage dashboard with C-drive guardrails, 8× faster Rust telemetry, and single-file SQLite hybrid memory.<br>
+Built on a unified first-party <strong><code>@prismux/*</code> Monorepo (Electron 44 + Effect + TypeScript + React 19)</strong>, Prismux commands native-CLI-identity Claude Code, Codex, Antigravity, cross-drive auto-discovered native <code>dsh</code> (DeepSeek Harness), <code>Pi</code>, and OpenCode from one calm window—uniting <strong>end-to-end Overnight Factory scheduling, live mail liveness probing &amp; real execution receipts</strong>, <strong>30-minute Today Token auto-refresh with concurrent singleflight/SWR quota acceleration</strong>, <strong>Codex→DSH cross-agent delegation with true vendor subagent icons</strong>, <strong>isolated split-pane threads/models with per-pane Overview</strong>, 6 poetic liquid-glass theme substrates, WizTree-style Performance &amp; Storage dashboard with C-drive guardrails, 8× faster Rust telemetry, and single-file SQLite hybrid memory.<br>
 Zero silent telemetry out of the box, pure QR remote pairing (zero cloud accounts), and strictly zero-preinstall plugins—your workspace, your privacy, your rules.</p>
 
 <p>
   <a href="#install"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/key-download-en-dark.png"><img src="assets/readme/key-download-en-light.png" alt="Downloads" height="40"></picture></a>
-  <a href="https://github.com/Fish-under-sea/Prismux/releases/tag/v0.2.3-rc.1"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/key-release-en-dark.png"><img src="assets/readme/key-release-en-light.png" alt="Changelog" height="40"></picture></a>
+  <a href="https://github.com/Fish-under-sea/Prismux/releases/tag/v0.2.3-rc.2"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/key-release-en-dark.png"><img src="assets/readme/key-release-en-light.png" alt="Changelog" height="40"></picture></a>
   <a href="https://github.com/Fish-under-sea/Prismux/issues"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/key-issues-en-dark.png"><img src="assets/readme/key-issues-en-light.png" alt="Issues" height="40"></picture></a>
 </p>
 
 <br>
 
 <p>
-  <img src="assets/readme/hero-demo-v02.gif" width="100%" alt="Prismux v0.2.3-RC.1 8-second live Electron 44 GPU demo: live 8-zone Liquid Glass refraction, Codex running-chibi 7-level reasoning effort slider &amp; Fast/Ultra Fast toggles, 2×2 Orca Split Anything, and 24-hour dynamic sky transition">
+  <img src="assets/readme/hero-demo-v02.gif" width="100%" alt="Prismux v0.2.3-RC.2 8-second live Electron 44 GPU demo: live 8-zone Liquid Glass refraction, Codex running-chibi 7-level reasoning effort slider &amp; Fast/Ultra Fast toggles, 2×2 Orca Split Anything, and 24-hour dynamic sky transition">
   <br>
   <sub><strong>8-Second Live Electron 44 GPU Capture</strong> (<a href="assets/readme/hero-demo-v02.webp">View crisp 1200×750 16 FPS Animated WebP</a>): (1) Open the right wallpaper drawer to adjust <strong>8-Zone Liquid Glass</strong> refraction live over an animated wallpaper; (2) Sweep the Codex <strong><code>dsh-fish</code> running-chibi 7-level effort slider</strong> (<code>Mini → Ultra</code>) and toggle <code>Fast / Ultra Fast</code>; (3) Launch a <strong>2×2 Orca Split Anything</strong> grid (zero interior corner radius, crisp <code>1px</code> dividers) with the <strong>24-hour living sky</strong> shifting smoothly from noon to starry night.</sub>
 </p>
@@ -58,14 +58,13 @@ Zero silent telemetry out of the box, pure QR remote pairing (zero cloud account
 - **Single-File Hybrid Memory, Sidebar Overnight Factory & Zero-Preinstall Plugins**: Store all durable memories in `~/.prismux/data/memory.db` (SQLite WAL + FTS5 + `sqlite-vec`) with transport-level group-chat isolation; access `Overnight Factory & Mail` right from the main sidebar with one-click toggle; install `qq` and `fishdock-hook` strictly on demand (zero preinstall, leak-free teardown) alongside Argon2id + AEAD E2EE sync and concurrent GitHub / Gitee updates.
 
 > [!TIP]
-> **What's New in `Prismux v0.2.3-RC.1`**
-> - **5s Auth-Storm, Settings Freeze & Full-Stack 15 Memory Leak Elimination**: Desktop exchanges signed `access_token` via `DesktopLocalEnvironmentAuth` and halts reconnect loops on HTTP 401/403/426; decouples `CommandDialog` / `AppRouteModal` nested close races, enables router structural sharing, replaces sidebar `flushSync` layout thrashing with rAF batching, and seals Electron `BrowserWindow`, WebWallGL / bitmap / recording Blob URL, paused rAF queue, and 6 unbounded frontend/runtime Atom & Map leaks.
-> - **Liquid-Glass Test-Tube Context Panel, Color-Stepped Capsules & DSH TPS Fix**: Redesigns the composer context popover with a liquid-glass test-tube breakdown and color-tiered status pills while decluttering the Token popover footer; fixes inflated DSH TPS from 0–1 ms buffered micro-bursts and partial multi-step `decodeMs` (with frontend self-healing for historical anomalies).
-> - **Codex→DSH Cross-Agent Delegation, Subscription Guardrails & Flowing RGB / Subagent Tree**: Adds 4-tier alias resolution (`dsh / claude / codex / agy / opencode / pi`) and read-only `DelegationSubscriptionGuard` (waiver-gated personal AGY / `subscription_oauth`, hard-blocked unattended AGY); adds a 40% open-gap flowing RGB border on active AGY composers and a secondary sidebar MCP delegated subagent file tree with curved branch rails, live RGB energy pulse, auto-collapse badges, and cascade/individual actions.
-> - **Strict Split-Pane Thread & Model Isolation, Per-Pane Overview & Synced Right Sidebar**: Keeps threads, models, and reasoning states cleanly isolated per split pane, gives every pane its own dedicated Overview overlay, and syncs the unified right sidebar smoothly to the active pane.
-> - **Inline Sidebar Update Check Animation & Bottom-Right Update Card**: Clicking "Check for Updates" in the brand menu runs inline without closing the menu (spinner, emerald up-to-date pill, retry state) and surfaces the bottom-right update card directly when a new version is found.
+> **What's New in `Prismux v0.2.3-RC.2`**
+> - **Residual `T3` Badges Replaced with `Ciallo～(∠・ω< )⌒★`**: Replaces remaining legacy `T3` identifiers across tool-call cards and lifecycle views with `Ciallo～(∠・ω< )⌒★` for clean brand consistency.
+> - **True Vendor Brand Icons for Delegated Subagents**: Fixes gray `[AR]` fallback boxes on secondary sidebar delegated subagents by forwarding recognizable `selectedModel.name` for opaque `modelSlug`s, rendering the DeepSeek whale and official vendor logos accurately.
+> - **Overnight Factory Mail Check Fix, Live Liveness Sync & Full End-to-End Execution Loop**: Fixes outbound email check failures across `agent_mail` / `imap_smtp` / `gmail_oauth2`, adds live status probing with automatic "Configured" state refresh on window focus, and ships full end-to-end scheduled polling, task queue, real executor, and email receipts (preserving the hard block on unattended personal AGY).
+> - **30-Min Today Token Auto-Refresh, First-Click Instant Hot-Reload & Concurrent/SWR Quota Acceleration**: Fixes Today Token auto-refresh to a steady 30-minute cadence, ensures the first click on Refresh updates live immediately, and accelerates quota lookups with full concurrency, singleflight deduplication, and SWR background revalidation.
 
-The current release is **`Prismux v0.2.3-RC.1`** (tag `v0.2.3-rc.1`), shipping `Prismux-Setup-0.2.3-rc.1-win-x64.exe` (`197.62 MB` / `207,216,321 bytes`, SHA-256: `24255c176ccb2570d0b3727c7864544dd86dcd7eb872cd8bc39298a304af584b`) on GitHub Releases and Gitee Releases, with macOS and Linux channels reserved.
+The current release is **`Prismux v0.2.3-RC.2`** (tag `v0.2.3-rc.2`), shipping `Prismux-Setup-0.2.3-rc.2-win-x64.exe` (`197.63 MB` / `207,235,058 bytes`, SHA-256: `f288fa272fd7eab9e5671f5643e3bfedf0dcae3ab812bf3013d9dd476b4287e4`) on GitHub Releases and Gitee Releases, with macOS and Linux channels reserved.
 
 <h2 id="preview"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/section-preview-en-dark.png"><img src="assets/readme/section-preview-en-light.png" alt="PREVIEW · Visual Preview" width="100%"></picture></h2>
 
@@ -161,14 +160,14 @@ The current release is **`Prismux v0.2.3-RC.1`** (tag `v0.2.3-rc.1`), shipping `
 <h2 id="plugins"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/section-plugins-en-dark.png"><img src="assets/readme/section-plugins-en-light.png" alt="PLUGINS · Optional Plugins" width="100%"></picture></h2>
 
 > [!NOTE]
-> **Two Active Official Plugins Are Strictly Never Preinstalled**: Neither `Prismux-Setup-0.2.3-rc.1-win-x64.exe` nor the unpacked desktop bundle contains any directory from `plugins-official/` (verified at 0 hits across the packaged tree). Both active official plugins (`qq` and `fishdock-hook`) ship independently as verified `.wb-plugin` archives (indexed by `prismux-plugins-official.json` and `prismux-plugins-0.2.3-rc.1-SHA256SUMS.txt`) and script-free npm single packages, installing strictly on demand with `ctx.effect()` zero-leak teardown.
+> **Two Active Official Plugins Are Strictly Never Preinstalled**: Neither `Prismux-Setup-0.2.3-rc.2-win-x64.exe` nor the unpacked desktop bundle contains any directory from `plugins-official/` (verified at 0 hits across the packaged tree). Both active official plugins (`qq` and `fishdock-hook`) ship independently as verified `.wb-plugin` archives (indexed by `prismux-plugins-official.json` and `prismux-plugins-0.2.3-rc.2-SHA256SUMS.txt`) and script-free npm single packages, installing strictly on demand with `ctx.effect()` zero-leak teardown.
 >
 > **Retired Plugins Notice**: `pet` (`@prismux/plugin-pet`) and `ssh` (`@prismux/plugin-ssh`) have been retired and removed from the official catalog and release pipeline — **Deprecated: Replaced by Prismux built-in capabilities**.
 
 | Plugin ID | Archive (`.wb-plugin`) | npm Package (Unscoped / GitHub Packages) | Realms | Capabilities &amp; Isolation |
 | :--- | :--- | :--- | :--- | :--- |
-| `qq` | `prismux-plugin-qq-0.2.3-rc.1.wb-plugin`<br>(`88,738 bytes` · SHA-256: `59d7c5b157ca4ad72a3d31a7b74d8feb068f29e30a2fdc760e09e97a8866f778`) | `prismux-plugin-qq`<br><code>@fish-under-sea/prismux-plugin-qq</code> | `daemon`, `ui` | OneBot v11 forward/reverse WebSocket probe (NapCatQQ / Lagrange.Core); owner DMs route to the Chief slot while authorized QQ groups use anti-spam pacing hard-isolated to <code>social/qq-group-&lt;gid&gt;</code> |
-| `fishdock-hook` | `prismux-plugin-fishdock-hook-0.2.3-rc.1.wb-plugin`<br>(`37,458 bytes` · SHA-256: `7b4b7ea73294a5bfdc83ca99ae5bf77c98a2fc6214cdea851c86c6b224cf47c6`) | `prismux-plugin-fishdock-hook`<br><code>@fish-under-sea/prismux-plugin-fishdock-hook</code> | `daemon` | Bridges `PreToolUse` risk approvals, priority mail alerts, and Overnight Factory completions to FISH-Dock Dynamic Island cards with instant approve/reject actions |
+| `qq` | `prismux-plugin-qq-0.2.3-rc.2.wb-plugin`<br>(`88,739 bytes` · SHA-256: `088c172e556213e67487fe79b0c229be433b48b7160bdae2499c324ff562baf4`) | `prismux-plugin-qq`<br><code>@fish-under-sea/prismux-plugin-qq</code> | `daemon`, `ui` | OneBot v11 forward/reverse WebSocket probe (NapCatQQ / Lagrange.Core); owner DMs route to the Chief slot while authorized QQ groups use anti-spam pacing hard-isolated to <code>social/qq-group-&lt;gid&gt;</code> |
+| `fishdock-hook` | `prismux-plugin-fishdock-hook-0.2.3-rc.2.wb-plugin`<br>(`37,458 bytes` · SHA-256: `ac19befedc8b852efa444ac7c08773036091cc54863e32f39428686d78678766`) | `prismux-plugin-fishdock-hook`<br><code>@fish-under-sea/prismux-plugin-fishdock-hook</code> | `daemon` | Bridges `PreToolUse` risk approvals, priority mail alerts, and Overnight Factory completions to FISH-Dock Dynamic Island cards with instant approve/reject actions |
 
 ### Plugin Authoring &amp; Official Documentation
 
@@ -183,31 +182,31 @@ Building a custom Prismux plugin or delegating it to a Coding Agent? Follow the 
 
 | Channel | Best For | Release &amp; Download Details |
 | :--- | :--- | :--- |
-| **GitHub Releases** (Global) | Direct global network / GitHub CLI environments | [Prismux v0.2.3-RC.1 Release](https://github.com/Fish-under-sea/Prismux/releases/tag/v0.2.3-rc.1) · [Direct `Prismux-Setup-0.2.3-rc.1-win-x64.exe`](https://github.com/Fish-under-sea/Prismux/releases/download/v0.2.3-rc.1/Prismux-Setup-0.2.3-rc.1-win-x64.exe) |
-| **Gitee Releases** (Mainland China Mirror) | High-speed direct downloads inside mainland China | [Prismux v0.2.3-RC.1 Release](https://gitee.com/Fish-under-sea/Prismux/releases/tag/v0.2.3-rc.1) (includes `80 MB` split `.7z` volumes, consolidated checksums, and active official plugin archives) |
+| **GitHub Releases** (Global) | Direct global network / GitHub CLI environments | [Prismux v0.2.3-RC.2 Release](https://github.com/Fish-under-sea/Prismux/releases/tag/v0.2.3-rc.2) · [Direct `Prismux-Setup-0.2.3-rc.2-win-x64.exe`](https://github.com/Fish-under-sea/Prismux/releases/download/v0.2.3-rc.2/Prismux-Setup-0.2.3-rc.2-win-x64.exe) |
+| **Gitee Releases** (Mainland China Mirror) | High-speed direct downloads inside mainland China | [Prismux v0.2.3-RC.2 Release](https://gitee.com/Fish-under-sea/Prismux/releases/tag/v0.2.3-rc.2) (includes `80 MB` split `.7z` volumes, consolidated checksums, and active official plugin archives) |
 | **In-App Update Center** (Recommended) | Concurrent latency probing, weighted split progress &amp; mandatory SHA-256 verification | Open **Settings → About &amp; Updates** (`/settings/about#prismux-updates`) to switch between `Auto / Domestic First / Global First`, browse rich release notes, and install with one click |
 
 ### Platform Downloads &amp; Integrity Verification
 
 | Platform / Release Asset | Filename / Availability | Details &amp; Isolation |
 | :--- | :--- | :--- |
-| **Windows x64 Installer (Electron 44 NSIS)** | `Prismux-Setup-0.2.3-rc.1-win-x64.exe`<br>(`197.62 MB` · `207,216,321 bytes` · Gitee also ships 3×80 MB `.7z` split volumes) | SHA-256: `24255c176ccb2570d0b3727c7864544dd86dcd7eb872cd8bc39298a304af584b`; full Electron 44 desktop app with bundled `resources/prismux-daemon/`, non-ASAR `resources/native/sqlite-vec/vec0.dll`, `resources/tools/7za.exe`, and 8× faster Task-Manager-accurate `t3-resource-monitor.exe`; upgrades cleanly sweep obsolete remnants while strictly protecting `~/.prismux/` user data; defaults to per-user `%LOCALAPPDATA%\Programs\Prismux` (supports custom paths &amp; `/D=<dir>`); **zero preinstalled official plugins** |
+| **Windows x64 Installer (Electron 44 NSIS)** | `Prismux-Setup-0.2.3-rc.2-win-x64.exe`<br>(`197.63 MB` · `207,235,058 bytes` · Gitee also ships 3×80 MB `.7z` split volumes) | SHA-256: `f288fa272fd7eab9e5671f5643e3bfedf0dcae3ab812bf3013d9dd476b4287e4`; full Electron 44 desktop app with bundled `resources/prismux-daemon/`, non-ASAR `resources/native/sqlite-vec/vec0.dll`, `resources/tools/7za.exe`, and 8× faster Task-Manager-accurate `t3-resource-monitor.exe`; upgrades cleanly sweep obsolete remnants while strictly protecting `~/.prismux/` user data; defaults to per-user `%LOCALAPPDATA%\Programs\Prismux` (supports custom paths &amp; `/D=<dir>`); **zero preinstalled official plugins** |
 | **macOS (Apple Silicon / Intel)** | `Coming soon (Channel reserved)` | Planned `.dmg` builds will follow the exact same `0-Token` visual separation and `~/.prismux/` isolation guarantees |
 | **Linux (x86_64 / arm64)** | `Coming soon (Channel reserved)` | Planned `.AppImage` / `.deb` packages will support dual-route updates and verified on-demand plugin import |
-| **2 Active Official Plugin Archives** | `prismux-plugin-{qq,fishdock-hook}-0.2.3-rc.1.wb-plugin` &amp; `prismux-plugins-official.json` | Deterministic ustar + gzip bundles for on-demand verified import via `/settings/plugins` (`pet` &amp; `ssh` retired: replaced by built-in capabilities) |
-| **Consolidated Checksums** | `Prismux-0.2.3-rc.1-SHA256SUMS.txt` &amp; `prismux-plugins-0.2.3-rc.1-SHA256SUMS.txt` | Verify manual downloads with `Get-FileHash Prismux-Setup-0.2.3-rc.1-win-x64.exe -Algorithm SHA256` or `7z t` |
+| **2 Active Official Plugin Archives** | `prismux-plugin-{qq,fishdock-hook}-0.2.3-rc.2.wb-plugin` &amp; `prismux-plugins-official.json` | Deterministic ustar + gzip bundles for on-demand verified import via `/settings/plugins` (`pet` &amp; `ssh` retired: replaced by built-in capabilities) |
+| **Consolidated Checksums** | `Prismux-0.2.3-rc.2-SHA256SUMS.txt` &amp; `prismux-plugins-0.2.3-rc.2-SHA256SUMS.txt` | Verify manual downloads with `Get-FileHash Prismux-Setup-0.2.3-rc.2-win-x64.exe -Algorithm SHA256` or `7z t` |
 
 <h2 id="packages"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/section-packages-en-dark.png"><img src="assets/readme/section-packages-en-light.png" alt="PACKAGES · npm &amp; Mirrors" width="100%"></picture></h2>
 
-Each active official plugin is also published as a **script-free (`preinstall / install / postinstall` disabled)** standalone npm package bundling its SHA-256-verified `prismux-plugin-<id>-0.2.3-rc.1.wb-plugin` archive and an overwrite-safe export CLI (`prismux-plugin-<id>`). Inside the Plugin Center, community and official tarballs stream directly over HTTPS with automatic failover between **`registry.npmjs.org` ↔ `registry.npmmirror.com`** and zero local `git` invocation.
+Each active official plugin is also published as a **script-free (`preinstall / install / postinstall` disabled)** standalone npm package bundling its SHA-256-verified `prismux-plugin-<id>-0.2.3-rc.2.wb-plugin` archive and an overwrite-safe export CLI (`prismux-plugin-<id>`). Inside the Plugin Center, community and official tarballs stream directly over HTTPS with automatic failover between **`registry.npmjs.org` ↔ `registry.npmmirror.com`** and zero local `git` invocation.
 
 ```powershell
 # 1. Install and extract a verified .wb-plugin archive from npmjs
-npm install prismux-plugin-qq@0.2.3-rc.1
+npm install prismux-plugin-qq@0.2.3-rc.2
 npx prismux-plugin-qq --out ./plugins-stage
 
 # 2. Use the npmmirror domestic registry in mainland China
-npm install prismux-plugin-qq@0.2.3-rc.1 --registry=https://registry.npmmirror.com
+npm install prismux-plugin-qq@0.2.3-rc.2 --registry=https://registry.npmmirror.com
 npx prismux-plugin-qq --out ./plugins-stage
 ```
 
@@ -249,7 +248,7 @@ prismux/
 ├── THIRD_PARTY_NOTICES.md               # Third-party open-source licenses & historical attributions
 ├── README.md / README.en.md             # Bilingual project homepages (with 8s live GPU demo)
 ├── pnpm-workspace.yaml                  # Unified workspace allowlist (apps/*, packages/*, plugins-official/plugin-*, oxlint-plugin-prismux, scripts)
-├── package.json                         # Root orchestration scripts (0.2.3-rc.1)
+├── package.json                         # Root orchestration scripts (0.2.3-rc.2)
 ├── tsconfig.base.json                   # Strict TS 5.8+ baseline for daemon & core packages (ES2024 + NodeNext)
 ├── tsconfig.core.json / vite.config.ts  # Unified Vite+ (vp) build, lint, format & test config
 ├── assets/
@@ -303,7 +302,7 @@ prismux/
 </details>
 
 <details>
-<summary><strong>Expand: M1–M5 &amp; v0.1.0–v0.2.3-RC.1 Evolution Milestones</strong></summary>
+<summary><strong>Expand: M1–M5 &amp; v0.1.0–v0.2.3-RC.2 Evolution Milestones</strong></summary>
 
 | Milestone | Scope Delivered | Status |
 | :--- | :--- | :--- |
@@ -321,6 +320,7 @@ prismux/
 | **v0.2.2-RC.1** | **6 poetic liquid-glass theme substrates (`pure / starry-violet / emerald-stars / sakura-drift / ocean-caustics / gilded-lunar`) synced bidirectionally with 0-Token isolation**, **Steam Web (zero-Referer `../` clamping + canvas sizing &amp; layout-ready delivery guards) &amp; 4K/8K Scene (`scene.pkg` zero-copy byte-range MP4, viewport-scaled staging &amp; Puppet/DXT safe preview fallback) live engine + master `HTMLMediaElement`/`AudioContext` silencer**, **all-agent native CLI identity preservation (Codex/Claude Code overrides removed)**, **dual-layer frosted 5s Subscription Risk Waiver modal with full-text confirmation gate**, **14px `<PrismuxStageFrame>` inner-corner coverage over maximized right panels, themed `@pierre/trees` file tree, unified full-width `/settings/*` layout &amp; transparent expanded thinking headers** | Complete &amp; Verified |
 | **v0.2.2-RC.2** | **Daemon/server/web polling-storm &amp; Windows drive/WMI probe elimination (10m/5m TTL caches + split `PrismuxTelemetryContext` + stabilized callbacks)**, **wallpaper freeze fix &amp; default-OFF opt-in Advanced Wallpaper Engine safety gate (smooth first-boot migration for existing Web/Scene users + async single-flight scans + virtualized grid + streaming-safe `shellCutout`)**, **DSH `[Local Stats]` usage deduplication &amp; multi-core usage scanning**, **8× faster Rust Windows sampling (~4 ms) + Win32 `GetSystemPowerStatus` FFI host hardware/power telemetry + 9-in-1 Electron preload bootstrap**, **Performance &amp; Storage overhaul (6-card footprint overview + symmetric Host &amp; Sampling + WizTree-style Squarified Treemap drilldown &amp; tiered safe cleanup)**, **end-to-end C-drive &amp; memory auto-quota guardrails (256 MiB disk cache cap, SQLite 64 MiB WAL + incremental `auto_vacuum`, dead PTY eviction, stale installer/worktree sweep) &amp; zero-telemetry cleanup** | Complete &amp; Verified |
 | **v0.2.3-RC.1** | **5s auth-storm, Settings freeze &amp; full-stack 15 memory-leak elimination (signed `access_token` exchange + 401/403/426 breaker, decoupled modal close races, router structural sharing, rAF sidebar measurement, BrowserWindow / WebWallGL / recording Blob / 6 Atom collection leak fixes)**, **liquid-glass test-tube context breakdown popover, color-tiered capsules, streamlined Token popover &amp; DSH TPS micro-burst / partial multi-step `decodeMs` fix (with frontend self-healing)**, **Codex→DSH 4-tier alias cross-agent delegation + unified AGY / `subscription_oauth` guardrails (`DelegationSubscriptionGuard`), active AGY composer 40% open-gap flowing RGB rim &amp; secondary sidebar MCP delegated subagent file tree**, **strict split-pane thread/model isolation, per-pane Overview overlay &amp; unified synced right sidebar**, **inline brand-menu update check animation &amp; direct bottom-right update card** | Complete &amp; Verified |
+| **v0.2.3-RC.2** | **Residual `T3` identifiers across tool calls and lifecycle views replaced with `Ciallo～(∠・ω< )⌒★`**, **secondary sidebar delegated subagent gray `[AR]` boxes fixed to render DeepSeek whale and official vendor logos (including `selectedModel.name` fallback for opaque `modelSlug`s)**, **outbound email check failures across `agent_mail` / `imap_smtp` / `gmail_oauth2` resolved with live probing, window-focus auto-"Configured" UX, and full end-to-end Overnight Factory polling, task queue, real executor, and email receipts (hard-blocking unattended personal AGY)**, **30-minute Today Token auto-refresh, first-click instant hot-reload on Refresh, and full concurrency / singleflight / SWR quota acceleration** | Complete &amp; Verified |
 
 </details>
 
@@ -353,4 +353,4 @@ prismux/
 
 Prismux core source code and README layout tooling are licensed under the **MIT License** (see [`LICENSE`](LICENSE)); the bundled pixel font `Jersey20-Regular.ttf` is licensed under [SIL Open Font License 1.1](assets/readme/OFL-Jersey20.txt); all third-party libraries and historical open-source attributions are preserved in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
-<p align="center"><sub>Prismux v0.2.3-RC.1 · Electron 44 + TypeScript + React 19 · Local-First Zero Telemetry · 8-Zone Liquid Glass · Orca Split Anything · 2 Optional Official Plugins</sub></p>
+<p align="center"><sub>Prismux v0.2.3-RC.2 · Electron 44 + TypeScript + React 19 · Local-First Zero Telemetry · 8-Zone Liquid Glass · Orca Split Anything · 2 Optional Official Plugins</sub></p>
