@@ -14,7 +14,6 @@
     "pack-plugin.ts",
     "publish-gitee-release.ts",
     "release-all.ts",
-    "rename-brand.ts",
-    "sync-t3-upstream.ts"
+    "rename-brand.ts"
   ]
 }

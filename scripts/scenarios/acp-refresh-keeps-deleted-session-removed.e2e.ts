@@ -6,8 +6,8 @@ import { ProviderDriverKind, ProviderInstanceId } from "@prismux/core-contracts"
 import { expect } from "e2e";
 import * as Effect from "effect/Effect";
 
-import { T3_HOME } from "../e2e.config.ts";
-import { rpcClient, runPromise, test, WEB } from "./t3.ts";
+import { PRISMUX_HOME } from "../e2e.config.ts";
+import { rpcClient, runPromise, test, WEB } from "./prismux.ts";
 
 const SESSION_TITLE = "Native draft to delete";
 const ACP = `
@@ -53,7 +53,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 test(
   "Refreshing native ACP sessions does not bring back a session deleted during the refresh",
   WEB,
-  async ({ t3, app, screen }) => {
+  async ({ prismux, app, screen }) => {
     const instanceId = ProviderInstanceId.make("scenario-session-agent");
     const snapshotTaken = Promise.withResolvers<void>();
     const releaseSnapshot = Promise.withResolvers<void>();
@@ -83,10 +83,10 @@ test(
       await new Promise<void>((resolve) => state.listen(0, "127.0.0.1", resolve));
       const address = state.address();
       if (address === null || typeof address === "string") throw new Error("No fixture port");
-      const project = await t3.project("demo", { "session-agent.mjs": ACP });
+      const project = await prismux.project("demo", { "session-agent.mjs": ACP });
       await runPromise(
         Effect.gen(function* () {
-          const client = yield* rpcClient(T3_HOME, app.baseUrl ?? "");
+          const client = yield* rpcClient(PRISMUX_HOME, app.baseUrl ?? "");
           yield* client["server.updateSettings"]({
             patch: {},
             providerInstanceMutation: {
@@ -109,7 +109,7 @@ test(
           });
         }).pipe(Effect.scoped),
       );
-      await t3.open(`/settings/providers?instanceId=${instanceId}`);
+      await prismux.open(`/settings/providers?instanceId=${instanceId}`);
       await screen.getByRole("button", "List sessions", { exact: true }).tap({ timeout: 60_000 });
       const entry = screen.getByText(SESSION_TITLE, { exact: true });
       await entry.waitFor();

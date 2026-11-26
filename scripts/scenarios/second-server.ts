@@ -1,4 +1,4 @@
-// A second T3 server for scenarios that need another machine: its own T3 home, the replay
+// A second Prismux server for scenarios that need another machine: its own Prismux home, the replay
 // agent, and a pairing token for Settings > Connections > Add environment.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@prismux/core-shared/HostProcess";
@@ -10,13 +10,13 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Path from "effect/Path";
 
-import { APP_DIR, T3_HOME } from "../e2e.config.ts";
+import { APP_DIR, PRISMUX_HOME } from "../e2e.config.ts";
 import { ScenarioError } from "./shell.ts";
 import { prepareHome, SCENARIO_MACHINE_ENV, start } from "./start-app.ts";
 
-export const SECOND_HOME = `${T3_HOME}-second-environment`;
+export const SECOND_HOME = `${PRISMUX_HOME}-second-environment`;
 
-/** A second server on its own T3 home, running until interrupted. `--dev-url` admits the web
+/** A second server on its own Prismux home, running until interrupted. `--dev-url` admits the web
  * origin through CORS and registers the replay agent; `paired` gets the Add environment input. */
 const runSecondServer = Effect.fn("scenario.secondServer")(function* (
   devUrl: string,

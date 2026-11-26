@@ -1,14 +1,19 @@
 /// <reference lib="dom" />
-import type { IssueComment, IssueCommentsPage, IssueDetail, IssueRef } from "@prismux/core-contracts";
+import type {
+  IssueComment,
+  IssueCommentsPage,
+  IssueDetail,
+  IssueRef,
+} from "@prismux/core-contracts";
 import { expect } from "e2e";
 
-import { test, WEB } from "./t3.ts";
+import { test, WEB } from "./prismux.ts";
 
 test(
   "A page requested before refreshing an issue does not restore old comments",
   WEB,
-  async ({ t3, app, browser, screen }) => {
-    await t3.project("demo");
+  async ({ prismux, app, browser, screen }) => {
+    await prismux.project("demo");
     await browser.addInitScript(() => {
       const pendingPage = new Promise<void>((resolve) => {
         Object.assign(window, { releaseOldIssuePage: () => resolve() });
@@ -127,7 +132,7 @@ test(
       };
     });
 
-    await t3.open("/issues?selectedProjectId=demo&tracker=github&scope=example/demo&key=42");
+    await prismux.open("/issues?selectedProjectId=demo&tracker=github&scope=example/demo&key=42");
     const loadOlder = screen.getByRole("button", "Load older comments", { exact: true });
     // The issues route compiles on first open, which can outlast the 30 s action timeout.
     await loadOlder.waitFor({ timeout: 60_000 });

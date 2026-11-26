@@ -2,17 +2,17 @@ import { expect } from "e2e";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
-import { T3_HOME } from "../e2e.config.ts";
-import { runPromise, test, WEB } from "./t3.ts";
+import { PRISMUX_HOME } from "../e2e.config.ts";
+import { runPromise, test, WEB } from "./prismux.ts";
 
 test(
   "Appearance reflects new edits after the environment theme directory is restored",
   WEB,
-  async ({ t3, app, screen }) => {
-    await t3.project("theme-directory");
-    const themes = `${T3_HOME}/userdata/themes`;
-    const previous = `${T3_HOME}/themes-before-restore`;
-    const restored = `${T3_HOME}/themes-to-restore`;
+  async ({ prismux, app, screen }) => {
+    await prismux.project("theme-directory");
+    const themes = `${PRISMUX_HOME}/userdata/themes`;
+    const previous = `${PRISMUX_HOME}/themes-before-restore`;
+    const restored = `${PRISMUX_HOME}/themes-to-restore`;
     const file = "restore-fixture.json";
     const contents = (name: string) =>
       JSON.stringify({
@@ -30,7 +30,7 @@ test(
       }),
     );
     try {
-      await t3.open("/settings/appearance");
+      await prismux.open("/settings/appearance");
       await screen.getByRole("button", "Use Original Palette theme", { exact: true }).waitFor();
       await runPromise(
         Effect.gen(function* () {

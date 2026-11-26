@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 import { expect } from "e2e";
 
-import { test, WEB } from "./t3.ts";
+import { test, WEB } from "./prismux.ts";
 
 interface ReopenGate {
   readonly closed: Promise<void>;
@@ -19,10 +19,10 @@ declare global {
 test(
   "A browser tab finishing its reopen leaves the newer conversation on screen",
   WEB,
-  async ({ t3, app, browser, screen }) => {
-    const project = await t3.project("demo");
-    const owner = await t3.thread({ project, title: "Browser owner", messages: ["first"] });
-    await t3.thread({
+  async ({ prismux, app, browser, screen }) => {
+    const project = await prismux.project("demo");
+    const owner = await prismux.thread({ project, title: "Browser owner", messages: ["first"] });
+    await prismux.thread({
       project,
       title: "Newer conversation",
       messages: ["Stay in this conversation"],
@@ -73,7 +73,7 @@ test(
       };
     });
 
-    await t3.open(owner);
+    await prismux.open(owner);
     await screen.getByRole("button", "Toggle right panel").tap();
     await screen.getByRole("button", "Browser B").tap();
     await screen.getByRole("button", "Close Browser", { exact: true }).tap();

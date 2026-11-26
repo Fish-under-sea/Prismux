@@ -8,7 +8,7 @@ pkgrel="${PKGREL:-1}"
 
 if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   pkgname='prismux-bin'
-  asset_prefix='T3-Code'
+  asset_prefix='Prismux'
 elif [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[0-9]+$ ]]; then
   pkgname='prismux-nightly-bin'
   asset_prefix='Prismux-Nightly'

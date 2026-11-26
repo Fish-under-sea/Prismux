@@ -1,5 +1,5 @@
-// `test` for web scenarios: e2e's web test plus `t3`, which seeds state and opens the signed-in
-// app. `t3-mobile.ts` is the same for the iOS app.
+// `test` for web scenarios: e2e's web test plus `prismux`, which seeds state and opens the signed-in
+// app. `prismux-mobile.ts` is the same for the iOS app.
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeWS from "@effect/platform-node/NodeWS";
@@ -26,10 +26,10 @@ import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } fr
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import { Socket } from "effect/socket";
 
-import { APP_DIR, T3_HOME } from "../e2e.config.ts";
+import { APP_DIR, PRISMUX_HOME } from "../e2e.config.ts";
 import { run, ScenarioError } from "./shell.ts";
 
-export interface T3State {
+export interface PrismuxState {
   /** Creates a git repository holding `files` and adds it as a project. Returns its path. */
   readonly project: (
     title: string,
@@ -45,19 +45,19 @@ export interface T3State {
     readonly title: string;
     readonly messages: ReadonlyArray<string>;
     readonly model?: string;
-  }) => Promise<T3Thread>;
+  }) => Promise<PrismuxThread>;
 }
 
-export interface T3Thread {
+export interface PrismuxThread {
   readonly threadId: string;
 }
 
-export interface T3 extends T3State {
+export interface Prismux extends PrismuxState {
   /**
-   * Opens the app, signed in, at a path or on a thread `t3.thread` returned. Opening the thread
+   * Opens the app, signed in, at a path or on a thread `prismux.thread` returned. Opening the thread
    * by its link is the reliable way to reach it: a sidebar row covers its own title text.
    */
-  readonly open: (target?: string | T3Thread) => Promise<void>;
+  readonly open: (target?: string | PrismuxThread) => Promise<void>;
 }
 
 /** e2e's fixtures are promise functions; this is the one place an Effect becomes a promise. */
@@ -202,7 +202,7 @@ export function makeState(home: string, env: NodeJS.ProcessEnv = {}) {
     const started = yield* turn(["start", input.project, first, "--title", input.title, ...replay]);
     const { threadId } = yield* decodeLaunched(started.stdout);
     for (const message of rest) yield* turn(["send", threadId, message]);
-    return { threadId } satisfies T3Thread;
+    return { threadId } satisfies PrismuxThread;
   });
 
   return {
@@ -210,7 +210,7 @@ export function makeState(home: string, env: NodeJS.ProcessEnv = {}) {
     state: {
       project: (title, files = {}) => runPromise(project(title, files)),
       thread: (input) => runPromise(thread(input)),
-    } satisfies T3State,
+    } satisfies PrismuxState,
     // The server outlives the test, so the next one must not see this one's projects.
     cleanup: Effect.forEach(
       projects,
@@ -231,12 +231,12 @@ export function makeState(home: string, env: NodeJS.ProcessEnv = {}) {
 const readPairingPath = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  return yield* fs.readFileString(path.join(T3_HOME, "pairing-path"));
+  return yield* fs.readFileString(path.join(PRISMUX_HOME, "pairing-path"));
 });
 
 /** The id every thread link starts with, asked of the server the app talks to. */
 export const environmentId = (baseUrl: string) =>
-  HttpClient.get(`${baseUrl}/.well-known/t3/environment`).pipe(
+  HttpClient.get(`${baseUrl}/.well-known/prismux/environment`).pipe(
     Effect.flatMap(HttpClientResponse.filterStatusOk),
     Effect.flatMap(
       HttpClientResponse.schemaBodyJson(Schema.Struct({ environmentId: Schema.String })),
@@ -272,9 +272,9 @@ export const rpcClient = Effect.fn("scenario.rpcClient")(function* (home: string
   return yield* RpcClient.make(WsRpcGroup).pipe(Effect.provideContext(protocol));
 });
 
-export const test = base.extend<{ t3: T3 }>({
-  t3: async ({ app, browser }, use) => {
-    const { state, cleanup } = makeState(T3_HOME);
+export const test = base.extend<{ prismux: Prismux }>({
+  prismux: async ({ app, browser }, use) => {
+    const { state, cleanup } = makeState(PRISMUX_HOME);
     await use({
       ...state,
       open: async (target = "/") => {
