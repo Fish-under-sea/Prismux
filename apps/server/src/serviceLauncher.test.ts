@@ -143,7 +143,7 @@ it("rejects contradictory service state", () => {
 });
 
 const unitPlan = (root: string, version: string) => ({
-  program: [`${root}/runtime/versions/${version}/t3`, "__service-launcher"],
+  program: [`${root}/runtime/versions/${version}/prismux`, "__service-launcher"],
   baseDir: root,
   logPath: `${root}/logs/boot-service.log`,
   unitPath: `${root}/unit/prismux.service`,
@@ -156,7 +156,7 @@ const writeFakeRuntime = (
   childSource: string,
 ) =>
   Effect.gen(function* () {
-    const entryPath = path.join(versionDir, "t3");
+    const entryPath = path.join(versionDir, "prismux");
     yield* fs.makeDirectory(versionDir, { recursive: true });
     yield* fs.writeFileString(entryPath, `#!${process.execPath}\n${childSource}`);
     yield* fs.chmod(entryPath, 0o755);
@@ -440,9 +440,9 @@ setInterval(() => {}, 1_000);
             "PRISMUX_HOME=/bad",
             "prismux_home=/bad",
             "PRISMUX_BOOT_SERVICE_UNIT=bad",
-            "t3_boot_service_unit=bad",
+            "prismux_boot_service_unit=bad",
             "PRISMUX_SERVICE_LAUNCHER_CONTEXT=bad",
-            "t3_service_launcher_context=bad",
+            "prismux_service_launcher_context=bad",
           ].join("\n"),
         );
         assert.deepEqual(yield* Effect.promise(() => readServiceEnvironment(root, inherited)), {
@@ -749,7 +749,7 @@ process.exit(0);
 
       yield* Effect.promise(() =>
         expect(runLauncher(root)).rejects.toThrow(
-          "Selected t3@1.0.0 runtime is missing or incomplete.",
+          "Selected prismux@1.0.0 runtime is missing or incomplete.",
         ),
       );
       assert.equal(yield* fs.readFileString(statePath), contents);

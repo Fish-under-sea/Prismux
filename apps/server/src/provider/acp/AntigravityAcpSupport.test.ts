@@ -163,7 +163,7 @@ describe("Antigravity Auto", () => {
         options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
       });
       for (const t3Call of [
-        request("Run mcp_prismux_t3_thread_list?"),
+        request("Run mcp_prismux_prismux_thread_list?"),
         request("MCP Tool delegate_task", { ServerName: "prismux", ToolName: "delegate_task" }),
       ]) {
         expect(antigravityPermissionDisposition(policy, t3Call)).toBe("allow");

@@ -205,10 +205,10 @@ it.layer(NodeServices.layer)("prismux update launcher", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" });
-      const oldExe = path.join(root, "runtime/versions/1.0.0/t3");
-      const newExe = path.join(root, "runtime/versions/2.0.0/t3");
-      const launcher = path.join(root, "bin/t3");
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "prismux-update-" });
+      const oldExe = path.join(root, "runtime/versions/1.0.0/prismux");
+      const newExe = path.join(root, "runtime/versions/2.0.0/prismux");
+      const launcher = path.join(root, "bin/prismux");
       for (const file of [oldExe, newExe]) {
         yield* fs.makeDirectory(path.dirname(file), { recursive: true });
         yield* fs.writeFileString(file, "");
@@ -236,9 +236,9 @@ it.layer(NodeServices.layer)("prismux update launcher", (it) => {
       const root = yield* fs.makeTempDirectoryScoped();
       const baseDir = path.join(root, "home");
       const runtimeDir = path.join(baseDir, "runtime");
-      const launcher = path.join(root, "custom bin", "t3.cmd");
-      const launchedAs = path.join(runtimeDir, "versions", "1.0.0", "t3.exe");
-      const targetEntryPath = path.join(runtimeDir, "versions", "2.0.0", "t3.exe");
+      const launcher = path.join(root, "custom bin", "prismux.cmd");
+      const launchedAs = path.join(runtimeDir, "versions", "1.0.0", "prismux.exe");
+      const targetEntryPath = path.join(runtimeDir, "versions", "2.0.0", "prismux.exe");
       yield* fs.makeDirectory(runtimeDir, { recursive: true });
       yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
       yield* fs.writeFileString(launcher, `@echo off\r\n"${launchedAs}" %*`);
@@ -263,19 +263,19 @@ it.layer(NodeServices.layer)("prismux update launcher", (it) => {
         const path = yield* Path.Path;
         const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const root = yield* fs.realPath(
-          yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" }),
+          yield* fs.makeTempDirectoryScoped({ prefix: "prismux-update-" }),
         );
         // A quote and a space in the home path exercise the script's quoting.
         const home = path.join(root, "it's home");
-        const entry = (version: string) => path.join(home, "runtime/versions", version, "t3");
+        const entry = (version: string) => path.join(home, "runtime/versions", version, "prismux");
         for (const version of ["1.0.0", "2.0.0"]) {
           yield* fs.makeDirectory(path.dirname(entry(version)), { recursive: true });
           yield* fs.writeFileString(entry(version), '#!/bin/sh\nprintf \'[%s]\\n\' "$0" "$@"\n', {
             mode: 0o755,
           });
         }
-        const launcher = path.join(root, "bin/t3");
-        const alias = path.join(root, "alias/t3");
+        const launcher = path.join(root, "bin/prismux");
+        const alias = path.join(root, "alias/prismux");
         yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
         yield* fs.makeDirectory(path.dirname(alias), { recursive: true });
         yield* fs.writeFileString(launcher, posixLauncherScript(entry("1.0.0")), { mode: 0o755 });
@@ -329,37 +329,37 @@ it.layer(NodeServices.layer)("prismux update launcher", (it) => {
   it.effect.each([
     { name: "no launcher records", recorded: undefined },
     { name: "an empty launcher record", recorded: "" },
-    { name: "whole launcher records", recorded: "/opt/t3\n" },
-    { name: "Windows launcher records", recorded: "C:\\t3.cmd\r\n" },
+    { name: "whole launcher records", recorded: "/opt/prismux\n" },
+    { name: "Windows launcher records", recorded: "C:\\prismux.cmd\r\n" },
     // An interrupted append cut this record short.
-    { name: "an unterminated launcher record", recorded: "/opt/t" },
+    { name: "an unterminated launcher record", recorded: "/opt/prism" },
     // Another process's append is cut short after prismux update reads the records.
-    { name: "a record cut short after the read", recorded: "/opt/t3\n", cut: "/opt/t" },
+    { name: "a record cut short after the read", recorded: "/opt/prismux\n", cut: "/opt/prism" },
   ])("keeps the runtime a repointed launcher off PATH points at with $name", ({ recorded, cut }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" });
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "prismux-update-" });
       yield* TestClock.setTime(Duration.toMillis(Duration.days(1)));
       for (const version of ["1.0.0", "2.0.0"]) {
         const directory = path.join(root, "runtime/versions", version);
         yield* fs.makeDirectory(directory, { recursive: true });
-        yield* fs.writeFileString(path.join(directory, "t3"), "");
+        yield* fs.writeFileString(path.join(directory, "prismux"), "");
         yield* fs.writeFileString(path.join(directory, ".install-complete"), `${version}\n`);
         yield* fs.utimes(path.join(directory, ".install-complete"), 0, 0);
       }
       if (recorded !== undefined) {
         yield* fs.writeFileString(path.join(root, "runtime/launchers"), recorded);
       }
-      // A launcher in the T3 home itself, which neither PATH nor the default bin dir reaches.
-      const launcher = path.join(root, "t3");
-      yield* fs.symlink(path.join(root, "runtime/versions/1.0.0/t3"), launcher);
+      // A launcher in the Prismux home itself, which neither PATH nor the default bin dir reaches.
+      const launcher = path.join(root, "prismux");
+      yield* fs.symlink(path.join(root, "runtime/versions/1.0.0/prismux"), launcher);
 
       const launchersFile = path.join(root, "runtime/launchers");
       yield* repointLauncher({
         launchedAs: launcher,
         baseDir: root,
-        targetEntryPath: path.join(root, "runtime/versions/2.0.0/t3"),
+        targetEntryPath: path.join(root, "runtime/versions/2.0.0/prismux"),
       }).pipe(
         Effect.provideService(FileSystem.FileSystem, {
           ...fs,
@@ -375,7 +375,7 @@ it.layer(NodeServices.layer)("prismux update launcher", (it) => {
               ),
         }),
       );
-      // A later server start prunes with no idea how this machine launches t3.
+      // A later server start prunes with no idea how this machine launches prismux.
       const removed = yield* prunePinnedRuntimes({ baseDir: root, keep: [] }).pipe(
         Effect.provideService(ProcessRunner.ProcessRunner, unrelatedLsof),
         Effect.provideService(HostProcess.Platform, "darwin"),
@@ -386,7 +386,7 @@ it.layer(NodeServices.layer)("prismux update launcher", (it) => {
       assert.deepStrictEqual(removed, ["1.0.0"]);
       assert.equal(
         yield* readPosixLauncherTarget(launcher),
-        path.join(root, "runtime/versions/2.0.0/t3"),
+        path.join(root, "runtime/versions/2.0.0/prismux"),
       );
     }).pipe(Effect.provideService(HostProcess.Platform, "linux")),
   );
@@ -394,10 +394,10 @@ it.layer(NodeServices.layer)("prismux update launcher", (it) => {
   const launcherFixture = Effect.fnUntraced(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" });
-    const oldExe = path.join(root, "runtime/versions/1.0.0/t3");
-    const newExe = path.join(root, "runtime/versions/2.0.0/t3");
-    const launcher = path.join(root, "t3");
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "prismux-update-" });
+    const oldExe = path.join(root, "runtime/versions/1.0.0/prismux");
+    const newExe = path.join(root, "runtime/versions/2.0.0/prismux");
+    const launcher = path.join(root, "prismux");
     for (const file of [oldExe, newExe]) {
       yield* fs.makeDirectory(path.dirname(file), { recursive: true });
       yield* fs.writeFileString(file, "");
@@ -480,13 +480,13 @@ it.layer(NodeServices.layer)("prismux update launcher", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" });
-      const newExe = path.join(root, "runtime/versions/2.0.0/t3");
-      const copy = path.join(root, "copy/t3");
-      const foreign = path.join(root, "foreign/t3");
-      const elsewhere = path.join(root, "elsewhere/t3");
-      const otherHome = path.join(root, "other/runtime/versions/1.0.0/t3");
-      const otherLauncher = path.join(root, "other/bin/t3");
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "prismux-update-" });
+      const newExe = path.join(root, "runtime/versions/2.0.0/prismux");
+      const copy = path.join(root, "copy/prismux");
+      const foreign = path.join(root, "foreign/prismux");
+      const elsewhere = path.join(root, "elsewhere/prismux");
+      const otherHome = path.join(root, "other/runtime/versions/1.0.0/prismux");
+      const otherLauncher = path.join(root, "other/bin/prismux");
       for (const file of [newExe, copy, elsewhere, otherHome]) {
         yield* fs.makeDirectory(path.dirname(file), { recursive: true });
         yield* fs.writeFileString(file, "");
@@ -514,25 +514,25 @@ it.layer(NodeServices.layer)("prismux update launcher", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const delimiter = (yield* HostProcess.Platform) === "win32" ? ";" : ":";
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" });
-      const launcher = path.join(root, "bin/t3");
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "prismux-update-" });
+      const launcher = path.join(root, "bin/prismux");
       yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
       yield* fs.writeFileString(launcher, "", { mode: 0o755 });
 
       const bare = yield* resolveLauncherPath.pipe(
-        Effect.provideService(HostProcess.InvokedAs, "t3"),
+        Effect.provideService(HostProcess.InvokedAs, "prismux"),
         Effect.provideService(HostProcess.Environment, {
           PATH: [path.join(root, "missing"), path.join(root, "bin")].join(delimiter),
         }),
         Effect.provideService(HostProcess.WorkingDirectory, root),
       );
       const relative = yield* resolveLauncherPath.pipe(
-        Effect.provideService(HostProcess.InvokedAs, "./bin/t3"),
+        Effect.provideService(HostProcess.InvokedAs, "./bin/prismux"),
         Effect.provideService(HostProcess.Environment, { PATH: "" }),
         Effect.provideService(HostProcess.WorkingDirectory, root),
       );
       const absent = yield* resolveLauncherPath.pipe(
-        Effect.provideService(HostProcess.InvokedAs, "t3"),
+        Effect.provideService(HostProcess.InvokedAs, "prismux"),
         Effect.provideService(HostProcess.Environment, { PATH: path.join(root, "missing") }),
         Effect.provideService(HostProcess.WorkingDirectory, root),
       );
@@ -655,7 +655,7 @@ it.layer(NodeServices.layer)("prismux update checks the database before switchin
     stdoutInvalidUtf8: false,
     stderrInvalidUtf8: false,
   });
-  const blockedReason = "This database has migrations that t3@0.1.8 does not know: 79_example.";
+  const blockedReason = "This database has migrations that prismux@0.1.8 does not know: 79_example.";
 
   it.effect.each([
     {
@@ -726,7 +726,7 @@ it.layer(NodeServices.layer)("prismux update checks the database before switchin
           }
           // A target's --version always answers, whatever its database support.
           return input.args?.includes("--version") === true
-            ? Effect.succeed(preflightOutput(`t3 v${targetVersion}\n`))
+            ? Effect.succeed(preflightOutput(`prismux v${targetVersion}\n`))
             : unrelatedLsof.run(input);
         },
       });
