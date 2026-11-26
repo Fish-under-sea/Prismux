@@ -3,13 +3,13 @@ import type { IssueListResult } from "@prismux/core-contracts";
 import { expect } from "e2e";
 
 import { SECOND_HOME, startSecondServer } from "./second-server.ts";
-import { makeState, test, WEB } from "./t3.ts";
+import { makeState, test, WEB } from "./prismux.ts";
 
 test(
   "Retrying a failed environment keeps the Issues refresh already in progress",
   WEB,
-  async ({ t3, app, screen, browser }) => {
-    await t3.project("demo");
+  async ({ prismux, app, screen, browser }) => {
+    await prismux.project("demo");
     const server = startSecondServer(app.baseUrl ?? "");
     try {
       const { host, token } = await server.ready;
@@ -114,7 +114,7 @@ test(
         };
       }, new URL(host).host);
 
-      await t3.open("/settings/connections");
+      await prismux.open("/settings/connections");
       await screen.getByRole("button", "Add environment").tap();
       const dialog = screen.getByRole("dialog");
       await dialog.getByPlaceholder("backend.example.com").fill(host);

@@ -9,14 +9,14 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
 
-import { APP_DIR, T3_HOME } from "../e2e.config.ts";
+import { APP_DIR, PRISMUX_HOME } from "../e2e.config.ts";
 import { run, ScenarioError } from "./shell.ts";
 import { prepareHome, start } from "./start-app.ts";
-import { makeState, runPromise, test, WEB } from "./t3.ts";
+import { makeState, runPromise, test, WEB } from "./prismux.ts";
 
 const HOST = "github.scenario.invalid";
 const SCOPE = "scenario/demo";
-const HOME = `${T3_HOME}-github-issue-links`;
+const HOME = `${PRISMUX_HOME}-github-issue-links`;
 
 // Install only on the isolated server. The real GitHub adapter still builds and decodes requests.
 const upstream = String.raw`
@@ -157,8 +157,8 @@ function startFixtureServer(webOrigin: string) {
 test(
   "A closing pull request remains visible after its timeline reference ages out",
   WEB,
-  async ({ t3, app, browser, screen }) => {
-    const workspace = await t3.project("Release");
+  async ({ prismux, app, browser, screen }) => {
+    const workspace = await prismux.project("Release");
     const server = startFixtureServer(app.baseUrl ?? "");
     try {
       const { origin, token } = await server.ready;
@@ -175,7 +175,7 @@ test(
       const projectId = /Added project (\S+) /.exec(added.stdout)?.[1];
       if (!projectId) throw new Error("The fixture project was not added.");
       const { environmentId } = await runPromise(
-        HttpClient.get(`${origin}/.well-known/t3/environment`).pipe(
+        HttpClient.get(`${origin}/.well-known/prismux/environment`).pipe(
           Effect.flatMap(HttpClientResponse.filterStatusOk),
           Effect.flatMap(
             HttpClientResponse.schemaBodyJson(Schema.Struct({ environmentId: Schema.String })),
@@ -192,7 +192,7 @@ test(
         selectedProjectId: projectId,
       });
 
-      await t3.open("/settings/connections");
+      await prismux.open("/settings/connections");
       await screen.getByRole("button", "Add environment").tap();
       const dialog = screen.getByRole("dialog");
       await dialog.getByPlaceholder("backend.example.com").fill(origin);

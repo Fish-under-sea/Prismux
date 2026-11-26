@@ -157,7 +157,7 @@ export function resolveResourceMonitorRustTargets(
 }
 
 export function resourceMonitorExecutableName(platform: typeof BuildPlatform.Type): string {
-  return platform === "win" ? "t3-resource-monitor.exe" : "t3-resource-monitor";
+  return platform === "win" ? "prismux-resource-monitor.exe" : "prismux-resource-monitor";
 }
 
 const PLATFORM_CONFIG: Record<typeof BuildPlatform.Type, PlatformConfig> = {
@@ -1148,12 +1148,7 @@ export const WINDOWS_SEVEN_ZIP_MIN_BYTES = 100_000;
 export const WINDOWS_SEVEN_ZIP_MAX_BYTES = 20 * 1024 * 1024;
 export const WINDOWS_SQLITE_VEC_MIN_BYTES = 50_000;
 export const WINDOWS_SQLITE_VEC_MAX_BYTES = 20 * 1024 * 1024;
-export const PRISMUX_OFFICIAL_PLUGIN_DIRS = [
-  "plugin-qq",
-  "plugin-pet",
-  "plugin-fishdock-hook",
-  "plugin-ssh",
-] as const;
+export const PRISMUX_OFFICIAL_PLUGIN_DIRS = ["plugin-qq"] as const;
 export const WINDOWS_TOOLS_EXTRA_RESOURCES = [
   {
     from: "apps/desktop/prod-resources/tools",
@@ -1693,7 +1688,9 @@ const BuildEnvConfig = Config.all({
   signed: Config.Boolean("PRISMUX_DESKTOP_SIGNED").pipe(Config.withDefault(false)),
   verbose: Config.Boolean("PRISMUX_DESKTOP_VERBOSE").pipe(Config.withDefault(false)),
   mockUpdates: Config.Boolean("PRISMUX_DESKTOP_MOCK_UPDATES").pipe(Config.withDefault(false)),
-  mockUpdateServerPort: Config.String("PRISMUX_DESKTOP_MOCK_UPDATE_SERVER_PORT").pipe(Config.option),
+  mockUpdateServerPort: Config.String("PRISMUX_DESKTOP_MOCK_UPDATE_SERVER_PORT").pipe(
+    Config.option,
+  ),
   wslRuntime: Config.String("PRISMUX_DESKTOP_WSL_RUNTIME").pipe(Config.option),
 });
 
@@ -2352,7 +2349,7 @@ export const stageLinuxCaptureHelper = Effect.fn("stageLinuxCaptureHelper")(func
     input.repoRoot,
     `native/${input.backend}-snap-shot/target`,
     rustTarget!,
-    `release/t3-${input.backend}-snap-shot`,
+    `release/prismux-${input.backend}-snap-shot`,
   );
   if (!reuseHelpers) {
     const spawnCommand = yield* resolveSpawnCommand("cargo", [
@@ -2384,7 +2381,7 @@ export const stageLinuxCaptureHelper = Effect.fn("stageLinuxCaptureHelper")(func
   }
   const destination = path.join(input.stageResourcesDir, `${input.backend}-capture`);
   yield* fs.makeDirectory(destination, { recursive: true });
-  const executable = path.join(destination, `t3-${input.backend}-snap-shot`);
+  const executable = path.join(destination, `prismux-${input.backend}-snap-shot`);
   yield* fs.copyFile(binaryPath, executable);
   yield* fs.chmod(executable, 0o755);
   if (input.backend === "hyprland") {
@@ -2501,7 +2498,7 @@ export const stageBrowserSecret = Effect.fn("stageBrowserSecret")(function* (inp
         "--arch",
         input.arch === "arm64" ? "arm64" : "x64",
         "--output",
-        path.join(input.stageResourcesDir, "browser-secret", "t3-browser-secret"),
+        path.join(input.stageResourcesDir, "browser-secret", "prismux-browser-secret"),
       ],
       { cwd: input.repoRoot },
     ),
@@ -2526,7 +2523,7 @@ export const stageAppleSpeech = Effect.fn("stageAppleSpeech")(function* (input: 
         "--arch",
         input.arch,
         "--output",
-        path.join(input.stageResourcesDir, "apple-speech", "t3-apple-speech"),
+        path.join(input.stageResourcesDir, "apple-speech", "prismux-apple-speech"),
       ],
       { cwd: input.repoRoot },
     ),
@@ -3079,6 +3076,9 @@ export const findForbiddenPreinstalledOfficialPlugins = Effect.fn(
         const relPath = relativePrefix ? `${relativePrefix}/${entry}` : entry;
         if (
           (PRISMUX_OFFICIAL_PLUGIN_DIRS as ReadonlyArray<string>).includes(lower) ||
+          lower === "plugins-official" ||
+          lower.startsWith("plugin-") ||
+          lower.startsWith("prismux-plugin-") ||
           lower.endsWith(".wb-plugin")
         ) {
           violations.push(relPath);
@@ -3659,7 +3659,7 @@ export const stageWslRuntimeArchive = Effect.fn("stageWslRuntimeArchive")(functi
 
 // Match cliArchiveStem without its circular import. WSL uses the Windows host's architecture.
 export const wslRuntimeArchiveStem = (version: string, arch: typeof BuildArch.Type): string =>
-  `t3-${version}-linux-${arch}`;
+  `prismux-${version}-linux-${arch}`;
 
 export const parseWslRuntimeArchiveMembers = (listing: string): ReadonlyArray<string> =>
   listing
@@ -4159,7 +4159,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
     return yield* new WindowsPackagedPayloadValidationError({
       reason: "resource-monitor-missing",
       packagedAppDir,
-      missingFiles: ["resource-monitor/t3-resource-monitor.exe"],
+      missingFiles: ["resource-monitor/prismux-resource-monitor.exe"],
     });
   }
 
@@ -4266,7 +4266,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
       );
     }
     const members = parseWslRuntimeArchiveMembers(listing.stdout);
-    // The WSL installer finds t3 under the archive's single stem-named directory.
+    // The WSL installer finds prismux under the archive's single stem-named directory.
     const stem = wslRuntimeArchiveStem(input.appVersion, input.targetArch);
     const topLevel = new Set(members.map((member) => member.split("/")[0]));
     if (topLevel.size !== 1 || !topLevel.has(stem)) {
@@ -4276,7 +4276,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
         ),
       );
     }
-    const requiredMembers = [`${stem}/t3`, `${stem}/client`, `${stem}/node_modules`];
+    const requiredMembers = [`${stem}/prismux`, `${stem}/client`, `${stem}/node_modules`];
     const missingMembers = requiredMembers.filter((member) => !members.includes(member));
     const ptyCandidates = [
       `${stem}/node_modules/node-pty/build/Release/pty.node`,
@@ -5016,7 +5016,9 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
     Flag.optional,
   ),
   arch: Flag.Literals("arch", BuildArch.literals).pipe(
-    Flag.withDescription("Build arch, for example arm64/x64/universal (env: PRISMUX_DESKTOP_ARCH)."),
+    Flag.withDescription(
+      "Build arch, for example arm64/x64/universal (env: PRISMUX_DESKTOP_ARCH).",
+    ),
     Flag.optional,
   ),
   buildVersion: Flag.String("build-version").pipe(
@@ -5060,7 +5062,7 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   ),
   wslRuntime: Flag.String("wsl-runtime").pipe(
     Flag.withDescription(
-      "Path to the Linux CLI release archive (t3-<version>-linux-x64.tar.gz) to embed as the WSL runtime of a Windows build (env: PRISMUX_DESKTOP_WSL_RUNTIME).",
+      "Path to the Linux CLI release archive (prismux-<version>-linux-x64.tar.gz) to embed as the WSL runtime of a Windows build (env: PRISMUX_DESKTOP_WSL_RUNTIME).",
     ),
     Flag.optional,
   ),

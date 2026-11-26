@@ -9,7 +9,7 @@ import { removeSharedWriteAccess } from "./linux-after-pack.ts";
 
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("removeSharedWriteAccess", () => {
   it("removes group and other write access from the packed app only", async () => {
-    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-after-pack-"));
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "prismux-after-pack-"));
     try {
       const appOutDir = NodePath.join(root, "app");
       const modes = {

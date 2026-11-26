@@ -1,13 +1,13 @@
 import { expect } from "e2e";
 
-import { test, WEB } from "./t3.ts";
+import { test, WEB } from "./prismux.ts";
 
 test(
   "The right panel shortcut closes and reopens the Issues panel",
   WEB,
-  async ({ t3, app, browser, screen }) => {
-    await t3.project("demo");
-    await t3.open("/issues?selectedProjectId=demo&tracker=github&scope=example/demo&key=42");
+  async ({ prismux, app, browser, screen }) => {
+    await prismux.project("demo");
+    await prismux.open("/issues?selectedProjectId=demo&tracker=github&scope=example/demo&key=42");
 
     const toggle = screen.getByRole("button", "Toggle right panel");
     await screen.getByRole("button", { name: "Toggle right panel", pressed: true }).waitFor();

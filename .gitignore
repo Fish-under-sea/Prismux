@@ -27,7 +27,7 @@ apps/desktop-tauri/target/
 **/.vite-plus/
 .vite-hooks/
 .electron-runtime/
-.t3/
+.prismux/
 .repos/
 .tanstack/
 scripts/.e2e/

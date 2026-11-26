@@ -3,13 +3,13 @@ import { expect } from "e2e";
 import * as Effect from "effect/Effect";
 
 import { run } from "./shell.ts";
-import { runPromise, test, WEB } from "./t3.ts";
+import { runPromise, test, WEB } from "./prismux.ts";
 
 test(
   "Reopening the branch picker shows a worktree created outside Prismux",
   WEB,
-  async ({ t3, app, browser, screen }) => {
-    const project = await t3.project("demo");
+  async ({ prismux, app, browser, screen }) => {
+    const project = await prismux.project("demo");
     const git = (...args: string[]) => runPromise(run("git", args, { cwd: project }));
     await git("branch", "feature");
     await browser.setViewport({ width: 1280, height: 800 });
@@ -46,7 +46,7 @@ test(
       };
     });
 
-    await t3.open("/");
+    await prismux.open("/");
     const branchPicker = browser
       .locator('[data-slot="combobox-trigger"][aria-label^="Branch:"]:visible')
       .first();

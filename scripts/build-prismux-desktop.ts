@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
   existsSync,
@@ -8,10 +8,10 @@ import {
   rmSync,
   statSync,
   writeFileSync,
-} from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { parseArgs } from 'node:util';
+} from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import {
   formatSoftwareSumsFilename,
   readRepoVersion,
@@ -20,19 +20,19 @@ import {
   sha256File,
   verifyArchiveWithSevenZip,
   writeConsolidatedSha256File,
-} from './build-release-packages.ts';
+} from "./build-release-packages.ts";
 
 export const ROOT_DESKTOP_BUILD_FILTERS = [
-  '@prismux/protocol',
-  '@prismux/memory-core',
-  '@prismux/cordis-kernel',
-  '@prismux/sync-vault',
-  '@prismux/appearance',
-  '@prismux/wallpaper',
-  '@prismux/daemon',
+  "@prismux/protocol",
+  "@prismux/memory-core",
+  "@prismux/cordis-kernel",
+  "@prismux/sync-vault",
+  "@prismux/appearance",
+  "@prismux/wallpaper",
+  "@prismux/daemon",
 ] as const;
 
-export const RESOURCE_MONITOR_TARGET = 'x86_64-pc-windows-msvc' as const;
+export const RESOURCE_MONITOR_TARGET = "x86_64-pc-windows-msvc" as const;
 
 export interface DesktopCommandInvocation {
   command: string;
@@ -48,9 +48,7 @@ export interface DesktopCommandResult {
   stderr: string;
 }
 
-export type DesktopCommandRunner = (
-  invocation: DesktopCommandInvocation,
-) => DesktopCommandResult;
+export type DesktopCommandRunner = (invocation: DesktopCommandInvocation) => DesktopCommandResult;
 
 export interface BuildPrismuxDesktopOptions {
   repoRoot?: string;
@@ -88,20 +86,19 @@ export interface ParsedBuildDesktopCliArgs {
 }
 
 const PROXY_ENV_KEYS = [
-  'HTTP_PROXY',
-  'HTTPS_PROXY',
-  'ALL_PROXY',
-  'http_proxy',
-  'https_proxy',
-  'all_proxy',
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
 ] as const;
 
+// Guard against bundling active (`plugin-qq`) or legacy official plugin directories/archives.
 const FORBIDDEN_PLUGIN_ARCHIVE_PREFIXES = [
-  'plugin-qq',
-  'plugin-pet',
-  'plugin-fishdock-hook',
-  'plugin-ssh',
-  'prismux-plugin-',
+  "plugins-official",
+  "plugin-",
+  "prismux-plugin-",
 ] as const;
 
 export function sanitizeDesktopBuildEnv(
@@ -112,9 +109,9 @@ export function sanitizeDesktopBuildEnv(
   for (const key of PROXY_ENV_KEYS) {
     delete env[key];
   }
-  env['NO_PROXY'] = '*';
-  delete env['ELECTRON_RUN_AS_NODE'];
-  delete env['ELECTRON_NO_ATTACH_CONSOLE'];
+  env["NO_PROXY"] = "*";
+  delete env["ELECTRON_RUN_AS_NODE"];
+  delete env["ELECTRON_NO_ATTACH_CONSOLE"];
 
   for (const [key, value] of Object.entries(extraEnv)) {
     if (value === undefined) {
@@ -133,34 +130,27 @@ function formatShellCommandForWindows(command: string, args: readonly string[]):
     }
     return arg;
   };
-  return [quoteArg(command), ...args.map(quoteArg)].join(' ');
+  return [quoteArg(command), ...args.map(quoteArg)].join(" ");
 }
 
-function defaultDesktopCommandRunner(
-  invocation: DesktopCommandInvocation,
-): DesktopCommandResult {
+function defaultDesktopCommandRunner(invocation: DesktopCommandInvocation): DesktopCommandResult {
   const { command, args, cwd, env } = invocation;
   const needsWindowsCmdWrapper =
-    process.platform === 'win32' &&
-    (command === 'pnpm' || command.toLowerCase().endsWith('.cmd'));
+    process.platform === "win32" && (command === "pnpm" || command.toLowerCase().endsWith(".cmd"));
 
   const result = needsWindowsCmdWrapper
-    ? spawnSync(
-        'cmd.exe',
-        ['/d', '/s', '/c', formatShellCommandForWindows(command, args)],
-        {
-          cwd,
-          env,
-          stdio: 'inherit',
-          encoding: 'utf8',
-          windowsHide: true,
-        },
-      )
+    ? spawnSync("cmd.exe", ["/d", "/s", "/c", formatShellCommandForWindows(command, args)], {
+        cwd,
+        env,
+        stdio: "inherit",
+        encoding: "utf8",
+        windowsHide: true,
+      })
     : spawnSync(command, args, {
         cwd,
         env,
-        stdio: 'inherit',
-        encoding: 'utf8',
+        stdio: "inherit",
+        encoding: "utf8",
         windowsHide: true,
       });
 
@@ -170,20 +160,15 @@ function defaultDesktopCommandRunner(
 
   return {
     status: result.status ?? 1,
-    stdout: typeof result.stdout === 'string' ? result.stdout : '',
-    stderr: typeof result.stderr === 'string' ? result.stderr : '',
+    stdout: typeof result.stdout === "string" ? result.stdout : "",
+    stderr: typeof result.stderr === "string" ? result.stderr : "",
   };
 }
 
-function runStepCommand(
-  runner: DesktopCommandRunner,
-  invocation: DesktopCommandInvocation,
-): void {
+function runStepCommand(runner: DesktopCommandRunner, invocation: DesktopCommandInvocation): void {
   const res = runner(invocation);
   if (res.status !== 0) {
-    throw new Error(
-      `[desktop:build] Step "${invocation.label}" exited with code ${res.status}`,
-    );
+    throw new Error(`[desktop:build] Step "${invocation.label}" exited with code ${res.status}`);
   }
 }
 
@@ -196,17 +181,17 @@ function runCargoMonitorWithRetry(
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const res = runner({
       label: `cargo build resource-monitor (attempt ${attempt})`,
-      command: 'cargo',
+      command: "cargo",
       args: [
-        'build',
-        '--locked',
-        '--release',
-        '--target',
+        "build",
+        "--locked",
+        "--release",
+        "--target",
         RESOURCE_MONITOR_TARGET,
-        '--manifest-path',
-        'native/resource-monitor/Cargo.toml',
-        '-j',
-        '1',
+        "--manifest-path",
+        "native/resource-monitor/Cargo.toml",
+        "-j",
+        "1",
       ],
       cwd: vendorDir,
       env,
@@ -238,7 +223,7 @@ function findProducedInstallerExe(stageDir: string): string {
     throw new Error(`Missing installer output staging directory: ${stageDir}`);
   }
   const entries = readdirSync(stageDir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.exe'))
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".exe"))
     .map((entry) => entry.name)
     .sort((a, b) => a.localeCompare(b));
 
@@ -248,9 +233,7 @@ function findProducedInstallerExe(stageDir: string): string {
     entries[0];
 
   if (!preferred) {
-    throw new Error(
-      `No Prismux-Setup-*.exe artifact found in ${stageDir}`,
-    );
+    throw new Error(`No Prismux-Setup-*.exe artifact found in ${stageDir}`);
   }
   return join(stageDir, preferred);
 }
@@ -258,16 +241,16 @@ function findProducedInstallerExe(stageDir: string): string {
 export function resolveSqliteVecLibraryFilename(
   platform: NodeJS.Platform = process.platform,
 ): string {
-  if (platform === 'win32') return 'vec0.dll';
-  if (platform === 'darwin') return 'vec0.dylib';
-  return 'vec0.so';
+  if (platform === "win32") return "vec0.dll";
+  if (platform === "darwin") return "vec0.dylib";
+  return "vec0.so";
 }
 
 export function resolveSqliteVecPackageName(
   platform: NodeJS.Platform = process.platform,
   arch: string = process.arch,
 ): string {
-  const osToken = platform === 'win32' ? 'windows' : platform;
+  const osToken = platform === "win32" ? "windows" : platform;
   return `sqlite-vec-${osToken}-${arch}`;
 }
 
@@ -289,7 +272,7 @@ export function resolveSqliteVecBinaryPath(options: {
   const pkgName = resolveSqliteVecPackageName(platform, arch);
 
   const candidates: string[] = [];
-  const envOverride = env['PRISMUX_SQLITE_VEC_PATH']?.trim();
+  const envOverride = env["PRISMUX_SQLITE_VEC_PATH"]?.trim();
   if (envOverride) {
     candidates.push(resolve(envOverride));
     if (!envOverride.toLowerCase().endsWith(libName.toLowerCase())) {
@@ -298,18 +281,18 @@ export function resolveSqliteVecBinaryPath(options: {
   }
 
   candidates.push(
-    join(options.repoRoot, 'packages', 'memory-core', 'node_modules', pkgName, libName),
-    join(options.repoRoot, 'apps', 'daemon', 'node_modules', pkgName, libName),
-    join(options.repoRoot, 'node_modules', pkgName, libName),
-    join(options.repoRoot, 'node_modules', '.pnpm', 'node_modules', pkgName, libName),
+    join(options.repoRoot, "packages", "memory-core", "node_modules", pkgName, libName),
+    join(options.repoRoot, "apps", "daemon", "node_modules", pkgName, libName),
+    join(options.repoRoot, "node_modules", pkgName, libName),
+    join(options.repoRoot, "node_modules", ".pnpm", "node_modules", pkgName, libName),
   );
 
   const sqliteVecLink = join(
     options.repoRoot,
-    'packages',
-    'memory-core',
-    'node_modules',
-    'sqlite-vec',
+    "packages",
+    "memory-core",
+    "node_modules",
+    "sqlite-vec",
   );
   if (existsSync(sqliteVecLink)) {
     try {
@@ -320,7 +303,7 @@ export function resolveSqliteVecBinaryPath(options: {
     }
   }
 
-  const pnpmDir = join(options.repoRoot, 'node_modules', '.pnpm');
+  const pnpmDir = join(options.repoRoot, "node_modules", ".pnpm");
   if (existsSync(pnpmDir)) {
     const prefix = `${pkgName}@`;
     const entries = readdirSync(pnpmDir, { withFileTypes: true })
@@ -328,7 +311,7 @@ export function resolveSqliteVecBinaryPath(options: {
       .map((entry) => entry.name)
       .sort((a, b) => a.localeCompare(b));
     for (const entry of entries) {
-      candidates.push(join(pnpmDir, entry, 'node_modules', pkgName, libName));
+      candidates.push(join(pnpmDir, entry, "node_modules", pkgName, libName));
     }
   }
 
@@ -347,14 +330,14 @@ export function resolveSqliteVecBinaryPath(options: {
         return candidate;
       }
     } catch (error) {
-      if (error instanceof Error && error.message.includes('file is empty')) {
+      if (error instanceof Error && error.message.includes("file is empty")) {
         throw error;
       }
     }
   }
 
   throw new Error(
-    `[desktop:build] Missing native sqlite-vec library (${libName} from ${pkgName}). Run \`pnpm install\` or set PRISMUX_SQLITE_VEC_PATH. Searched: ${candidates.join(', ')}`,
+    `[desktop:build] Missing native sqlite-vec library (${libName} from ${pkgName}). Run \`pnpm install\` or set PRISMUX_SQLITE_VEC_PATH. Searched: ${candidates.join(", ")}`,
   );
 }
 
@@ -382,15 +365,7 @@ export function stageSqliteVecBinaryForDesktop(options: {
 
   const stagedPath = resolve(
     options.targetPath ??
-      join(
-        options.repoRoot,
-        'apps',
-        'desktop',
-        'prod-resources',
-        'native',
-        'sqlite-vec',
-        libName,
-      ),
+      join(options.repoRoot, "apps", "desktop", "prod-resources", "native", "sqlite-vec", libName),
   );
 
   if (/\.asar([\\/]|$)/i.test(stagedPath) && !/\.asar\.unpacked([\\/]|$)/i.test(stagedPath)) {
@@ -429,7 +404,7 @@ function assertCleanDesktopReleaseDir(dir: string): void {
     const lower = name.toLowerCase();
     if (
       FORBIDDEN_PLUGIN_ARCHIVE_PREFIXES.some((prefix) => lower.includes(prefix)) ||
-      lower.endsWith('.wb-plugin')
+      lower.endsWith(".wb-plugin")
     ) {
       throw new Error(
         `Desktop installer directory must not contain prebundled official plugins: ${join(dir, name)}`,
@@ -447,22 +422,20 @@ export function buildPrismuxDesktop(
   options: BuildPrismuxDesktopOptions = {},
 ): BuildPrismuxDesktopResult {
   const here = dirname(fileURLToPath(import.meta.url));
-  const repoRoot = resolve(options.repoRoot ?? resolve(here, '..'));
+  const repoRoot = resolve(options.repoRoot ?? resolve(here, ".."));
   const version = (options.version ?? readRepoVersion(repoRoot)).trim();
-  const outDir = resolve(
-    options.outDir ?? join(repoRoot, '.work', `release-v${version}`),
-  );
+  const outDir = resolve(options.outDir ?? join(repoRoot, ".work", `release-v${version}`));
   const runner = options.runner ?? defaultDesktopCommandRunner;
   const verifySevenZip = options.verifySevenZip ?? verifyArchiveWithSevenZip;
 
   const resourceMonitorPath = join(
     repoRoot,
-    'native',
-    'resource-monitor',
-    'target',
+    "native",
+    "resource-monitor",
+    "target",
     RESOURCE_MONITOR_TARGET,
-    'release',
-    process.platform === 'win32' ? 't3-resource-monitor.exe' : 't3-resource-monitor',
+    "release",
+    process.platform === "win32" ? "prismux-resource-monitor.exe" : "prismux-resource-monitor",
   );
 
   const executedSteps: string[] = [];
@@ -483,7 +456,7 @@ export function buildPrismuxDesktop(
       installerExePath: null,
       installerSha256: null,
       checksumPath: null,
-      executedSteps: ['dry-run'],
+      executedSteps: ["dry-run"],
     };
   }
 
@@ -491,18 +464,15 @@ export function buildPrismuxDesktop(
 
   // Step 1: Build root workspace core packages + daemon
   if (!options.skipRootBuild) {
-    const filterArgs = ROOT_DESKTOP_BUILD_FILTERS.flatMap((pkg) => [
-      '--filter',
-      pkg,
-    ]);
+    const filterArgs = ROOT_DESKTOP_BUILD_FILTERS.flatMap((pkg) => ["--filter", pkg]);
     runStepCommand(runner, {
-      label: 'root workspace packages build',
-      command: 'pnpm',
-      args: [...filterArgs, 'build'],
+      label: "root workspace packages build",
+      command: "pnpm",
+      args: [...filterArgs, "build"],
       cwd: repoRoot,
       env: baseEnv,
     });
-    executedSteps.push('root-build');
+    executedSteps.push("root-build");
   }
 
   // Step 1.5: Stage and assert sqlite-vec native library (`vec0.dll`) outside .asar on disk
@@ -510,7 +480,7 @@ export function buildPrismuxDesktop(
     repoRoot,
     env: baseEnv,
   });
-  executedSteps.push('sqlite-vec-stage');
+  executedSteps.push("sqlite-vec-stage");
 
   // Step 2: Build or reuse native/resource-monitor
   if (options.skipRust) {
@@ -519,26 +489,24 @@ export function buildPrismuxDesktop(
         `--skip-rust was passed, but cached resource-monitor binary is missing at ${resourceMonitorPath}`,
       );
     }
-    executedSteps.push('rust-skipped');
+    executedSteps.push("rust-skipped");
   } else {
     runCargoMonitorWithRetry(runner, repoRoot, baseEnv);
     if (!existsSync(resourceMonitorPath)) {
-      throw new Error(
-        `cargo build completed without producing ${resourceMonitorPath}`,
-      );
+      throw new Error(`cargo build completed without producing ${resourceMonitorPath}`);
     }
-    executedSteps.push('rust-build');
+    executedSteps.push("rust-build");
   }
 
   // Step 3: Build real Prismux web + server + desktop bundles
   runStepCommand(runner, {
-    label: 'vp run build:desktop',
-    command: 'pnpm',
-    args: ['exec', 'vp', 'run', 'build:desktop'],
+    label: "vp run build:desktop",
+    command: "pnpm",
+    args: ["exec", "vp", "run", "build:desktop"],
     cwd: repoRoot,
     env: baseEnv,
   });
-  executedSteps.push('t3-build-desktop');
+  executedSteps.push("prismux-build-desktop");
 
   let installerExePath: string | null = null;
   let installerSha256: string | null = null;
@@ -547,7 +515,7 @@ export function buildPrismuxDesktop(
   // Step 4: Optional NSIS Windows installer build + archive + 7z verification + sha256
   if (options.installer) {
     mkdirSync(outDir, { recursive: true });
-    const stageOutputDir = join(outDir, '.installer-stage');
+    const stageOutputDir = join(outDir, ".installer-stage");
     rmSync(stageOutputDir, { recursive: true, force: true });
     mkdirSync(stageOutputDir, { recursive: true });
 
@@ -558,27 +526,27 @@ export function buildPrismuxDesktop(
     }
 
     const installerEnv = sanitizeDesktopBuildEnv(baseEnv, {
-      PRISMUX_DESKTOP_REUSE_RESOURCE_MONITOR: '1',
+      PRISMUX_DESKTOP_REUSE_RESOURCE_MONITOR: "1",
       PRISMUX_DESKTOP_VERSION: version,
       PRISMUX_SQLITE_VEC_PATH: sqliteVecStaged.stagedPath,
     });
 
     runStepCommand(runner, {
-      label: 'NSIS installer build',
+      label: "NSIS installer build",
       command: process.execPath,
       args: [
-        'scripts/build-desktop-artifact.ts',
-        '--platform',
-        'win',
-        '--target',
-        'nsis',
-        '--arch',
-        'x64',
-        '--build-version',
+        "scripts/build-desktop-artifact.ts",
+        "--platform",
+        "win",
+        "--target",
+        "nsis",
+        "--arch",
+        "x64",
+        "--build-version",
         version,
-        '--output-dir',
+        "--output-dir",
         stageOutputDir,
-        '--skip-build',
+        "--skip-build",
       ],
       cwd: repoRoot,
       env: installerEnv,
@@ -596,11 +564,10 @@ export function buildPrismuxDesktop(
     verifySevenZip(sevenZipPath, installerExePath);
 
     installerSha256 = sha256File(installerExePath);
-    checksumPath = writeConsolidatedSha256File(
-      join(outDir, formatSoftwareSumsFilename(version)),
-      [installerExePath],
-    );
-    executedSteps.push('nsis-installer');
+    checksumPath = writeConsolidatedSha256File(join(outDir, formatSoftwareSumsFilename(version)), [
+      installerExePath,
+    ]);
+    executedSteps.push("nsis-installer");
   }
 
   return {
@@ -620,13 +587,13 @@ export function parseBuildDesktopArgs(argv: readonly string[]): ParsedBuildDeskt
   const { values } = parseArgs({
     args: [...argv],
     options: {
-      installer: { type: 'boolean', default: false },
-      'skip-rust': { type: 'boolean', default: false },
-      'skip-root-build': { type: 'boolean', default: false },
-      'dry-run': { type: 'boolean', default: false },
-      out: { type: 'string' },
-      version: { type: 'string' },
-      help: { type: 'boolean', short: 'h', default: false },
+      installer: { type: "boolean", default: false },
+      "skip-rust": { type: "boolean", default: false },
+      "skip-root-build": { type: "boolean", default: false },
+      "dry-run": { type: "boolean", default: false },
+      out: { type: "string" },
+      version: { type: "string" },
+      help: { type: "boolean", short: "h", default: false },
     },
     allowPositionals: false,
   });
@@ -635,9 +602,9 @@ export function parseBuildDesktopArgs(argv: readonly string[]): ParsedBuildDeskt
     help: values.help,
     options: {
       installer: values.installer,
-      skipRust: values['skip-rust'],
-      skipRootBuild: values['skip-root-build'],
-      dryRun: values['dry-run'],
+      skipRust: values["skip-rust"],
+      skipRootBuild: values["skip-root-build"],
+      dryRun: values["dry-run"],
       ...(values.out !== undefined ? { outDir: values.out } : {}),
       ...(values.version !== undefined ? { version: values.version } : {}),
     },
@@ -648,14 +615,14 @@ function main(): void {
   const parsed = parseBuildDesktopArgs(process.argv.slice(2));
   if (parsed.help) {
     console.log(
-      'Usage: node scripts/build-prismux-desktop.ts [--installer] [--skip-rust] [--skip-root-build] [--out <dir>] [--version <semver>] [--dry-run]',
+      "Usage: node scripts/build-prismux-desktop.ts [--installer] [--skip-rust] [--skip-root-build] [--out <dir>] [--version <semver>] [--dry-run]",
     );
     return;
   }
 
   const result = buildPrismuxDesktop(parsed.options);
   console.log(`\n[desktop:build] Completed v${result.version}`);
-  console.log(`  Steps:            ${result.executedSteps.join(' -> ')}`);
+  console.log(`  Steps:            ${result.executedSteps.join(" -> ")}`);
   console.log(`  ResourceMonitor:  ${result.resourceMonitorPath}`);
   if (result.sqliteVecPath && result.sqliteVecBytes !== null) {
     console.log(`  SqliteVec:        ${result.sqliteVecPath} (${result.sqliteVecBytes} bytes)`);
@@ -667,8 +634,7 @@ function main(): void {
 }
 
 const isMainModule =
-  process.argv[1] !== undefined &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (isMainModule) {
   main();

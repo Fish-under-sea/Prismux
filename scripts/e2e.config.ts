@@ -11,17 +11,17 @@ const resolved = await Effect.gen(function* () {
   const path = yield* Path.Path;
   const env = yield* HostProcess.Environment;
   const scripts = yield* path.fromFileUrl(new URL(".", import.meta.url));
-  const home = path.resolve(scripts, "../.t3/scenarios");
+  const home = path.resolve(scripts, "../.prismux/scenarios");
   return {
     node: yield* HostProcess.ExecutablePath,
     scripts,
     /** The checkout whose app runs. `prove-scenario.ts` points it at a base or head worktree. */
-    appDir: path.resolve(scripts, env.T3_SCENARIO_APP_DIR ?? ".."),
+    appDir: path.resolve(scripts, env.PRISMUX_SCENARIO_APP_DIR ?? ".."),
     home,
     startApp: path.join(scripts, "scenarios/start-app.ts"),
     // e2e gives the app only PATH, HOME and the temp directory. A scenario that needs more names
     // it here: exact names or prefixes ending in `*`, separated by commas.
-    inheritEnv: (env.T3_SCENARIO_INHERIT_ENV ?? "")
+    inheritEnv: (env.PRISMUX_SCENARIO_INHERIT_ENV ?? "")
       .split(",")
       .map((name) => name.trim())
       .filter((name) => name !== ""),
@@ -29,8 +29,8 @@ const resolved = await Effect.gen(function* () {
 }).pipe(Effect.provide(NodeServices.layer), Effect.runPromise);
 
 export const APP_DIR = resolved.appDir;
-/** Homes only scenarios use, recreated on every run. `.t3` is gitignored. */
-export const T3_HOME = resolved.home;
+/** Homes only scenarios use, recreated on every run. `.prismux` is gitignored. */
+export const PRISMUX_HOME = resolved.home;
 const startApp = resolved.startApp;
 /**
  * The one address e2e opens the web app at and the app is told to bind. Never `localhost`: the
@@ -49,10 +49,10 @@ export default {
         // Lets a scenario put an image on the clipboard for a real keyboard paste.
         permissions: { "clipboard-write": "grant" },
         // Vite answers before the server does; this path is proxied to the server.
-        readyUrl: `http://${LOOPBACK}:{port}/.well-known/t3/environment`,
+        readyUrl: `http://${LOOPBACK}:{port}/.well-known/prismux/environment`,
         command: {
           executable: resolved.node,
-          args: [startApp, "web", T3_HOME, LOOPBACK, "{port}"],
+          args: [startApp, "web", PRISMUX_HOME, LOOPBACK, "{port}"],
           cwd: APP_DIR,
           inheritEnv: resolved.inheritEnv,
           startupTimeout: 300_000,

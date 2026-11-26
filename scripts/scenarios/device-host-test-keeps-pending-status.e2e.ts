@@ -2,8 +2,8 @@
 import { expect } from "e2e";
 import * as Effect from "effect/Effect";
 
-import { T3_HOME } from "../e2e.config.ts";
-import { environmentId, rpcClient, runPromise, test, WEB } from "./t3.ts";
+import { PRISMUX_HOME } from "../e2e.config.ts";
+import { environmentId, rpcClient, runPromise, test, WEB } from "./prismux.ts";
 
 declare global {
   interface Window {
@@ -14,13 +14,13 @@ declare global {
 test(
   "A second SSH connection check keeps the pending status visible",
   WEB,
-  async ({ t3, app, browser, screen }) => {
+  async ({ prismux, app, browser, screen }) => {
     const origin = app.baseUrl ?? "";
     const environment = await runPromise(environmentId(origin));
-    await t3.project("demo");
+    await prismux.project("demo");
     await runPromise(
       Effect.gen(function* () {
-        const client = yield* rpcClient(T3_HOME, origin);
+        const client = yield* rpcClient(PRISMUX_HOME, origin);
         yield* client["server.updateSettings"]({
           patch: {
             enableDeviceSupport: true,
@@ -60,7 +60,9 @@ test(
       };
     });
 
-    await t3.open(`/settings/devices?machine=${encodeURIComponent(environment)}#device-sources`);
+    await prismux.open(
+      `/settings/devices?machine=${encodeURIComponent(environment)}#device-sources`,
+    );
     const more = browser.locator("#device-sources").getByRole("button", "More", { exact: true });
     const testConnection = screen.getByRole("menuitem", "Test connection", { exact: true });
     const pending = screen.getByText("Testing connection", { exact: true });

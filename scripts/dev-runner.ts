@@ -5,7 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@prismux/core-shared/Net";
-import { resolveGitWorktreePath, resolveWorktreeT3Home } from "@prismux/core-shared/devHome";
+import { resolveGitWorktreePath, resolveWorktreePrismuxHome } from "@prismux/core-shared/devHome";
 import * as HostProcess from "@prismux/core-shared/HostProcess";
 import { resolveSpawnCommand } from "@prismux/core-shared/shell";
 import * as Config from "effect/Config";
@@ -67,8 +67,8 @@ function sharedBackendTargetHost(host: string | undefined): string {
   return "127.0.0.1";
 }
 
-export const DEFAULT_T3_HOME = Effect.map(Effect.service(Path.Path), (path) =>
-  path.join(NodeOS.homedir(), ".t3"),
+export const DEFAULT_PRISMUX_HOME = Effect.map(Effect.service(Path.Path), (path) =>
+  path.join(NodeOS.homedir(), ".prismux"),
 );
 
 const MODE_ARGS = {
@@ -76,11 +76,11 @@ const MODE_ARGS = {
     "run",
     "--filter=@prismux/core-contracts",
     "--filter=@prismux/web",
-    "--filter=t3",
+    "--filter=@prismux/server",
     "--parallel",
     "dev",
   ],
-  "dev:server": ["run", "--filter=t3", "dev"],
+  "dev:server": ["run", "--filter=@prismux/server", "dev"],
   "dev:web": ["run", "--filter=@prismux/web", "dev"],
   "dev:desktop": ["run", "--filter=@prismux/desktop", "--filter=@prismux/web", "dev"],
 } as const satisfies Record<string, ReadonlyArray<string>>;
@@ -90,7 +90,7 @@ const MODE_ARGS = {
 const BUILT_DEV_ARGS = [
   "run",
   "--filter=@prismux/web",
-  "--filter=t3",
+  "--filter=@prismux/server",
   "--parallel",
   "dev:built",
 ] as const;
@@ -285,7 +285,7 @@ const resolveBaseDir = Effect.fn("dev-runner.resolveBaseDir")(function* (
     return path.resolve(configured);
   }
 
-  return yield* DEFAULT_T3_HOME;
+  return yield* DEFAULT_PRISMUX_HOME;
 });
 
 interface CreateDevRunnerEnvInput {
@@ -293,7 +293,7 @@ interface CreateDevRunnerEnvInput {
   readonly baseEnv: NodeJS.ProcessEnv;
   readonly serverOffset: number;
   readonly webOffset: number;
-  readonly t3Home: string | undefined;
+  readonly prismuxHome: string | undefined;
   readonly browser: boolean | undefined;
   readonly autoBootstrapProjectFromCwd: boolean | undefined;
   readonly logWebSocketEvents: boolean | undefined;
@@ -307,7 +307,7 @@ export const createDevRunnerEnv = Effect.fn("dev-runner.createDevRunnerEnv")(fun
   baseEnv,
   serverOffset,
   webOffset,
-  t3Home,
+  prismuxHome,
   browser,
   autoBootstrapProjectFromCwd,
   logWebSocketEvents,
@@ -317,7 +317,7 @@ export const createDevRunnerEnv = Effect.fn("dev-runner.createDevRunnerEnv")(fun
 }: CreateDevRunnerEnvInput): Effect.fn.Return<NodeJS.ProcessEnv, never, Path.Path> {
   const serverPort = port ?? BASE_SERVER_PORT + serverOffset;
   const webPort = BASE_WEB_PORT + webOffset;
-  const configuredBaseDir = t3Home?.trim() || undefined;
+  const configuredBaseDir = prismuxHome?.trim() || undefined;
   const resolvedBaseDir = yield* resolveBaseDir(configuredBaseDir);
   const isDesktopMode = mode === "dev:desktop";
 
@@ -330,19 +330,19 @@ export const createDevRunnerEnv = Effect.fn("dev-runner.createDevRunnerEnv")(fun
   };
 
   const path = yield* Path.Path;
-  // The server stores an explicit home's state in userdata, which for ~/.t3 is the live
-  // install. Left implicit, dev state goes to ~/.t3/dev.
-  const isLiveHome = resolvedBaseDir === path.join(yield* HostProcess.HomeDirectory, ".t3");
+  // The server stores an explicit home's state in userdata, which for ~/.prismux is the live
+  // install. Left implicit, dev state goes to ~/.prismux/dev.
+  const isLiveHome = resolvedBaseDir === path.join(yield* HostProcess.HomeDirectory, ".prismux");
   if (configuredBaseDir !== undefined && !isLiveHome) {
     output.PRISMUX_HOME = resolvedBaseDir;
   } else {
     delete output.PRISMUX_HOME;
   }
 
-  // Managed T3 service shells leak launcher variables that make dev servers fail version checks.
+  // Managed Prismux service shells leak launcher variables that make dev servers fail version checks.
   // Dev-runner servers are never launcher-managed (serviceLauncherClient.ts resolveStartup).
-  delete output.T3_SERVICE_LAUNCHER_CONTEXT;
-  delete output.T3_BOOT_SERVICE_UNIT;
+  delete output.PRISMUX_SERVICE_LAUNCHER_CONTEXT;
+  delete output.PRISMUX_BOOT_SERVICE_UNIT;
 
   // Each worktree has its own state, so a dev server would count as a new
   // install of the developer's real accounts. Set it explicitly to opt in.
@@ -381,7 +381,7 @@ export const createDevRunnerEnv = Effect.fn("dev-runner.createDevRunnerEnv")(fun
     delete output.PRISMUX_DEV_AUTH_TOKEN;
   }
 
-  // Agent shells inherit the parent T3 server's bind settings; only --host widens the dev server.
+  // Agent shells inherit the parent Prismux server's bind settings; only --host widens the dev server.
   delete output.PRISMUX_LAN;
   if (!isDesktopMode && host !== undefined) {
     output.PRISMUX_HOST = host;
@@ -643,7 +643,12 @@ const prepareFirstStart = Effect.fn("dev-runner.prepareFirstStart")(function* (i
         );
       }
     }
-    const source = path.join(yield* HostProcess.HomeDirectory, ".t3", "userdata", "statev2.sqlite");
+    const source = path.join(
+      yield* HostProcess.HomeDirectory,
+      ".prismux",
+      "userdata",
+      "statev2.sqlite",
+    );
     // A V1 state.sqlite counts as data too: the server imports it only while
     // statev2.sqlite is missing, so seeding would hide it.
     if (
@@ -677,7 +682,9 @@ const prepareFirstStart = Effect.fn("dev-runner.prepareFirstStart")(function* (i
   if (input.mode !== "dev:web") {
     const crate = path.join(repoRoot, "native/resource-monitor");
     const binary =
-      (yield* HostProcess.Platform) === "win32" ? "t3-resource-monitor.exe" : "t3-resource-monitor";
+      (yield* HostProcess.Platform) === "win32"
+        ? "prismux-resource-monitor.exe"
+        : "prismux-resource-monitor";
     if (
       !(yield* exists(path.join(crate, "target/release", binary))) &&
       !(yield* exists(path.join(crate, "target/debug", binary)))
@@ -717,7 +724,7 @@ const prepareFirstStart = Effect.fn("dev-runner.prepareFirstStart")(function* (i
 
 interface DevRunnerCliInput {
   readonly mode: DevMode;
-  readonly t3Home: string | undefined;
+  readonly prismuxHome: string | undefined;
   readonly browser: boolean | undefined;
   readonly autoBootstrapProjectFromCwd: boolean | undefined;
   readonly logWebSocketEvents: boolean | undefined;
@@ -775,14 +782,14 @@ export const runDevRunnerWithInput = Effect.fn("dev-runner.runDevRunnerWithInput
 
   const hostEnvironment = yield* HostProcess.Environment;
   // A dev server started inside a worktree defaults to that worktree's own
-  // (gitignored) `.t3` — see @prismux/core-shared/devHome for why this must
+  // (gitignored) `.prismux` — see @prismux/core-shared/devHome for why this must
   // outrank an ambient PRISMUX_HOME. `--home-dir` still wins.
-  const worktreeHome = yield* resolveWorktreeT3Home(yield* HostProcess.WorkingDirectory);
+  const worktreeHome = yield* resolveWorktreePrismuxHome(yield* HostProcess.WorkingDirectory);
   // Trim before choosing: `--home-dir ""` is not a selection, and treating it
   // as one would skip the worktree default and land on the shared home —
   // exactly the outcome this precedence exists to prevent.
-  const resolvedT3Home =
-    (input.t3Home?.trim() || undefined) ??
+  const resolvedPrismuxHome =
+    (input.prismuxHome?.trim() || undefined) ??
     worktreeHome ??
     (hostEnvironment.PRISMUX_HOME?.trim() || undefined);
   const env = yield* createDevRunnerEnv({
@@ -790,7 +797,7 @@ export const runDevRunnerWithInput = Effect.fn("dev-runner.runDevRunnerWithInput
     baseEnv: hostEnvironment,
     serverOffset,
     webOffset,
-    t3Home: resolvedT3Home,
+    prismuxHome: resolvedPrismuxHome,
     browser: input.browser,
     autoBootstrapProjectFromCwd: input.autoBootstrapProjectFromCwd,
     logWebSocketEvents: input.logWebSocketEvents,
@@ -803,7 +810,7 @@ export const runDevRunnerWithInput = Effect.fn("dev-runner.runDevRunnerWithInput
     serverOffset !== offset || webOffset !== offset
       ? ` selectedOffset(server=${serverOffset},web=${webOffset})`
       : "";
-  const baseDir = env.PRISMUX_HOME ?? (yield* DEFAULT_T3_HOME);
+  const baseDir = env.PRISMUX_HOME ?? (yield* DEFAULT_PRISMUX_HOME);
 
   yield* Effect.logInfo(
     `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverPort=${String(env.PRISMUX_PORT)} webPort=${String(env.PORT)} baseDir=${baseDir}`,
@@ -970,9 +977,9 @@ const devRunnerCli = Command.make("dev-runner", {
   mode: Argument.Literals("mode", DEV_RUNNER_MODES).pipe(
     Argument.withDescription("Development mode to run."),
   ),
-  t3Home: Flag.String("home-dir").pipe(
+  prismuxHome: Flag.String("home-dir").pipe(
     Flag.withDescription(
-      "Explicit Prismux data directory; runtime state is stored under userdata (equivalent to PRISMUX_HOME). Inside a git worktree this defaults to that worktree's own .t3 so dev state stays off the shared home.",
+      "Explicit Prismux data directory; runtime state is stored under userdata (equivalent to PRISMUX_HOME). Inside a git worktree this defaults to that worktree's own .prismux so dev state stays off the shared home.",
     ),
     Flag.optional,
     Flag.map(Option.getOrUndefined),
@@ -994,7 +1001,7 @@ const devRunnerCli = Command.make("dev-runner", {
   ),
   host: Flag.String("host").pipe(
     Flag.withDescription(
-      "Server host/interface override (forwards to PRISMUX_HOST). Ambient PRISMUX_HOST is ignored: agent shells inherit it from the T3 server that spawned them.",
+      "Server host/interface override (forwards to PRISMUX_HOST). Ambient PRISMUX_HOST is ignored: agent shells inherit it from the Prismux server that spawned them.",
     ),
     Flag.optional,
     Flag.map(Option.getOrUndefined),
@@ -1002,7 +1009,7 @@ const devRunnerCli = Command.make("dev-runner", {
   port: Flag.Int("port").pipe(
     Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }))),
     Flag.withDescription(
-      "Server port override (forwards to PRISMUX_PORT). Ambient PRISMUX_PORT is ignored: agent shells inherit it from the T3 server that spawned them.",
+      "Server port override (forwards to PRISMUX_PORT). Ambient PRISMUX_PORT is ignored: agent shells inherit it from the Prismux server that spawned them.",
     ),
     Flag.optional,
     Flag.map(Option.getOrUndefined),
@@ -1027,7 +1034,7 @@ const devRunnerCli = Command.make("dev-runner", {
   ),
   seed: Flag.Boolean("seed").pipe(
     Flag.withDescription(
-      "Seed an empty worktree database from ~/.t3 on first start (read-only, via migrate-dev-db) if the source is at most 500 MiB. On by default; --no-seed or PRISMUX_DEV_SEED=0 skips it.",
+      "Seed an empty worktree database from ~/.prismux on first start (read-only, via migrate-dev-db) if the source is at most 500 MiB. On by default; --no-seed or PRISMUX_DEV_SEED=0 skips it.",
     ),
     Flag.withFallbackConfig(optionalBooleanConfig("PRISMUX_DEV_SEED")),
   ),

@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 import { expect } from "e2e";
 
-import { test, WEB } from "./t3.ts";
+import { test, WEB } from "./prismux.ts";
 
 declare global {
   interface Window {
@@ -12,13 +12,13 @@ declare global {
 test(
   "A failed project action import preserves a manual action draft",
   WEB,
-  async ({ t3, app, browser, screen }) => {
-    const project = await t3.project("demo", {
-      "t3.json": JSON.stringify({
+  async ({ prismux, app, browser, screen }) => {
+    const project = await prismux.project("demo", {
+      "prismux.json": JSON.stringify({
         scripts: [{ name: "Shared build", command: "echo build" }],
       }),
     });
-    const thread = await t3.thread({ project, title: "Action import", messages: ["Start"] });
+    const thread = await prismux.thread({ project, title: "Action import", messages: ["Start"] });
     await browser.setViewport({ width: 1920, height: 1000 });
 
     await browser.addInitScript(() => {
@@ -64,7 +64,7 @@ test(
       };
     });
 
-    await t3.open(thread);
+    await prismux.open(thread);
     const actions = screen.getByRole("button", "Choose project action", { exact: true });
     await actions.tap();
     await screen.getByRole("menuitem", /Shared build/).tap();

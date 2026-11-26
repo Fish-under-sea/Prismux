@@ -51,7 +51,7 @@ module.exports = async ({ appOutDir, electronPlatformName, arch, packager }) => 
   for (const name of Object.keys(env)) {
     if (name.startsWith("NODE_") || name.startsWith("PRISMUX_")) delete env[name];
   }
-  const state = fs.mkdtempSync(path.join(os.tmpdir(), "t3-release-cache-"));
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "prismux-release-cache-"));
   env.PRISMUX_HOME = state;
   let result;
   try {

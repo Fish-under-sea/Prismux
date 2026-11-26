@@ -1,19 +1,19 @@
 import { expect } from "e2e";
 
-import { test, WEB } from "./t3.ts";
+import { test, WEB } from "./prismux.ts";
 
 test(
   "An expanded command shows the JSON line it printed, keys and all",
   WEB,
-  async ({ t3, app, screen }) => {
-    const project = await t3.project("demo");
-    const thread = await t3.thread({
+  async ({ prismux, app, screen }) => {
+    const project = await prismux.project("demo");
+    const thread = await prismux.thread({
       project,
       title: "JSON output",
       messages: ["Print the JSON"],
       model: "command-output",
     });
-    await t3.open(thread);
+    await prismux.open(thread);
 
     await expect(screen.getByText("The command printed one JSON line.")).toBeVisible();
     await screen.getByRole("button", "Worked for", { exact: false }).tap();

@@ -1,15 +1,9 @@
-import { cpSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { parseArgs } from 'node:util';
-import {
-  buildNpmPluginPackages,
-  type BuiltNpmPluginPackage,
-} from './build-npm-plugin-packages.ts';
-import {
-  buildPrismuxDesktop,
-  type BuildPrismuxDesktopResult,
-} from './build-prismux-desktop.ts';
+import { cpSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
+import { buildNpmPluginPackages, type BuiltNpmPluginPackage } from "./build-npm-plugin-packages.ts";
+import { buildPrismuxDesktop, type BuildPrismuxDesktopResult } from "./build-prismux-desktop.ts";
 import {
   OFFICIAL_PLUGIN_IDS,
   RELEASE_CATALOG_FILENAME,
@@ -17,8 +11,8 @@ import {
   formatSoftwareSumsFilename,
   readRepoVersion,
   writeConsolidatedSha256File,
-} from './build-release-packages.ts';
-import { packPlugin, type PackPluginResult } from './pack-plugin.ts';
+} from "./build-release-packages.ts";
+import { packPlugin, type PackPluginResult } from "./pack-plugin.ts";
 
 export interface ReleaseAllOptions {
   repoRoot?: string;
@@ -45,18 +39,16 @@ export interface ReleaseAllResult {
 }
 
 /**
- * Full release coordinator: builds the T3-based Prismux desktop
- * installer cleanly (with zero prebundled plugins), packs the 2 active standalone
- * `.wb-plugin` archives (`qq`, `fishdock-hook`) + updates `plugins-official/catalog/official.json`,
+ * Full release coordinator: builds the Prismux desktop
+ * installer cleanly (with zero prebundled plugins), packs the active standalone
+ * `.wb-plugin` archive (`qq`) + updates `plugins-official/catalog/official.json`,
  * generates standalone npm plugin wrapper packages, and emits `SHA256SUMS.txt`.
  */
 export function runReleaseAll(options: ReleaseAllOptions = {}): ReleaseAllResult {
   const here = dirname(fileURLToPath(import.meta.url));
-  const repoRoot = resolve(options.repoRoot ?? resolve(here, '..'));
+  const repoRoot = resolve(options.repoRoot ?? resolve(here, ".."));
   const version = (options.version ?? readRepoVersion(repoRoot)).trim();
-  const outDir = resolve(
-    options.outDir ?? join(repoRoot, '.work', `release-v${version}`),
-  );
+  const outDir = resolve(options.outDir ?? join(repoRoot, ".work", `release-v${version}`));
   mkdirSync(outDir, { recursive: true });
 
   let desktop: BuildPrismuxDesktopResult | null = null;
@@ -71,17 +63,16 @@ export function runReleaseAll(options: ReleaseAllOptions = {}): ReleaseAllResult
     });
   }
 
-  const pluginsOutDir = join(outDir, 'plugins');
+  const pluginsOutDir = join(outDir, "plugins");
   mkdirSync(pluginsOutDir, { recursive: true });
 
-  const catalogPath = join(repoRoot, 'plugins-official', 'catalog', 'official.json');
-  const shouldUpdateCatalog =
-    options.updateCatalog !== false && existsSync(catalogPath);
+  const catalogPath = join(repoRoot, "plugins-official", "catalog", "official.json");
+  const shouldUpdateCatalog = options.updateCatalog !== false && existsSync(catalogPath);
 
   const plugins: PackPluginResult[] = [];
   for (const id of OFFICIAL_PLUGIN_IDS) {
     const packed = packPlugin({
-      pluginDir: join(repoRoot, 'plugins-official', `plugin-${id}`),
+      pluginDir: join(repoRoot, "plugins-official", `plugin-${id}`),
       outDir: pluginsOutDir,
       ...(shouldUpdateCatalog ? { updateCatalogPath: catalogPath } : {}),
       emitChecksum: false,
@@ -98,15 +89,15 @@ export function runReleaseAll(options: ReleaseAllOptions = {}): ReleaseAllResult
   const unscopedNpmPackages = buildNpmPluginPackages({
     repoRoot,
     releaseDir: pluginsOutDir,
-    outDir: join(outDir, 'npm-plugins', 'unscoped'),
+    outDir: join(outDir, "npm-plugins", "unscoped"),
     version,
   });
 
   const scopedNpmPackages = buildNpmPluginPackages({
     repoRoot,
     releaseDir: pluginsOutDir,
-    outDir: join(outDir, 'npm-plugins', 'scoped'),
-    scope: options.npmScope ?? '@fish-under-sea',
+    outDir: join(outDir, "npm-plugins", "scoped"),
+    scope: options.npmScope ?? "@fish-under-sea",
     version,
   });
 
@@ -119,17 +110,17 @@ export function runReleaseAll(options: ReleaseAllOptions = {}): ReleaseAllResult
     softwareFiles,
   );
 
-  const splitDir = join(outDir, '.gitee-split');
+  const splitDir = join(outDir, ".gitee-split");
   if (existsSync(splitDir)) {
     const splitParts = readdirSync(splitDir)
       .sort((a, b) => a.localeCompare(b))
       .filter((part) => /\.7z\.\d{3}$/i.test(part))
       .map((part) => join(splitDir, part));
     if (splitParts.length > 0) {
-      writeConsolidatedSha256File(
-        join(splitDir, formatSoftwareSumsFilename(version)),
-        [...softwareFiles, ...splitParts],
-      );
+      writeConsolidatedSha256File(join(splitDir, formatSoftwareSumsFilename(version)), [
+        ...softwareFiles,
+        ...splitParts,
+      ]);
     }
   }
 
@@ -158,22 +149,22 @@ export function runReleaseAll(options: ReleaseAllOptions = {}): ReleaseAllResult
 function main(): void {
   const { values } = parseArgs({
     options: {
-      out: { type: 'string' },
-      version: { type: 'string' },
-      'skip-desktop': { type: 'boolean', default: false },
-      'skip-installer': { type: 'boolean', default: false },
-      'skip-rust': { type: 'boolean', default: false },
-      'skip-root-build': { type: 'boolean', default: false },
-      scope: { type: 'string' },
-      'no-catalog-update': { type: 'boolean', default: false },
-      help: { type: 'boolean', short: 'h', default: false },
+      out: { type: "string" },
+      version: { type: "string" },
+      "skip-desktop": { type: "boolean", default: false },
+      "skip-installer": { type: "boolean", default: false },
+      "skip-rust": { type: "boolean", default: false },
+      "skip-root-build": { type: "boolean", default: false },
+      scope: { type: "string" },
+      "no-catalog-update": { type: "boolean", default: false },
+      help: { type: "boolean", short: "h", default: false },
     },
     allowPositionals: false,
   });
 
   if (values.help) {
     console.log(
-      'Usage: node scripts/release-all.ts [--out <dir>] [--version <ver>] [--skip-desktop] [--skip-installer] [--skip-rust] [--skip-root-build] [--scope @fish-under-sea] [--no-catalog-update]',
+      "Usage: node scripts/release-all.ts [--out <dir>] [--version <ver>] [--skip-desktop] [--skip-installer] [--skip-rust] [--skip-root-build] [--scope @fish-under-sea] [--no-catalog-update]",
     );
     return;
   }
@@ -181,12 +172,12 @@ function main(): void {
   const result = runReleaseAll({
     ...(values.out !== undefined ? { outDir: values.out } : {}),
     ...(values.version !== undefined ? { version: values.version } : {}),
-    skipDesktop: values['skip-desktop'],
-    skipInstaller: values['skip-installer'],
-    skipRust: values['skip-rust'],
-    skipRootBuild: values['skip-root-build'],
+    skipDesktop: values["skip-desktop"],
+    skipInstaller: values["skip-installer"],
+    skipRust: values["skip-rust"],
+    skipRootBuild: values["skip-root-build"],
     ...(values.scope !== undefined ? { npmScope: values.scope } : {}),
-    updateCatalog: !values['no-catalog-update'],
+    updateCatalog: !values["no-catalog-update"],
   });
 
   console.log(`\n[release:all] Complete v${result.version} -> ${result.outDir}`);
@@ -199,8 +190,7 @@ function main(): void {
 }
 
 const isMainModule =
-  process.argv[1] !== undefined &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (isMainModule) {
   main();

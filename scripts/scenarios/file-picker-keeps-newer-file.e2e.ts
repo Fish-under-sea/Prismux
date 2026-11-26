@@ -3,7 +3,7 @@ import type { EnvironmentId, ProjectSearchEntriesInput } from "@prismux/core-con
 import { expect } from "e2e";
 import type { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
-import { test, WEB } from "./t3.ts";
+import { test, WEB } from "./prismux.ts";
 
 const CITED = "cited-note.txt";
 const PICKED = "picker-note.txt";
@@ -11,12 +11,12 @@ const PICKED = "picker-note.txt";
 test(
   "A slow citation leaves the newer file picker choice active",
   WEB,
-  async ({ t3, app, browser, screen }) => {
-    const project = await t3.project("demo", {
+  async ({ prismux, app, browser, screen }) => {
+    const project = await prismux.project("demo", {
       [`notes/${CITED}`]: "Text from the earlier citation",
       [PICKED]: "Text from the newer choice",
     });
-    const thread = await t3.thread({
+    const thread = await prismux.thread({
       project,
       title: "File preview order",
       messages: [`See :codex-file-citation{path="${CITED}" line_range_start="1"}`],
@@ -70,7 +70,7 @@ test(
     }, CITED);
 
     const activeTab = browser.locator('[data-active-tab="true"]');
-    await t3.open(thread);
+    await prismux.open(thread);
     await screen.getByRole("button", /^Agent See/).tap();
     await screen.getByRole("link", /^cited-note\.txt/).tap();
     await browser.evaluate(async () => {

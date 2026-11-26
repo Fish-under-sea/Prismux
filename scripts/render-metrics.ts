@@ -40,7 +40,7 @@ export type RenderMetrics = Readonly<Record<string, ScenarioReport>>;
 const root = NodePath.resolve(import.meta.dirname, "..");
 
 export function runOnce(): RenderMetrics {
-  const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-renders-"));
+  const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "prismux-renders-"));
   try {
     const [command, commandArgs] = vitePlusCommand(["test", "run", "--project", "renders"]);
     const result = NodeChildProcess.spawnSync(command, commandArgs, {

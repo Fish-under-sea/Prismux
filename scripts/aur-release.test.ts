@@ -46,7 +46,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("AUR release", 
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const inherited = yield* HostProcess.Environment;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-aur-release-" });
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "prismux-aur-release-" });
       const aur = path.join(root, "packaging/aur");
       yield* fs.copy(path.join(import.meta.dirname, "../packaging/aur"), aur);
       const tools = path.join(root, "tools");
