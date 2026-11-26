@@ -547,12 +547,35 @@ export interface DaemonKillSystemPortResponse {
 }
 
 export type DaemonOvernightInboundMode = "gmail-oauth2" | "imap";
-export type DaemonOvernightMailPreset = "qq" | "163" | "gmail" | "outlook" | "custom";
+export type DaemonOvernightEmailProvider = "imap_smtp" | "gmail_oauth2" | "agent_mail";
+export type DaemonOvernightMailPreset =
+  | "gmail"
+  | "qq"
+  | "agent_mail"
+  | "outlook"
+  | "netease"
+  | "163"
+  | "126"
+  | "custom";
 export type DaemonOvernightWindowMode = "scheduled" | "always";
-export type DaemonOvernightRunStatus =
+export type DaemonOvernightExecutionStage =
+  | "queued"
+  | "preparing_worktree"
+  | "running_agent"
+  | "verifying"
+  | "reporting"
   | "completed"
   | "failed"
+  | "cancelled";
+export type DaemonOvernightRunStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
   | "blocked_whitelist"
+  | "blocked_policy"
+  | "awaiting_human_confirmation"
   | "skipped";
 
 export interface DaemonOvernightGmailConfigDto {
@@ -577,6 +600,7 @@ export interface DaemonOvernightImapSmtpConfigDto {
   smtpSecure: boolean;
   smtpUsername: string;
   fromName: string;
+  useSeparateSmtpPassword?: boolean;
 }
 
 export interface DaemonOvernightStrategyConfigDto {
@@ -598,9 +622,41 @@ export interface DaemonOvernightConfigDto {
   updatedAt: number;
   enabled: boolean;
   mode: DaemonOvernightInboundMode;
+  emailProvider?: DaemonOvernightEmailProvider;
+  agentMailAddress?: string;
   gmail: DaemonOvernightGmailConfigDto;
   imapSmtp: DaemonOvernightImapSmtpConfigDto;
   strategy: DaemonOvernightStrategyConfigDto;
+}
+
+export interface DaemonOvernightAgentMailStatusDto {
+  cliInstalled: boolean;
+  installed?: boolean;
+  version?: string | null;
+  cliPath?: string;
+  binaryPath?: string | null;
+  loggedIn?: boolean;
+  authorizedEmail?: string | null;
+  address?: string | null;
+  configured?: boolean;
+  scopes?: string[];
+  dailySendQuota?: number | null;
+  authInProgress?: boolean;
+  pendingAuthUrl?: string | null;
+  lastError?: string | null;
+}
+
+export interface DaemonOvernightMailStatusDto {
+  activeProvider: DaemonOvernightEmailProvider;
+  configured: boolean;
+  ready: boolean;
+  address: string | null;
+  inboundReady: boolean;
+  outboundReady: boolean;
+  detectedAgentMailReady: boolean;
+  detectedAgentMailAddress: string | null;
+  label: string;
+  summary: string;
 }
 
 export interface DaemonOvernightSecretPresenceDto {
@@ -615,16 +671,31 @@ export interface DaemonOvernightMailProbeChannelDto {
   latencyMs: number;
   message: string;
   detail?: string;
+  hint?: string;
 }
 
 export interface DaemonOvernightMailTestResponse {
   ok: boolean;
   mode: DaemonOvernightInboundMode;
+  emailProvider?: DaemonOvernightEmailProvider;
   checkedAt: number;
   durationMs: number;
   inbound: DaemonOvernightMailProbeChannelDto;
   outbound: DaemonOvernightMailProbeChannelDto;
   message: string;
+  installed?: boolean;
+  version?: string | null;
+  cliPath?: string;
+  binaryPath?: string | null;
+  loggedIn?: boolean;
+  configured?: boolean;
+  authorizedEmail?: string | null;
+  address?: string | null;
+  authUrl?: string | null;
+  authInProgress?: boolean;
+  stdout?: string;
+  stderr?: string;
+  agentMail?: DaemonOvernightAgentMailStatusDto;
 }
 
 export interface DaemonOvernightConfigSnapshot {
@@ -632,6 +703,8 @@ export interface DaemonOvernightConfigSnapshot {
   config: DaemonOvernightConfigDto;
   secrets: DaemonOvernightSecretPresenceDto;
   credentialsFile: string;
+  agentMail?: DaemonOvernightAgentMailStatusDto;
+  mailStatus?: DaemonOvernightMailStatusDto;
   runtime: {
     pollerActive: boolean;
     inAllowedWindow: boolean;
@@ -640,12 +713,17 @@ export interface DaemonOvernightConfigSnapshot {
     lastPollError: string | null;
     lastTestResult: DaemonOvernightMailTestResponse | null;
     runsCount: number;
+    activeRunsCount?: number;
+    tasksCount?: number;
   };
 }
 
 export interface DaemonOvernightConfigPatch {
   enabled?: boolean;
   mode?: DaemonOvernightInboundMode;
+  emailProvider?: DaemonOvernightEmailProvider;
+  agentMailAddress?: string;
+  agentMailAction?: "status" | "install" | "login";
   gmail?: Partial<Pick<DaemonOvernightGmailConfigDto, "clientId" | "redirectUri" | "boundEmail">>;
   imapSmtp?: Partial<DaemonOvernightImapSmtpConfigDto>;
   strategy?: Partial<DaemonOvernightStrategyConfigDto>;
@@ -674,6 +752,20 @@ export interface DaemonOvernightTestReportResponse {
   message: string;
 }
 
+export interface DaemonOvernightRunLogEntryDto {
+  timestamp: number;
+  level: "info" | "warn" | "error";
+  stage: DaemonOvernightExecutionStage;
+  message: string;
+}
+
+export interface DaemonOvernightChangedFileDto {
+  path: string;
+  status: "added" | "modified" | "deleted" | "renamed";
+  additions: number;
+  deletions: number;
+}
+
 export interface DaemonOvernightRunRecordDto {
   id: string;
   jobId: string;
@@ -682,22 +774,88 @@ export interface DaemonOvernightRunRecordDto {
   subject: string;
   sender: string;
   status: DaemonOvernightRunStatus;
+  stage?: DaemonOvernightExecutionStage;
+  source?: "email" | "manual" | "scheduled";
+  taskId?: string | null;
+  workspaceDir?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  prompt?: string | null;
+  verifyCommand?: string | null;
   branchName: string | null;
+  commitSha?: string | null;
   changedFilesCount: number;
+  changedFiles?: DaemonOvernightChangedFileDto[];
+  diffSummary?: string | null;
   testPassed: boolean | null;
   oracleSummary: string;
   reviewComments: string[];
   deepLink: string | null;
   reportSent: boolean;
+  reportRecipient?: string | null;
+  logs?: DaemonOvernightRunLogEntryDto[];
   createdAt: number;
+  startedAt?: number | null;
   completedAt: number;
   errorMessage: string | null;
+}
+
+export interface DaemonOvernightTaskDto {
+  id: string;
+  title: string;
+  prompt: string;
+  workspaceDir: string;
+  provider: string;
+  model: string;
+  verifyCommand: string;
+  triggerMode: "manual" | "scheduled" | "email";
+  sendEmailReport: boolean;
+  reportRecipient: string;
+  allowNoFileChanges: boolean;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+  lastRunId: string | null;
+  lastRunStatus: DaemonOvernightRunStatus | null;
+  lastRunAt: number | null;
+}
+
+export interface DaemonOvernightTasksResponse {
+  ok: true;
+  tasks: DaemonOvernightTaskDto[];
+  total: number;
+}
+
+export interface DaemonOvernightTaskMutationResponse {
+  ok: true;
+  task: DaemonOvernightTaskDto;
+}
+
+export interface DaemonOvernightRunNowRequest {
+  taskId?: string;
+  title?: string;
+  prompt: string;
+  workspaceDir?: string;
+  provider?: string;
+  model?: string;
+  verifyCommand?: string;
+  sendEmailReport?: boolean;
+  reportRecipient?: string;
+  allowNoFileChanges?: boolean;
+  wait?: boolean;
+}
+
+export interface DaemonOvernightRunMutationResponse {
+  ok: true;
+  run: DaemonOvernightRunRecordDto;
+  message: string;
 }
 
 export interface DaemonOvernightRunsResponse {
   ok: true;
   runs: DaemonOvernightRunRecordDto[];
   total: number;
+  activeRunsCount?: number;
   lastPollAt: number | null;
   lastPollError: string | null;
 }
@@ -1114,10 +1272,16 @@ export class PrismuxDaemonClient {
         __PRISMUX_DAEMON_URL__?: unknown;
         __PRISMUX_DAEMON_TOKEN__?: unknown;
       };
-      if (typeof fallbackGlobal.__PRISMUX_DAEMON_URL__ === "string" && fallbackGlobal.__PRISMUX_DAEMON_URL__.trim().length > 0) {
+      if (
+        typeof fallbackGlobal.__PRISMUX_DAEMON_URL__ === "string" &&
+        fallbackGlobal.__PRISMUX_DAEMON_URL__.trim().length > 0
+      ) {
         const normalized: DaemonConnectionInfo = {
           baseUrl: normalizeBaseUrl(fallbackGlobal.__PRISMUX_DAEMON_URL__),
-          token: typeof fallbackGlobal.__PRISMUX_DAEMON_TOKEN__ === "string" ? fallbackGlobal.__PRISMUX_DAEMON_TOKEN__ : "",
+          token:
+            typeof fallbackGlobal.__PRISMUX_DAEMON_TOKEN__ === "string"
+              ? fallbackGlobal.__PRISMUX_DAEMON_TOKEN__
+              : "",
           ready: true,
         };
         this.cachedInfo = normalized;
@@ -1155,7 +1319,11 @@ export class PrismuxDaemonClient {
     if (!headers.has("Accept")) {
       headers.set("Accept", "application/json");
     }
-    if (init.body !== undefined && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
+    if (
+      init.body !== undefined &&
+      !(init.body instanceof FormData) &&
+      !headers.has("Content-Type")
+    ) {
       headers.set("Content-Type", "application/json");
     }
     if (info.token) {
@@ -1191,7 +1359,8 @@ export class PrismuxDaemonClient {
     }
 
     if (!response.ok) {
-      const record = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+      const record =
+        parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
       const errObj =
         record && record.error && typeof record.error === "object"
           ? (record.error as Record<string, unknown>)
@@ -1248,11 +1417,7 @@ export class PrismuxDaemonClient {
     return parsed as T;
   }
 
-  buildMediaUrl(
-    kind: "media" | "preview" | "web" | "scene",
-    id: string,
-    subPath?: string,
-  ): string {
+  buildMediaUrl(kind: "media" | "preview" | "web" | "scene", id: string, subPath?: string): string {
     const encodedId = encodeURIComponent(id);
     const tail = subPath && subPath.trim().length > 0 ? `/${encodeSubPath(subPath)}` : "";
     const base = this.cachedInfo.baseUrl ? normalizeBaseUrl(this.cachedInfo.baseUrl) : "";
@@ -1457,13 +1622,10 @@ export class PrismuxDaemonClient {
     model?: string;
     maxFiles?: number;
   }): Promise<DaemonObsidianImportPlanResponse> {
-    return this.requestJson<DaemonObsidianImportPlanResponse>(
-      "/v1/memory/import-obsidian/plan",
-      {
-        method: "POST",
-        body: JSON.stringify(payload),
-      },
-    );
+    return this.requestJson<DaemonObsidianImportPlanResponse>("/v1/memory/import-obsidian/plan", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
   }
 
   commitObsidianImport(payload: {
@@ -1618,8 +1780,14 @@ export class PrismuxDaemonClient {
     });
   }
 
-  fetchOvernightConfig(): Promise<DaemonOvernightConfigSnapshot> {
-    return this.requestJson<DaemonOvernightConfigSnapshot>("/v1/overnight/config");
+  fetchOvernightConfig(forceRefresh = false): Promise<DaemonOvernightConfigSnapshot> {
+    const suffix = forceRefresh ? "?refresh=1" : "";
+    return this.requestJson<DaemonOvernightConfigSnapshot>(`/v1/overnight/config${suffix}`);
+  }
+
+  fetchOvernightStatus(forceRefresh = false): Promise<DaemonOvernightConfigSnapshot> {
+    const suffix = forceRefresh ? "?refresh=1" : "";
+    return this.requestJson<DaemonOvernightConfigSnapshot>(`/v1/overnight/status${suffix}`);
   }
 
   updateOvernightConfig(
@@ -1643,27 +1811,91 @@ export class PrismuxDaemonClient {
   sendOvernightTestReport(
     payload?: DaemonOvernightConfigPatch & { recipient?: string },
   ): Promise<DaemonOvernightTestReportResponse> {
-    return this.requestJson<DaemonOvernightTestReportResponse>(
-      "/v1/overnight/send-test-report",
-      {
-        method: "POST",
-        body: JSON.stringify(payload ?? {}),
-      },
-    );
+    return this.requestJson<DaemonOvernightTestReportResponse>("/v1/overnight/send-test-report", {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    });
   }
 
-  pollOvernightNow(
-    payload?: DaemonOvernightConfigPatch,
-  ): Promise<DaemonOvernightPollNowResponse> {
+  pollOvernightNow(payload?: DaemonOvernightConfigPatch): Promise<DaemonOvernightPollNowResponse> {
     return this.requestJson<DaemonOvernightPollNowResponse>("/v1/overnight/poll-now", {
       method: "POST",
       body: JSON.stringify(payload ?? {}),
     });
   }
 
+  fetchOvernightTasks(): Promise<DaemonOvernightTasksResponse> {
+    return this.requestJson<DaemonOvernightTasksResponse>("/v1/overnight/tasks");
+  }
+
+  createOvernightTask(
+    payload: Omit<DaemonOvernightRunNowRequest, "taskId" | "wait"> & {
+      triggerMode?: "manual" | "scheduled" | "email";
+      enabled?: boolean;
+    },
+  ): Promise<DaemonOvernightTaskMutationResponse> {
+    return this.requestJson<DaemonOvernightTaskMutationResponse>("/v1/overnight/tasks", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  deleteOvernightTask(taskId: string): Promise<{ ok: true; deletedId: string }> {
+    return this.requestJson<{ ok: true; deletedId: string }>(
+      `/v1/overnight/tasks/${encodeURIComponent(taskId)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  runOvernightTask(
+    taskId: string,
+    options?: { wait?: boolean },
+  ): Promise<DaemonOvernightRunMutationResponse> {
+    return this.requestJson<DaemonOvernightRunMutationResponse>(
+      `/v1/overnight/tasks/${encodeURIComponent(taskId)}/run`,
+      {
+        method: "POST",
+        body: JSON.stringify(options ?? {}),
+      },
+    );
+  }
+
+  runOvernightNow(
+    payload: DaemonOvernightRunNowRequest,
+  ): Promise<DaemonOvernightRunMutationResponse> {
+    return this.requestJson<DaemonOvernightRunMutationResponse>("/v1/overnight/run-now", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
   fetchOvernightRuns(limit = 30): Promise<DaemonOvernightRunsResponse> {
     return this.requestJson<DaemonOvernightRunsResponse>(
       `/v1/overnight/runs?limit=${encodeURIComponent(String(limit))}`,
+    );
+  }
+
+  cancelOvernightRun(runId: string): Promise<DaemonOvernightRunMutationResponse> {
+    return this.requestJson<DaemonOvernightRunMutationResponse>(
+      `/v1/overnight/runs/${encodeURIComponent(runId)}/cancel`,
+      { method: "POST", body: JSON.stringify({}) },
+    );
+  }
+
+  retryOvernightRun(
+    runId: string,
+    options?: { wait?: boolean },
+  ): Promise<DaemonOvernightRunMutationResponse> {
+    return this.requestJson<DaemonOvernightRunMutationResponse>(
+      `/v1/overnight/runs/${encodeURIComponent(runId)}/retry`,
+      { method: "POST", body: JSON.stringify(options ?? {}) },
+    );
+  }
+
+  deleteOvernightRun(runId: string): Promise<{ ok: true; deletedId: string }> {
+    return this.requestJson<{ ok: true; deletedId: string }>(
+      `/v1/overnight/runs/${encodeURIComponent(runId)}`,
+      { method: "DELETE" },
     );
   }
 
@@ -1682,13 +1914,10 @@ export class PrismuxDaemonClient {
   }
 
   disconnectOvernightGmail(): Promise<DaemonOvernightConfigSnapshot> {
-    return this.requestJson<DaemonOvernightConfigSnapshot>(
-      "/v1/overnight/oauth/gmail/disconnect",
-      {
-        method: "POST",
-        body: JSON.stringify({}),
-      },
-    );
+    return this.requestJson<DaemonOvernightConfigSnapshot>("/v1/overnight/oauth/gmail/disconnect", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
   }
 
   getPluginCatalog(): Promise<DaemonPluginCatalogResponse> {
@@ -1744,9 +1973,7 @@ export class PrismuxDaemonClient {
     });
   }
 
-  downloadUpdate(
-    payload?: DaemonUpdaterDownloadRequest,
-  ): Promise<DaemonUpdateDownloadResultDto> {
+  downloadUpdate(payload?: DaemonUpdaterDownloadRequest): Promise<DaemonUpdateDownloadResultDto> {
     return this.requestJson<DaemonUpdateDownloadResultDto>("/v1/updater/download", {
       method: "POST",
       body: JSON.stringify(payload ?? {}),
@@ -1760,7 +1987,9 @@ export class PrismuxDaemonClient {
     });
   }
 
-  checkCliUpdates(options: { force?: boolean; provider?: string } = {}): Promise<DaemonCliUpdatesCheckResponse> {
+  checkCliUpdates(
+    options: { force?: boolean; provider?: string } = {},
+  ): Promise<DaemonCliUpdatesCheckResponse> {
     const params = new URLSearchParams();
     if (options.force) {
       params.set("force", "1");
@@ -2024,8 +2253,7 @@ export const killSystemPort = (pid: number): Promise<DaemonKillSystemPortRespons
 
 export const fetchSystemResources = (
   forceRefresh = false,
-): Promise<DaemonSystemResourcesResponse> =>
-  prismuxDaemonClient.fetchSystemResources(forceRefresh);
+): Promise<DaemonSystemResourcesResponse> => prismuxDaemonClient.fetchSystemResources(forceRefresh);
 
 export const killStalePty = (sessionId: string): Promise<DaemonKillStalePtyResponse> =>
   prismuxDaemonClient.killStalePty(sessionId);
@@ -2038,9 +2266,8 @@ export const checkCliUpdates = (options?: {
 export const installCliUpdate = (provider: string): Promise<DaemonCliUpdateInstallResponse> =>
   prismuxDaemonClient.installCliUpdate(provider);
 
-export const fetchQuotaSummary = (
-  force = false,
-): Promise<DaemonOfficialQuotaSummaryResponse> => prismuxDaemonClient.fetchQuotaSummary(force);
+export const fetchQuotaSummary = (force = false): Promise<DaemonOfficialQuotaSummaryResponse> =>
+  prismuxDaemonClient.fetchQuotaSummary(force);
 
 // Read-only Multi-Agent Native Auxiliary Runtime Inspector (AGY / CC / Codex)
 
@@ -2153,7 +2380,9 @@ export interface DaemonAgentAuxSwarmViewDto {
     readonly owners?: readonly string[];
     readonly state?: string;
     readonly note?: string;
-    readonly progress?: { readonly done?: number; readonly total?: number; readonly label?: string } | number;
+    readonly progress?:
+      | { readonly done?: number; readonly total?: number; readonly label?: string }
+      | number;
     readonly blocked_on?: string;
     readonly refs?: ReadonlyArray<{ readonly seq?: number; readonly member?: string }>;
   }>;
@@ -2243,7 +2472,13 @@ export interface DaemonAgentAuxCodexGoalDto {
   readonly threadId: string;
   readonly goalId: string;
   readonly objective: string;
-  readonly status: "active" | "paused" | "blocked" | "usage_limited" | "budget_limited" | "complete";
+  readonly status:
+    | "active"
+    | "paused"
+    | "blocked"
+    | "usage_limited"
+    | "budget_limited"
+    | "complete";
   readonly tokenBudget: number | null;
   readonly tokensUsed: number;
   readonly timeUsedSeconds: number;

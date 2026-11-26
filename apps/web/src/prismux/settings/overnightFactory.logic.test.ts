@@ -33,14 +33,18 @@ import {
   applyOvernightEmailInput,
   applyOvernightMailPreset,
   buildAgentMailActionTestPayload,
+  buildOvernightConnectionChecklist,
   buildOvernightMailSavePayload,
   createDefaultOvernightDraft,
   detectNeteaseDomain,
   extractAgentMailStatusFromSnapshot,
   extractEmailProviderFromSnapshot,
+  formatOvernightExecutionStageLabel,
+  formatOvernightRunStatusBadge,
   hydrateOvernightDraftFromSnapshot,
   isMailChannelConfigured,
   parseAgentMailTestResponse,
+  resolveDefaultTestRecipient,
   shouldDefaultExpandMailChannel,
 } from "./overnightFactory.logic";
 import {
@@ -361,24 +365,23 @@ describe("overnightFactory.logic — 6-card presets, NetEase 163/126 & Tencent A
       },
     });
     const neteaseHtml = renderToStaticMarkup(
-      createElement<PrismuxOvernightFactorySettingsPageProps>(
-        PrismuxOvernightFactorySettingsPage,
-        {
-          standalone: true,
-          daemonReadyOverride: true,
-          serverProvidersOverride: [],
-          settingsOverride: null,
-          waiverOverride: UNSIGNED_WAIVER,
-          initialSnapshotOverride: neteaseSnap,
-          initialRunsOverride: [],
-          workspaceOptionsOverride: [],
-        },
-      ),
+      createElement<PrismuxOvernightFactorySettingsPageProps>(PrismuxOvernightFactorySettingsPage, {
+        standalone: true,
+        daemonReadyOverride: true,
+        serverProvidersOverride: [],
+        settingsOverride: null,
+        waiverOverride: UNSIGNED_WAIVER,
+        initialSnapshotOverride: neteaseSnap,
+        initialRunsOverride: [],
+        workspaceOptionsOverride: [],
+      }),
     );
 
     // Verify exact DOM order of all 6 mailbox preset cards
     const presetIds = ["gmail", "qq", "agent_mail", "outlook", "netease", "custom"] as const;
-    const positions = presetIds.map((id) => neteaseHtml.indexOf(`data-testid="overnight-preset-${id}"`));
+    const positions = presetIds.map((id) =>
+      neteaseHtml.indexOf(`data-testid="overnight-preset-${id}"`),
+    );
     for (const pos of positions) {
       expect(pos).toBeGreaterThan(-1);
     }
@@ -428,19 +431,16 @@ describe("overnightFactory.logic — 6-card presets, NetEase 163/126 & Tencent A
       },
     );
     const agentMailHtml = renderToStaticMarkup(
-      createElement<PrismuxOvernightFactorySettingsPageProps>(
-        PrismuxOvernightFactorySettingsPage,
-        {
-          standalone: true,
-          daemonReadyOverride: true,
-          serverProvidersOverride: [],
-          settingsOverride: null,
-          waiverOverride: UNSIGNED_WAIVER,
-          initialSnapshotOverride: agentMailSnap,
-          initialRunsOverride: [],
-          workspaceOptionsOverride: [],
-        },
-      ),
+      createElement<PrismuxOvernightFactorySettingsPageProps>(PrismuxOvernightFactorySettingsPage, {
+        standalone: true,
+        daemonReadyOverride: true,
+        serverProvidersOverride: [],
+        settingsOverride: null,
+        waiverOverride: UNSIGNED_WAIVER,
+        initialSnapshotOverride: agentMailSnap,
+        initialRunsOverride: [],
+        workspaceOptionsOverride: [],
+      }),
     );
 
     expect(agentMailHtml).toContain('data-testid="overnight-agent-mail-card"');
@@ -451,7 +451,99 @@ describe("overnightFactory.logic — 6-card presets, NetEase 163/126 & Tencent A
     expect(agentMailHtml).toContain("发起 OAuth 浏览器授权");
     expect(agentMailHtml).toContain("检测授权身份（agently-cli +me）");
     expect(agentMailHtml).toContain('data-testid="overnight-agent-mail-oauth-url"');
-    expect(agentMailHtml).toContain("https://agent.qq.com/oauth/authorize?code=RAW%2BVAL&amp;state=123");
+    expect(agentMailHtml).toContain(
+      "https://agent.qq.com/oauth/authorize?code=RAW%2BVAL&amp;state=123",
+    );
     expect(agentMailHtml).toContain('data-testid="overnight-agent-mail-prompt-toggle"');
+  });
+
+  it("auto-promotes live detected agently-cli login to configured state, computes 4-step checklist, resolves default test recipient, and maps live run stages", () => {
+    // Fresh daemon snapshot has default `emailProvider: "imap_smtp"` with empty IMAP credentials,
+    // while `agentMail` probe reports an externally installed & logged-in `agently-cli`!
+    const externallyConfiguredSnap = makeBaseSnapshot(
+      {
+        emailProvider: "imap_smtp",
+        mode: "imap",
+      },
+      {
+        agentMail: {
+          cliInstalled: true,
+          installed: true,
+          version: "1.0.18",
+          cliPath: "C:\\Users\\Fish\\AppData\\Roaming\\npm\\agently-cli.cmd",
+          binaryPath: "C:\\Users\\Fish\\AppData\\Roaming\\npm\\agently-cli.cmd",
+          loggedIn: true,
+          authorizedEmail: "fishundersea@agent.qq.com",
+          address: "fishundersea@agent.qq.com",
+          configured: true,
+          scopes: ["mail:read", "mail:send"],
+          dailySendQuota: 50,
+          authInProgress: false,
+          pendingAuthUrl: null,
+          lastError: null,
+        },
+      },
+    );
+
+    // Must immediately promote to agent_mail and report configured + expanded!
+    const draft = hydrateOvernightDraftFromSnapshot(externallyConfiguredSnap);
+    expect(draft.emailProvider).toBe("agent_mail");
+    expect(draft.preset).toBe("agent_mail");
+    expect(draft.agentMailCliInstalled).toBe(true);
+    expect(draft.agentMailVersion).toBe("1.0.18");
+    expect(draft.agentMailConfigured).toBe(true);
+    expect(draft.agentMailAuthorizedEmail).toBe("fishundersea@agent.qq.com");
+    expect(draft.agentMailDailySendQuota).toBe(50);
+    expect(isMailChannelConfigured(draft)).toBe(true);
+    expect(shouldDefaultExpandMailChannel(externallyConfiguredSnap, false)).toBe(true);
+    expect(resolveDefaultTestRecipient(draft)).toBe("fishundersea@agent.qq.com");
+
+    // 4-step checklist reflects passed state when Agent Mail is detected & outbound fails when testResult reports failure
+    const readyChecklist = buildOvernightConnectionChecklist(draft, null);
+    expect(readyChecklist.map((s) => s.status)).toEqual(["passed", "passed", "passed", "passed"]);
+    expect(readyChecklist[0]?.detail).toContain("fishundersea@agent.qq.com");
+    expect(readyChecklist[0]?.detail).toContain("v1.0.18");
+
+    const failedOutboundChecklist = buildOvernightConnectionChecklist(draft, {
+      ok: false,
+      mode: "imap",
+      emailProvider: "agent_mail",
+      checkedAt: 1_763_000_000_000,
+      durationMs: 120,
+      inbound: { ok: true, latencyMs: 80, message: "收信正常" },
+      outbound: { ok: false, latencyMs: 40, message: "发信权限缺失", hint: "重新授权" },
+      message: "发信校验失败",
+    });
+    expect(failedOutboundChecklist.map((s) => s.status)).toEqual([
+      "passed",
+      "passed",
+      "error",
+      "error",
+    ]);
+
+    // Save payload carries `useSeparateSmtpPassword: false` explicitly so daemon clears stale SMTP secrets
+    const qqDraft = {
+      ...createDefaultOvernightDraft(),
+      email: "owner@qq.com",
+      useSeparateSmtpPassword: false,
+      imapPasswordInput: "fresh-auth",
+      smtpPasswordInput: "ignored-when-unchecked",
+    };
+    const savePayload = buildOvernightMailSavePayload(qqDraft);
+    expect(savePayload.imapSmtp?.useSeparateSmtpPassword).toBe(false);
+    expect(savePayload.secrets).toEqual({ imapPassword: "fresh-auth" });
+
+    // Live execution stage & run status badges
+    expect(formatOvernightExecutionStageLabel("preparing_worktree")).toBe("准备工作树");
+    expect(formatOvernightExecutionStageLabel("running_agent")).toBe("代理编码中");
+    expect(formatOvernightExecutionStageLabel("verifying")).toBe("验收测试");
+    expect(formatOvernightRunStatusBadge("running")).toEqual({
+      label: "执行中",
+      variant: "warning",
+    });
+    expect(formatOvernightRunStatusBadge("cancelled")).toEqual({
+      label: "已取消",
+      variant: "secondary",
+    });
   });
 });

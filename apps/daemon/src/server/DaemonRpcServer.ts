@@ -14,7 +14,7 @@ import type { CordisPluginHost } from "@prismux/cordis-kernel";
 import {
   ForwardIdentityGuard,
   type ObsidianVaultImporterImpl,
-  type SqliteMemoryStore
+  type SqliteMemoryStore,
 } from "@prismux/memory-core";
 import {
   DEFAULT_APP_VERSION,
@@ -42,26 +42,20 @@ import {
   type UpdateChannel,
   type UpdatePackageKind,
   type UpdatePolicyPatch,
-  type UpdateSourceId
+  type UpdateSourceId,
 } from "@prismux/protocol";
 import { WebSocket, WebSocketServer } from "ws";
 import type { AppearanceConfigStore } from "../appearance/AppearanceConfigStore.js";
 import type { ChiefThreadManager } from "../chief/ChiefThreadManager.js";
-import type {
-  HandoffEngine,
-  HandoffTranscriptMessage
-} from "../handoff/HandoffEngine.js";
+import type { HandoffEngine, HandoffTranscriptMessage } from "../handoff/HandoffEngine.js";
 import type { LifecycleHookBus } from "../hooks/LifecycleHookBus.js";
 import type { PersistentPtyPool } from "../pty/PersistentPtyPool.js";
 import type { CliUpdateService } from "../system/CliUpdateService.js";
 import type { OfficialQuotaService } from "../system/OfficialQuotaService.js";
-import {
-  PortKillError,
-  type PortScannerService
-} from "../system/PortScannerService.js";
+import { PortKillError, type PortScannerService } from "../system/PortScannerService.js";
 import {
   normalizeHostMetricsReport,
-  type ResourceMonitorService
+  type ResourceMonitorService,
 } from "../system/ResourceMonitorService.js";
 import type { ServiceDiagnosticsService } from "../system/ServiceDiagnosticsService.js";
 import type { StorageQuotaService } from "../system/StorageQuotaService.js";
@@ -74,26 +68,17 @@ import {
   WallpaperServiceError,
   type WallpaperImportRequest,
   type WallpaperMediaService,
-  type WallpaperRescanRequest
+  type WallpaperRescanRequest,
 } from "../wallpapers/WallpaperMediaService.js";
 import { CliUpdateRouteService } from "./CliUpdateRoutes.js";
-import {
-  BusinessRouteError,
-  type DaemonBusinessService
-} from "./DaemonBusinessRoutes.js";
-import {
-  AgentAuxService,
-  AgentAuxValidationError
-} from "../agentAux/AgentAuxService.js";
+import { BusinessRouteError, type DaemonBusinessService } from "./DaemonBusinessRoutes.js";
+import { AgentAuxService, AgentAuxValidationError } from "../agentAux/AgentAuxService.js";
 import type { OvernightRouteService } from "./OvernightRoutes.js";
 import type { PairingManager } from "./PairingManager.js";
 import { handleQuotaRoute } from "./QuotaRoutes.js";
 import type { DesktopIpcDispatchHub } from "../dispatch/DesktopIpcDispatchHub.js";
 import type { SubscriptionWaiverStore } from "../security/AntigravityPolicyStore.js";
-import {
-  handleDispatchRoute,
-  isDispatchOrSecurityRoute
-} from "./DispatchRoutes.js";
+import { handleDispatchRoute, isDispatchOrSecurityRoute } from "./DispatchRoutes.js";
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const MAX_IMPORT_JSON_BODY_BYTES = 34 * 1024 * 1024;
@@ -110,7 +95,7 @@ export interface DaemonRpcServerOptions {
   pluginHost?: CordisPluginHost;
   onTogglePlugin?: (
     pluginId: string,
-    enabled: boolean
+    enabled: boolean,
   ) => Promise<{ pluginId: string; enabled: boolean }>;
   appUpdater?: AppUpdater;
   memoryStore?: SqliteMemoryStore;
@@ -200,10 +185,7 @@ interface ParsedWebTokenRoute {
   relPath: string;
 }
 
-function parsePrefixedTokenRoutePath(
-  pathname: string,
-  prefix: string
-): ParsedWebTokenRoute | null {
+function parsePrefixedTokenRoutePath(pathname: string, prefix: string): ParsedWebTokenRoute | null {
   if (!pathname.startsWith(prefix)) {
     return null;
   }
@@ -252,7 +234,7 @@ function isLoopbackSameHostReferer(req: IncomingMessage, refererUrl: URL): boole
 function extractPrefixedRefererQueryToken(
   req: IncomingMessage,
   requestUrl: URL,
-  routePrefix: string
+  routePrefix: string,
 ): string | null {
   if (!requestUrl.pathname.startsWith(routePrefix)) {
     return null;
@@ -277,33 +259,24 @@ function extractPrefixedRefererQueryToken(
     return null;
   }
   const expectedPrefix = `${routePrefix}${rawId}`;
-  if (
-    refUrl.pathname !== expectedPrefix &&
-    !refUrl.pathname.startsWith(`${expectedPrefix}/`)
-  ) {
+  if (refUrl.pathname !== expectedPrefix && !refUrl.pathname.startsWith(`${expectedPrefix}/`)) {
     return null;
   }
   const refToken = refUrl.searchParams.get("token")?.trim();
   return refToken && refToken.length > 0 ? refToken : null;
 }
 
-function extractWebRefererQueryToken(
-  req: IncomingMessage,
-  requestUrl: URL
-): string | null {
+function extractWebRefererQueryToken(req: IncomingMessage, requestUrl: URL): string | null {
   return extractPrefixedRefererQueryToken(req, requestUrl, "/v1/wallpapers/web/");
 }
 
-function extractSceneRefererQueryToken(
-  req: IncomingMessage,
-  requestUrl: URL
-): string | null {
+function extractSceneRefererQueryToken(req: IncomingMessage, requestUrl: URL): string | null {
   return extractPrefixedRefererQueryToken(req, requestUrl, "/v1/wallpapers/scene/");
 }
 
 function extractWebTokenRefererWallpaperId(
   req: IncomingMessage,
-  expectedToken: string
+  expectedToken: string,
 ): string | null {
   const rawReferer = req.headers.referer;
   if (typeof rawReferer !== "string" || rawReferer.trim().length === 0) {
@@ -351,7 +324,7 @@ function extractCookieValue(req: IncomingMessage, cookieName: string): string | 
 function extractRequestToken(
   req: IncomingMessage,
   requestUrl: URL,
-  allowQueryToken: boolean
+  allowQueryToken: boolean,
 ): string | null {
   const bearer = extractBearerToken(req);
   if (bearer !== null) {
@@ -400,20 +373,19 @@ function extractRequestToken(
 
 async function readJsonBody(
   req: IncomingMessage,
-  maxBytes: number = MAX_JSON_BODY_BYTES
+  maxBytes: number = MAX_JSON_BODY_BYTES,
 ): Promise<unknown> {
   const chunks: Buffer[] = [];
   let totalBytes = 0;
 
   for await (const chunk of req) {
-    const buf =
-      typeof chunk === "string" ? Buffer.from(chunk, "utf8") : (chunk as Buffer);
+    const buf = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : (chunk as Buffer);
     totalBytes += buf.length;
     if (totalBytes > maxBytes) {
       throw new RpcDispatchError(
         "payload_too_large",
         `Request body exceeded ${maxBytes} bytes.`,
-        413
+        413,
       );
     }
     chunks.push(buf);
@@ -463,90 +435,59 @@ function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
   if (typeof origin === "string" && isAllowedCorsOrigin(origin)) {
     res.setHeader("access-control-allow-origin", origin);
     res.setHeader("vary", "Origin");
-    res.setHeader(
-      "access-control-allow-methods",
-      "GET, HEAD, POST, PUT, DELETE, OPTIONS"
-    );
+    res.setHeader("access-control-allow-methods", "GET, HEAD, POST, PUT, DELETE, OPTIONS");
     res.setHeader(
       "access-control-allow-headers",
-      "Content-Type, Authorization, Range, X-Prismux-Token, Cache-Control, Last-Event-ID, Pragma, Accept"
+      "Content-Type, Authorization, Range, X-Prismux-Token, Cache-Control, Last-Event-ID, Pragma, Accept",
     );
     res.setHeader(
       "access-control-expose-headers",
-      "Content-Range, Accept-Ranges, Content-Length, ETag, Content-Type"
+      "Content-Range, Accept-Ranges, Content-Length, ETag, Content-Type",
     );
     res.setHeader("access-control-max-age", "600");
   }
 }
 
-function writeJsonResponse(
-  res: ServerResponse,
-  statusCode: number,
-  payload: unknown
-): void {
+function writeJsonResponse(res: ServerResponse, statusCode: number, payload: unknown): void {
   const body = `${JSON.stringify(payload)}\n`;
   res.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
-    "content-length": String(Buffer.byteLength(body, "utf8"))
+    "content-length": String(Buffer.byteLength(body, "utf8")),
   });
   res.end(body);
 }
 
-function requireStringParam(
-  params: Record<string, unknown>,
-  key: string
-): string {
+function requireStringParam(params: Record<string, unknown>, key: string): string {
   const value = params[key];
   if (typeof value !== "string" || value.length === 0) {
-    throw new RpcDispatchError(
-      "invalid_params",
-      `Parameter "${key}" must be a non-empty string.`
-    );
+    throw new RpcDispatchError("invalid_params", `Parameter "${key}" must be a non-empty string.`);
   }
   return value;
 }
 
-function optionalStringParam(
-  params: Record<string, unknown>,
-  key: string
-): string | undefined {
+function optionalStringParam(params: Record<string, unknown>, key: string): string | undefined {
   const value = params[key];
   if (value === undefined) {
     return undefined;
   }
   if (typeof value !== "string") {
-    throw new RpcDispatchError(
-      "invalid_params",
-      `Parameter "${key}" must be a string.`
-    );
+    throw new RpcDispatchError("invalid_params", `Parameter "${key}" must be a string.`);
   }
   return value;
 }
 
-function requireBooleanParam(
-  params: Record<string, unknown>,
-  key: string
-): boolean {
+function requireBooleanParam(params: Record<string, unknown>, key: string): boolean {
   const value = params[key];
   if (typeof value !== "boolean") {
-    throw new RpcDispatchError(
-      "invalid_params",
-      `Parameter "${key}" must be a boolean.`
-    );
+    throw new RpcDispatchError("invalid_params", `Parameter "${key}" must be a boolean.`);
   }
   return value;
 }
 
-function requirePositiveIntParam(
-  params: Record<string, unknown>,
-  key: string
-): number {
+function requirePositiveIntParam(params: Record<string, unknown>, key: string): number {
   const value = params[key];
   if (typeof value !== "number" || !Number.isFinite(value) || value < 1) {
-    throw new RpcDispatchError(
-      "invalid_params",
-      `Parameter "${key}" must be a positive number.`
-    );
+    throw new RpcDispatchError("invalid_params", `Parameter "${key}" must be a positive number.`);
   }
   return Math.floor(value);
 }
@@ -555,30 +496,21 @@ function parseOptionalEmbedding(raw: unknown): number[] | undefined {
   if (raw === undefined) {
     return undefined;
   }
-  if (
-    !Array.isArray(raw) ||
-    raw.some((v) => typeof v !== "number" || !Number.isFinite(v))
-  ) {
+  if (!Array.isArray(raw) || raw.some((v) => typeof v !== "number" || !Number.isFinite(v))) {
     throw new RpcDispatchError(
       "invalid_params",
-      'Parameter "embedding" must be an array of finite numbers.'
+      'Parameter "embedding" must be an array of finite numbers.',
     );
   }
   return raw as number[];
 }
 
-function parseOptionalStringArray(
-  raw: unknown,
-  key: string
-): string[] | undefined {
+function parseOptionalStringArray(raw: unknown, key: string): string[] | undefined {
   if (raw === undefined) {
     return undefined;
   }
   if (!Array.isArray(raw) || raw.some((v) => typeof v !== "string")) {
-    throw new RpcDispatchError(
-      "invalid_params",
-      `Parameter "${key}" must be an array of strings.`
-    );
+    throw new RpcDispatchError("invalid_params", `Parameter "${key}" must be an array of strings.`);
   }
   return raw as string[];
 }
@@ -594,10 +526,7 @@ export class DaemonRpcServer {
   private readonly pairingManager: PairingManager;
   private readonly pluginHost: CordisPluginHost | undefined;
   private readonly onTogglePlugin:
-    | ((
-        pluginId: string,
-        enabled: boolean
-      ) => Promise<{ pluginId: string; enabled: boolean }>)
+    | ((pluginId: string, enabled: boolean) => Promise<{ pluginId: string; enabled: boolean }>)
     | undefined;
   private readonly appUpdater: AppUpdater | undefined;
   private readonly memoryStore: SqliteMemoryStore | undefined;
@@ -623,9 +552,7 @@ export class DaemonRpcServer {
   private readonly subscriptionWaiverStore: SubscriptionWaiverStore | undefined;
   private readonly dispatchHub: DesktopIpcDispatchHub | undefined;
   private readonly startedAt: number;
-  private readonly onRequestShutdown:
-    | ((reason?: string) => void | Promise<void>)
-    | undefined;
+  private readonly onRequestShutdown: ((reason?: string) => void | Promise<void>) | undefined;
 
   private httpServer: Server | undefined;
   private wss: WebSocketServer | undefined;
@@ -708,7 +635,7 @@ export class DaemonRpcServer {
       supervisorState: supervisorStatus?.state ?? "stopped",
       activeProvider: this.chiefManager.getSlot().activeProvider,
       ptyCount: this.ptyPool.listSessions().length,
-      uptimeMs: Math.max(0, Date.now() - this.startedAt)
+      uptimeMs: Math.max(0, Date.now() - this.startedAt),
     };
   }
 
@@ -726,7 +653,7 @@ export class DaemonRpcServer {
         ? { lastError: rpcStatus.lastError }
         : supervisorStatus?.lastError !== undefined
           ? { lastError: supervisorStatus.lastError }
-          : {})
+          : {}),
     };
   }
 
@@ -777,8 +704,8 @@ export class DaemonRpcServer {
 
     wss.on("connection", (ws, req) => {
       const trustedScope =
-        (req as IncomingMessage & { __prismuxCallerScope?: CallerScope })
-          .__prismuxCallerScope ?? "owner_chief";
+        (req as IncomingMessage & { __prismuxCallerScope?: CallerScope }).__prismuxCallerScope ??
+        "owner_chief";
       this.handleWsConnection(ws, trustedScope);
     });
 
@@ -857,31 +784,27 @@ export class DaemonRpcServer {
     req: IncomingMessage,
     res: ServerResponse,
     requestUrl?: URL,
-    allowQueryToken = false
+    allowQueryToken = false,
   ): CallerScope | null {
     const token =
       requestUrl !== undefined
         ? extractRequestToken(req, requestUrl, allowQueryToken)
         : extractBearerToken(req);
-    const trustedScope =
-      token !== null ? this.pairingManager.resolveTokenScope(token) : null;
+    const trustedScope = token !== null ? this.pairingManager.resolveTokenScope(token) : null;
     if (trustedScope === null) {
       writeJsonResponse(res, 401, {
         ok: false,
         error: {
           code: "unauthorized",
-          message: "Missing or invalid Bearer token."
-        }
+          message: "Missing or invalid Bearer token.",
+        },
       });
       return null;
     }
     return trustedScope;
   }
 
-  private async handleHttpRequest(
-    req: IncomingMessage,
-    res: ServerResponse
-  ): Promise<void> {
+  private async handleHttpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     applyCorsHeaders(req, res);
 
     let requestUrl: URL;
@@ -890,7 +813,7 @@ export class DaemonRpcServer {
     } catch {
       writeJsonResponse(res, 400, {
         ok: false,
-        error: { code: "invalid_url", message: "Malformed request URL." }
+        error: { code: "invalid_url", message: "Malformed request URL." },
       });
       return;
     }
@@ -915,24 +838,20 @@ export class DaemonRpcServer {
             ok: false,
             error: {
               code: "invalid_params",
-              message: "pairingCode must be a string."
-            }
+              message: "pairingCode must be a string.",
+            },
           });
           return;
         }
-        const deviceLabel =
-          typeof body.deviceLabel === "string" ? body.deviceLabel : undefined;
-        const exchanged = this.pairingManager.exchangePairingCode(
-          body.pairingCode,
-          deviceLabel
-        );
+        const deviceLabel = typeof body.deviceLabel === "string" ? body.deviceLabel : undefined;
+        const exchanged = this.pairingManager.exchangePairingCode(body.pairingCode, deviceLabel);
         if (exchanged === null) {
           writeJsonResponse(res, 401, {
             ok: false,
             error: {
               code: "unauthorized",
-              message: "Invalid, used, or expired pairing code."
-            }
+              message: "Invalid, used, or expired pairing code.",
+            },
           });
           return;
         }
@@ -941,7 +860,7 @@ export class DaemonRpcServer {
           daemonUrl: this.getHttpUrl(),
           wsUrl: this.getWsUrl(),
           deviceLabel: exchanged.deviceLabel,
-          issuedAt: exchanged.issuedAt
+          issuedAt: exchanged.issuedAt,
         });
         return;
       }
@@ -967,15 +886,12 @@ export class DaemonRpcServer {
         writeJsonResponse(res, 200, {
           id: entry.id,
           updatedAt: entry.updatedAt,
-          entry
+          entry,
         });
         return;
       }
 
-      if (
-        method === "POST" &&
-        requestUrl.pathname === "/v1/memory/import-obsidian"
-      ) {
+      if (method === "POST" && requestUrl.pathname === "/v1/memory/import-obsidian") {
         const trustedCallerScope = this.authenticateHttpRequest(req, res);
         if (trustedCallerScope === null) {
           return;
@@ -985,24 +901,17 @@ export class DaemonRpcServer {
             ok: false,
             error: {
               code: "forbidden",
-              message: "Only owner_chief callerScope may import an Obsidian vault."
-            }
+              message: "Only owner_chief callerScope may import an Obsidian vault.",
+            },
           });
           return;
         }
         if (this.obsidianImporter === undefined) {
-          throw new RpcDispatchError(
-            "not_configured",
-            "Obsidian importer is not configured.",
-            503
-          );
+          throw new RpcDispatchError("not_configured", "Obsidian importer is not configured.", 503);
         }
         const rawBody = await readJsonBody(req);
         if (!isRecord(rawBody)) {
-          throw new RpcDispatchError(
-            "invalid_params",
-            "Request body must be a JSON object."
-          );
+          throw new RpcDispatchError("invalid_params", "Request body must be a JSON object.");
         }
         const vaultPath = requireStringParam(rawBody, "vaultPath");
         const targetNsRaw = optionalStringParam(rawBody, "targetNamespace");
@@ -1011,19 +920,17 @@ export class DaemonRpcServer {
           if (!isValidMemoryNamespace(targetNsRaw)) {
             throw new RpcDispatchError(
               "invalid_params",
-              `Invalid targetNamespace: "${targetNsRaw}".`
+              `Invalid targetNamespace: "${targetNsRaw}".`,
             );
           }
           targetNamespace = targetNsRaw;
         }
         const dryRun =
-          rawBody.dryRun !== undefined
-            ? requireBooleanParam(rawBody, "dryRun")
-            : undefined;
+          rawBody.dryRun !== undefined ? requireBooleanParam(rawBody, "dryRun") : undefined;
         const importReq: ObsidianImportRequest = {
           vaultPath,
           ...(targetNamespace !== undefined ? { targetNamespace } : {}),
-          ...(dryRun !== undefined ? { dryRun } : {})
+          ...(dryRun !== undefined ? { dryRun } : {}),
         };
         const result = await this.obsidianImporter.importVault(importReq);
         writeJsonResponse(res, 200, result);
@@ -1040,12 +947,7 @@ export class DaemonRpcServer {
       }
 
       if (method === "GET" && requestUrl.pathname === "/v1/updater/events") {
-        const trustedCallerScope = this.authenticateHttpRequest(
-          req,
-          res,
-          requestUrl,
-          true
-        );
+        const trustedCallerScope = this.authenticateHttpRequest(req, res, requestUrl, true);
         if (trustedCallerScope === null) {
           return;
         }
@@ -1112,9 +1014,7 @@ export class DaemonRpcServer {
         return;
       }
 
-      if (
-        await this.handleExtendedHttpRoutes(req, res, method, requestUrl)
-      ) {
+      if (await this.handleExtendedHttpRoutes(req, res, method, requestUrl)) {
         return;
       }
 
@@ -1122,14 +1022,14 @@ export class DaemonRpcServer {
         ok: false,
         error: {
           code: "not_found",
-          message: `Route not found: ${method} ${requestUrl.pathname}`
-        }
+          message: `Route not found: ${method} ${requestUrl.pathname}`,
+        },
       });
     } catch (error) {
       if (error instanceof WallpaperServiceError) {
         writeJsonResponse(res, error.statusCode, {
           ok: false,
-          error: { code: error.code, message: error.message }
+          error: { code: error.code, message: error.message },
         });
         return;
       }
@@ -1138,7 +1038,7 @@ export class DaemonRpcServer {
           ok: false,
           killed: false,
           message: error.message,
-          error: { code: error.code, message: error.message }
+          error: { code: error.code, message: error.message },
         });
         return;
       }
@@ -1148,8 +1048,8 @@ export class DaemonRpcServer {
           error: {
             code: error.code,
             message: error.message,
-            ...(error.details !== undefined ? { details: error.details } : {})
-          }
+            ...(error.details !== undefined ? { details: error.details } : {}),
+          },
         });
         return;
       }
@@ -1157,14 +1057,14 @@ export class DaemonRpcServer {
         writeJsonResponse(res, error.httpStatus, {
           id: "unknown",
           ok: false,
-          error: { code: error.code, message: error.message }
+          error: { code: error.code, message: error.message },
         });
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
       writeJsonResponse(res, 500, {
         ok: false,
-        error: { code: "internal_error", message }
+        error: { code: "internal_error", message },
       });
     }
   }
@@ -1173,7 +1073,7 @@ export class DaemonRpcServer {
     req: IncomingMessage,
     res: ServerResponse,
     method: string,
-    requestUrl: URL
+    requestUrl: URL,
   ): Promise<boolean> {
     const rawPathPart = (req.url ?? "/").split("?")[0] ?? "/";
     if (
@@ -1199,8 +1099,8 @@ export class DaemonRpcServer {
         ok: false,
         error: {
           code: "PATH_TRAVERSAL_BLOCKED",
-          message: "Path traversal is forbidden."
-        }
+          message: "Path traversal is forbidden.",
+        },
       });
       return true;
     }
@@ -1213,33 +1113,31 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "WALLPAPER_UNAVAILABLE",
-          "WallpaperMediaService is not configured."
+          "WallpaperMediaService is not configured.",
         );
       }
       const advancedEngineEnabled = this.appearanceStore
         ? this.appearanceStore.get().config.wallpaper.advancedEngineEnabled
         : this.wallpaperService.isAdvancedEngineEnabled();
       let inventory = await this.wallpaperService.getInventory({
-        advancedEngineEnabled
+        advancedEngineEnabled,
       });
       if (this.appearanceStore?.isLegacyAdvancedEngineMigrationPending()) {
         const pendingWallpaper = this.appearanceStore.get().config.wallpaper;
         const selectedId = pendingWallpaper.selectedId;
         const matched = selectedId
           ? inventory.items.find(
-              (item) =>
-                item.id === selectedId || `steam:${item.id}` === selectedId
+              (item) => item.id === selectedId || `steam:${item.id}` === selectedId,
             )
           : undefined;
-        const migratedToTrue =
-          this.appearanceStore.resolveLegacyAdvancedEngineMigration(
-            matched?.type ?? null
-          );
+        const migratedToTrue = this.appearanceStore.resolveLegacyAdvancedEngineMigration(
+          matched?.type ?? null,
+        );
         if (migratedToTrue) {
           inventory = await this.wallpaperService.rescan({
             customDirs: pendingWallpaper.customDirs,
             steamRootOverride: pendingWallpaper.steamRootOverride,
-            advancedEngineEnabled: true
+            advancedEngineEnabled: true,
           });
         }
       }
@@ -1253,7 +1151,7 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "WALLPAPER_UNAVAILABLE",
-          "WallpaperMediaService is not configured."
+          "WallpaperMediaService is not configured.",
         );
       }
       const rawBody = await readJsonBody(req);
@@ -1261,7 +1159,7 @@ export class DaemonRpcServer {
       if (isRecord(rawBody)) {
         if (Array.isArray(rawBody["customDirs"])) {
           rescanReq.customDirs = rawBody["customDirs"].filter(
-            (d): d is string => typeof d === "string"
+            (d): d is string => typeof d === "string",
           );
         }
         if (typeof rawBody["steamRootOverride"] === "string") {
@@ -1287,20 +1185,15 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "WALLPAPER_UNAVAILABLE",
-          "WallpaperMediaService is not configured."
+          "WallpaperMediaService is not configured.",
         );
       }
       const rawBody = await readJsonBody(req, MAX_IMPORT_JSON_BODY_BYTES);
       if (!isRecord(rawBody)) {
-        throw new RpcDispatchError(
-          "invalid_params",
-          "Import request body must be a JSON object."
-        );
+        throw new RpcDispatchError("invalid_params", "Import request body must be a JSON object.");
       }
       const importReq: WallpaperImportRequest = {
-        ...(typeof rawBody["sourcePath"] === "string"
-          ? { sourcePath: rawBody["sourcePath"] }
-          : {}),
+        ...(typeof rawBody["sourcePath"] === "string" ? { sourcePath: rawBody["sourcePath"] } : {}),
         ...(typeof rawBody["fileName"] === "string"
           ? { fileName: rawBody["fileName"] }
           : typeof rawBody["filename"] === "string"
@@ -1315,7 +1208,7 @@ export class DaemonRpcServer {
             : typeof rawBody["contentBase64"] === "string"
               ? { base64: rawBody["contentBase64"] }
               : {}),
-        ...(typeof rawBody["title"] === "string" ? { title: rawBody["title"] } : {})
+        ...(typeof rawBody["title"] === "string" ? { title: rawBody["title"] } : {}),
       };
       const result = await this.wallpaperService.importWallpaper(importReq);
       this.diagnosticsService?.clearCache();
@@ -1323,10 +1216,7 @@ export class DaemonRpcServer {
       return true;
     }
 
-    if (
-      (method === "GET" || method === "HEAD") &&
-      pathname.startsWith("/v1/wallpapers/preview/")
-    ) {
+    if ((method === "GET" || method === "HEAD") && pathname.startsWith("/v1/wallpapers/preview/")) {
       if (this.authenticateHttpRequest(req, res, requestUrl, true) === null) {
         return true;
       }
@@ -1334,7 +1224,7 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "WALLPAPER_UNAVAILABLE",
-          "WallpaperMediaService is not configured."
+          "WallpaperMediaService is not configured.",
         );
       }
       req.socket?.setTimeout?.(0);
@@ -1344,10 +1234,7 @@ export class DaemonRpcServer {
       return true;
     }
 
-    if (
-      (method === "GET" || method === "HEAD") &&
-      pathname.startsWith("/v1/wallpapers/media/")
-    ) {
+    if ((method === "GET" || method === "HEAD") && pathname.startsWith("/v1/wallpapers/media/")) {
       if (this.authenticateHttpRequest(req, res, requestUrl, true) === null) {
         return true;
       }
@@ -1355,7 +1242,7 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "WALLPAPER_UNAVAILABLE",
-          "WallpaperMediaService is not configured."
+          "WallpaperMediaService is not configured.",
         );
       }
       req.socket?.setTimeout?.(0);
@@ -1367,8 +1254,7 @@ export class DaemonRpcServer {
 
     if (
       (method === "GET" || method === "HEAD") &&
-      (pathname === "/v1/wallpapers/web-t" ||
-        pathname.startsWith(WEB_TOKEN_ROUTE_PREFIX))
+      (pathname === "/v1/wallpapers/web-t" || pathname.startsWith(WEB_TOKEN_ROUTE_PREFIX))
     ) {
       const parsed = parseWebTokenRoutePath(pathname);
       const trustedScope =
@@ -1378,8 +1264,8 @@ export class DaemonRpcServer {
           ok: false,
           error: {
             code: "unauthorized",
-            message: "Missing or invalid Bearer token."
-          }
+            message: "Missing or invalid Bearer token.",
+          },
         });
         return true;
       }
@@ -1387,7 +1273,7 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "WALLPAPER_UNAVAILABLE",
-          "WallpaperMediaService is not configured."
+          "WallpaperMediaService is not configured.",
         );
       }
       req.socket?.setTimeout?.(0);
@@ -1395,37 +1281,30 @@ export class DaemonRpcServer {
       if (parsed.rawId.length === 0) {
         writeJsonResponse(res, 404, {
           ok: false,
-          error: { code: "WALLPAPER_NOT_FOUND", message: "Missing wallpaper id." }
+          error: { code: "WALLPAPER_NOT_FOUND", message: "Missing wallpaper id." },
         });
         return true;
       }
       const advancedEngineEnabled = this.appearanceStore
         ? this.appearanceStore.get().config.wallpaper.advancedEngineEnabled
         : this.wallpaperService.isAdvancedEngineEnabled();
-      if (
-        advancedEngineEnabled &&
-        (await this.wallpaperService.isWebWallpaperId(parsed.rawId))
-      ) {
+      if (advancedEngineEnabled && (await this.wallpaperService.isWebWallpaperId(parsed.rawId))) {
         this.lastWebWallpaperIdByToken.set(parsed.token, parsed.rawId);
       }
       const refererWallpaperId =
         extractWebTokenRefererWallpaperId(req, parsed.token) ??
         this.lastWebWallpaperIdByToken.get(parsed.token) ??
         null;
-      await this.wallpaperService.serveWebAsset(
-        parsed.rawId,
-        parsed.relPath,
-        req,
-        res,
-        { refererWallpaperId, advancedEngineEnabled }
-      );
+      await this.wallpaperService.serveWebAsset(parsed.rawId, parsed.relPath, req, res, {
+        refererWallpaperId,
+        advancedEngineEnabled,
+      });
       return true;
     }
 
     if (
       (method === "GET" || method === "HEAD") &&
-      (pathname === "/v1/wallpapers/scene-t" ||
-        pathname.startsWith(SCENE_TOKEN_ROUTE_PREFIX))
+      (pathname === "/v1/wallpapers/scene-t" || pathname.startsWith(SCENE_TOKEN_ROUTE_PREFIX))
     ) {
       const parsed = parseSceneTokenRoutePath(pathname);
       const trustedScope =
@@ -1435,8 +1314,8 @@ export class DaemonRpcServer {
           ok: false,
           error: {
             code: "unauthorized",
-            message: "Missing or invalid Bearer token."
-          }
+            message: "Missing or invalid Bearer token.",
+          },
         });
         return true;
       }
@@ -1444,7 +1323,7 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "WALLPAPER_UNAVAILABLE",
-          "WallpaperMediaService is not configured."
+          "WallpaperMediaService is not configured.",
         );
       }
       req.socket?.setTimeout?.(0);
@@ -1452,27 +1331,22 @@ export class DaemonRpcServer {
       if (parsed.rawId.length === 0) {
         writeJsonResponse(res, 404, {
           ok: false,
-          error: { code: "WALLPAPER_NOT_FOUND", message: "Missing wallpaper id." }
+          error: { code: "WALLPAPER_NOT_FOUND", message: "Missing wallpaper id." },
         });
         return true;
       }
       const advancedEngineEnabled = this.appearanceStore
         ? this.appearanceStore.get().config.wallpaper.advancedEngineEnabled
         : this.wallpaperService.isAdvancedEngineEnabled();
-      await this.wallpaperService.serveSceneAsset(
-        parsed.rawId,
-        parsed.relPath,
-        req,
-        res,
-        { advancedEngineEnabled }
-      );
+      await this.wallpaperService.serveSceneAsset(parsed.rawId, parsed.relPath, req, res, {
+        advancedEngineEnabled,
+      });
       return true;
     }
 
     if (
       (method === "GET" || method === "HEAD") &&
-      (pathname === "/v1/wallpapers/scene" ||
-        pathname.startsWith("/v1/wallpapers/scene/"))
+      (pathname === "/v1/wallpapers/scene" || pathname.startsWith("/v1/wallpapers/scene/"))
     ) {
       if (this.authenticateHttpRequest(req, res, requestUrl, true) === null) {
         return true;
@@ -1481,14 +1355,14 @@ export class DaemonRpcServer {
       if (sceneQueryToken && sceneQueryToken.length > 0) {
         res.setHeader(
           "set-cookie",
-          `${SCENE_WALLPAPER_AUTH_COOKIE}=${encodeURIComponent(sceneQueryToken)}; HttpOnly; SameSite=Lax; Path=/v1/wallpapers/scene/`
+          `${SCENE_WALLPAPER_AUTH_COOKIE}=${encodeURIComponent(sceneQueryToken)}; HttpOnly; SameSite=Lax; Path=/v1/wallpapers/scene/`,
         );
       }
       if (!this.wallpaperService) {
         throw new BusinessRouteError(
           503,
           "WALLPAPER_UNAVAILABLE",
-          "WallpaperMediaService is not configured."
+          "WallpaperMediaService is not configured.",
         );
       }
       req.socket?.setTimeout?.(0);
@@ -1500,7 +1374,7 @@ export class DaemonRpcServer {
       if (rawId.length === 0) {
         writeJsonResponse(res, 404, {
           ok: false,
-          error: { code: "WALLPAPER_NOT_FOUND", message: "Missing wallpaper id." }
+          error: { code: "WALLPAPER_NOT_FOUND", message: "Missing wallpaper id." },
         });
         return true;
       }
@@ -1508,15 +1382,14 @@ export class DaemonRpcServer {
         ? this.appearanceStore.get().config.wallpaper.advancedEngineEnabled
         : this.wallpaperService.isAdvancedEngineEnabled();
       await this.wallpaperService.serveSceneAsset(rawId, relPath, req, res, {
-        advancedEngineEnabled
+        advancedEngineEnabled,
       });
       return true;
     }
 
     if (
       (method === "GET" || method === "HEAD") &&
-      (pathname === "/v1/wallpapers/web" ||
-        pathname.startsWith("/v1/wallpapers/web/"))
+      (pathname === "/v1/wallpapers/web" || pathname.startsWith("/v1/wallpapers/web/"))
     ) {
       if (this.authenticateHttpRequest(req, res, requestUrl, true) === null) {
         return true;
@@ -1527,14 +1400,14 @@ export class DaemonRpcServer {
         // Steam Web wallpaper iframes authenticate seamlessly without exposing token to other routes.
         res.setHeader(
           "set-cookie",
-          `${WEB_WALLPAPER_AUTH_COOKIE}=${encodeURIComponent(webQueryToken)}; HttpOnly; SameSite=Lax; Path=/v1/wallpapers/web/`
+          `${WEB_WALLPAPER_AUTH_COOKIE}=${encodeURIComponent(webQueryToken)}; HttpOnly; SameSite=Lax; Path=/v1/wallpapers/web/`,
         );
       }
       if (!this.wallpaperService) {
         throw new BusinessRouteError(
           503,
           "WALLPAPER_UNAVAILABLE",
-          "WallpaperMediaService is not configured."
+          "WallpaperMediaService is not configured.",
         );
       }
       req.socket?.setTimeout?.(0);
@@ -1546,7 +1419,7 @@ export class DaemonRpcServer {
       if (rawId.length === 0) {
         writeJsonResponse(res, 404, {
           ok: false,
-          error: { code: "WALLPAPER_NOT_FOUND", message: "Missing wallpaper id." }
+          error: { code: "WALLPAPER_NOT_FOUND", message: "Missing wallpaper id." },
         });
         return true;
       }
@@ -1554,7 +1427,7 @@ export class DaemonRpcServer {
         ? this.appearanceStore.get().config.wallpaper.advancedEngineEnabled
         : this.wallpaperService.isAdvancedEngineEnabled();
       await this.wallpaperService.serveWebAsset(rawId, relPath, req, res, {
-        advancedEngineEnabled
+        advancedEngineEnabled,
       });
       return true;
     }
@@ -1575,23 +1448,19 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "APPEARANCE_UNAVAILABLE",
-          "AppearanceConfigStore is not configured."
+          "AppearanceConfigStore is not configured.",
         );
       }
-      if (
-        this.wallpaperService &&
-        this.appearanceStore.isLegacyAdvancedEngineMigrationPending()
-      ) {
+      if (this.wallpaperService && this.appearanceStore.isLegacyAdvancedEngineMigrationPending()) {
         const pendingWallpaper = this.appearanceStore.get().config.wallpaper;
         const selectedId = pendingWallpaper.selectedId;
         let matchedType: "image" | "video" | "web" | "scene" | null = null;
         if (selectedId) {
           const probeInventory = await this.wallpaperService.getInventory({
-            advancedEngineEnabled: false
+            advancedEngineEnabled: false,
           });
           const matched = probeInventory.items.find(
-            (item) =>
-              item.id === selectedId || `steam:${item.id}` === selectedId
+            (item) => item.id === selectedId || `steam:${item.id}` === selectedId,
           );
           matchedType = matched?.type ?? null;
         }
@@ -1601,7 +1470,7 @@ export class DaemonRpcServer {
           await this.wallpaperService.rescan({
             customDirs: pendingWallpaper.customDirs,
             steamRootOverride: pendingWallpaper.steamRootOverride,
-            advancedEngineEnabled: true
+            advancedEngineEnabled: true,
           });
         }
       }
@@ -1609,7 +1478,7 @@ export class DaemonRpcServer {
       writeJsonResponse(res, 200, {
         ok: true,
         ...loaded.config,
-        recoveredFromCorruption: loaded.recoveredFromCorruption
+        recoveredFromCorruption: loaded.recoveredFromCorruption,
       });
       return true;
     }
@@ -1621,33 +1490,27 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           403,
           "FORBIDDEN_SCOPE",
-          `Scope "${trustedCallerScope}" cannot modify appearance settings.`
+          `Scope "${trustedCallerScope}" cannot modify appearance settings.`,
         );
       }
       if (!this.appearanceStore) {
         throw new BusinessRouteError(
           503,
           "APPEARANCE_UNAVAILABLE",
-          "AppearanceConfigStore is not configured."
+          "AppearanceConfigStore is not configured.",
         );
       }
       const rawBody = await readJsonBody(req);
       if (!isRecord(rawBody)) {
-        throw new RpcDispatchError(
-          "invalid_params",
-          "Appearance payload must be a JSON object."
-        );
+        throw new RpcDispatchError("invalid_params", "Appearance payload must be a JSON object.");
       }
       const prevWallpaper = this.appearanceStore.get().config.wallpaper;
       const updated = this.appearanceStore.update(rawBody);
       const nextWallpaper = updated.wallpaper;
       const customDirsChanged =
         prevWallpaper.customDirs.length !== nextWallpaper.customDirs.length ||
-        prevWallpaper.customDirs.some(
-          (dir, idx) => dir !== nextWallpaper.customDirs[idx]
-        );
-      const steamRootChanged =
-        prevWallpaper.steamRootOverride !== nextWallpaper.steamRootOverride;
+        prevWallpaper.customDirs.some((dir, idx) => dir !== nextWallpaper.customDirs[idx]);
+      const steamRootChanged = prevWallpaper.steamRootOverride !== nextWallpaper.steamRootOverride;
       const advancedEngineChanged =
         prevWallpaper.advancedEngineEnabled !== nextWallpaper.advancedEngineEnabled;
       if (
@@ -1657,7 +1520,7 @@ export class DaemonRpcServer {
         await this.wallpaperService.rescan({
           customDirs: nextWallpaper.customDirs,
           steamRootOverride: nextWallpaper.steamRootOverride,
-          advancedEngineEnabled: nextWallpaper.advancedEngineEnabled
+          advancedEngineEnabled: nextWallpaper.advancedEngineEnabled,
         });
       }
       writeJsonResponse(res, 200, { ok: true, ...updated });
@@ -1671,14 +1534,10 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "SERVICE_UNAVAILABLE",
-          "Business routes service is not configured."
+          "Business routes service is not configured.",
         );
       }
-      writeJsonResponse(
-        res,
-        200,
-        this.businessService.getChiefStatus(trustedCallerScope)
-      );
+      writeJsonResponse(res, 200, this.businessService.getChiefStatus(trustedCallerScope));
       return true;
     }
 
@@ -1689,37 +1548,28 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "SERVICE_UNAVAILABLE",
-          "Business routes service is not configured."
+          "Business routes service is not configured.",
         );
       }
       const rawBody = await readJsonBody(req);
-      const result = await this.businessService.switchChief(
-        rawBody,
-        trustedCallerScope
-      );
+      const result = await this.businessService.switchChief(rawBody, trustedCallerScope);
       this.diagnosticsService?.clearCache();
       writeJsonResponse(res, 200, result);
       return true;
     }
 
-    if (
-      (method === "PUT" || method === "POST") &&
-      pathname === "/v1/chief/profile"
-    ) {
+    if ((method === "PUT" || method === "POST") && pathname === "/v1/chief/profile") {
       const trustedCallerScope = this.authenticateHttpRequest(req, res);
       if (trustedCallerScope === null) return true;
       if (!this.businessService) {
         throw new BusinessRouteError(
           503,
           "SERVICE_UNAVAILABLE",
-          "Business routes service is not configured."
+          "Business routes service is not configured.",
         );
       }
       const rawBody = await readJsonBody(req);
-      const result = this.businessService.updateChiefProfile(
-        rawBody,
-        trustedCallerScope
-      );
+      const result = this.businessService.updateChiefProfile(rawBody, trustedCallerScope);
       this.diagnosticsService?.clearCache();
       writeJsonResponse(res, 200, result);
       return true;
@@ -1732,7 +1582,7 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "SERVICE_UNAVAILABLE",
-          "Business routes service is not configured."
+          "Business routes service is not configured.",
         );
       }
       const result = this.businessService.getChiefAgentsMd(trustedCallerScope);
@@ -1747,14 +1597,11 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "SERVICE_UNAVAILABLE",
-          "Business routes service is not configured."
+          "Business routes service is not configured.",
         );
       }
       const rawBody = await readJsonBody(req);
-      const result = this.businessService.saveChiefAgentsMd(
-        rawBody,
-        trustedCallerScope
-      );
+      const result = this.businessService.saveChiefAgentsMd(rawBody, trustedCallerScope);
       writeJsonResponse(res, 200, result);
       return true;
     }
@@ -1766,13 +1613,13 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "SERVICE_UNAVAILABLE",
-          "Business routes service is not configured."
+          "Business routes service is not configured.",
         );
       }
       const rawBody = await readJsonBody(req);
       const result = await this.businessService.planObsidianVaultImport(
         rawBody,
-        trustedCallerScope
+        trustedCallerScope,
       );
       writeJsonResponse(res, 200, result);
       return true;
@@ -1785,13 +1632,13 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "SERVICE_UNAVAILABLE",
-          "Business routes service is not configured."
+          "Business routes service is not configured.",
         );
       }
       const rawBody = await readJsonBody(req);
       const result = await this.businessService.commitObsidianVaultImport(
         rawBody,
-        trustedCallerScope
+        trustedCallerScope,
       );
       writeJsonResponse(res, 200, result);
       return true;
@@ -1804,7 +1651,7 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "SERVICE_UNAVAILABLE",
-          "Business routes service is not configured."
+          "Business routes service is not configured.",
         );
       }
       const stats = await this.businessService.getMemoryStats(trustedCallerScope);
@@ -1819,14 +1666,11 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "SERVICE_UNAVAILABLE",
-          "Business routes service is not configured."
+          "Business routes service is not configured.",
         );
       }
       const rawBody = await readJsonBody(req);
-      const result = await this.businessService.searchMemory(
-        rawBody,
-        trustedCallerScope
-      );
+      const result = await this.businessService.searchMemory(rawBody, trustedCallerScope);
       writeJsonResponse(res, 200, result);
       return true;
     }
@@ -1838,7 +1682,7 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "SERVICE_UNAVAILABLE",
-          "Business routes service is not configured."
+          "Business routes service is not configured.",
         );
       }
       const result = await this.businessService.getSyncStatus(trustedCallerScope);
@@ -1846,24 +1690,18 @@ export class DaemonRpcServer {
       return true;
     }
 
-    if (
-      (method === "PUT" || method === "POST") &&
-      pathname === "/v1/sync/config"
-    ) {
+    if ((method === "PUT" || method === "POST") && pathname === "/v1/sync/config") {
       const trustedCallerScope = this.authenticateHttpRequest(req, res);
       if (trustedCallerScope === null) return true;
       if (!this.businessService) {
         throw new BusinessRouteError(
           503,
           "SERVICE_UNAVAILABLE",
-          "Business routes service is not configured."
+          "Business routes service is not configured.",
         );
       }
       const rawBody = await readJsonBody(req);
-      const result = await this.businessService.updateSyncConfig(
-        rawBody,
-        trustedCallerScope
-      );
+      const result = await this.businessService.updateSyncConfig(rawBody, trustedCallerScope);
       this.diagnosticsService?.clearCache();
       writeJsonResponse(res, 200, result);
       return true;
@@ -1876,14 +1714,11 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "SERVICE_UNAVAILABLE",
-          "Business routes service is not configured."
+          "Business routes service is not configured.",
         );
       }
       const rawBody = await readJsonBody(req);
-      const result = await this.businessService.triggerSyncNow(
-        rawBody,
-        trustedCallerScope
-      );
+      const result = await this.businessService.triggerSyncNow(rawBody, trustedCallerScope);
       writeJsonResponse(res, 200, result);
       return true;
     }
@@ -1895,25 +1730,20 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "SERVICE_UNAVAILABLE",
-          "Business routes service is not configured."
+          "Business routes service is not configured.",
         );
       }
       const rawBody = await readJsonBody(req);
-      const result = await this.businessService.testSyncConnection(
-        rawBody,
-        trustedCallerScope
-      );
+      const result = await this.businessService.testSyncConnection(rawBody, trustedCallerScope);
       writeJsonResponse(res, 200, result);
       return true;
     }
 
     if (
       (method === "GET" &&
-        (pathname === "/v1/diagnostics/services" ||
-          pathname === "/v1/diagnostics")) ||
+        (pathname === "/v1/diagnostics/services" || pathname === "/v1/diagnostics")) ||
       (method === "POST" &&
-        (pathname === "/v1/diagnostics/refresh" ||
-          pathname === "/v1/diagnostics/services/refresh"))
+        (pathname === "/v1/diagnostics/refresh" || pathname === "/v1/diagnostics/services/refresh"))
     ) {
       const trustedCallerScope = this.authenticateHttpRequest(req, res);
       if (trustedCallerScope === null) return true;
@@ -1921,14 +1751,14 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           403,
           "FORBIDDEN_SCOPE",
-          `Scope "${trustedCallerScope}" is not permitted to access ${pathname}.`
+          `Scope "${trustedCallerScope}" is not permitted to access ${pathname}.`,
         );
       }
       if (!this.diagnosticsService) {
         throw new BusinessRouteError(
           503,
           "DIAGNOSTICS_UNAVAILABLE",
-          "ServiceDiagnosticsService is not configured."
+          "ServiceDiagnosticsService is not configured.",
         );
       }
       const isRefreshPost = method === "POST";
@@ -1955,7 +1785,7 @@ export class DaemonRpcServer {
         force,
         ...(providersParam !== undefined ? { providers: providersParam } : {}),
         ...(includeAll ? { includeAll: true } : {}),
-        ...(deepScan ? { deepScan: true } : {})
+        ...(deepScan ? { deepScan: true } : {}),
       });
       writeJsonResponse(res, 200, report);
       return true;
@@ -1968,14 +1798,14 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           403,
           "FORBIDDEN_SCOPE",
-          `Scope "${trustedCallerScope}" is not permitted to access /v1/system/ports.`
+          `Scope "${trustedCallerScope}" is not permitted to access /v1/system/ports.`,
         );
       }
       if (!this.portScannerService) {
         throw new BusinessRouteError(
           503,
           "PORT_SCANNER_UNAVAILABLE",
-          "PortScannerService is not configured."
+          "PortScannerService is not configured.",
         );
       }
       const workspace = requestUrl.searchParams.get("workspace") ?? undefined;
@@ -1991,27 +1821,23 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           403,
           "FORBIDDEN_SCOPE",
-          `Scope "${trustedCallerScope}" is not permitted to terminate system ports.`
+          `Scope "${trustedCallerScope}" is not permitted to terminate system ports.`,
         );
       }
       if (!this.portScannerService) {
         throw new BusinessRouteError(
           503,
           "PORT_SCANNER_UNAVAILABLE",
-          "PortScannerService is not configured."
+          "PortScannerService is not configured.",
         );
       }
       const rawBody = await readJsonBody(req);
       if (!isRecord(rawBody)) {
         throw new PortKillError(400, "INVALID_PARAMS", "请求体必须是 JSON 对象。");
       }
-      const signal =
-        typeof rawBody["signal"] === "string" ? rawBody["signal"] : undefined;
+      const signal = typeof rawBody["signal"] === "string" ? rawBody["signal"] : undefined;
       try {
-        const result = await this.portScannerService.killPid(
-          rawBody["pid"],
-          signal
-        );
+        const result = await this.portScannerService.killPid(rawBody["pid"], signal);
         writeJsonResponse(res, 200, result);
       } catch (err) {
         if (err instanceof PortKillError) {
@@ -2020,7 +1846,7 @@ export class DaemonRpcServer {
             pid: typeof rawBody["pid"] === "number" ? rawBody["pid"] : -1,
             killed: false,
             message: err.message,
-            error: { code: err.code, message: err.message }
+            error: { code: err.code, message: err.message },
           });
           return true;
         }
@@ -2036,14 +1862,14 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           403,
           "FORBIDDEN_SCOPE",
-          `Scope "${trustedCallerScope}" is not permitted to access /v1/system/resources.`
+          `Scope "${trustedCallerScope}" is not permitted to access /v1/system/resources.`,
         );
       }
       if (!this.resourceMonitorService) {
         throw new BusinessRouteError(
           503,
           "RESOURCE_MONITOR_UNAVAILABLE",
-          "ResourceMonitorService is not configured."
+          "ResourceMonitorService is not configured.",
         );
       }
       const refreshParam =
@@ -2062,20 +1888,19 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           403,
           "FORBIDDEN_SCOPE",
-          `Scope "${trustedCallerScope}" is not permitted to access /v1/system/storage.`
+          `Scope "${trustedCallerScope}" is not permitted to access /v1/system/storage.`,
         );
       }
       if (!this.storageQuotaService) {
         throw new BusinessRouteError(
           503,
           "STORAGE_QUOTA_UNAVAILABLE",
-          "StorageQuotaService is not configured."
+          "StorageQuotaService is not configured.",
         );
       }
       const refreshParam =
         requestUrl.searchParams.get("refresh") ?? requestUrl.searchParams.get("force");
-      const refresh =
-        refreshParam === "1" || refreshParam === "true" || refreshParam === "yes";
+      const refresh = refreshParam === "1" || refreshParam === "true" || refreshParam === "yes";
       const inventory = await this.storageQuotaService.getInventory({ refresh });
       writeJsonResponse(res, 200, inventory);
       return true;
@@ -2088,23 +1913,19 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           403,
           "FORBIDDEN_SCOPE",
-          `Scope "${trustedCallerScope}" is not permitted to clean local storage.`
+          `Scope "${trustedCallerScope}" is not permitted to clean local storage.`,
         );
       }
       if (!this.storageQuotaService) {
         throw new BusinessRouteError(
           503,
           "STORAGE_QUOTA_UNAVAILABLE",
-          "StorageQuotaService is not configured."
+          "StorageQuotaService is not configured.",
         );
       }
       const rawBody = await readJsonBody(req);
       if (!isRecord(rawBody)) {
-        throw new BusinessRouteError(
-          400,
-          "INVALID_PARAMS",
-          "Request body must be a JSON object."
-        );
+        throw new BusinessRouteError(400, "INVALID_PARAMS", "Request body must be a JSON object.");
       }
       const targetIds = Array.isArray(rawBody["targetIds"])
         ? rawBody["targetIds"].filter((v): v is string => typeof v === "string")
@@ -2114,7 +1935,7 @@ export class DaemonRpcServer {
         : undefined;
       const result = await this.storageQuotaService.clean({
         ...(targetIds !== undefined ? { targetIds } : {}),
-        ...(actions !== undefined ? { actions } : {})
+        ...(actions !== undefined ? { actions } : {}),
       });
       writeJsonResponse(res, 200, result);
       return true;
@@ -2131,15 +1952,12 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           403,
           "FORBIDDEN_SCOPE",
-          `Scope "${trustedCallerScope}" is not permitted to access ${pathname}.`
+          `Scope "${trustedCallerScope}" is not permitted to access ${pathname}.`,
         );
       }
       const rawBody = await readJsonBody(req);
       if (this.businessService) {
-        const result = this.businessService.ingestHostResourceMetrics(
-          rawBody,
-          trustedCallerScope
-        );
+        const result = this.businessService.ingestHostResourceMetrics(rawBody, trustedCallerScope);
         writeJsonResponse(res, 200, result);
         return true;
       }
@@ -2147,7 +1965,7 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "RESOURCE_MONITOR_UNAVAILABLE",
-          "ResourceMonitorService is not configured."
+          "ResourceMonitorService is not configured.",
         );
       }
       const normalized = normalizeHostMetricsReport(rawBody);
@@ -2155,7 +1973,7 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           400,
           "INVALID_HOST_METRICS",
-          "Request body must contain valid mainPid, electronProcesses, or t3Server metrics."
+          "Request body must contain valid mainPid, electronProcesses, or t3Server metrics.",
         );
       }
       const result = this.resourceMonitorService.ingestHostMetrics(normalized);
@@ -2170,14 +1988,14 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           403,
           "FORBIDDEN_SCOPE",
-          `Scope "${trustedCallerScope}" is not permitted to terminate PTY sessions.`
+          `Scope "${trustedCallerScope}" is not permitted to terminate PTY sessions.`,
         );
       }
       if (!this.resourceMonitorService) {
         throw new BusinessRouteError(
           503,
           "RESOURCE_MONITOR_UNAVAILABLE",
-          "ResourceMonitorService is not configured."
+          "ResourceMonitorService is not configured.",
         );
       }
       const rawBody = await readJsonBody(req);
@@ -2188,15 +2006,14 @@ export class DaemonRpcServer {
           killed: false,
           removed: false,
           message: "请求体必须是 JSON 对象。",
-          error: { code: "INVALID_PARAMS", message: "请求体必须是 JSON 对象。" }
+          error: { code: "INVALID_PARAMS", message: "请求体必须是 JSON 对象。" },
         });
         return true;
       }
-      const signal =
-        typeof rawBody["signal"] === "string" ? rawBody["signal"] : undefined;
+      const signal = typeof rawBody["signal"] === "string" ? rawBody["signal"] : undefined;
       const outcome = await this.resourceMonitorService.killPtySession(
         rawBody["sessionId"],
-        signal
+        signal,
       );
       writeJsonResponse(res, outcome.statusCode, {
         ...outcome.payload,
@@ -2204,13 +2021,10 @@ export class DaemonRpcServer {
           ? {}
           : {
               error: {
-                code:
-                  outcome.statusCode === 404
-                    ? "PTY_NOT_FOUND"
-                    : "INVALID_PARAMS",
-                message: outcome.payload.message
-              }
-            })
+                code: outcome.statusCode === 404 ? "PTY_NOT_FOUND" : "INVALID_PARAMS",
+                message: outcome.payload.message,
+              },
+            }),
       });
       return true;
     }
@@ -2222,7 +2036,7 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "SERVICE_UNAVAILABLE",
-          "Business routes service is not configured."
+          "Business routes service is not configured.",
         );
       }
       const result = await this.businessService.getPluginsCatalog(trustedCallerScope);
@@ -2237,12 +2051,10 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "SERVICE_UNAVAILABLE",
-          "Business routes service is not configured."
+          "Business routes service is not configured.",
         );
       }
-      const result = await this.businessService.getPluginsInstalled(
-        trustedCallerScope
-      );
+      const result = await this.businessService.getPluginsInstalled(trustedCallerScope);
       writeJsonResponse(res, 200, result);
       return true;
     }
@@ -2254,7 +2066,7 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "SERVICE_UNAVAILABLE",
-          "Business routes service is not configured."
+          "Business routes service is not configured.",
         );
       }
       const pluginIdParam = requestUrl.searchParams.get("pluginId");
@@ -2266,7 +2078,7 @@ export class DaemonRpcServer {
       const result = await this.businessService.getPluginLogs(
         pluginIdParam,
         parsedLimit !== null && Number.isFinite(parsedLimit) ? parsedLimit : null,
-        trustedCallerScope
+        trustedCallerScope,
       );
       writeJsonResponse(res, 200, result);
       return true;
@@ -2284,7 +2096,7 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "SERVICE_UNAVAILABLE",
-          "Business routes service is not configured."
+          "Business routes service is not configured.",
         );
       }
       const rawBody = await readJsonBody(req, MAX_IMPORT_JSON_BODY_BYTES);
@@ -2294,10 +2106,7 @@ export class DaemonRpcServer {
           : pathname === "/v1/plugins/install-npm" && isRecord(rawBody)
             ? { ...rawBody, source: "npm" }
             : rawBody;
-      const result = await this.businessService.installPlugin(
-        normalizedBody,
-        trustedCallerScope
-      );
+      const result = await this.businessService.installPlugin(normalizedBody, trustedCallerScope);
       this.diagnosticsService?.clearCache();
       writeJsonResponse(res, 200, result);
       return true;
@@ -2315,7 +2124,7 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "SERVICE_UNAVAILABLE",
-          "Business routes service is not configured."
+          "Business routes service is not configured.",
         );
       }
       const rawBody = await readJsonBody(req);
@@ -2325,10 +2134,7 @@ export class DaemonRpcServer {
           : pathname === "/v1/plugins/disable" && isRecord(rawBody)
             ? { ...rawBody, enabled: false }
             : rawBody;
-      const result = await this.businessService.togglePlugin(
-        normalizedBody,
-        trustedCallerScope
-      );
+      const result = await this.businessService.togglePlugin(normalizedBody, trustedCallerScope);
       this.diagnosticsService?.clearCache();
       writeJsonResponse(res, 200, result);
       return true;
@@ -2341,14 +2147,11 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "SERVICE_UNAVAILABLE",
-          "Business routes service is not configured."
+          "Business routes service is not configured.",
         );
       }
       const rawBody = await readJsonBody(req);
-      const result = await this.businessService.rollbackPlugin(
-        rawBody,
-        trustedCallerScope
-      );
+      const result = await this.businessService.rollbackPlugin(rawBody, trustedCallerScope);
       this.diagnosticsService?.clearCache();
       writeJsonResponse(res, 200, result);
       return true;
@@ -2361,14 +2164,11 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "SERVICE_UNAVAILABLE",
-          "Business routes service is not configured."
+          "Business routes service is not configured.",
         );
       }
       const rawBody = await readJsonBody(req);
-      const result = await this.businessService.uninstallPlugin(
-        rawBody,
-        trustedCallerScope
-      );
+      const result = await this.businessService.uninstallPlugin(rawBody, trustedCallerScope);
       this.diagnosticsService?.clearCache();
       writeJsonResponse(res, 200, result);
       return true;
@@ -2388,25 +2188,20 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "CLI_UPDATES_UNAVAILABLE",
-          "CliUpdateService is not configured."
+          "CliUpdateService is not configured.",
         );
       }
       const trustedCallerScope = this.authenticateHttpRequest(req, res);
       if (trustedCallerScope === null) return true;
 
       if (method === "GET" && pathname === "/v1/cli-updates/check") {
-        const result = await this.cliUpdateRouteService.handleCheck(
-          requestUrl.searchParams
-        );
+        const result = await this.cliUpdateRouteService.handleCheck(requestUrl.searchParams);
         writeJsonResponse(res, result.statusCode, result.payload);
         return true;
       }
       if (method === "POST" && pathname === "/v1/cli-updates/install") {
         const rawBody = await readJsonBody(req);
-        const result = await this.cliUpdateRouteService.handleInstall(
-          rawBody,
-          trustedCallerScope
-        );
+        const result = await this.cliUpdateRouteService.handleInstall(rawBody, trustedCallerScope);
         writeJsonResponse(res, result.statusCode, result.payload);
         return true;
       }
@@ -2417,16 +2212,16 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           503,
           "OVERNIGHT_UNAVAILABLE",
-          "OvernightRouteService is not configured."
+          "OvernightRouteService is not configured.",
         );
       }
       if (method === "GET" && pathname === "/v1/overnight/oauth/gmail/callback") {
         const callbackRes = await this.overnightService.handleGmailOAuthCallback(
-          requestUrl.searchParams
+          requestUrl.searchParams,
         );
         res.writeHead(callbackRes.statusCode, {
           "content-type": "text/html; charset=utf-8",
-          "cache-control": "no-store"
+          "cache-control": "no-store",
         });
         res.end(callbackRes.html);
         return true;
@@ -2436,27 +2231,35 @@ export class DaemonRpcServer {
       if (trustedCallerScope === null) return true;
 
       if (method === "GET" && pathname === "/v1/overnight/config") {
-        const snapshot = await this.overnightService.getConfigSnapshot(
-          trustedCallerScope
-        );
+        const refreshFlag = requestUrl.searchParams.get("refresh");
+        const forceProbe = refreshFlag === "1" || refreshFlag === "true";
+        const snapshot = await this.overnightService.getConfigSnapshot(trustedCallerScope, {
+          forceProbe,
+        });
         writeJsonResponse(res, 200, snapshot);
+        return true;
+      }
+      if (method === "GET" && pathname === "/v1/overnight/status") {
+        const refreshFlag = requestUrl.searchParams.get("refresh");
+        const forceProbe = refreshFlag === "1" || refreshFlag === "true";
+        const status = await this.overnightService.getStatusSnapshot(trustedCallerScope, {
+          forceProbe,
+        });
+        writeJsonResponse(res, 200, status);
         return true;
       }
       if (method === "PUT" && pathname === "/v1/overnight/config") {
         const rawBody = await readJsonBody(req);
-        const snapshot = await this.overnightService.updateConfig(
-          rawBody,
-          trustedCallerScope
-        );
+        const snapshot = await this.overnightService.updateConfig(rawBody, trustedCallerScope);
         writeJsonResponse(res, 200, snapshot);
         return true;
       }
-      if (method === "POST" && pathname === "/v1/overnight/test-mail") {
+      if (
+        method === "POST" &&
+        (pathname === "/v1/overnight/test-mail" || pathname === "/v1/overnight/test-connection")
+      ) {
         const rawBody = await readJsonBody(req);
-        const result = await this.overnightService.testMailConnection(
-          rawBody,
-          trustedCallerScope
-        );
+        const result = await this.overnightService.testMailConnection(rawBody, trustedCallerScope);
         writeJsonResponse(res, 200, result);
         return true;
       }
@@ -2464,19 +2267,59 @@ export class DaemonRpcServer {
         const rawBody = await readJsonBody(req);
         const result = await this.overnightService.sendTestMorningReport(
           rawBody,
-          trustedCallerScope
+          trustedCallerScope,
         );
         writeJsonResponse(res, 200, result);
         return true;
       }
       if (method === "POST" && pathname === "/v1/overnight/poll-now") {
         const rawBody = await readJsonBody(req);
-        const result = await this.overnightService.pollNow(
+        const result = await this.overnightService.pollNow(rawBody, trustedCallerScope);
+        writeJsonResponse(res, 200, result);
+        return true;
+      }
+      if (method === "POST" && pathname === "/v1/overnight/run-now") {
+        const rawBody = await readJsonBody(req);
+        const result = await this.overnightService.runManualTask(rawBody, trustedCallerScope);
+        writeJsonResponse(res, 200, result);
+        return true;
+      }
+      if (method === "GET" && pathname === "/v1/overnight/tasks") {
+        const result = this.overnightService.listTasks(trustedCallerScope);
+        writeJsonResponse(res, 200, result);
+        return true;
+      }
+      if (method === "POST" && pathname === "/v1/overnight/tasks") {
+        const rawBody = await readJsonBody(req);
+        const result = this.overnightService.createTask(rawBody, trustedCallerScope);
+        writeJsonResponse(res, 201, result);
+        return true;
+      }
+      const taskRunMatch = /^\/v1\/overnight\/tasks\/([^/]+)\/run$/.exec(pathname);
+      if (method === "POST" && taskRunMatch?.[1]) {
+        const rawBody = await readJsonBody(req);
+        const result = await this.overnightService.runTaskById(
+          decodeURIComponent(taskRunMatch[1]),
           rawBody,
-          trustedCallerScope
+          trustedCallerScope,
         );
         writeJsonResponse(res, 200, result);
         return true;
+      }
+      const taskItemMatch = /^\/v1\/overnight\/tasks\/([^/]+)$/.exec(pathname);
+      if (taskItemMatch?.[1]) {
+        const taskId = decodeURIComponent(taskItemMatch[1]);
+        if (method === "PUT") {
+          const rawBody = await readJsonBody(req);
+          const result = this.overnightService.updateTask(taskId, rawBody, trustedCallerScope);
+          writeJsonResponse(res, 200, result);
+          return true;
+        }
+        if (method === "DELETE") {
+          const result = this.overnightService.deleteTask(taskId, trustedCallerScope);
+          writeJsonResponse(res, 200, result);
+          return true;
+        }
       }
       if (method === "GET" && pathname === "/v1/overnight/runs") {
         const limitParam = requestUrl.searchParams.get("limit");
@@ -2486,27 +2329,51 @@ export class DaemonRpcServer {
             : null;
         const result = this.overnightService.getRuns(
           parsedLimit !== null && Number.isFinite(parsedLimit) ? parsedLimit : null,
-          trustedCallerScope
+          trustedCallerScope,
         );
         writeJsonResponse(res, 200, result);
         return true;
       }
+      const runActionMatch = /^\/v1\/overnight\/runs\/([^/]+)\/(cancel|retry)$/.exec(pathname);
+      if (method === "POST" && runActionMatch?.[1] && runActionMatch[2]) {
+        const runId = decodeURIComponent(runActionMatch[1]);
+        if (runActionMatch[2] === "cancel") {
+          const result = this.overnightService.cancelRun(runId, trustedCallerScope);
+          writeJsonResponse(res, 200, result);
+          return true;
+        }
+        const rawBody = await readJsonBody(req);
+        const result = await this.overnightService.retryRun(runId, rawBody, trustedCallerScope);
+        writeJsonResponse(res, 200, result);
+        return true;
+      }
+      const runItemMatch = /^\/v1\/overnight\/runs\/([^/]+)$/.exec(pathname);
+      if (runItemMatch?.[1]) {
+        const runId = decodeURIComponent(runItemMatch[1]);
+        if (method === "GET") {
+          const result = this.overnightService.getRunById(runId, trustedCallerScope);
+          writeJsonResponse(res, 200, result);
+          return true;
+        }
+        if (method === "DELETE") {
+          const result = this.overnightService.deleteRun(runId, trustedCallerScope);
+          writeJsonResponse(res, 200, result);
+          return true;
+        }
+      }
       if (method === "POST" && pathname === "/v1/overnight/oauth/gmail/start") {
         const rawBody = await readJsonBody(req);
-        const origin =
-          this.boundPort !== undefined ? this.getHttpUrl() : requestUrl.origin;
+        const origin = this.boundPort !== undefined ? this.getHttpUrl() : requestUrl.origin;
         const result = await this.overnightService.startGmailOAuth(
           rawBody,
           trustedCallerScope,
-          origin
+          origin,
         );
         writeJsonResponse(res, 200, result);
         return true;
       }
       if (method === "POST" && pathname === "/v1/overnight/oauth/gmail/disconnect") {
-        const result = await this.overnightService.disconnectGmail(
-          trustedCallerScope
-        );
+        const result = await this.overnightService.disconnectGmail(trustedCallerScope);
         writeJsonResponse(res, 200, result);
         return true;
       }
@@ -2519,14 +2386,14 @@ export class DaemonRpcServer {
         throw new BusinessRouteError(
           403,
           "FORBIDDEN_SCOPE",
-          `Scope "${trustedCallerScope}" is not permitted to access /v1/providers/probe.`
+          `Scope "${trustedCallerScope}" is not permitted to access /v1/providers/probe.`,
         );
       }
       if (!this.providerProbeService) {
         throw new BusinessRouteError(
           503,
           "PROVIDER_PROBE_UNAVAILABLE",
-          "PrismuxProviderProbeService is not configured."
+          "PrismuxProviderProbeService is not configured.",
         );
       }
       const providerParam = requestUrl.searchParams.get("provider");
@@ -2553,7 +2420,7 @@ export class DaemonRpcServer {
         ...(providersParam !== undefined ? { providers: providersParam } : {}),
         ...(includeAll ? { includeAll: true } : {}),
         ...(deepScan ? { deepScan: true } : {}),
-        refresh
+        refresh,
       });
       writeJsonResponse(res, 200, result);
       return true;
@@ -2567,9 +2434,9 @@ export class DaemonRpcServer {
           method,
           pathname,
           searchParams: requestUrl.searchParams,
-          callerScope: trustedCallerScope
+          callerScope: trustedCallerScope,
         },
-        this.quotaService
+        this.quotaService,
       );
       if (quotaResponse !== null) {
         writeJsonResponse(res, quotaResponse.statusCode, quotaResponse.payload);
@@ -2585,8 +2452,8 @@ export class DaemonRpcServer {
           ok: false,
           error: {
             code: "FORBIDDEN_SCOPE",
-            message: `Scope "${trustedCallerScope}" is not permitted to inspect agent aux state.`
-          }
+            message: `Scope "${trustedCallerScope}" is not permitted to inspect agent aux state.`,
+          },
         });
         return true;
       }
@@ -2594,14 +2461,14 @@ export class DaemonRpcServer {
         const result = await this.agentAuxService.inspect({
           provider: requestUrl.searchParams.get("provider") ?? undefined,
           sessionId: requestUrl.searchParams.get("sessionId") ?? undefined,
-          cwd: requestUrl.searchParams.get("cwd") ?? undefined
+          cwd: requestUrl.searchParams.get("cwd") ?? undefined,
         });
         writeJsonResponse(res, 200, result);
       } catch (err) {
         if (err instanceof AgentAuxValidationError) {
           writeJsonResponse(res, err.statusCode, {
             ok: false,
-            error: { code: err.code, message: err.message }
+            error: { code: err.code, message: err.message },
           });
           return true;
         }
@@ -2611,13 +2478,12 @@ export class DaemonRpcServer {
     }
 
     if (isDispatchOrSecurityRoute(pathname)) {
-      const allowQueryToken =
-        method === "GET" && pathname === "/v1/dispatch/events";
+      const allowQueryToken = method === "GET" && pathname === "/v1/dispatch/events";
       const trustedCallerScope = this.authenticateHttpRequest(
         req,
         res,
         requestUrl,
-        allowQueryToken
+        allowQueryToken,
       );
       if (trustedCallerScope === null) return true;
       const handled = await handleDispatchRoute(
@@ -2634,13 +2500,13 @@ export class DaemonRpcServer {
           },
           unregisterSseCleanup: (cleanup) => {
             this.activeSseCleanups.delete(cleanup);
-          }
+          },
         },
         {
           waiverStore: this.subscriptionWaiverStore,
           policyStore: this.subscriptionWaiverStore,
-          dispatchHub: this.dispatchHub
-        }
+          dispatchHub: this.dispatchHub,
+        },
       );
       if (handled) {
         return true;
@@ -2654,7 +2520,7 @@ export class DaemonRpcServer {
     req: IncomingMessage,
     socket: Duplex,
     head: Buffer,
-    wss: WebSocketServer
+    wss: WebSocketServer,
   ): void {
     let requestUrl: URL;
     try {
@@ -2672,8 +2538,7 @@ export class DaemonRpcServer {
     }
 
     const token = extractRequestToken(req, requestUrl, true);
-    const trustedScope =
-      token !== null ? this.pairingManager.resolveTokenScope(token) : null;
+    const trustedScope = token !== null ? this.pairingManager.resolveTokenScope(token) : null;
     if (trustedScope === null) {
       socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
       socket.destroy();
@@ -2688,10 +2553,7 @@ export class DaemonRpcServer {
     });
   }
 
-  private handleWsConnection(
-    ws: WebSocket,
-    trustedCallerScope: CallerScope
-  ): void {
+  private handleWsConnection(ws: WebSocket, trustedCallerScope: CallerScope): void {
     const ptySubscriptions = new Map<string, () => void>();
 
     const cleanupSubscriptions = () => {
@@ -2723,9 +2585,7 @@ export class DaemonRpcServer {
             const ptyId = requireStringParam(envelope.params, "ptyId");
             const rawFromSeq = envelope.params.fromSeq;
             const fromSeq =
-              typeof rawFromSeq === "number" && Number.isFinite(rawFromSeq)
-                ? rawFromSeq
-                : 0;
+              typeof rawFromSeq === "number" && Number.isFinite(rawFromSeq) ? rawFromSeq : 0;
 
             const existingUnsub = ptySubscriptions.get(ptyId);
             if (existingUnsub !== undefined) {
@@ -2738,14 +2598,14 @@ export class DaemonRpcServer {
               (frame) => {
                 sendJson({ type: "pty.frame", frame });
               },
-              { replayFromSeq: fromSeq }
+              { replayFromSeq: fromSeq },
             );
             ptySubscriptions.set(ptyId, unsub);
 
             sendJson({
               id: envelope.id,
               ok: true,
-              result: { ptyId, subscribed: true }
+              result: { ptyId, subscribed: true },
             });
             return;
           }
@@ -2760,7 +2620,7 @@ export class DaemonRpcServer {
             sendJson({
               id: envelope.id,
               ok: true,
-              result: { ptyId, unsubscribed: existingUnsub !== undefined }
+              result: { ptyId, unsubscribed: existingUnsub !== undefined },
             });
             return;
           }
@@ -2769,13 +2629,12 @@ export class DaemonRpcServer {
           sendJson(outcome.response);
           outcome.afterSend?.();
         } catch (error) {
-          const code =
-            error instanceof RpcDispatchError ? error.code : "rpc_error";
+          const code = error instanceof RpcDispatchError ? error.code : "rpc_error";
           const message = error instanceof Error ? error.message : String(error);
           sendJson({
             id: requestId,
             ok: false,
-            error: { code, message }
+            error: { code, message },
           });
         }
       })();
@@ -2796,44 +2655,30 @@ export class DaemonRpcServer {
 
   private async executeMemoryQuery(
     rawParams: unknown,
-    trustedCallerScope: CallerScope
+    trustedCallerScope: CallerScope,
   ): Promise<MemoryQueryResponse> {
     if (this.memoryStore === undefined) {
-      throw new RpcDispatchError(
-        "not_configured",
-        "Memory store is not configured.",
-        503
-      );
+      throw new RpcDispatchError("not_configured", "Memory store is not configured.", 503);
     }
     if (!isRecord(rawParams)) {
-      throw new RpcDispatchError(
-        "invalid_params",
-        "Memory query payload must be a JSON object."
-      );
+      throw new RpcDispatchError("invalid_params", "Memory query payload must be a JSON object.");
     }
 
     const query = rawParams.query;
     if (typeof query !== "string") {
-      throw new RpcDispatchError(
-        "invalid_params",
-        'Parameter "query" must be a string.'
-      );
+      throw new RpcDispatchError("invalid_params", 'Parameter "query" must be a string.');
     }
 
-    const namespaces = parseOptionalStringArray(
-      rawParams.namespaces,
-      "namespaces"
-    ) as MemoryNamespace[] | undefined;
+    const namespaces = parseOptionalStringArray(rawParams.namespaces, "namespaces") as
+      | MemoryNamespace[]
+      | undefined;
 
     const kindsRaw = parseOptionalStringArray(rawParams.kinds, "kinds");
     let kinds: MemoryKind[] | undefined;
     if (kindsRaw !== undefined) {
       for (const kind of kindsRaw) {
         if (!MEMORY_KINDS.includes(kind as MemoryKind)) {
-          throw new RpcDispatchError(
-            "invalid_params",
-            `Invalid memory kind: "${kind}".`
-          );
+          throw new RpcDispatchError("invalid_params", `Invalid memory kind: "${kind}".`);
         }
       }
       kinds = kindsRaw as MemoryKind[];
@@ -2848,17 +2693,12 @@ export class DaemonRpcServer {
     let mode: MemoryQueryRequest["mode"];
     if (modeRaw !== undefined) {
       if (modeRaw !== "hybrid" && modeRaw !== "fts" && modeRaw !== "vector") {
-        throw new RpcDispatchError(
-          "invalid_params",
-          `Invalid query mode: "${modeRaw}".`
-        );
+        throw new RpcDispatchError("invalid_params", `Invalid query mode: "${modeRaw}".`);
       }
       mode = modeRaw;
     }
 
-    const queryEmbedding = parseOptionalEmbedding(
-      rawParams.queryEmbedding ?? rawParams.embedding
-    );
+    const queryEmbedding = parseOptionalEmbedding(rawParams.queryEmbedding ?? rawParams.embedding);
 
     // Transport-layer override: unconditionally enforce server-authenticated callerScope
     // and ignore any client-supplied callerScope / _callerScope fields.
@@ -2867,66 +2707,43 @@ export class DaemonRpcServer {
       ...(namespaces !== undefined ? { namespaces } : {}),
       ...(kinds !== undefined ? { kinds } : {}),
       ...(limit !== undefined ? { limit } : {}),
-      ...(mode !== undefined ? { mode } : {})
+      ...(mode !== undefined ? { mode } : {}),
     });
 
-    return this.memoryStore.query(
-      boundRequest,
-      trustedCallerScope,
-      queryEmbedding
-    );
+    return this.memoryStore.query(boundRequest, trustedCallerScope, queryEmbedding);
   }
 
-  private async executeMemoryUpsert(
-    rawParams: unknown,
-    trustedCallerScope: CallerScope
-  ) {
+  private async executeMemoryUpsert(rawParams: unknown, trustedCallerScope: CallerScope) {
     if (this.memoryStore === undefined) {
-      throw new RpcDispatchError(
-        "not_configured",
-        "Memory store is not configured.",
-        503
-      );
+      throw new RpcDispatchError("not_configured", "Memory store is not configured.", 503);
     }
     if (!isRecord(rawParams)) {
-      throw new RpcDispatchError(
-        "invalid_params",
-        "Memory upsert payload must be a JSON object."
-      );
+      throw new RpcDispatchError("invalid_params", "Memory upsert payload must be a JSON object.");
     }
 
     const id = optionalStringParam(rawParams, "id");
     const namespaceRaw = requireStringParam(rawParams, "namespace");
     if (!isValidMemoryNamespace(namespaceRaw)) {
-      throw new RpcDispatchError(
-        "invalid_params",
-        `Invalid memory namespace: "${namespaceRaw}".`
-      );
+      throw new RpcDispatchError("invalid_params", `Invalid memory namespace: "${namespaceRaw}".`);
     }
 
     if (!isScopeAllowedForNamespace(trustedCallerScope, namespaceRaw)) {
       throw new RpcDispatchError(
         "forbidden",
         `Caller scope "${trustedCallerScope}" is not authorized to write namespace "${namespaceRaw}".`,
-        403
+        403,
       );
     }
 
     const kindRaw = requireStringParam(rawParams, "kind");
     if (!MEMORY_KINDS.includes(kindRaw as MemoryKind)) {
-      throw new RpcDispatchError(
-        "invalid_params",
-        `Invalid memory kind: "${kindRaw}".`
-      );
+      throw new RpcDispatchError("invalid_params", `Invalid memory kind: "${kindRaw}".`);
     }
 
     const title = requireStringParam(rawParams, "title");
     const contentValue = rawParams.content;
     if (typeof contentValue !== "string") {
-      throw new RpcDispatchError(
-        "invalid_params",
-        'Parameter "content" must be a string.'
-      );
+      throw new RpcDispatchError("invalid_params", 'Parameter "content" must be a string.');
     }
 
     const sourceRefRaw = rawParams.sourceRef;
@@ -2938,26 +2755,22 @@ export class DaemonRpcServer {
     } else {
       throw new RpcDispatchError(
         "invalid_params",
-        'Parameter "sourceRef" must be a string or null.'
+        'Parameter "sourceRef" must be a string or null.',
       );
     }
 
     let importance: number | undefined;
     if (rawParams.importance !== undefined) {
-      if (
-        typeof rawParams.importance !== "number" ||
-        !Number.isFinite(rawParams.importance)
-      ) {
+      if (typeof rawParams.importance !== "number" || !Number.isFinite(rawParams.importance)) {
         throw new RpcDispatchError(
           "invalid_params",
-          'Parameter "importance" must be a finite number.'
+          'Parameter "importance" must be a finite number.',
         );
       }
       importance = rawParams.importance;
     }
 
-    const machineId =
-      optionalStringParam(rawParams, "machineId") ?? this.machineId;
+    const machineId = optionalStringParam(rawParams, "machineId") ?? this.machineId;
     const embedding = parseOptionalEmbedding(rawParams.embedding);
 
     const input: MemoryUpsertInput = {
@@ -2968,7 +2781,7 @@ export class DaemonRpcServer {
       content: contentValue,
       ...(sourceRef !== undefined ? { sourceRef } : {}),
       ...(importance !== undefined ? { importance } : {}),
-      machineId
+      machineId,
     };
 
     return this.memoryStore.upsert(input, embedding);
@@ -2976,23 +2789,20 @@ export class DaemonRpcServer {
 
   private parseRpcEnvelope(raw: unknown): RpcPayloadEnvelope {
     if (!isRecord(raw)) {
-      throw new RpcDispatchError(
-        "invalid_request",
-        "RPC payload must be a JSON object."
-      );
+      throw new RpcDispatchError("invalid_request", "RPC payload must be a JSON object.");
     }
     const id = raw.id;
     const method = raw.method;
     if (typeof id !== "string" || id.length === 0) {
       throw new RpcDispatchError(
         "invalid_request",
-        'RPC payload requires non-empty string field "id".'
+        'RPC payload requires non-empty string field "id".',
       );
     }
     if (typeof method !== "string" || method.length === 0) {
       throw new RpcDispatchError(
         "invalid_request",
-        'RPC payload requires non-empty string field "method".'
+        'RPC payload requires non-empty string field "method".',
       );
     }
     const rawParams = raw.params;
@@ -3002,7 +2812,7 @@ export class DaemonRpcServer {
 
   private async executeRpc(
     envelope: RpcPayloadEnvelope,
-    trustedCallerScope: CallerScope
+    trustedCallerScope: CallerScope,
   ): Promise<{
     response:
       | { id: string; ok: true; result: unknown }
@@ -3018,8 +2828,8 @@ export class DaemonRpcServer {
             response: {
               id: envelope.id,
               ok: true,
-              result: { sessions: this.ptyPool.listSessions() }
-            }
+              result: { sessions: this.ptyPool.listSessions() },
+            },
           };
         }
 
@@ -3027,9 +2837,7 @@ export class DaemonRpcServer {
           const args = parseOptionalStringArray(params.args, "args");
           const rawGroup = params.group;
           const group =
-            rawGroup === "agent-scratch" || rawGroup === "default"
-              ? rawGroup
-              : undefined;
+            rawGroup === "agent-scratch" || rawGroup === "default" ? rawGroup : undefined;
 
           const session = this.ptyPool.spawnSession({
             ptyId: optionalStringParam(params, "ptyId"),
@@ -3037,14 +2845,14 @@ export class DaemonRpcServer {
             command: optionalStringParam(params, "command"),
             args,
             group,
-            worktreeBranch: optionalStringParam(params, "worktreeBranch")
+            worktreeBranch: optionalStringParam(params, "worktreeBranch"),
           });
           return {
             response: {
               id: envelope.id,
               ok: true,
-              result: { session }
-            }
+              result: { session },
+            },
           };
         }
 
@@ -3052,17 +2860,14 @@ export class DaemonRpcServer {
           const ptyId = requireStringParam(params, "ptyId");
           const data = params.data;
           if (typeof data !== "string") {
-            throw new RpcDispatchError(
-              "invalid_params",
-              'Parameter "data" must be a string.'
-            );
+            throw new RpcDispatchError("invalid_params", 'Parameter "data" must be a string.');
           }
           return {
             response: {
               id: envelope.id,
               ok: true,
-              result: { accepted: this.ptyPool.write(ptyId, data) }
-            }
+              result: { accepted: this.ptyPool.write(ptyId, data) },
+            },
           };
         }
 
@@ -3074,8 +2879,8 @@ export class DaemonRpcServer {
             response: {
               id: envelope.id,
               ok: true,
-              result: { resized: this.ptyPool.resize(ptyId, cols, rows) }
-            }
+              result: { resized: this.ptyPool.resize(ptyId, cols, rows) },
+            },
           };
         }
 
@@ -3087,8 +2892,8 @@ export class DaemonRpcServer {
             response: {
               id: envelope.id,
               ok: true,
-              result: { killed }
-            }
+              result: { killed },
+            },
           };
         }
 
@@ -3096,15 +2901,13 @@ export class DaemonRpcServer {
           const ptyId = requireStringParam(params, "ptyId");
           const rawFromSeq = params.fromSeq;
           const fromSeq =
-            typeof rawFromSeq === "number" && Number.isFinite(rawFromSeq)
-              ? rawFromSeq
-              : 0;
+            typeof rawFromSeq === "number" && Number.isFinite(rawFromSeq) ? rawFromSeq : 0;
           return {
             response: {
               id: envelope.id,
               ok: true,
-              result: this.ptyPool.replay(ptyId, fromSeq)
-            }
+              result: this.ptyPool.replay(ptyId, fromSeq),
+            },
           };
         }
 
@@ -3118,9 +2921,9 @@ export class DaemonRpcServer {
               result: {
                 repoRoot: scanResult.repoRoot,
                 discoveredWorktrees: scanResult.discoveredWorktrees,
-                sessions: scanResult.sessions
-              }
-            }
+                sessions: scanResult.sessions,
+              },
+            },
           };
         }
 
@@ -3132,8 +2935,8 @@ export class DaemonRpcServer {
             response: {
               id: envelope.id,
               ok: true,
-              result: adopted
-            }
+              result: adopted,
+            },
           };
         }
 
@@ -3142,16 +2945,13 @@ export class DaemonRpcServer {
             response: {
               id: envelope.id,
               ok: true,
-              result: { slot: this.chiefManager.getSlot() }
-            }
+              result: { slot: this.chiefManager.getSlot() },
+            },
           };
         }
 
         case "chief.switchProvider": {
-          const provider = requireStringParam(
-            params,
-            "provider"
-          ) as ChiefProviderKind;
+          const provider = requireStringParam(params, "provider") as ChiefProviderKind;
           const model = optionalStringParam(params, "model");
           const reasoningEffort =
             optionalStringParam(params, "reasoningEffort") ??
@@ -3161,14 +2961,14 @@ export class DaemonRpcServer {
             provider,
             model,
             reasoningEffort,
-            secretaryName !== undefined ? { secretaryName } : undefined
+            secretaryName !== undefined ? { secretaryName } : undefined,
           );
           return {
             response: {
               id: envelope.id,
               ok: true,
-              result: { slot }
-            }
+              result: { slot },
+            },
           };
         }
 
@@ -3177,24 +2977,21 @@ export class DaemonRpcServer {
             response: {
               id: envelope.id,
               ok: true,
-              result: { status: this.getT3BridgeStatus() }
-            }
+              result: { status: this.getT3BridgeStatus() },
+            },
           };
         }
 
         case "plugins.list": {
           if (this.pluginHost === undefined) {
-            throw new RpcDispatchError(
-              "not_configured",
-              "Plugin host is not configured."
-            );
+            throw new RpcDispatchError("not_configured", "Plugin host is not configured.");
           }
           return {
             response: {
               id: envelope.id,
               ok: true,
-              result: { plugins: this.pluginHost.listInstalled() }
-            }
+              result: { plugins: this.pluginHost.listInstalled() },
+            },
           };
         }
 
@@ -3207,27 +3004,21 @@ export class DaemonRpcServer {
               response: {
                 id: envelope.id,
                 ok: true,
-                result: toggled
-              }
+                result: toggled,
+              },
             };
           }
           if (this.pluginHost === undefined) {
-            throw new RpcDispatchError(
-              "not_configured",
-              "Plugin host is not configured."
-            );
+            throw new RpcDispatchError("not_configured", "Plugin host is not configured.");
           }
           const existing = this.pluginHost.getRecord(pluginId);
           if (existing === undefined) {
-            throw new RpcDispatchError(
-              "not_found",
-              `Plugin "${pluginId}" is not installed.`
-            );
+            throw new RpcDispatchError("not_found", `Plugin "${pluginId}" is not installed.`);
           }
           if (enabled) {
             throw new RpcDispatchError(
               "not_configured",
-              `Cannot enable plugin "${pluginId}" without daemon plugin toggle handler.`
+              `Cannot enable plugin "${pluginId}" without daemon plugin toggle handler.`,
             );
           }
           await this.pluginHost.unmountPlugin(pluginId);
@@ -3235,78 +3026,61 @@ export class DaemonRpcServer {
             response: {
               id: envelope.id,
               ok: true,
-              result: { pluginId, enabled: false }
-            }
+              result: { pluginId, enabled: false },
+            },
           };
         }
 
         case "memory.query": {
-          const result = await this.executeMemoryQuery(
-            params,
-            trustedCallerScope
-          );
+          const result = await this.executeMemoryQuery(params, trustedCallerScope);
           return {
             response: {
               id: envelope.id,
               ok: true,
-              result
-            }
+              result,
+            },
           };
         }
 
         case "memory.upsert": {
-          const entry = await this.executeMemoryUpsert(
-            params,
-            trustedCallerScope
-          );
+          const entry = await this.executeMemoryUpsert(params, trustedCallerScope);
           return {
             response: {
               id: envelope.id,
               ok: true,
-              result: { id: entry.id, updatedAt: entry.updatedAt }
-            }
+              result: { id: entry.id, updatedAt: entry.updatedAt },
+            },
           };
         }
 
         case "handoff.execute": {
           if (this.handoffEngine === undefined) {
-            throw new RpcDispatchError(
-              "not_configured",
-              "HandoffEngine is not configured."
-            );
+            throw new RpcDispatchError("not_configured", "HandoffEngine is not configured.");
           }
           const sourceThreadId = requireStringParam(params, "sourceThreadId");
           const rawDial = optionalStringParam(params, "targetDialMode");
           let targetDialMode: DialMode | undefined;
           if (rawDial !== undefined) {
             if (!(DIAL_MODES as readonly string[]).includes(rawDial)) {
-              throw new RpcDispatchError(
-                "invalid_params",
-                `Invalid targetDialMode: "${rawDial}".`
-              );
+              throw new RpcDispatchError("invalid_params", `Invalid targetDialMode: "${rawDial}".`);
             }
             targetDialMode = rawDial as DialMode;
           }
           const targetWorkspace = optionalStringParam(params, "targetWorkspace");
           const targetBranch = optionalStringParam(params, "targetBranch");
-          const additionalContext = optionalStringParam(
-            params,
-            "additionalContext"
-          );
+          const additionalContext = optionalStringParam(params, "additionalContext");
           const rawTranscript = params.transcript;
           let transcript: HandoffTranscriptMessage[] | undefined;
           if (rawTranscript !== undefined) {
             if (!Array.isArray(rawTranscript)) {
               throw new RpcDispatchError(
                 "invalid_params",
-                'Parameter "transcript" must be an array.'
+                'Parameter "transcript" must be an array.',
               );
             }
             transcript = rawTranscript.filter(
               (item): item is HandoffTranscriptMessage =>
-                isRecord(item) &&
-                typeof item.role === "string" &&
-                typeof item.content === "string"
+                isRecord(item) && typeof item.role === "string" && typeof item.content === "string",
             );
           }
 
@@ -3331,60 +3105,44 @@ export class DaemonRpcServer {
             ...(effectiveAdditionalContext !== undefined
               ? { additionalContext: effectiveAdditionalContext }
               : {}),
-            ...(transcript !== undefined ? { transcript } : {})
+            ...(transcript !== undefined ? { transcript } : {}),
           });
           return {
             response: {
               id: envelope.id,
               ok: true,
-              result
-            }
+              result,
+            },
           };
         }
 
         case "dial.setMode": {
           if (this.handoffEngine === undefined) {
-            throw new RpcDispatchError(
-              "not_configured",
-              "HandoffEngine is not configured."
-            );
+            throw new RpcDispatchError("not_configured", "HandoffEngine is not configured.");
           }
           const threadId = requireStringParam(params, "threadId");
           const modeRaw = requireStringParam(params, "mode");
           if (!(DIAL_MODES as readonly string[]).includes(modeRaw)) {
-            throw new RpcDispatchError(
-              "invalid_params",
-              `Invalid dial mode: "${modeRaw}".`
-            );
+            throw new RpcDispatchError("invalid_params", `Invalid dial mode: "${modeRaw}".`);
           }
-          const mode = this.handoffEngine.setDialMode(
-            threadId,
-            modeRaw as DialMode
-          );
+          const mode = this.handoffEngine.setDialMode(threadId, modeRaw as DialMode);
           return {
             response: {
               id: envelope.id,
               ok: true,
-              result: { threadId, mode }
-            }
+              result: { threadId, mode },
+            },
           };
         }
 
         case "hooks.decideApproval": {
           if (this.hookBus === undefined) {
-            throw new RpcDispatchError(
-              "not_configured",
-              "LifecycleHookBus is not configured."
-            );
+            throw new RpcDispatchError("not_configured", "LifecycleHookBus is not configured.");
           }
           const requestId = requireStringParam(params, "requestId");
           const allow = requireBooleanParam(params, "allow");
           const reason = optionalStringParam(params, "reason");
-          const record = this.hookBus.recordApprovalDecision(
-            requestId,
-            allow,
-            reason
-          );
+          const record = this.hookBus.recordApprovalDecision(requestId, allow, reason);
           return {
             response: {
               id: envelope.id,
@@ -3392,9 +3150,9 @@ export class DaemonRpcServer {
               result: {
                 requestId: record.requestId,
                 accepted: true,
-                status: record.status
-              }
-            }
+                status: record.status,
+              },
+            },
           };
         }
 
@@ -3403,8 +3161,8 @@ export class DaemonRpcServer {
             response: {
               id: envelope.id,
               ok: true,
-              result: this.requireAppUpdater().getStatus()
-            }
+              result: this.requireAppUpdater().getStatus(),
+            },
           };
         }
 
@@ -3414,8 +3172,8 @@ export class DaemonRpcServer {
             response: {
               id: envelope.id,
               ok: true,
-              result: report
-            }
+              result: report,
+            },
           };
         }
 
@@ -3425,8 +3183,8 @@ export class DaemonRpcServer {
             response: {
               id: envelope.id,
               ok: true,
-              result
-            }
+              result,
+            },
           };
         }
 
@@ -3436,8 +3194,8 @@ export class DaemonRpcServer {
             response: {
               id: envelope.id,
               ok: true,
-              result: { policy }
-            }
+              result: { policy },
+            },
           };
         }
 
@@ -3447,8 +3205,8 @@ export class DaemonRpcServer {
             response: {
               id: envelope.id,
               ok: true,
-              result
-            }
+              result,
+            },
           };
         }
 
@@ -3458,20 +3216,20 @@ export class DaemonRpcServer {
             response: {
               id: envelope.id,
               ok: true,
-              result: { shuttingDown: true }
+              result: { shuttingDown: true },
             },
             afterSend: () => {
               setImmediate(() => {
                 void this.onRequestShutdown?.(reason);
               });
-            }
+            },
           };
         }
 
         default: {
           throw new RpcDispatchError(
             "method_not_found",
-            `Unknown or unimplemented RPC method: ${method}`
+            `Unknown or unimplemented RPC method: ${method}`,
           );
         }
       }
@@ -3482,16 +3240,13 @@ export class DaemonRpcServer {
         response: {
           id: envelope.id,
           ok: false,
-          error: { code, message }
-        }
+          error: { code, message },
+        },
       };
     }
   }
 
-  private handleUpdaterSseStream(
-    req: IncomingMessage,
-    res: ServerResponse
-  ): void {
+  private handleUpdaterSseStream(req: IncomingMessage, res: ServerResponse): void {
     const updater = this.requireAppUpdater();
 
     req.socket?.setTimeout?.(0);
@@ -3503,7 +3258,7 @@ export class DaemonRpcServer {
       "content-type": "text/event-stream; charset=utf-8",
       "cache-control": "no-cache, no-transform",
       connection: "keep-alive",
-      "x-accel-buffering": "no"
+      "x-accel-buffering": "no",
     });
     res.flushHeaders?.();
 
@@ -3516,9 +3271,7 @@ export class DaemonRpcServer {
       }
       seq += 1;
       try {
-        res.write(
-          `id: ${seq}\nevent: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`
-        );
+        res.write(`id: ${seq}\nevent: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`);
       } catch {
         cleanup();
       }
@@ -3573,17 +3326,13 @@ export class DaemonRpcServer {
       downloadedFilePath: initialStatus.downloadedFilePath,
       downloadedSha256: initialStatus.downloadedSha256,
       portableMode: initialStatus.portableMode,
-      status: initialStatus
+      status: initialStatus,
     });
   }
 
   private requireAppUpdater(): AppUpdater {
     if (this.appUpdater === undefined) {
-      throw new RpcDispatchError(
-        "not_configured",
-        "AppUpdater is not configured.",
-        503
-      );
+      throw new RpcDispatchError("not_configured", "AppUpdater is not configured.", 503);
     }
     return this.appUpdater;
   }
@@ -3591,19 +3340,13 @@ export class DaemonRpcServer {
   private async executeUpdaterCheck(rawParams: unknown) {
     const updater = this.requireAppUpdater();
     if (!isRecord(rawParams)) {
-      throw new RpcDispatchError(
-        "invalid_params",
-        "Updater check payload must be a JSON object."
-      );
+      throw new RpcDispatchError("invalid_params", "Updater check payload must be a JSON object.");
     }
     const channelRaw = optionalStringParam(rawParams, "channel");
     let channel: UpdateChannel | undefined;
     if (channelRaw !== undefined) {
       if (!(UPDATE_CHANNELS as readonly string[]).includes(channelRaw)) {
-        throw new RpcDispatchError(
-          "invalid_params",
-          `Invalid update channel: "${channelRaw}".`
-        );
+        throw new RpcDispatchError("invalid_params", `Invalid update channel: "${channelRaw}".`);
       }
       channel = channelRaw as UpdateChannel;
     }
@@ -3614,7 +3357,7 @@ export class DaemonRpcServer {
       if (!(UPDATE_SOURCE_IDS as readonly string[]).includes(sourceRaw)) {
         throw new RpcDispatchError(
           "invalid_params",
-          `Invalid update sourceOverride: "${sourceRaw}".`
+          `Invalid update sourceOverride: "${sourceRaw}".`,
         );
       }
       sourceOverride = sourceRaw as UpdateSourceId;
@@ -3622,27 +3365,21 @@ export class DaemonRpcServer {
 
     return updater.checkForUpdates({
       ...(channel !== undefined ? { channel } : {}),
-      ...(sourceOverride !== undefined ? { sourceOverride } : {})
+      ...(sourceOverride !== undefined ? { sourceOverride } : {}),
     });
   }
 
   private executeUpdaterSetPolicy(rawParams: unknown) {
     const updater = this.requireAppUpdater();
     if (!isRecord(rawParams)) {
-      throw new RpcDispatchError(
-        "invalid_params",
-        "Updater policy payload must be a JSON object."
-      );
+      throw new RpcDispatchError("invalid_params", "Updater policy payload must be a JSON object.");
     }
 
     const patch: UpdatePolicyPatch = {};
     if (rawParams.routePreference !== undefined) {
       const routeRaw = requireStringParam(rawParams, "routePreference");
       if (!(NETWORK_ROUTE_PREFERENCES as readonly string[]).includes(routeRaw)) {
-        throw new RpcDispatchError(
-          "invalid_params",
-          `Invalid routePreference: "${routeRaw}".`
-        );
+        throw new RpcDispatchError("invalid_params", `Invalid routePreference: "${routeRaw}".`);
       }
       patch.routePreference = routeRaw as NetworkRoutePreference;
     }
@@ -3653,20 +3390,17 @@ export class DaemonRpcServer {
       if (typeof rawParams.customGhProxyPrefix !== "string") {
         throw new RpcDispatchError(
           "invalid_params",
-          'Parameter "customGhProxyPrefix" must be a string.'
+          'Parameter "customGhProxyPrefix" must be a string.',
         );
       }
       patch.customGhProxyPrefix = rawParams.customGhProxyPrefix;
     }
     if (rawParams.pluginRegistryOverride !== undefined) {
       const regRaw = requireStringParam(rawParams, "pluginRegistryOverride");
-      if (
-        regRaw !== "auto" &&
-        !(PLUGIN_REGISTRY_IDS as readonly string[]).includes(regRaw)
-      ) {
+      if (regRaw !== "auto" && !(PLUGIN_REGISTRY_IDS as readonly string[]).includes(regRaw)) {
         throw new RpcDispatchError(
           "invalid_params",
-          `Invalid pluginRegistryOverride: "${regRaw}".`
+          `Invalid pluginRegistryOverride: "${regRaw}".`,
         );
       }
       patch.pluginRegistryOverride = regRaw as PluginRegistryOverride;
@@ -3683,7 +3417,7 @@ export class DaemonRpcServer {
     } catch (error) {
       throw new RpcDispatchError(
         "invalid_params",
-        error instanceof Error ? error.message : String(error)
+        error instanceof Error ? error.message : String(error),
       );
     }
   }
@@ -3693,7 +3427,7 @@ export class DaemonRpcServer {
     if (!isRecord(rawParams)) {
       throw new RpcDispatchError(
         "invalid_params",
-        "Updater download payload must be a JSON object."
+        "Updater download payload must be a JSON object.",
       );
     }
 
@@ -3702,15 +3436,8 @@ export class DaemonRpcServer {
     const kindRaw = optionalStringParam(rawParams, "kind");
     let kind: UpdatePackageKind | undefined;
     if (kindRaw !== undefined) {
-      if (
-        kindRaw !== "setup-exe" &&
-        kindRaw !== "portable-zip" &&
-        kindRaw !== "split-7z-exe"
-      ) {
-        throw new RpcDispatchError(
-          "invalid_params",
-          `Invalid update package kind: "${kindRaw}".`
-        );
+      if (kindRaw !== "setup-exe" && kindRaw !== "portable-zip" && kindRaw !== "split-7z-exe") {
+        throw new RpcDispatchError("invalid_params", `Invalid update package kind: "${kindRaw}".`);
       }
       kind = kindRaw;
     }
@@ -3721,7 +3448,7 @@ export class DaemonRpcServer {
       if (!(UPDATE_SOURCE_IDS as readonly string[]).includes(sourceRaw)) {
         throw new RpcDispatchError(
           "invalid_params",
-          `Invalid update sourceOverride: "${sourceRaw}".`
+          `Invalid update sourceOverride: "${sourceRaw}".`,
         );
       }
       sourceOverride = sourceRaw as UpdateSourceId;
@@ -3731,7 +3458,7 @@ export class DaemonRpcServer {
       ...(destDir !== undefined ? { destDir } : {}),
       ...(assetName !== undefined ? { assetName } : {}),
       ...(kind !== undefined ? { kind } : {}),
-      ...(sourceOverride !== undefined ? { sourceOverride } : {})
+      ...(sourceOverride !== undefined ? { sourceOverride } : {}),
     });
   }
 }

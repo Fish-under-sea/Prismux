@@ -9,7 +9,9 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => () => Promise.resolve(),
-  useLocation: (opts?: { select?: (loc: { pathname: string; hash: string; state: Record<string, unknown> }) => unknown }) => {
+  useLocation: (opts?: {
+    select?: (loc: { pathname: string; hash: string; state: Record<string, unknown> }) => unknown;
+  }) => {
     const loc = {
       pathname: "/settings/overnight-factory",
       hash: "",
@@ -22,6 +24,7 @@ vi.mock("@tanstack/react-router", () => ({
 import type {
   DaemonOvernightConfigSnapshot,
   DaemonOvernightRunRecordDto,
+  DaemonOvernightTaskDto,
 } from "../daemonClient";
 import type { SubscriptionWaiverState } from "../SubscriptionRiskWaiverSection";
 import {
@@ -90,7 +93,13 @@ const SAMPLE_LIVE_PROVIDERS: ServerProvider[] = [
     displayName: "Codex",
     enabled: true,
     models: [
-      { slug: "gpt-5.4-codex", name: "GPT-5.4 Codex", isCustom: false, isDefault: true, capabilities: null },
+      {
+        slug: "gpt-5.4-codex",
+        name: "GPT-5.4 Codex",
+        isCustom: false,
+        isDefault: true,
+        capabilities: null,
+      },
       { slug: "gpt-5.3-codex", name: "GPT-5.3 Codex", isCustom: false, capabilities: null },
     ],
   }),
@@ -99,7 +108,9 @@ const SAMPLE_LIVE_PROVIDERS: ServerProvider[] = [
     driver: "claudeAgent",
     displayName: "Claude Code",
     enabled: false, // Disabled provider MUST be skipped!
-    models: [{ slug: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", isCustom: false, capabilities: null }],
+    models: [
+      { slug: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", isCustom: false, capabilities: null },
+    ],
   }),
   makeMockProvider({
     instanceId: "acp-dsh",
@@ -107,7 +118,13 @@ const SAMPLE_LIVE_PROVIDERS: ServerProvider[] = [
     displayName: "DeepSeek Harness",
     enabled: true,
     models: [
-      { slug: "deepseek-reasoner", name: "DeepSeek Reasoner", isCustom: false, isDefault: true, capabilities: null },
+      {
+        slug: "deepseek-reasoner",
+        name: "DeepSeek Reasoner",
+        isCustom: false,
+        isDefault: true,
+        capabilities: null,
+      },
       { slug: "deepseek-chat", name: "DeepSeek Chat", isCustom: false, capabilities: null },
     ],
   }),
@@ -392,9 +409,9 @@ describe("PrismuxOvernightFactorySettingsPage & overnightFactory.logic", () => {
     expect(resolveGmailOAuthRedirectUri({})).toBe(
       "http://127.0.0.1:47777/v1/overnight/oauth/gmail/callback",
     );
-    expect(
-      resolveGmailOAuthRedirectUri({ daemonBaseUrl: "http://127.0.0.1:43999/" }),
-    ).toBe("http://127.0.0.1:43999/v1/overnight/oauth/gmail/callback");
+    expect(resolveGmailOAuthRedirectUri({ daemonBaseUrl: "http://127.0.0.1:43999/" })).toBe(
+      "http://127.0.0.1:43999/v1/overnight/oauth/gmail/callback",
+    );
     expect(
       resolveGmailOAuthRedirectUri({
         draftRedirectUri: "http://127.0.0.1:51234/v1/overnight/oauth/gmail/callback",
@@ -868,5 +885,168 @@ describe("PrismuxOvernightFactorySettingsPage & overnightFactory.logic", () => {
     expect(connectedGmailHtml).toContain("boss@gmail.com");
     expect(connectedGmailHtml).toContain("解除绑定");
     expect(connectedGmailHtml).toContain("Refresh Token 已密封保存");
+  });
+
+  it("displays Agent Mail ready/configured badge immediately on live probe, renders outbound failure hint, task queue workbench, live run logs/cancel controls, and full-width settings container", () => {
+    const autoDetectedAgentSnap: DaemonOvernightConfigSnapshot = {
+      ...makeSnapshot(),
+      agentMail: {
+        cliInstalled: true,
+        installed: true,
+        version: "1.0.18",
+        cliPath: "C:\\Users\\Fish\\AppData\\Roaming\\npm\\agently-cli.cmd",
+        binaryPath: "C:\\Users\\Fish\\AppData\\Roaming\\npm\\agently-cli.cmd",
+        loggedIn: true,
+        authorizedEmail: "fishundersea@agent.qq.com",
+        address: "fishundersea@agent.qq.com",
+        configured: true,
+        scopes: ["mail:read", "mail:send"],
+        dailySendQuota: 50,
+        authInProgress: false,
+        pendingAuthUrl: null,
+        lastError: null,
+      },
+      runtime: {
+        pollerActive: false,
+        inAllowedWindow: false,
+        oauthPending: false,
+        lastPollAt: null,
+        lastPollError: null,
+        lastTestResult: {
+          ok: false,
+          mode: "imap",
+          emailProvider: "agent_mail",
+          checkedAt: 1_763_000_000_000,
+          durationMs: 210,
+          inbound: { ok: true, latencyMs: 110, message: "Agent 邮箱收信就绪" },
+          outbound: {
+            ok: false,
+            latencyMs: 100,
+            message: "SMTP/CLI 发信测试失败",
+            hint: "请检查授权码或重新完成 OAuth 授权。",
+          },
+          message: "发信检查失败",
+        },
+        runsCount: 1,
+      },
+    };
+
+    const sampleTasks: DaemonOvernightTaskDto[] = [
+      {
+        id: "task-1",
+        title: "夜间回归测试修复",
+        prompt: "修复所有失败单测并生成 diff 摘要",
+        workspaceDir: "D:\\Fish-code\\AGY\\Prismux",
+        provider: "codex",
+        model: "gpt-5.4-codex",
+        verifyCommand: "pnpm test",
+        triggerMode: "manual",
+        sendEmailReport: true,
+        reportRecipient: "fishundersea@agent.qq.com",
+        allowNoFileChanges: false,
+        enabled: true,
+        createdAt: 1_763_000_000_000,
+        updatedAt: 1_763_000_000_000,
+        lastRunId: "run-live-1",
+        lastRunStatus: "running",
+        lastRunAt: 1_763_000_050_000,
+      },
+    ];
+
+    const liveRuns: DaemonOvernightRunRecordDto[] = [
+      {
+        id: "run-live-1",
+        jobId: "fac-live-1",
+        messageId: "<manual-live-1@prismux.local>",
+        threadId: "thr-live-1",
+        subject: "夜间回归测试修复",
+        sender: "fishundersea@agent.qq.com",
+        status: "running",
+        stage: "running_agent",
+        source: "manual",
+        taskId: "task-1",
+        workspaceDir: "D:\\Fish-code\\AGY\\Prismux",
+        provider: "codex",
+        model: "gpt-5.4-codex",
+        prompt: "修复所有失败单测并生成 diff 摘要",
+        branchName: "factory/1126-fix-tests",
+        changedFilesCount: 2,
+        changedFiles: [
+          {
+            path: "apps/daemon/src/server/OvernightRoutes.ts",
+            status: "modified",
+            additions: 12,
+            deletions: 4,
+          },
+        ],
+        testPassed: null,
+        oracleSummary: "代理编码执行中...",
+        reviewComments: [],
+        deepLink: null,
+        reportSent: false,
+        logs: [
+          {
+            timestamp: 1_763_000_000_000,
+            level: "info",
+            stage: "preparing_worktree",
+            message: "已创建隔离 Git Worktree 分支 factory/1126-fix-tests",
+          },
+          {
+            timestamp: 1_763_000_010_000,
+            level: "info",
+            stage: "running_agent",
+            message: "正在调用 codex 执行代码修改...",
+          },
+        ],
+        createdAt: 1_763_000_000_000,
+        completedAt: 1_763_000_010_000,
+        errorMessage: null,
+      },
+    ];
+
+    // Embedded `/settings/overnight-factory` view uses full-width container (max-w-none)
+    const embeddedHtml = renderToStaticMarkup(
+      <PrismuxOvernightFactorySettingsPage
+        daemonReadyOverride
+        serverProvidersOverride={SAMPLE_LIVE_PROVIDERS}
+        settingsOverride={null}
+        waiverOverride={UNSIGNED_WAIVER}
+        initialSnapshotOverride={autoDetectedAgentSnap}
+        initialRunsOverride={liveRuns}
+        initialTasksOverride={sampleTasks}
+        workspaceOptionsOverride={[{ title: "Prismux", cwd: "D:\\Fish-code\\AGY\\Prismux" }]}
+      />,
+    );
+
+    // Full-width settings layout (no narrow max-w-5xl / max-w-4xl)
+    expect(embeddedHtml).toContain("max-w-none");
+    expect(embeddedHtml).not.toContain("max-w-5xl");
+
+    // Live Agent Mail immediately reflects 已配置 / 已就绪 + version + quota + checklist + redetect button
+    expect(embeddedHtml).toContain("Agent 邮箱已配置 · fishundersea@agent.qq.com");
+    expect(embeddedHtml).toContain("已配置 · 已就绪");
+    expect(embeddedHtml).toContain("agently-cli 已安装 v1.0.18");
+    expect(embeddedHtml).toContain("日发信额度 50");
+    expect(embeddedHtml).toContain('data-testid="overnight-connection-checklist"');
+    expect(embeddedHtml).toContain('data-testid="overnight-redetect-env-btn"');
+    expect(embeddedHtml).toContain('data-testid="overnight-test-recipient-input"');
+
+    // Outbound failure hint rendered cleanly
+    expect(embeddedHtml).toContain('data-testid="overnight-outbound-hint"');
+    expect(embeddedHtml).toContain("请检查授权码或重新完成 OAuth 授权。");
+
+    // End-to-end Task Queue & Immediate Run workbench rendered
+    expect(embeddedHtml).toContain('data-testid="overnight-task-workbench"');
+    expect(embeddedHtml).toContain('data-testid="overnight-run-now-btn"');
+    expect(embeddedHtml).toContain('data-testid="overnight-create-task-btn"');
+    expect(embeddedHtml).toContain('data-testid="overnight-task-row"');
+    expect(embeddedHtml).toContain("夜间回归测试修复");
+
+    // Live running task shows stage badge, auto-expanded logs, and cancel button
+    expect(embeddedHtml).toContain('data-testid="overnight-run-stage-badge"');
+    expect(embeddedHtml).toContain("代理编码中");
+    expect(embeddedHtml).toContain('data-testid="overnight-run-logs"');
+    expect(embeddedHtml).toContain("已创建隔离 Git Worktree 分支 factory/1126-fix-tests");
+    expect(embeddedHtml).toContain('data-testid="overnight-run-cancel-btn"');
   });
 });

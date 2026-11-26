@@ -1,13 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import net, { type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -19,7 +12,7 @@ import { BRAND } from "@prismux/protocol";
 import {
   DialModeToolDeniedError,
   HandoffEngine,
-  isToolAllowedInDialMode
+  isToolAllowedInDialMode,
 } from "../handoff/HandoffEngine.js";
 import { LifecycleHookBus } from "../hooks/LifecycleHookBus.js";
 import {
@@ -27,16 +20,19 @@ import {
   ImapIdleInboundAdapter,
   OVERNIGHT_FACTORY_MILESTONE,
   OvernightFactory,
+  OvernightTaskCancelledError,
   analyzeDiffStaticRisks,
   buildFactoryBranchName,
   buildReviewDeepLink,
+  createDefaultOvernightCodingExecutor,
   matchesFactoryTrigger,
   type FactoryMorningReport,
   type FactoryPluginNotification,
   type InboundEmailMessage,
   type OutboundMailPayload,
   type OutboundMailReceipt,
-  type OutboundMailer
+  type OutboundMailer,
+  type OvernightExecutionStage,
 } from "../workflows/OvernightFactory.js";
 
 const tempDirs: string[] = [];
@@ -66,7 +62,7 @@ function runGitRepo(cwd: string, args: string[]): string {
   return execFileSync("git", args, {
     cwd,
     encoding: "utf8",
-    windowsHide: true
+    windowsHide: true,
   });
 }
 
@@ -88,9 +84,9 @@ test("inbound trigger matching, branch naming, Gmail historyId cursor, and IMAP 
       from: "me@gmail.com",
       to: ["Owner <fish+factory@gmail.com>"],
       subject: "Optimize startup latency",
-      receivedAt: Date.now()
+      receivedAt: Date.now(),
     }),
-    true
+    true,
   );
 
   assert.equal(
@@ -99,9 +95,9 @@ test("inbound trigger matching, branch naming, Gmail historyId cursor, and IMAP 
       from: "me@gmail.com",
       to: ["fish@gmail.com"],
       subject: "Refactor PTY pool #Factory",
-      receivedAt: Date.now()
+      receivedAt: Date.now(),
     }),
-    true
+    true,
   );
 
   assert.equal(
@@ -110,9 +106,9 @@ test("inbound trigger matching, branch naming, Gmail historyId cursor, and IMAP 
       from: "me@gmail.com",
       to: ["fish@gmail.com"],
       subject: "[idea] Add dark border toggle",
-      receivedAt: Date.now()
+      receivedAt: Date.now(),
     }),
-    true
+    true,
   );
 
   assert.equal(
@@ -122,9 +118,9 @@ test("inbound trigger matching, branch naming, Gmail historyId cursor, and IMAP 
       to: ["fish@gmail.com"],
       subject: "Quick idea note",
       labels: ["INBOX", "#factory"],
-      receivedAt: Date.now()
+      receivedAt: Date.now(),
     }),
-    true
+    true,
   );
 
   assert.equal(
@@ -135,16 +131,16 @@ test("inbound trigger matching, branch naming, Gmail historyId cursor, and IMAP 
       subject: "Weekly digest",
       labels: ["INBOX"],
       textBody: "Body mentioning #factory should not trigger without subject/tag/alias",
-      receivedAt: Date.now()
+      receivedAt: Date.now(),
     }),
-    false
+    false,
   );
 
   // 2. Branch name format `factory/MMDD-<slug>` (including CJK fallback)
   const sampleDate = new Date(2026, 10, 23, 2, 30, 0).getTime();
   const asciiBranch = buildFactoryBranchName(
     "[Idea] #factory Fix add() overflow in math.mjs",
-    sampleDate
+    sampleDate,
   );
   assert.match(asciiBranch, /^factory\/1123-fix-add-overflow-in-math-mjs$/);
 
@@ -160,8 +156,8 @@ test("inbound trigger matching, branch naming, Gmail historyId cursor, and IMAP 
       res.end(
         JSON.stringify({
           access_token: "ya29.mock-access-token",
-          expires_in: 3600
-        })
+          expires_in: 3600,
+        }),
       );
       return;
     }
@@ -180,8 +176,8 @@ test("inbound trigger matching, branch naming, Gmail historyId cursor, and IMAP 
         res.end(
           JSON.stringify({
             historyId: "1042",
-            history: [{ messagesAdded: [{ message: { id: "gmail-msg-1" } }] }]
-          })
+            history: [{ messagesAdded: [{ message: { id: "gmail-msg-1" } }] }],
+          }),
         );
         return;
       }
@@ -204,16 +200,16 @@ test("inbound trigger matching, branch naming, Gmail historyId cursor, and IMAP 
               { name: "Message-ID", value: "<gmail-msg-1@mail.gmail.com>" },
               { name: "From", value: "Fish <fish@gmail.com>" },
               { name: "To", value: "fish+factory@gmail.com" },
-              { name: "Subject", value: "[Idea] Fix math bug" }
+              { name: "Subject", value: "[Idea] Fix math bug" },
             ],
             parts: [
               {
                 mimeType: "text/plain",
-                body: { data: toBase64Url(rawIdeaBody) }
-              }
-            ]
-          }
-        })
+                body: { data: toBase64Url(rawIdeaBody) },
+              },
+            ],
+          },
+        }),
       );
       return;
     }
@@ -227,9 +223,7 @@ test("inbound trigger matching, branch naming, Gmail historyId cursor, and IMAP 
   });
   t.after(async () => {
     mockGmailServer.closeAllConnections?.();
-    await new Promise<void>((resolveClose) =>
-      mockGmailServer.close(() => resolveClose())
-    );
+    await new Promise<void>((resolveClose) => mockGmailServer.close(() => resolveClose()));
   });
 
   const gmailPort = (mockGmailServer.address() as AddressInfo).port;
@@ -240,7 +234,7 @@ test("inbound trigger matching, branch naming, Gmail historyId cursor, and IMAP 
     refreshToken: "mock-refresh",
     initialHistoryId: "1000",
     tokenUrl: `http://127.0.0.1:${gmailPort}/token`,
-    apiBaseUrl: `http://127.0.0.1:${gmailPort}/gmail/v1`
+    apiBaseUrl: `http://127.0.0.1:${gmailPort}/gmail/v1`,
   });
 
   const gmailPoll1 = await gmailAdapter.pollIncremental();
@@ -262,7 +256,7 @@ test("inbound trigger matching, branch naming, Gmail historyId cursor, and IMAP 
     "Subject: #factory Add clamp helper",
     "Content-Type: text/plain; charset=utf-8",
     "",
-    "Implement clamp(value, min, max) cleanly."
+    "Implement clamp(value, min, max) cleanly.",
   ].join("\r\n");
 
   const imapServer = net.createServer((socket) => {
@@ -312,7 +306,7 @@ test("inbound trigger matching, branch naming, Gmail historyId cursor, and IMAP 
     secure: false,
     username: "owner",
     password: "secret",
-    initialUid: 10
+    initialUid: 10,
   });
 
   const imapPoll = await imapAdapter.pollIncremental();
@@ -348,13 +342,8 @@ test("end-to-end overnight factory pipeline with real git worktree, SqliteMemory
 
   writeFileSync(
     join(repoDir, "math.mjs"),
-    [
-      "export function add(a, b) {",
-      "  return a - b;",
-      "}",
-      ""
-    ].join("\n"),
-    "utf8"
+    ["export function add(a, b) {", "  return a - b;", "}", ""].join("\n"),
+    "utf8",
   );
   writeFileSync(
     join(repoDir, "math.test.mjs"),
@@ -367,9 +356,9 @@ test("end-to-end overnight factory pipeline with real git worktree, SqliteMemory
       "  assert.equal(add(2, 3), 5);",
       "  assert.equal(add(-1, 4), 3);",
       "});",
-      ""
+      "",
     ].join("\n"),
-    "utf8"
+    "utf8",
   );
 
   runGitRepo(repoDir, ["add", "math.mjs", "math.test.mjs"]);
@@ -385,8 +374,8 @@ test("end-to-end overnight factory pipeline with real git worktree, SqliteMemory
       cwd: repoDir,
       env: cleanNodeEnv,
       stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true
-    })
+      windowsHide: true,
+    }),
   );
 
   // 2. Start real SqliteMemoryStore and seed workspace & chief memories
@@ -394,7 +383,7 @@ test("end-to-end overnight factory pipeline with real git worktree, SqliteMemory
     dbPath,
     machineId: "factory-test-machine",
     embeddingDimensions: 768,
-    enableWal: true
+    enableWal: true,
   });
   await memoryStore.initialize();
   cleanups.push(async () => {
@@ -409,7 +398,7 @@ test("end-to-end overnight factory pipeline with real git worktree, SqliteMemory
       "Use pure ESM .mjs modules with zero external dependencies and node:test assertions for math.mjs.",
     sourceRef: "repo:math-toolbox:spec",
     importance: 0.95,
-    machineId: "factory-test-machine"
+    machineId: "factory-test-machine",
   });
   await memoryStore.upsert({
     namespace: "private/chief",
@@ -419,7 +408,7 @@ test("end-to-end overnight factory pipeline with real git worktree, SqliteMemory
       "Prefer concise pure functions in math.mjs and verify all edge arithmetic cases before commit.",
     sourceRef: "chief:pref:coding",
     importance: 0.9,
-    machineId: "factory-test-machine"
+    machineId: "factory-test-machine",
   });
 
   // 3. Configure LifecycleHookBus & HandoffEngine & OutboundMailer & Plugin Notifier
@@ -430,22 +419,22 @@ test("end-to-end overnight factory pipeline with real git worktree, SqliteMemory
       id: "observe-session-start",
       event: "SessionStart",
       onFailure: "block",
-      timeoutMs: 1_000
+      timeoutMs: 1_000,
     },
     () => {
       hookEventsSeen.push("SessionStart");
-    }
+    },
   );
   hookBus.register(
     {
       id: "observe-stop-hook",
       event: "Stop",
       onFailure: "block",
-      timeoutMs: 1_000
+      timeoutMs: 1_000,
     },
     (ctx) => {
       hookEventsSeen.push(`Stop:${ctx.threadId}`);
-    }
+    },
   );
 
   const handoffEngine = new HandoffEngine();
@@ -456,9 +445,9 @@ test("end-to-end overnight factory pipeline with real git worktree, SqliteMemory
       return {
         messageId: `<report-${sentMails.length}@prismux.local>`,
         acceptedAt: Date.now(),
-        provider: "mock-smtp"
+        provider: "mock-smtp",
       };
-    }
+    },
   };
   const pluginNotifications: FactoryPluginNotification[] = [];
 
@@ -480,7 +469,7 @@ test("end-to-end overnight factory pipeline with real git worktree, SqliteMemory
       repoPath: repoDir,
       repoSlug: "math-toolbox",
       workspaceNamespace: "workspace/math-toolbox",
-      testCommand: "node --test math.test.mjs"
+      testCommand: "node --test math.test.mjs",
     },
     codingExecutor: async (ctx) => {
       observedWorktreePath = ctx.worktreePath;
@@ -493,35 +482,25 @@ test("end-to-end overnight factory pipeline with real git worktree, SqliteMemory
         ctx.memoryHits.some(
           (hit) =>
             hit.entry.namespace === "workspace/math-toolbox" ||
-            hit.entry.namespace === "private/chief"
+            hit.entry.namespace === "private/chief",
         ),
-        true
+        true,
       );
       assert.equal(ctx.cleanedEmailText.includes("Sent from Gemini App"), false);
       assert.equal(ctx.cleanedEmailText.includes("Quoted history"), false);
 
       // Verify WorktreeSandbox blocks out-of-worktree writes (`isWriteTargetAllowed === false` + `assertWriteTargetAllowed` throws)
-      assert.equal(
-        ctx.sandbox.isWriteTargetAllowed(ctx.sandboxPolicy, outsideSecretFile),
-        false
-      );
+      assert.equal(ctx.sandbox.isWriteTargetAllowed(ctx.sandboxPolicy, outsideSecretFile), false);
       assert.equal(ctx.tools.isWriteAllowed(outsideSecretFile), false);
       assert.throws(
-        () =>
-          ctx.sandbox.assertWriteTargetAllowed(
-            ctx.sandboxPolicy,
-            outsideSecretFile
-          ),
-        /Sandbox write blocked/
+        () => ctx.sandbox.assertWriteTargetAllowed(ctx.sandboxPolicy, outsideSecretFile),
+        /Sandbox write blocked/,
       );
       await assert.rejects(
         () => ctx.tools.writeFile(outsideSecretFile, "PWNED=true\n"),
-        /Sandbox write blocked/
+        /Sandbox write blocked/,
       );
-      assert.equal(
-        readFileSync(outsideSecretFile, "utf8"),
-        "TOP_SECRET_DO_NOT_TOUCH=1\n"
-      );
+      assert.equal(readFileSync(outsideSecretFile, "utf8"), "TOP_SECRET_DO_NOT_TOUCH=1\n");
       sandboxOutOfTreeBlocked = true;
 
       // Verify ELECTRON_RUN_AS_NODE is sanitized from child execution env
@@ -531,12 +510,7 @@ test("end-to-end overnight factory pipeline with real git worktree, SqliteMemory
         // Attempt 1 intentionally introduces a subtle off-by-one bug to exercise self-healing
         await ctx.tools.writeFile(
           "math.mjs",
-          [
-            "export function add(a, b) {",
-            "  return a + b + 1;",
-            "}",
-            ""
-          ].join("\n")
+          ["export function add(a, b) {", "  return a + b + 1;", "}", ""].join("\n"),
         );
         return {
           summary: "尝试修复 math.mjs 加法函数（第 1 轮）",
@@ -546,8 +520,8 @@ test("end-to-end overnight factory pipeline with real git worktree, SqliteMemory
             outputTokens: 110,
             estimatedCostUsd: 0.0021,
             model: "gemini-4-neon",
-            provider: "antigravity"
-          }
+            provider: "antigravity",
+          },
         };
       }
 
@@ -556,12 +530,7 @@ test("end-to-end overnight factory pipeline with real git worktree, SqliteMemory
       assert.match(ctx.lastTestFailure, /add computes arithmetic sum|AssertionError|fail 1/i);
       await ctx.tools.writeFile(
         "math.mjs",
-        [
-          "export function add(a, b) {",
-          "  return a + b;",
-          "}",
-          ""
-        ].join("\n")
+        ["export function add(a, b) {", "  return a + b;", "}", ""].join("\n"),
       );
       return {
         summary: "修复 math.mjs 中 add(a, b) 误做减法的运算符缺陷并通过单测",
@@ -571,36 +540,31 @@ test("end-to-end overnight factory pipeline with real git worktree, SqliteMemory
           outputTokens: 145,
           estimatedCostUsd: 0.0034,
           model: "gemini-4-neon",
-          provider: "antigravity"
-        }
+          provider: "antigravity",
+        },
       };
     },
     oracleReviewer: async (ctx) => {
       assert.equal(handoffEngine.getDialMode(ctx.reviewThreadId), "review");
       assert.equal(isToolAllowedInDialMode("review", "write_file"), false);
-      assert.throws(
-        () => ctx.assertReadOnlyTool("write_file"),
-        DialModeToolDeniedError
-      );
+      assert.throws(() => ctx.assertReadOnlyTool("write_file"), DialModeToolDeniedError);
       ctx.assertReadOnlyTool("git_diff");
       oracleVerifiedReadOnly = true;
 
       assert.match(ctx.diff, /-\s*return a - b;/);
       assert.match(ctx.diff, /\+\s*return a \+ b;/);
       return {
-        comments: [
-          "已核验 diff：`add(a, b)` 运算符已修正为 `+`，无额外副作用且原有单测全绿。"
-        ],
+        comments: ["已核验 diff：`add(a, b)` 运算符已修正为 `+`，无额外副作用且原有单测全绿。"],
         tokenStats: {
           inputTokens: 300,
           outputTokens: 80,
-          estimatedCostUsd: 0.0015
-        }
+          estimatedCostUsd: 0.0015,
+        },
       };
     },
     onNotifyPlugins: (notification) => {
       pluginNotifications.push(notification);
-    }
+    },
   });
 
   const inboundEmail: InboundEmailMessage = {
@@ -615,8 +579,8 @@ test("end-to-end overnight factory pipeline with real git worktree, SqliteMemory
       "",
       "-- ",
       "Sent from Gemini App",
-      "> Quoted history that should be stripped by DocumentCollector"
-    ].join("\n")
+      "> Quoted history that should be stripped by DocumentCollector",
+    ].join("\n"),
   };
 
   // 4. Execute full 4-stage pipeline
@@ -635,17 +599,11 @@ test("end-to-end overnight factory pipeline with real git worktree, SqliteMemory
   const mainHeadAfter = runGitRepo(repoDir, ["rev-parse", "main"]).trim();
   assert.equal(mainHeadAfter, mainHeadBefore);
 
-  const branchHead = runGitRepo(repoDir, [
-    "rev-parse",
-    result.branchName!
-  ]).trim();
+  const branchHead = runGitRepo(repoDir, ["rev-parse", result.branchName!]).trim();
   assert.equal(branchHead, result.commitSha);
   assert.notEqual(branchHead, mainHeadBefore);
 
-  const committedMath = runGitRepo(repoDir, [
-    "show",
-    `${result.commitSha}:math.mjs`
-  ]);
+  const committedMath = runGitRepo(repoDir, ["show", `${result.commitSha}:math.mjs`]);
   assert.match(committedMath, /return a \+ b;/);
 
   // Verify changed file stats and diff
@@ -668,7 +626,7 @@ test("end-to-end overnight factory pipeline with real git worktree, SqliteMemory
   assert.equal(result.deepLink, expectedDeepLink);
   assert.ok(
     expectedDeepLink.startsWith(`${BRAND.uriScheme}://review/`),
-    `Expected deepLink starting with ${BRAND.uriScheme}://review/`
+    `Expected deepLink starting with ${BRAND.uriScheme}://review/`,
   );
 
   // 7 required sections in HTML morning report
@@ -714,7 +672,7 @@ test("end-to-end overnight factory pipeline with real git worktree, SqliteMemory
           messageId: "<unrelated-news@example.com>",
           from: "news@example.com",
           to: ["fish@gmail.com"],
-          subject: "Weekly newsletter"
+          subject: "Weekly newsletter",
         },
         inboundEmail,
         {
@@ -722,19 +680,17 @@ test("end-to-end overnight factory pipeline with real git worktree, SqliteMemory
           from: "Fish <fish@gmail.com>",
           to: ["fish@gmail.com"],
           subject: "[Idea] Second math check",
-          textBody: "Ensure math.mjs add(a, b) stays clean."
-        }
-      ]
-    })
+          textBody: "Ensure math.mjs add(a, b) stays clean.",
+        },
+      ],
+    }),
   });
 
   const pollResults = await factory.pollInbound(pollAdapter);
   assert.equal(pollResults.length, 2);
   assert.equal(pollResults[0]?.status, "skipped_duplicate");
   assert.equal(pollResults[1]?.status, "completed");
-  assert.deepEqual(pollAdapter.getAcknowledgedMessageIds(), [
-    "<factory-e2e-002@gmail.com>"
-  ]);
+  assert.deepEqual(pollAdapter.getAcknowledgedMessageIds(), ["<factory-e2e-002@gmail.com>"]);
   assert.equal(sentMails.length, 2);
 });
 
@@ -759,21 +715,18 @@ test("security hook veto overrides auto mode, static risk analyzer detects diff 
       event: "PreToolUse",
       onFailure: "block",
       securityCritical: true,
-      timeoutMs: 500
+      timeoutMs: 500,
     },
     (ctx) => {
-      if (
-        ctx.toolName === "write_file" &&
-        String(ctx.toolInput?.filePath ?? "").endsWith(".env")
-      ) {
+      if (ctx.toolName === "write_file" && String(ctx.toolInput?.filePath ?? "").endsWith(".env")) {
         return {
           decision: "block",
           exitCode: 2,
-          feedback: "安全策略阻断：禁止在夜间工场写入 .env 凭据文件"
+          feedback: "安全策略阻断：禁止在夜间工场写入 .env 凭据文件",
         };
       }
       return { decision: "allow", exitCode: 0 };
-    }
+    },
   );
 
   const factory = new OvernightFactory({
@@ -782,11 +735,11 @@ test("security hook veto overrides auto mode, static risk analyzer detects diff 
     cleanupWorktree: true,
     defaultRepoTarget: {
       repoPath: repoDir,
-      testCommand: `"${process.execPath}" -e "process.exit(0)"`
+      testCommand: `"${process.execPath}" -e "process.exit(0)"`,
     },
     codingExecutor: async (ctx) => {
       await ctx.tools.writeFile(".env", "SECRET=123\n");
-    }
+    },
   });
 
   await assert.rejects(
@@ -795,9 +748,9 @@ test("security hook veto overrides auto mode, static risk analyzer detects diff 
         messageId: "<sec-veto-1@gmail.com>",
         from: "fish@gmail.com",
         to: ["fish+factory@gmail.com"],
-        subject: "#factory Attempt credential write"
+        subject: "#factory Attempt credential write",
       }),
-    /禁止在夜间工场写入 \.env 凭据文件/
+    /禁止在夜间工场写入 \.env 凭据文件/,
   );
 
   // 2. Built-in static risk analyzer checks
@@ -809,13 +762,13 @@ test("security hook veto overrides auto mode, static risk analyzer detects diff 
     '+const apiKey = "sk-1234567890abcdef1234567890";',
     "+try { doRisky(); } catch (e) {}",
     "+console.log('debug leak');",
-    "+export const parsed: any = eval('1+1');"
+    "+export const parsed: any = eval('1+1');",
   ].join("\n");
 
   const findings = analyzeDiffStaticRisks(
     riskyDiff,
     [{ path: "src/auth.ts", status: "modified", additions: 4, deletions: 0 }],
-    true
+    true,
   );
   assert.ok(findings.some((f) => f.includes("[Security]") && f.includes("凭据")));
   assert.ok(findings.some((f) => f.includes("[Reliability]")));
@@ -835,8 +788,8 @@ test("security hook veto overrides auto mode, static risk analyzer detects diff 
         path: 'src/<svg onload="alert(1)">.ts',
         status: "modified",
         additions: 1,
-        deletions: 1
-      }
+        deletions: 1,
+      },
     ],
     diff: '+const x = "<script>alert(1)</script>";\n-const y = "<img src=x>";',
     testCommand: "node --test <script>",
@@ -848,9 +801,9 @@ test("security hook veto overrides auto mode, static risk analyzer detects diff 
       outputTokens: 5,
       totalTokens: 15,
       estimatedCostUsd: 0.0001,
-      model: '<script>m</script>'
+      model: "<script>m</script>",
     },
-    deepLink: "javascript:alert(1)"
+    deepLink: "javascript:alert(1)",
   };
 
   const xssHtml = factory.renderMorningReportHtml(xssReport);
@@ -860,4 +813,123 @@ test("security hook veto overrides auto mode, static risk analyzer detects diff 
   assert.equal(xssHtml.includes("javascript:alert(1)"), false);
   assert.ok(xssHtml.includes("&lt;script&gt;"));
   assert.ok(xssHtml.includes(`${BRAND.uriScheme}://review/`));
+});
+
+test("createDefaultOvernightCodingExecutor preserves native CLI identity, hard-blocks personal AGY, emits live stage progress, supports allowNoFileChanges, and honors AbortSignal cancellation", async () => {
+  const rootDir = mkdtempSync(join(tmpdir(), "prismux-factory-default-exec-"));
+  tempDirs.push(rootDir);
+
+  const repoDir = join(rootDir, "exec-repo");
+  mkdirSync(repoDir, { recursive: true });
+  runGitRepo(repoDir, ["init", "-b", "main"]);
+  runGitRepo(repoDir, ["config", "user.name", "Exec Test"]);
+  runGitRepo(repoDir, ["config", "user.email", "exec@prismux.local"]);
+  writeFileSync(join(repoDir, "readme.md"), "# Init\n", "utf8");
+  runGitRepo(repoDir, ["add", "readme.md"]);
+  runGitRepo(repoDir, ["commit", "-m", "init"]);
+
+  const capturedInvocations: Array<{
+    command: string;
+    args: readonly string[];
+    env: NodeJS.ProcessEnv;
+  }> = [];
+
+  const defaultExecutor = createDefaultOvernightCodingExecutor({
+    findExecutable: (candidates) => `/mock/bin/${candidates[0]}`,
+    spawnRunner: async ({ executablePath, args, env, onLine }) => {
+      capturedInvocations.push({ command: executablePath, args, env });
+      onLine?.("Analyzing workspace...", "info");
+      return {
+        exitCode: 0,
+        stdout: "Done cleanly\n",
+        stderr: "",
+        combinedOutput: "Done cleanly\n",
+      };
+    },
+  });
+
+  const stages: OvernightExecutionStage[] = [];
+  const factory = new OvernightFactory({
+    worktreeBaseDir: join(rootDir, "wt"),
+    cleanupWorktree: true,
+    defaultRepoTarget: {
+      repoPath: repoDir,
+      testCommand: `"${process.execPath}" -e "process.exit(0)"`,
+    },
+    codingExecutor: defaultExecutor,
+  });
+
+  // 1. Codex run completes with allowNoFileChanges=true, strips ELECTRON_RUN_AS_NODE, and never overrides originator
+  process.env.ELECTRON_RUN_AS_NODE = "1";
+  const codexRes = await factory.runEmailPipeline(
+    {
+      messageId: "<default-exec-1@qq.com>",
+      from: "owner@qq.com",
+      to: ["owner@qq.com"],
+      subject: "#factory Audit readme",
+      textBody: "Review readme and verify status",
+    },
+    {
+      agentProvider: "codex",
+      agentModel: "gpt-5.4-codex",
+      allowNoFileChanges: true,
+      onProgress: (evt) => {
+        stages.push(evt.stage);
+      },
+    },
+  );
+  assert.equal(codexRes.status, "completed");
+  assert.equal(capturedInvocations.length, 1);
+  assert.equal(capturedInvocations[0]?.command, "/mock/bin/codex");
+  assert.ok(capturedInvocations[0]?.args.includes("exec"));
+  assert.ok(capturedInvocations[0]?.args.includes("gpt-5.4-codex"));
+  assert.equal(capturedInvocations[0]?.env.ELECTRON_RUN_AS_NODE, undefined);
+  assert.equal(capturedInvocations[0]?.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE, undefined);
+  assert.equal(capturedInvocations[0]?.env.CLAUDE_CODE_ENTRYPOINT, undefined);
+  assert.ok(stages.includes("preparing_worktree"));
+  assert.ok(stages.includes("running_agent"));
+  assert.ok(stages.includes("verifying"));
+  assert.ok(stages.includes("reporting"));
+  assert.ok(stages.includes("completed"));
+
+  // 2. Personal AGY hard-blocked even directly inside default coding executor
+  await assert.rejects(
+    () =>
+      factory.runEmailPipeline(
+        {
+          messageId: "<default-exec-agy@qq.com>",
+          from: "owner@qq.com",
+          to: ["owner@qq.com"],
+          subject: "#factory Try AGY",
+          textBody: "Should fail",
+        },
+        {
+          agentProvider: "antigravity",
+          allowNoFileChanges: true,
+        },
+      ),
+    /AGY|Antigravity/i,
+  );
+
+  // 3. Pre-aborted AbortSignal throws OvernightTaskCancelledError cleanly
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    () =>
+      factory.runEmailPipeline(
+        {
+          messageId: "<default-exec-cancel@qq.com>",
+          from: "owner@qq.com",
+          to: ["owner@qq.com"],
+          subject: "#factory Cancelled task",
+          textBody: "Should cancel immediately",
+        },
+        {
+          agentProvider: "codex",
+          allowNoFileChanges: true,
+          signal: controller.signal,
+        },
+      ),
+    (err: unknown) => err instanceof OvernightTaskCancelledError,
+  );
 });

@@ -29,6 +29,7 @@ import {
 import type {
   DaemonOvernightConfigPatch,
   DaemonOvernightConfigSnapshot,
+  DaemonOvernightExecutionStage,
   DaemonOvernightImapSmtpConfigDto,
   DaemonOvernightInboundMode,
   DaemonOvernightMailPreset,
@@ -64,8 +65,16 @@ export type OvernightAgentMailAction = "status" | "install" | "login";
 
 export interface OvernightAgentMailStatus {
   readonly cliInstalled: boolean;
+  readonly installed?: boolean;
+  readonly version?: string | null;
   readonly cliPath?: string;
+  readonly binaryPath?: string | null;
+  readonly loggedIn?: boolean;
   readonly authorizedEmail: string | null;
+  readonly address?: string | null;
+  readonly configured?: boolean;
+  readonly scopes?: readonly string[];
+  readonly dailySendQuota?: number | null;
   readonly authInProgress: boolean;
   readonly pendingAuthUrl: string | null;
   readonly lastError: string | null;
@@ -74,8 +83,13 @@ export interface OvernightAgentMailStatus {
 export interface OvernightAgentMailActionResult {
   readonly ok: boolean;
   readonly installed: boolean;
+  readonly version?: string | null;
   readonly cliPath?: string;
+  readonly binaryPath?: string | null;
+  readonly loggedIn?: boolean;
+  readonly configured?: boolean;
   readonly authorizedEmail: string | null;
+  readonly address?: string | null;
   readonly authUrl: string | null;
   readonly authInProgress: boolean;
   readonly stdout: string;
@@ -363,9 +377,7 @@ export function normalizeOvernightAgentProviderId(rawId: string | null | undefin
 function isPlaceholderModelSlug(slug: string): boolean {
   const trimmed = slug.trim();
   return (
-    trimmed.length === 0 ||
-    trimmed === ANTIGRAVITY_DEFAULT_MODEL ||
-    trimmed === MUSE_DEFAULT_MODEL
+    trimmed.length === 0 || trimmed === ANTIGRAVITY_DEFAULT_MODEL || trimmed === MUSE_DEFAULT_MODEL
   );
 }
 
@@ -621,10 +633,7 @@ export function evaluateOvernightAgyCompliance(input: {
     };
   }
 
-  if (
-    input.agentProvider === "chief" &&
-    isAntigravityOvernightProvider(input.chiefProvider)
-  ) {
+  if (input.agentProvider === "chief" && isAntigravityOvernightProvider(input.chiefProvider)) {
     return {
       blocked: true,
       reason: "chief_agy",
@@ -654,8 +663,13 @@ export interface OvernightFactoryDraft {
   emailProvider: OvernightEmailProvider;
   agentMailAddress: string;
   agentMailCliInstalled: boolean;
+  agentMailVersion: string | null;
   agentMailCliPath: string;
+  agentMailLoggedIn: boolean;
+  agentMailConfigured: boolean;
   agentMailAuthorizedEmail: string | null;
+  agentMailScopes: string[];
+  agentMailDailySendQuota: number | null;
   agentMailAuthInProgress: boolean;
   agentMailPendingAuthUrl: string | null;
   agentMailLastError: string | null;
@@ -768,14 +782,38 @@ export function extractAgentMailStatusFromSnapshot(
   const authorizedEmail =
     typeof am?.["authorizedEmail"] === "string" && am["authorizedEmail"].trim().length > 0
       ? am["authorizedEmail"].trim()
-      : persistedAddr || null;
+      : typeof am?.["address"] === "string" && am["address"].trim().length > 0
+        ? am["address"].trim()
+        : persistedAddr || null;
   const cliPath =
     typeof am?.["cliPath"] === "string" && am["cliPath"].trim().length > 0
       ? am["cliPath"].trim()
+      : typeof am?.["binaryPath"] === "string" && am["binaryPath"].trim().length > 0
+        ? am["binaryPath"].trim()
+        : undefined;
+  const cliInstalled = am?.["cliInstalled"] === true || am?.["installed"] === true;
+  const version =
+    typeof am?.["version"] === "string" && am["version"].trim().length > 0
+      ? am["version"].trim()
       : undefined;
+  const scopes = Array.isArray(am?.["scopes"])
+    ? am["scopes"].filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+    : undefined;
+  const dailySendQuota =
+    typeof am?.["dailySendQuota"] === "number" && Number.isFinite(am["dailySendQuota"])
+      ? am["dailySendQuota"]
+      : undefined;
+  const loggedIn = typeof am?.["loggedIn"] === "boolean" ? am["loggedIn"] : undefined;
+  const configured = typeof am?.["configured"] === "boolean" ? am["configured"] : undefined;
+
   return {
-    cliInstalled: am?.["cliInstalled"] === true,
+    cliInstalled,
     ...(cliPath ? { cliPath } : {}),
+    ...(version !== undefined ? { version } : {}),
+    ...(loggedIn !== undefined ? { loggedIn } : {}),
+    ...(configured !== undefined ? { configured } : {}),
+    ...(scopes && scopes.length > 0 ? { scopes } : {}),
+    ...(dailySendQuota !== undefined ? { dailySendQuota } : {}),
     authorizedEmail,
     authInProgress: am?.["authInProgress"] === true,
     pendingAuthUrl:
@@ -812,31 +850,70 @@ export function parseAgentMailTestResponse(
   const cliPath =
     typeof rec?.["cliPath"] === "string" && rec["cliPath"].trim().length > 0
       ? rec["cliPath"].trim()
-      : typeof nestedAm?.["cliPath"] === "string" && nestedAm["cliPath"].trim().length > 0
-        ? nestedAm["cliPath"].trim()
-        : undefined;
+      : typeof rec?.["binaryPath"] === "string" && rec["binaryPath"].trim().length > 0
+        ? rec["binaryPath"].trim()
+        : typeof nestedAm?.["cliPath"] === "string" && nestedAm["cliPath"].trim().length > 0
+          ? nestedAm["cliPath"].trim()
+          : typeof nestedAm?.["binaryPath"] === "string" && nestedAm["binaryPath"].trim().length > 0
+            ? nestedAm["binaryPath"].trim()
+            : undefined;
+  const version =
+    typeof rec?.["version"] === "string" && rec["version"].trim().length > 0
+      ? rec["version"].trim()
+      : typeof nestedAm?.["version"] === "string" && nestedAm["version"].trim().length > 0
+        ? nestedAm["version"].trim()
+        : null;
   const authorizedEmail =
     typeof rec?.["authorizedEmail"] === "string" && rec["authorizedEmail"].trim().length > 0
       ? rec["authorizedEmail"].trim()
-      : typeof nestedAm?.["authorizedEmail"] === "string" &&
-          nestedAm["authorizedEmail"].trim().length > 0
-        ? nestedAm["authorizedEmail"].trim()
-        : null;
+      : typeof rec?.["address"] === "string" && rec["address"].trim().length > 0
+        ? rec["address"].trim()
+        : typeof nestedAm?.["authorizedEmail"] === "string" &&
+            nestedAm["authorizedEmail"].trim().length > 0
+          ? nestedAm["authorizedEmail"].trim()
+          : typeof nestedAm?.["address"] === "string" && nestedAm["address"].trim().length > 0
+            ? nestedAm["address"].trim()
+            : null;
   const authUrl =
     typeof rec?.["authUrl"] === "string" && rec["authUrl"].length > 0
       ? rec["authUrl"]
       : typeof nestedAm?.["pendingAuthUrl"] === "string" && nestedAm["pendingAuthUrl"].length > 0
         ? nestedAm["pendingAuthUrl"]
         : null;
-  const installed = rec?.["installed"] === true || nestedAm?.["cliInstalled"] === true;
-  const authInProgress =
-    rec?.["authInProgress"] === true || nestedAm?.["authInProgress"] === true;
+  const installed =
+    rec?.["installed"] === true ||
+    nestedAm?.["cliInstalled"] === true ||
+    nestedAm?.["installed"] === true;
+  const loggedIn =
+    rec?.["loggedIn"] === true ||
+    nestedAm?.["loggedIn"] === true ||
+    Boolean(installed && authorizedEmail);
+  const configured =
+    rec?.["configured"] === true ||
+    nestedAm?.["configured"] === true ||
+    Boolean(installed && authorizedEmail);
+  const authInProgress = rec?.["authInProgress"] === true || nestedAm?.["authInProgress"] === true;
+  const scopes = Array.isArray(nestedAm?.["scopes"])
+    ? nestedAm["scopes"].filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+    : undefined;
+  const dailySendQuota =
+    typeof nestedAm?.["dailySendQuota"] === "number" && Number.isFinite(nestedAm["dailySendQuota"])
+      ? nestedAm["dailySendQuota"]
+      : null;
 
   const agentMail: OvernightAgentMailStatus | undefined = nestedAm
     ? {
-        cliInstalled: nestedAm["cliInstalled"] === true,
+        cliInstalled: nestedAm["cliInstalled"] === true || nestedAm["installed"] === true,
+        installed: nestedAm["cliInstalled"] === true || nestedAm["installed"] === true,
+        version,
         ...(cliPath ? { cliPath } : {}),
+        binaryPath: cliPath ?? null,
+        loggedIn,
         authorizedEmail,
+        address: authorizedEmail,
+        configured,
+        ...(scopes && scopes.length > 0 ? { scopes } : {}),
+        dailySendQuota,
         authInProgress,
         pendingAuthUrl: authUrl,
         lastError:
@@ -849,8 +926,13 @@ export function parseAgentMailTestResponse(
   return {
     ok: response.ok,
     installed,
+    version,
     ...(cliPath ? { cliPath } : {}),
+    binaryPath: cliPath ?? null,
+    loggedIn,
+    configured,
     authorizedEmail,
+    address: authorizedEmail,
     authUrl,
     authInProgress,
     stdout: typeof rec?.["stdout"] === "string" ? rec["stdout"] : "",
@@ -927,8 +1009,13 @@ export function createDefaultOvernightDraft(): OvernightFactoryDraft {
     emailProvider: "imap_smtp",
     agentMailAddress: "",
     agentMailCliInstalled: false,
+    agentMailVersion: null,
     agentMailCliPath: "",
+    agentMailLoggedIn: false,
+    agentMailConfigured: false,
     agentMailAuthorizedEmail: null,
+    agentMailScopes: [],
+    agentMailDailySendQuota: null,
     agentMailAuthInProgress: false,
     agentMailPendingAuthUrl: null,
     agentMailLastError: null,
@@ -993,20 +1080,34 @@ export function hydrateOvernightDraftFromSnapshot(
   snapshot: DaemonOvernightConfigSnapshot,
 ): OvernightFactoryDraft {
   const { config, secrets } = snapshot;
-  const emailProvider = extractEmailProviderFromSnapshot(snapshot);
+  const rawEmailProvider = extractEmailProviderFromSnapshot(snapshot);
   const agentMail = extractAgentMailStatusFromSnapshot(snapshot);
   const cfgRecord = asRecord(config);
   const rawAgentMailAddr =
-    typeof cfgRecord?.["agentMailAddress"] === "string"
-      ? cfgRecord["agentMailAddress"].trim()
-      : "";
+    typeof cfgRecord?.["agentMailAddress"] === "string" ? cfgRecord["agentMailAddress"].trim() : "";
+
+  const imapConfiguredOnDisk = Boolean(config.imapSmtp.email.trim()) || secrets.hasImapPassword;
+  const gmailConfiguredOnDisk = hasSavedGmailOAuthConfig(snapshot);
+  const agentMailReadyOnDisk = Boolean(agentMail.cliInstalled && agentMail.authorizedEmail);
+
+  // If the user installed & logged in `agently-cli` (even outside Prismux!) and has not
+  // configured IMAP/SMTP or Gmail OAuth2 yet, automatically surface Agent Mail as active & configured!
+  const autoPromoteAgentMail =
+    rawEmailProvider === "imap_smtp" &&
+    !imapConfiguredOnDisk &&
+    !gmailConfiguredOnDisk &&
+    agentMailReadyOnDisk;
+
+  const emailProvider: OvernightEmailProvider = autoPromoteAgentMail
+    ? "agent_mail"
+    : rawEmailProvider;
 
   // Unconfigured snapshots always land on Generic IMAP/SMTP ("imap"), while already-saved
   // Gmail OAuth2 setups stay on "gmail-oauth2" untouched.
   const effectiveMode: DaemonOvernightInboundMode =
     emailProvider === "gmail_oauth2"
       ? "gmail-oauth2"
-      : config.mode === "gmail-oauth2" && !hasSavedGmailOAuthConfig(snapshot)
+      : config.mode === "gmail-oauth2" && !gmailConfiguredOnDisk
         ? "imap"
         : config.mode;
 
@@ -1022,14 +1123,25 @@ export function hydrateOvernightDraftFromSnapshot(
       ? "126.com"
       : "163.com";
 
+  const resolvedAgentMailAddr = rawAgentMailAddr || agentMail.authorizedEmail || "";
+
   return {
     enabled: config.enabled,
     mode: effectiveMode,
     emailProvider: effectiveMode === "gmail-oauth2" ? "gmail_oauth2" : emailProvider,
-    agentMailAddress: rawAgentMailAddr || agentMail.authorizedEmail || "",
+    agentMailAddress: resolvedAgentMailAddr,
     agentMailCliInstalled: agentMail.cliInstalled,
+    agentMailVersion: agentMail.version ?? null,
     agentMailCliPath: agentMail.cliPath ?? "",
+    agentMailLoggedIn: Boolean(
+      agentMail.loggedIn || (agentMail.cliInstalled && resolvedAgentMailAddr),
+    ),
+    agentMailConfigured: Boolean(
+      agentMail.configured || (agentMail.cliInstalled && resolvedAgentMailAddr),
+    ),
     agentMailAuthorizedEmail: agentMail.authorizedEmail,
+    agentMailScopes: agentMail.scopes ? [...agentMail.scopes] : [],
+    agentMailDailySendQuota: agentMail.dailySendQuota ?? null,
     agentMailAuthInProgress: agentMail.authInProgress,
     agentMailPendingAuthUrl: agentMail.pendingAuthUrl,
     agentMailLastError: agentMail.lastError,
@@ -1054,7 +1166,7 @@ export function hydrateOvernightDraftFromSnapshot(
     fromName: config.imapSmtp.fromName || "Prismux Overnight Factory",
     imapPasswordInput: "",
     smtpPasswordInput: "",
-    useSeparateSmtpPassword: false,
+    useSeparateSmtpPassword: config.imapSmtp.useSeparateSmtpPassword === true,
     triggerTag: config.strategy.triggerTag || "#factory",
     allowedSendersText: formatAllowedSendersInput(config.strategy.allowedSenders),
     windowMode: config.strategy.windowMode,
@@ -1219,6 +1331,7 @@ export function buildOvernightMailSavePayload(
       smtpSecure: draft.smtpSecure,
       smtpUsername: draft.smtpUsername.trim() || draft.email.trim(),
       fromName: draft.fromName.trim() || "Prismux Overnight Factory",
+      useSeparateSmtpPassword: draft.useSeparateSmtpPassword,
     },
     ...(Object.keys(secrets).length > 0 ? { secrets } : {}),
   };
@@ -1247,12 +1360,158 @@ export function buildOvernightStrategySavePayload(
 
 export function isMailChannelConfigured(draft: OvernightFactoryDraft): boolean {
   if (draft.mode === "gmail-oauth2" || draft.emailProvider === "gmail_oauth2") {
-    return draft.gmailConnected || Boolean(draft.gmailClientId.trim() && draft.hasGmailClientSecret);
+    return (
+      draft.gmailConnected || Boolean(draft.gmailClientId.trim() && draft.hasGmailClientSecret)
+    );
   }
   if (draft.preset === "agent_mail" || draft.emailProvider === "agent_mail") {
     return Boolean((draft.agentMailAuthorizedEmail || draft.agentMailAddress).trim());
   }
   return Boolean(draft.email.trim() && draft.imapHost.trim() && draft.hasImapPassword);
+}
+
+export function resolveDefaultTestRecipient(draft: OvernightFactoryDraft): string {
+  if (draft.mode === "gmail-oauth2" || draft.emailProvider === "gmail_oauth2") {
+    if (draft.gmailBoundEmail.trim()) return draft.gmailBoundEmail.trim();
+  } else if (draft.preset === "agent_mail" || draft.emailProvider === "agent_mail") {
+    const addr = (draft.agentMailAuthorizedEmail || draft.agentMailAddress).trim();
+    if (addr) return addr;
+  } else if (draft.email.trim()) {
+    return draft.email.trim();
+  }
+  const senders = parseAllowedSendersInput(draft.allowedSendersText);
+  return senders.find((s) => !s.startsWith("*@")) ?? "";
+}
+
+export type OvernightChecklistStepStatus = "passed" | "pending" | "warning" | "error";
+
+export interface OvernightConnectionChecklistStep {
+  readonly id: "credentials" | "inbound" | "outbound" | "ready";
+  readonly label: string;
+  readonly status: OvernightChecklistStepStatus;
+  readonly detail: string;
+}
+
+export function buildOvernightConnectionChecklist(
+  draft: OvernightFactoryDraft,
+  testResult: DaemonOvernightMailTestResponse | null,
+): readonly OvernightConnectionChecklistStep[] {
+  const configured = isMailChannelConfigured(draft);
+  const isAgentMail =
+    draft.mode === "imap" &&
+    (draft.preset === "agent_mail" || draft.emailProvider === "agent_mail");
+  const isGmail = draft.mode === "gmail-oauth2" || draft.emailProvider === "gmail_oauth2";
+  const agentEmail = (draft.agentMailAuthorizedEmail || draft.agentMailAddress).trim();
+
+  const credStep: OvernightConnectionChecklistStep = isAgentMail
+    ? configured
+      ? {
+          id: "credentials",
+          label: "CLI / 身份检测",
+          status: "passed",
+          detail: `已配置 · ${agentEmail}${draft.agentMailVersion ? ` (v${draft.agentMailVersion})` : ""}`,
+        }
+      : draft.agentMailCliInstalled
+        ? {
+            id: "credentials",
+            label: "CLI / 身份检测",
+            status: "warning",
+            detail: `已安装 CLI${draft.agentMailVersion ? ` v${draft.agentMailVersion}` : ""} · 待授权登录`,
+          }
+        : {
+            id: "credentials",
+            label: "CLI / 身份检测",
+            status: "pending",
+            detail: "未检测到 agently-cli",
+          }
+    : isGmail
+      ? draft.gmailConnected && draft.hasGmailRefreshToken
+        ? {
+            id: "credentials",
+            label: "OAuth 凭据",
+            status: "passed",
+            detail: `已配置 · ${draft.gmailBoundEmail || "Gmail 已绑定"}`,
+          }
+        : {
+            id: "credentials",
+            label: "OAuth 凭据",
+            status: "pending",
+            detail: "待完成 Google 浏览器授权",
+          }
+      : configured
+        ? {
+            id: "credentials",
+            label: "账号 / 授权码",
+            status: "passed",
+            detail: `已配置 · ${draft.email}`,
+          }
+        : {
+            id: "credentials",
+            label: "账号 / 授权码",
+            status: "pending",
+            detail: draft.email.trim() ? "待保存邮箱授权码" : "待填写邮箱与授权码",
+          };
+
+  const matchesCurrentProvider =
+    testResult !== null &&
+    (isAgentMail
+      ? testResult.emailProvider === "agent_mail"
+      : isGmail
+        ? testResult.mode === "gmail-oauth2"
+        : testResult.mode === "imap" && testResult.emailProvider !== "agent_mail");
+
+  const inboundStep: OvernightConnectionChecklistStep = matchesCurrentProvider
+    ? {
+        id: "inbound",
+        label: "收信连通",
+        status: testResult.inbound.ok ? "passed" : "error",
+        detail: testResult.inbound.ok
+          ? `通过 (${testResult.inbound.latencyMs}ms)`
+          : testResult.inbound.message,
+      }
+    : {
+        id: "inbound",
+        label: "收信连通",
+        status: configured ? "passed" : "pending",
+        detail: configured ? "凭据就绪 · 可测试校验" : "等待配置",
+      };
+
+  const outboundStep: OvernightConnectionChecklistStep = matchesCurrentProvider
+    ? {
+        id: "outbound",
+        label: "发信连通",
+        status: testResult.outbound.ok ? "passed" : "error",
+        detail: testResult.outbound.ok
+          ? `通过 (${testResult.outbound.latencyMs}ms)`
+          : testResult.outbound.message,
+      }
+    : {
+        id: "outbound",
+        label: "发信连通",
+        status: configured ? "passed" : "pending",
+        detail: configured ? "发信就绪 · 可发送测试邮件" : "等待配置",
+      };
+
+  const allOk =
+    credStep.status === "passed" &&
+    inboundStep.status === "passed" &&
+    outboundStep.status === "passed";
+  const hasErr = inboundStep.status === "error" || outboundStep.status === "error";
+
+  const readyStep: OvernightConnectionChecklistStep = {
+    id: "ready",
+    label: "工场就绪",
+    status: hasErr ? "error" : allOk ? "passed" : "pending",
+    detail: hasErr
+      ? "请先修复收发通道异常"
+      : allOk
+        ? draft.enabled
+          ? "已就绪 · 自动值守运行中"
+          : "邮箱已就绪 · 可立即执行或开启自动值守"
+        : "完成邮箱配置后即可收发早报",
+  };
+
+  return [credStep, inboundStep, outboundStep, readyStep];
 }
 
 export function shouldDefaultExpandMailChannel(
@@ -1263,8 +1522,8 @@ export function shouldDefaultExpandMailChannel(
     return true;
   }
   const provider = extractEmailProviderFromSnapshot(snapshot);
-  if (provider === "agent_mail") {
-    const am = extractAgentMailStatusFromSnapshot(snapshot);
+  const am = extractAgentMailStatusFromSnapshot(snapshot);
+  if (provider === "agent_mail" || (am.cliInstalled && am.authorizedEmail)) {
     return Boolean(am.authorizedEmail || am.cliInstalled);
   }
   if (snapshot.config.mode === "gmail-oauth2") {
@@ -1281,17 +1540,52 @@ export function shouldDefaultExpandStrategy(snapshot: DaemonOvernightConfigSnaps
   );
 }
 
+export function formatOvernightExecutionStageLabel(
+  stage: DaemonOvernightExecutionStage | undefined,
+): string {
+  switch (stage) {
+    case "queued":
+      return "排队中";
+    case "preparing_worktree":
+      return "准备工作树";
+    case "running_agent":
+      return "代理编码中";
+    case "verifying":
+      return "验收测试";
+    case "reporting":
+      return "生成早报";
+    case "completed":
+      return "已完成";
+    case "failed":
+      return "执行失败";
+    case "cancelled":
+      return "已取消";
+    default:
+      return "就绪";
+  }
+}
+
 export function formatOvernightRunStatusBadge(status: DaemonOvernightRunStatus): {
   readonly label: string;
   readonly variant: "success" | "error" | "warning" | "secondary";
 } {
   switch (status) {
+    case "queued":
+      return { label: "排队中", variant: "secondary" };
+    case "running":
+      return { label: "执行中", variant: "warning" };
     case "completed":
       return { label: "已完成", variant: "success" };
     case "failed":
       return { label: "执行失败", variant: "error" };
+    case "cancelled":
+      return { label: "已取消", variant: "secondary" };
     case "blocked_whitelist":
       return { label: "白名单拦截", variant: "warning" };
+    case "blocked_policy":
+      return { label: "策略拦截", variant: "error" };
+    case "awaiting_human_confirmation":
+      return { label: "待人工确认", variant: "warning" };
     case "skipped":
       return { label: "已跳过", variant: "secondary" };
   }

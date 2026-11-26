@@ -1,19 +1,9 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync
-} from "node:fs";
-import {
-  lstat as lstatAsync,
-  readdir as readdirAsync,
-  rm as rmAsync
-} from "node:fs/promises";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { lstat as lstatAsync, readdir as readdirAsync, rm as rmAsync } from "node:fs/promises";
 import net from "node:net";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import process from "node:process";
 import { StringDecoder } from "node:string_decoder";
@@ -22,45 +12,51 @@ import {
   DocumentCollector,
   ForwardIdentityGuard,
   type CollectorChunk,
-  type MemoryStore
+  type MemoryStore,
 } from "@prismux/memory-core";
 import {
   BRAND,
+  isAntigravityProvider,
   type DispatchCallerKind,
   type DispatchReasoningEffort,
   type DispatchTaskArtifact,
   type IslandHookEvent,
   type MemoryNamespace,
   type MemoryQueryHit,
-  type PrismuxDispatchEnvelope
+  type PrismuxDispatchEnvelope,
 } from "@prismux/protocol";
 import { ArtifactResultBackdoor } from "../dispatch/ArtifactResultBackdoor.js";
 import type { DesktopIpcDispatchHub } from "../dispatch/DesktopIpcDispatchHub.js";
 import {
   TaskDispatchRouter,
-  detectExplicitAntigravityPrompt
+  detectExplicitAntigravityPrompt,
 } from "../dispatch/TaskDispatchRouter.js";
 import {
   AntigravityGuardDeniedError,
-  AntigravityPolicyGuard
+  AntigravityPolicyGuard,
 } from "../security/AntigravityPolicyGuard.js";
 import {
   HandoffEngine,
   isToolAllowedInDialMode,
   type HandoffExecutionResult,
-  type HandoffTranscriptMessage
+  type HandoffTranscriptMessage,
 } from "../handoff/HandoffEngine.js";
 import {
   LifecycleHookBus,
   splitCommandLine,
-  type HookDispatchResult
+  type HookDispatchResult,
 } from "../hooks/LifecycleHookBus.js";
 import {
   WorktreeSandbox,
   type SandboxIsolationSpec,
-  type WorktreeSandboxPolicy
+  type WorktreeSandboxPolicy,
 } from "../sandbox/WorktreeSandbox.js";
 import { sanitizeChildEnv } from "../core/CoreServerSupervisor.js";
+import {
+  buildSafeCliSpawnSpec,
+  decodeWindowsProcessOutput,
+  findExecutableOnPath,
+} from "../system/WindowsEnvRefresh.js";
 
 export const OVERNIGHT_FACTORY_MILESTONE = "M5" as const;
 export const DEFAULT_STALE_FACTORY_WORKTREE_AGE_MS = 24 * 60 * 60 * 1000;
@@ -94,18 +90,15 @@ async function computeEntryBytesSafe(targetPath: string, depth = 0): Promise<num
  * Sweeps crashed `%TEMP%\prismux-factory-worktrees\*` directories older than `maxAgeMs`
  * (default 24h) asynchronously without following symlinks outside the base directory.
  */
-export async function sweepStaleFactoryWorktrees(options: {
-  baseDir?: string;
-  maxAgeMs?: number;
-  nowMs?: number;
-} = {}): Promise<StaleFactoryWorktreesSweepResult> {
-  const baseDir = resolve(
-    options.baseDir ?? join(tmpdir(), `${BRAND.appSlug}-factory-worktrees`)
-  );
-  const maxAgeMs = Math.max(
-    0,
-    options.maxAgeMs ?? DEFAULT_STALE_FACTORY_WORKTREE_AGE_MS
-  );
+export async function sweepStaleFactoryWorktrees(
+  options: {
+    baseDir?: string;
+    maxAgeMs?: number;
+    nowMs?: number;
+  } = {},
+): Promise<StaleFactoryWorktreesSweepResult> {
+  const baseDir = resolve(options.baseDir ?? join(tmpdir(), `${BRAND.appSlug}-factory-worktrees`));
+  const maxAgeMs = Math.max(0, options.maxAgeMs ?? DEFAULT_STALE_FACTORY_WORKTREE_AGE_MS);
   const nowMs = options.nowMs ?? Date.now();
   const removedPaths: string[] = [];
   const errors: string[] = [];
@@ -128,9 +121,7 @@ export async function sweepStaleFactoryWorktrees(options: {
       if (nowMs - st.mtimeMs < maxAgeMs) {
         continue;
       }
-      const bytes = st.isDirectory()
-        ? await computeEntryBytesSafe(fullPath)
-        : st.size;
+      const bytes = st.isDirectory() ? await computeEntryBytesSafe(fullPath) : st.size;
       await rmAsync(fullPath, { recursive: true, force: true });
       removedPaths.push(fullPath);
       freedBytes += bytes;
@@ -150,11 +141,39 @@ export type FactoryStage =
   | "stage_c_oracle_review"
   | "stage_d_morning_report";
 
+export type OvernightExecutionStage =
+  | "queued"
+  | "preparing_worktree"
+  | "running_agent"
+  | "verifying"
+  | "reporting"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface OvernightProgressEvent {
+  stage: OvernightExecutionStage;
+  level?: "info" | "warn" | "error";
+  message: string;
+  detail?: string;
+  branchName?: string;
+  worktreePath?: string;
+}
+
+export class OvernightTaskCancelledError extends Error {
+  readonly code = "OVERNIGHT_TASK_CANCELLED" as const;
+
+  constructor(message = "夜间工场任务已取消。") {
+    super(message);
+    this.name = "OvernightTaskCancelledError";
+  }
+}
+
 export const FACTORY_STAGES: readonly FactoryStage[] = [
   "stage_a_handoff",
   "stage_b_worktree_code",
   "stage_c_oracle_review",
-  "stage_d_morning_report"
+  "stage_d_morning_report",
 ] as const;
 
 export interface FactoryInboundConfig {
@@ -187,7 +206,7 @@ export interface MailInboundAdapter {
   readonly mode: FactoryInboundMode;
   pollIncremental(cursor?: string): Promise<MailInboundPollResult>;
   startIdle?(
-    onMessage: (message: InboundEmailMessage) => Promise<void> | void
+    onMessage: (message: InboundEmailMessage) => Promise<void> | void,
   ): Promise<() => Promise<void> | void>;
   acknowledgeProcessed?(messageId: string): Promise<void>;
 }
@@ -282,6 +301,10 @@ export interface CodingAgentExecutionContext {
   cleanedEmailText: string;
   testCommand: string;
   lastTestFailure?: string;
+  routedProvider?: string;
+  routedModelId?: string;
+  signal?: AbortSignal;
+  onLog?: (message: string, level?: "info" | "warn" | "error") => void;
   sandbox: WorktreeSandbox;
   sandboxPolicy: WorktreeSandboxPolicy;
   isolationSpec: SandboxIsolationSpec;
@@ -303,7 +326,7 @@ export interface CodingAgentExecutionResult {
 }
 
 export type CodingAgentExecutor = (
-  context: CodingAgentExecutionContext
+  context: CodingAgentExecutionContext,
 ) => Promise<CodingAgentExecutionResult | void>;
 
 export interface OracleReviewContext {
@@ -328,7 +351,7 @@ export interface OracleReviewResult {
 }
 
 export type OracleReviewer = (
-  context: OracleReviewContext
+  context: OracleReviewContext,
 ) => Promise<string[] | OracleReviewResult>;
 
 export interface FactoryPluginNotification {
@@ -365,9 +388,7 @@ export interface OvernightFactoryOptions extends Partial<FactoryInboundConfig> {
   outboundMailer?: OutboundMailer;
   codingExecutor?: CodingAgentExecutor;
   oracleReviewer?: OracleReviewer;
-  onNotifyPlugins?: (
-    notification: FactoryPluginNotification
-  ) => Promise<void> | void;
+  onNotifyPlugins?: (notification: FactoryPluginNotification) => Promise<void> | void;
   repos?: Record<string, FactoryRepoTarget>;
   defaultRepoTarget?: FactoryRepoTarget;
   worktreeBaseDir?: string;
@@ -399,19 +420,16 @@ export interface FactoryRunOptions {
   codingExecutor?: CodingAgentExecutor;
   oracleReviewer?: OracleReviewer;
   outboundMailer?: OutboundMailer;
-  onNotifyPlugins?: (
-    notification: FactoryPluginNotification
-  ) => Promise<void> | void;
+  onNotifyPlugins?: (notification: FactoryPluginNotification) => Promise<void> | void;
   reportRecipient?: string;
   ignoreTriggerCheck?: boolean;
+  allowNoFileChanges?: boolean;
+  signal?: AbortSignal;
+  onProgress?: (event: OvernightProgressEvent) => void;
 }
 
 export interface FactoryPipelineResult {
-  status:
-    | "completed"
-    | "awaiting_human_confirmation"
-    | "skipped_unmatched"
-    | "skipped_duplicate";
+  status: "completed" | "awaiting_human_confirmation" | "skipped_unmatched" | "skipped_duplicate";
   jobId: string;
   messageId: string;
   threadId: string;
@@ -498,9 +516,7 @@ function hasPlusAliasInRecipient(recipient: string, aliasToken: string): boolean
   const address = extractEmailAddressOnly(recipient).toLowerCase();
   const atIndex = address.indexOf("@");
   const localPart = atIndex >= 0 ? address.slice(0, atIndex) : address;
-  const normalizedAlias = aliasToken.startsWith("+")
-    ? aliasToken
-    : `+${aliasToken}`;
+  const normalizedAlias = aliasToken.startsWith("+") ? aliasToken : `+${aliasToken}`;
   const escaped = normalizedAlias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const regex = new RegExp(`${escaped}(?=$|[+.])`, "i");
   return regex.test(localPart);
@@ -514,12 +530,9 @@ function hasPlusAliasInRecipient(recipient: string, aliasToken: string): boolean
  */
 export function matchesFactoryTrigger(
   email: InboundEmailMessage,
-  matchAliasOrTag?: string
+  matchAliasOrTag?: string,
 ): boolean {
-  const recipients = [
-    ...normalizeAddressList(email.to),
-    ...normalizeAddressList(email.cc)
-  ];
+  const recipients = [...normalizeAddressList(email.to), ...normalizeAddressList(email.cc)];
   const labels = (email.labels ?? []).map((label) => label.trim());
   const subject = email.subject ?? "";
 
@@ -586,10 +599,7 @@ function sanitizeSlugComponent(raw: string, maxLength = 36): string {
   return trimmed;
 }
 
-export function buildFactoryBranchName(
-  subject: string,
-  timestampMs: number = Date.now()
-): string {
+export function buildFactoryBranchName(subject: string, timestampMs: number = Date.now()): string {
   const date = new Date(timestampMs);
   const mm = String(date.getMonth() + 1).padStart(2, "0");
   const dd = String(date.getDate()).padStart(2, "0");
@@ -604,11 +614,7 @@ export function buildFactoryBranchName(
   return `factory/${mmdd}-${slug}`;
 }
 
-function extractSearchKeywords(
-  subject: string,
-  body: string,
-  repoSlug: string
-): string {
+function extractSearchKeywords(subject: string, body: string, repoSlug: string): string {
   const stopWords = new Set<string>([
     "the",
     "and",
@@ -625,7 +631,7 @@ function extractSearchKeywords(
     "factory",
     "subject",
     "fix",
-    "add"
+    "add",
   ]);
 
   const rawText = `${repoSlug} ${subject} ${body}`
@@ -668,7 +674,7 @@ function extractSummarySentence(
   explicitSummary: string | undefined,
   handoff: HandoffExecutionResult,
   changedFiles: ReadonlyArray<FactoryChangedFileStat>,
-  testPassed: boolean
+  testPassed: boolean,
 ): string {
   if (explicitSummary !== undefined && explicitSummary.trim().length > 0) {
     return explicitSummary.trim();
@@ -688,7 +694,7 @@ function extractSummarySentence(
 export function analyzeDiffStaticRisks(
   diff: string,
   changedFiles: ReadonlyArray<FactoryChangedFileStat>,
-  testPassed: boolean
+  testPassed: boolean,
 ): string[] {
   const findings: string[] = [];
   const lines = diff.split(/\r?\n/);
@@ -713,12 +719,12 @@ export function analyzeDiffStaticRisks(
     if (
       !hasCredentialRisk &&
       /(?:api[_-]?key|secret|password|token|private[_-]?key)\s*[:=]\s*["'`][^"'`\s]{8,}["'`]|-----BEGIN [A-Z ]*PRIVATE KEY-----|sk-[a-zA-Z0-9]{16,}|ghp_[a-zA-Z0-9]{20,}/i.test(
-        added
+        added,
       )
     ) {
       hasCredentialRisk = true;
       findings.push(
-        `[Security] 疑似在 ${currentFile || "变更代码"} 中包含硬编码凭据或敏感密钥字面量，请确认并改用加密存储/环境变量。`
+        `[Security] 疑似在 ${currentFile || "变更代码"} 中包含硬编码凭据或敏感密钥字面量，请确认并改用加密存储/环境变量。`,
       );
     }
 
@@ -729,20 +735,18 @@ export function analyzeDiffStaticRisks(
     ) {
       hasEmptyCatch = true;
       findings.push(
-        `[Reliability] 在 ${currentFile || "变更代码"} 发现空 catch 吞没异常块，建议记录错误上下文或显式向上传递。`
+        `[Reliability] 在 ${currentFile || "变更代码"} 发现空 catch 吞没异常块，建议记录错误上下文或显式向上传递。`,
       );
     }
 
     if (
       !hasDebugStatement &&
-      /\b(?:console\.log|console\.debug|debugger)\b|\/\/\s*(?:TODO|FIXME|XXX)\b/i.test(
-        added
-      ) &&
+      /\b(?:console\.log|console\.debug|debugger)\b|\/\/\s*(?:TODO|FIXME|XXX)\b/i.test(added) &&
       !/(?:^|\/)__tests__\/|\.test\.[cm]?[jt]sx?$/i.test(currentFile)
     ) {
       hasDebugStatement = true;
       findings.push(
-        `[Hygiene] 在 ${currentFile || "变更代码"} 检测到调试语句或未清理的 TODO/FIXME 标记。`
+        `[Hygiene] 在 ${currentFile || "变更代码"} 检测到调试语句或未清理的 TODO/FIXME 标记。`,
       );
     }
 
@@ -752,17 +756,14 @@ export function analyzeDiffStaticRisks(
     ) {
       hasDangerousPrimitive = true;
       findings.push(
-        `[Security] 在 ${currentFile || "变更代码"} 使用了潜在注入风险原语（eval / shell:true / innerHTML），请复核输入边界。`
+        `[Security] 在 ${currentFile || "变更代码"} 使用了潜在注入风险原语（eval / shell:true / innerHTML），请复核输入边界。`,
       );
     }
 
-    if (
-      !hasNullAssertionOrAny &&
-      /:\s*any\b|\bas\s+any\b/.test(added)
-    ) {
+    if (!hasNullAssertionOrAny && /:\s*any\b|\bas\s+any\b/.test(added)) {
       hasNullAssertionOrAny = true;
       findings.push(
-        `[Typing] 在 ${currentFile || "变更代码"} 引入了 \`any\` 宽松类型，建议收敛为显式接口或联合类型。`
+        `[Typing] 在 ${currentFile || "变更代码"} 引入了 \`any\` 宽松类型，建议收敛为显式接口或联合类型。`,
       );
     }
   }
@@ -770,29 +771,25 @@ export function analyzeDiffStaticRisks(
   const touchedSource = changedFiles.some(
     (f) =>
       /\.[cm]?[jt]sx?$/i.test(f.path) &&
-      !/(?:^|\/)(?:__tests__|tests)\/|\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(
-        f.path
-      )
+      !/(?:^|\/)(?:__tests__|tests)\/|\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(f.path),
   );
   const touchedTest = changedFiles.some((f) =>
-    /(?:^|\/)(?:__tests__|tests)\/|\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(f.path)
+    /(?:^|\/)(?:__tests__|tests)\/|\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(f.path),
   );
 
   if (touchedSource && !touchedTest) {
     findings.push(
-      "[Coverage] 本次源码改动未附带测试文件变更，建议核对回归测试与边界用例是否充分。"
+      "[Coverage] 本次源码改动未附带测试文件变更，建议核对回归测试与边界用例是否充分。",
     );
   }
 
   if (!testPassed) {
-    findings.push(
-      "[Tests] 验收测试尚未全部通过，合并前需人工排查失败用例。"
-    );
+    findings.push("[Tests] 验收测试尚未全部通过，合并前需人工排查失败用例。");
   }
 
   if (findings.length === 0) {
     findings.push(
-      "[Review OK] 只读 Diff 静态审计未发现硬编码凭据、空异常吞没或遗留调试语句；测试全部通过，可审阅合并。"
+      "[Review OK] 只读 Diff 静态审计未发现硬编码凭据、空异常吞没或遗留调试语句；测试全部通过，可审阅合并。",
     );
   }
 
@@ -802,15 +799,10 @@ export function analyzeDiffStaticRisks(
 function decodeBase64Url(input: string): string {
   const normalized = input.replaceAll("-", "+").replaceAll("_", "/");
   const padLen = (4 - (normalized.length % 4)) % 4;
-  return Buffer.from(`${normalized}${"=".repeat(padLen)}`, "base64").toString(
-    "utf8"
-  );
+  return Buffer.from(`${normalized}${"=".repeat(padLen)}`, "base64").toString("utf8");
 }
 
-function stripQuotedPrintableOrBase64(
-  body: string,
-  transferEncoding: string | undefined
-): string {
+function stripQuotedPrintableOrBase64(body: string, transferEncoding: string | undefined): string {
   const enc = (transferEncoding ?? "").trim().toLowerCase();
   if (enc === "base64") {
     try {
@@ -822,7 +814,7 @@ function stripQuotedPrintableOrBase64(
   if (enc === "quoted-printable") {
     const unfolded = body.replace(/=\r?\n/g, "");
     return unfolded.replace(/=([0-9A-Fa-f]{2})/g, (_m, hex: string) =>
-      String.fromCharCode(Number.parseInt(hex, 16))
+      String.fromCharCode(Number.parseInt(hex, 16)),
     );
   }
   return body;
@@ -837,12 +829,11 @@ export function parseRawRfc822Email(
     uid?: number;
     labels?: string[];
     historyId?: string;
-  }
+  },
 ): InboundEmailMessage {
   const normalized = raw.replace(/\r\n?/g, "\n");
   const separatorIdx = normalized.indexOf("\n\n");
-  const headerBlock =
-    separatorIdx >= 0 ? normalized.slice(0, separatorIdx) : normalized;
+  const headerBlock = separatorIdx >= 0 ? normalized.slice(0, separatorIdx) : normalized;
   const rawBody = separatorIdx >= 0 ? normalized.slice(separatorIdx + 2) : "";
 
   const unfoldedLines: string[] = [];
@@ -873,13 +864,12 @@ export function parseRawRfc822Email(
   const contentType = headers.get("content-type") ?? "";
   const decodedBody = stripQuotedPrintableOrBase64(
     rawBody,
-    headers.get("content-transfer-encoding")
+    headers.get("content-transfer-encoding"),
   );
   const isHtml = /text\/html/i.test(contentType);
 
   const dateHeader = headers.get("date");
-  const parsedDate =
-    dateHeader !== undefined ? Date.parse(dateHeader) : Number.NaN;
+  const parsedDate = dateHeader !== undefined ? Date.parse(dateHeader) : Number.NaN;
 
   const messageId =
     headers.get("message-id") ??
@@ -895,10 +885,8 @@ export function parseRawRfc822Email(
     rawRfc822: raw,
     ...(metadata?.labels !== undefined ? { labels: [...metadata.labels] } : {}),
     receivedAt: Number.isFinite(parsedDate) ? parsedDate : Date.now(),
-    ...(metadata?.historyId !== undefined
-      ? { historyId: metadata.historyId }
-      : {}),
-    ...(metadata?.uid !== undefined ? { uid: metadata.uid } : {})
+    ...(metadata?.historyId !== undefined ? { historyId: metadata.historyId } : {}),
+    ...(metadata?.uid !== undefined ? { uid: metadata.uid } : {}),
   };
 }
 
@@ -920,7 +908,7 @@ interface GmailApiMessage {
 
 function extractGmailParts(
   part: GmailMessagePayloadPart | undefined,
-  collector: { text?: string; html?: string }
+  collector: { text?: string; html?: string },
 ): void {
   if (part === undefined) {
     return;
@@ -954,8 +942,7 @@ function convertGmailApiMessage(msg: GmailApiMessage): InboundEmailMessage {
   const bodies: { text?: string; html?: string } = {};
   extractGmailParts(msg.payload, bodies);
 
-  const internalDateMs =
-    msg.internalDate !== undefined ? Number(msg.internalDate) : Number.NaN;
+  const internalDateMs = msg.internalDate !== undefined ? Number(msg.internalDate) : Number.NaN;
 
   return {
     messageId: headerMap.get("message-id") ?? msg.id ?? randomUUID(),
@@ -967,7 +954,7 @@ function convertGmailApiMessage(msg: GmailApiMessage): InboundEmailMessage {
     ...(bodies.html !== undefined ? { htmlBody: bodies.html } : {}),
     ...(msg.labelIds !== undefined ? { labels: [...msg.labelIds] } : {}),
     receivedAt: Number.isFinite(internalDateMs) ? internalDateMs : Date.now(),
-    ...(msg.historyId !== undefined ? { historyId: msg.historyId } : {})
+    ...(msg.historyId !== undefined ? { historyId: msg.historyId } : {}),
   };
 }
 
@@ -1028,32 +1015,26 @@ export class GmailOAuth2InboundAdapter implements MailInboundAdapter {
       return this.accessToken;
     }
 
-    if (
-      this.config.historyFetcher !== undefined &&
-      this.config.tokenUrl === undefined
-    ) {
+    if (this.config.historyFetcher !== undefined && this.config.tokenUrl === undefined) {
       return this.accessToken ?? "";
     }
 
     const fetchImpl = this.config.fetchFn ?? fetch;
-    const tokenUrl =
-      this.config.tokenUrl ?? "https://oauth2.googleapis.com/token";
+    const tokenUrl = this.config.tokenUrl ?? "https://oauth2.googleapis.com/token";
     const body = new URLSearchParams({
       client_id: this.config.clientId,
       client_secret: this.config.clientSecret,
       refresh_token: this.config.refreshToken,
-      grant_type: "refresh_token"
+      grant_type: "refresh_token",
     });
 
     const res = await fetchImpl(tokenUrl, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: body.toString()
+      body: body.toString(),
     });
     if (!res.ok) {
-      throw new Error(
-        `Gmail OAuth2 token refresh failed with HTTP ${res.status}`
-      );
+      throw new Error(`Gmail OAuth2 token refresh failed with HTTP ${res.status}`);
     }
     const json = (await res.json()) as {
       access_token?: string;
@@ -1070,7 +1051,7 @@ export class GmailOAuth2InboundAdapter implements MailInboundAdapter {
 
   private updateHistoryCursor(
     explicitHistoryId: string | undefined,
-    messages: ReadonlyArray<InboundEmailMessage>
+    messages: ReadonlyArray<InboundEmailMessage>,
   ): void {
     let best = explicitHistoryId ?? this.historyId;
     for (const msg of messages) {
@@ -1100,23 +1081,22 @@ export class GmailOAuth2InboundAdapter implements MailInboundAdapter {
 
     if (this.config.historyFetcher !== undefined) {
       const result = await this.config.historyFetcher({
-        ...(effectiveCursor !== undefined
-          ? { startHistoryId: effectiveCursor }
-          : {}),
+        ...(effectiveCursor !== undefined ? { startHistoryId: effectiveCursor } : {}),
         accessToken,
-        userEmail: this.config.userEmail
+        userEmail: this.config.userEmail,
       });
       this.updateHistoryCursor(result.historyId, result.messages);
       return {
         messages: result.messages,
-        ...(this.historyId !== undefined ? { nextCursor: this.historyId } : {})
+        ...(this.historyId !== undefined ? { nextCursor: this.historyId } : {}),
       };
     }
 
     const fetchImpl = this.config.fetchFn ?? fetch;
-    const apiBase = (
-      this.config.apiBaseUrl ?? "https://gmail.googleapis.com/gmail/v1"
-    ).replace(/\/+$/, "");
+    const apiBase = (this.config.apiBaseUrl ?? "https://gmail.googleapis.com/gmail/v1").replace(
+      /\/+$/,
+      "",
+    );
     const headers = { Authorization: `Bearer ${accessToken}` };
 
     const messageIds = new Set<string>();
@@ -1129,9 +1109,7 @@ export class GmailOAuth2InboundAdapter implements MailInboundAdapter {
         // Cursor expired; fall through to list fallback below.
         latestHistoryId = undefined;
       } else if (!historyRes.ok) {
-        throw new Error(
-          `Gmail history poll failed with HTTP ${historyRes.status}`
-        );
+        throw new Error(`Gmail history poll failed with HTTP ${historyRes.status}`);
       } else {
         const payload = (await historyRes.json()) as {
           historyId?: string;
@@ -1156,9 +1134,7 @@ export class GmailOAuth2InboundAdapter implements MailInboundAdapter {
       const listUrl = `${apiBase}/users/me/messages?maxResults=25&q=${encodeURIComponent("+factory OR #factory OR [Idea]")}`;
       const listRes = await fetchImpl(listUrl, { headers });
       if (!listRes.ok) {
-        throw new Error(
-          `Gmail messages list failed with HTTP ${listRes.status}`
-        );
+        throw new Error(`Gmail messages list failed with HTTP ${listRes.status}`);
       }
       const listJson = (await listRes.json()) as {
         messages?: Array<{ id?: string }>;
@@ -1174,7 +1150,7 @@ export class GmailOAuth2InboundAdapter implements MailInboundAdapter {
     for (const id of messageIds) {
       const msgRes = await fetchImpl(
         `${apiBase}/users/me/messages/${encodeURIComponent(id)}?format=full`,
-        { headers }
+        { headers },
       );
       if (!msgRes.ok) {
         continue;
@@ -1186,7 +1162,7 @@ export class GmailOAuth2InboundAdapter implements MailInboundAdapter {
     this.updateHistoryCursor(latestHistoryId, messages);
     return {
       messages,
-      ...(this.historyId !== undefined ? { nextCursor: this.historyId } : {})
+      ...(this.historyId !== undefined ? { nextCursor: this.historyId } : {}),
     };
   }
 
@@ -1214,7 +1190,7 @@ export interface ImapIdleConfig {
     mailbox: string;
   }) => Promise<{ messages: InboundEmailMessage[]; nextUid?: number }>;
   idleHandler?: (
-    onMessage: (message: InboundEmailMessage) => Promise<void> | void
+    onMessage: (message: InboundEmailMessage) => Promise<void> | void,
   ) => Promise<() => Promise<void> | void>;
 }
 
@@ -1247,7 +1223,7 @@ export class ImapIdleInboundAdapter implements MailInboundAdapter {
 
   private advanceUid(
     explicitNextUid: number | undefined,
-    messages: ReadonlyArray<InboundEmailMessage>
+    messages: ReadonlyArray<InboundEmailMessage>,
   ): void {
     let best = explicitNextUid ?? this.lastUid;
     for (const msg of messages) {
@@ -1260,23 +1236,19 @@ export class ImapIdleInboundAdapter implements MailInboundAdapter {
 
   async pollIncremental(cursor?: string): Promise<MailInboundPollResult> {
     const parsedCursor =
-      cursor !== undefined && /^\d+$/.test(cursor)
-        ? Number.parseInt(cursor, 10)
-        : undefined;
+      cursor !== undefined && /^\d+$/.test(cursor) ? Number.parseInt(cursor, 10) : undefined;
     const effectiveUid = parsedCursor ?? this.lastUid;
     const mailbox = this.config.mailbox ?? "INBOX";
 
     if (this.config.pollHandler !== undefined) {
       const result = await this.config.pollHandler({
         ...(effectiveUid !== undefined ? { lastUid: effectiveUid } : {}),
-        mailbox
+        mailbox,
       });
       this.advanceUid(result.nextUid, result.messages);
       return {
         messages: result.messages,
-        ...(this.lastUid !== undefined
-          ? { nextCursor: String(this.lastUid) }
-          : {})
+        ...(this.lastUid !== undefined ? { nextCursor: String(this.lastUid) } : {}),
       };
     }
 
@@ -1284,14 +1256,12 @@ export class ImapIdleInboundAdapter implements MailInboundAdapter {
     this.advanceUid(undefined, messages);
     return {
       messages,
-      ...(this.lastUid !== undefined
-        ? { nextCursor: String(this.lastUid) }
-        : {})
+      ...(this.lastUid !== undefined ? { nextCursor: String(this.lastUid) } : {}),
     };
   }
 
   async startIdle(
-    onMessage: (message: InboundEmailMessage) => Promise<void> | void
+    onMessage: (message: InboundEmailMessage) => Promise<void> | void,
   ): Promise<() => Promise<void>> {
     await this.stopIdle();
 
@@ -1357,42 +1327,40 @@ export class ImapIdleInboundAdapter implements MailInboundAdapter {
 
   private async fetchViaImapSocket(
     mailbox: string,
-    sinceUid: number | undefined
+    sinceUid: number | undefined,
   ): Promise<InboundEmailMessage[]> {
     const timeoutMs = this.config.connectTimeoutMs ?? 10_000;
     const useTls = this.config.secure !== false;
 
-    const socket: net.Socket | tls.TLSSocket = await new Promise(
-      (resolveSocket, rejectSocket) => {
-        const s = useTls
-          ? tls.connect({
-              host: this.config.host,
-              port: this.config.port,
-              servername: this.config.host
-            })
-          : net.connect({
-              host: this.config.host,
-              port: this.config.port
-            });
+    const socket: net.Socket | tls.TLSSocket = await new Promise((resolveSocket, rejectSocket) => {
+      const s = useTls
+        ? tls.connect({
+            host: this.config.host,
+            port: this.config.port,
+            servername: this.config.host,
+          })
+        : net.connect({
+            host: this.config.host,
+            port: this.config.port,
+          });
 
-        const timer = setTimeout(() => {
-          s.destroy();
-          rejectSocket(new Error("IMAP connection timed out."));
-        }, timeoutMs);
+      const timer = setTimeout(() => {
+        s.destroy();
+        rejectSocket(new Error("IMAP connection timed out."));
+      }, timeoutMs);
 
-        const onError = (err: Error) => {
-          clearTimeout(timer);
-          rejectSocket(err);
-        };
+      const onError = (err: Error) => {
+        clearTimeout(timer);
+        rejectSocket(err);
+      };
 
-        s.once("error", onError);
-        s.once(useTls ? "secureConnect" : "connect", () => {
-          clearTimeout(timer);
-          s.off("error", onError);
-          resolveSocket(s);
-        });
-      }
-    );
+      s.once("error", onError);
+      s.once(useTls ? "secureConnect" : "connect", () => {
+        clearTimeout(timer);
+        s.off("error", onError);
+        resolveSocket(s);
+      });
+    });
 
     let buffer = "";
     const waiters: Array<() => void> = [];
@@ -1409,6 +1377,21 @@ export class ImapIdleInboundAdapter implements MailInboundAdapter {
     });
     socket.on("close", notify);
 
+    const waitForData = async (remainingMs: number): Promise<void> => {
+      if (remainingMs <= 0) return;
+      await new Promise<void>((resolveWait) => {
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          resolveWait();
+        };
+        const timer = setTimeout(finish, remainingMs);
+        waiters.push(finish);
+      });
+    };
+
     const readUntilTagged = async (tag: string): Promise<string> => {
       const start = Date.now();
       const pattern = new RegExp(`(?:^|\\r?\\n)${tag} (OK|NO|BAD)[^\\r\\n]*\\r?\\n`);
@@ -1416,10 +1399,11 @@ export class ImapIdleInboundAdapter implements MailInboundAdapter {
         if (socket.destroyed || socket.closed) {
           throw new Error(`IMAP socket closed while waiting for tag ${tag}`);
         }
-        if (Date.now() - start > timeoutMs) {
+        const remaining = timeoutMs - (Date.now() - start);
+        if (remaining <= 0) {
           throw new Error(`IMAP command ${tag} timed out.`);
         }
-        await new Promise<void>((r) => waiters.push(r));
+        await waitForData(remaining);
       }
       const match = pattern.exec(buffer)!;
       const endIdx = match.index + match[0].length;
@@ -1434,10 +1418,11 @@ export class ImapIdleInboundAdapter implements MailInboundAdapter {
     const readGreeting = async (): Promise<void> => {
       const start = Date.now();
       while (!/\r?\n/.test(buffer)) {
-        if (socket.destroyed || Date.now() - start > timeoutMs) {
+        const remaining = timeoutMs - (Date.now() - start);
+        if (socket.destroyed || remaining <= 0) {
           throw new Error("IMAP greeting timed out.");
         }
-        await new Promise<void>((r) => waiters.push(r));
+        await waitForData(remaining);
       }
       const nlIdx = buffer.indexOf("\n");
       buffer = buffer.slice(nlIdx + 1);
@@ -1453,18 +1438,14 @@ export class ImapIdleInboundAdapter implements MailInboundAdapter {
     try {
       await readGreeting();
       await sendCommand(
-        `LOGIN ${escapeImapString(this.config.username)} ${escapeImapString(this.config.password)}`
+        `LOGIN ${escapeImapString(this.config.username)} ${escapeImapString(this.config.password)}`,
       );
       await sendCommand(`SELECT ${escapeImapString(mailbox)}`);
 
       const searchCmd =
-        sinceUid !== undefined
-          ? `UID SEARCH UID ${sinceUid + 1}:*`
-          : "UID SEARCH ALL";
+        sinceUid !== undefined ? `UID SEARCH UID ${sinceUid + 1}:*` : "UID SEARCH ALL";
       const searchResp = await sendCommand(searchCmd);
-      const searchLine = searchResp
-        .split(/\r?\n/)
-        .find((l) => l.startsWith("* SEARCH"));
+      const searchLine = searchResp.split(/\r?\n/).find((l) => l.startsWith("* SEARCH"));
       const uids = (searchLine ?? "")
         .replace("* SEARCH", "")
         .trim()
@@ -1495,6 +1476,395 @@ export class ImapIdleInboundAdapter implements MailInboundAdapter {
       socket.destroy();
     }
   }
+}
+
+function getCliExtraSearchDirs(): string[] {
+  const dirs: string[] = [];
+  const home = homedir();
+  if (process.platform === "win32") {
+    const appData = process.env["APPDATA"];
+    const localAppData = process.env["LOCALAPPDATA"];
+    const pnpmHome = process.env["PNPM_HOME"];
+    const voltaHome = process.env["VOLTA_HOME"];
+    const nvmSymlink = process.env["NVM_SYMLINK"];
+    const programFiles = process.env["ProgramFiles"];
+    if (appData) dirs.push(join(appData, "npm"));
+    if (localAppData) {
+      dirs.push(join(localAppData, "pnpm"));
+      dirs.push(join(localAppData, "Volta", "bin"));
+      dirs.push(join(localAppData, "Programs", "nodejs"));
+    }
+    if (pnpmHome) dirs.push(pnpmHome);
+    if (voltaHome) dirs.push(join(voltaHome, "bin"));
+    if (nvmSymlink) dirs.push(nvmSymlink);
+    if (programFiles) dirs.push(join(programFiles, "nodejs"));
+    if (home) {
+      dirs.push(join(home, ".npm-global"));
+      dirs.push(join(home, ".local", "bin"));
+      dirs.push(join(home, ".opencode", "bin"));
+    }
+  } else if (home) {
+    dirs.push(
+      join(home, ".npm-global", "bin"),
+      join(home, ".local", "bin"),
+      join(home, ".pnpm-global", "bin"),
+      join(home, ".opencode", "bin"),
+      "/usr/local/bin",
+      "/opt/homebrew/bin",
+    );
+  }
+  return dirs;
+}
+
+export interface DefaultOvernightCodingExecutorOptions {
+  /** Per-attempt execution timeout in milliseconds (default 15 minutes). */
+  timeoutMs?: number;
+  /** Optional executable resolver override for deterministic unit tests. */
+  findExecutable?: (commands: readonly string[]) => string | null;
+  /** Optional custom CLI runner override for deterministic unit tests. */
+  spawnRunner?: (input: {
+    executablePath: string;
+    args: readonly string[];
+    cwd: string;
+    env: Record<string, string>;
+    stdinPrompt?: string;
+    timeoutMs: number;
+    signal?: AbortSignal;
+    onLine?: (line: string, level: "info" | "warn" | "error") => void;
+  }) => Promise<FactoryCommandResult>;
+}
+
+interface OvernightCliAgentPlan {
+  readonly commands: readonly string[];
+  readonly args: readonly string[];
+  readonly stdinPrompt?: string;
+  readonly providerLabel: string;
+}
+
+const DEFAULT_PLACEHOLDER_MODELS = new Set([
+  "",
+  "default",
+  "gpt-6.2-sol",
+  "gpt-6.2-astra",
+  "opencode-default",
+  "dsh-default",
+  "antigravity-commander",
+]);
+
+function normalizeExecutorProvider(raw: string | undefined): string {
+  const lower = (raw ?? "codex").trim().toLowerCase();
+  if (
+    lower === "claude" ||
+    lower === "claude-code" ||
+    lower === "claude_agent" ||
+    lower === "claudeagent"
+  ) {
+    return "claudeAgent";
+  }
+  if (lower === "codex" || lower === "openai-codex") return "codex";
+  if (lower === "opencode" || lower === "open-code") return "opencode";
+  if (lower === "gemini" || lower === "gemini-cli" || lower === "gemini-api") return "gemini";
+  if (lower === "dsh" || lower === "dsh-next") return "dsh";
+  return raw?.trim() || "codex";
+}
+
+function buildOvernightCliAgentPlan(
+  provider: string,
+  modelId: string | undefined,
+  prompt: string,
+): OvernightCliAgentPlan {
+  const canonical = normalizeExecutorProvider(provider);
+  if (isAntigravityProvider(canonical)) {
+    throw new AntigravityGuardDeniedError(
+      "ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED",
+      "24h 无人值守夜间工场严禁调用个人版 Antigravity（AGY）。",
+    );
+  }
+  const effectiveModel =
+    modelId && !DEFAULT_PLACEHOLDER_MODELS.has(modelId.trim()) ? modelId.trim() : undefined;
+
+  switch (canonical) {
+    case "claudeAgent":
+      return {
+        commands: ["claude"],
+        args: [
+          "-p",
+          "--permission-mode",
+          "acceptEdits",
+          "--output-format",
+          "text",
+          ...(effectiveModel ? ["--model", effectiveModel] : []),
+        ],
+        stdinPrompt: prompt,
+        providerLabel: "Claude Code",
+      };
+    case "opencode":
+      return {
+        commands: ["opencode"],
+        args: ["run", ...(effectiveModel ? ["--model", effectiveModel] : []), prompt],
+        providerLabel: "OpenCode",
+      };
+    case "gemini":
+      return {
+        commands: ["gemini"],
+        args: [...(effectiveModel ? ["-m", effectiveModel] : []), "-p", prompt],
+        providerLabel: "Gemini CLI",
+      };
+    case "dsh":
+      return {
+        commands: ["dsh"],
+        args: ["run", ...(effectiveModel ? ["--model", effectiveModel] : []), prompt],
+        providerLabel: "DeepSeek Harness (dsh)",
+      };
+    case "codex":
+    default:
+      return {
+        commands: ["codex"],
+        args: [
+          "exec",
+          "--full-auto",
+          "--skip-git-repo-check",
+          ...(effectiveModel ? ["-m", effectiveModel] : []),
+          "-",
+        ],
+        stdinPrompt: prompt,
+        providerLabel: "Codex",
+      };
+  }
+}
+
+function buildOvernightAgentPrompt(ctx: CodingAgentExecutionContext): string {
+  const memoryLines =
+    ctx.memoryHits.length > 0
+      ? ctx.memoryHits
+          .slice(0, 6)
+          .map((h) => `- [${h.entry.namespace}] ${h.entry.title}: ${h.entry.content.slice(0, 260)}`)
+      : [];
+
+  const parts: string[] = [
+    `你正在 Prismux 夜间全自动工场的隔离 Git Worktree 分支（${ctx.branchName}）中工作。`,
+    `工作目录：${ctx.worktreePath}`,
+    `安全红线：仅修改当前工作目录内的文件，禁止执行 git push 或修改工作目录外的文件。`,
+    "",
+    `## 任务目标`,
+    `主题：${ctx.email.subject || ctx.handoff.summary.goal}`,
+    ctx.cleanedEmailText || ctx.handoff.continuationPrompt,
+  ];
+
+  if (memoryLines.length > 0) {
+    parts.push("", "## 相关历史记忆参考", ...memoryLines);
+  }
+  if (ctx.testCommand.trim().length > 0) {
+    parts.push("", `## 验收命令`, `完成后将执行验收命令：\`${ctx.testCommand}\``);
+  }
+  if (ctx.lastTestFailure) {
+    parts.push(
+      "",
+      `## 上一轮（第 ${ctx.attempt - 1} 轮）验收失败日志，请定位并修复`,
+      ctx.lastTestFailure.slice(0, 4000),
+    );
+  }
+  parts.push("", "请直接完成改动并在最后给出简洁的中文成果总结（1-3 句话）。");
+  return parts.join("\n");
+}
+
+function defaultSpawnAgentCli(input: {
+  executablePath: string;
+  args: readonly string[];
+  cwd: string;
+  env: Record<string, string>;
+  stdinPrompt?: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+  onLine?: (line: string, level: "info" | "warn" | "error") => void;
+}): Promise<FactoryCommandResult> {
+  return new Promise<FactoryCommandResult>((resolveResult, rejectResult) => {
+    if (input.signal?.aborted) {
+      rejectResult(new OvernightTaskCancelledError());
+      return;
+    }
+
+    const spec = buildSafeCliSpawnSpec(input.executablePath, input.args, {
+      env: input.env,
+    });
+
+    let settled = false;
+    let stdout = "";
+    let stderr = "";
+    let stdoutLineBuf = "";
+    let stderrLineBuf = "";
+
+    const child = spawn(spec.file, spec.args, {
+      cwd: input.cwd,
+      env: { ...spec.env, NO_COLOR: "1", FORCE_COLOR: "0" },
+      stdio: [input.stdinPrompt !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
+      windowsHide: true,
+      windowsVerbatimArguments: spec.windowsVerbatimArguments,
+    });
+
+    const cleanupListeners = () => {
+      clearTimeout(timer);
+      input.signal?.removeEventListener("abort", onAbort);
+    };
+
+    const killChild = () => {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // ignore kill error
+      }
+    };
+
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanupListeners();
+      killChild();
+      rejectResult(new OvernightTaskCancelledError());
+    };
+    input.signal?.addEventListener("abort", onAbort, { once: true });
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanupListeners();
+      killChild();
+      rejectResult(
+        new Error(`代理 CLI 执行超时（超过 ${Math.round(input.timeoutMs / 1000)} 秒）。`),
+      );
+    }, input.timeoutMs);
+
+    const flushLines = (chunk: Buffer | string, isErr: boolean): string => {
+      const text = decodeWindowsProcessOutput(chunk);
+      if (isErr) {
+        stderrLineBuf += text;
+        const lines = stderrLineBuf.split(/\r?\n/);
+        stderrLineBuf = lines.pop() ?? "";
+        for (const l of lines) {
+          const trimmed = l.trim();
+          if (trimmed) input.onLine?.(trimmed.slice(0, 300), "warn");
+        }
+      } else {
+        stdoutLineBuf += text;
+        const lines = stdoutLineBuf.split(/\r?\n/);
+        stdoutLineBuf = lines.pop() ?? "";
+        for (const l of lines) {
+          const trimmed = l.trim();
+          if (trimmed) input.onLine?.(trimmed.slice(0, 300), "info");
+        }
+      }
+      return text;
+    };
+
+    child.stdout?.on("data", (chunk: Buffer | string) => {
+      const text = flushLines(chunk, false);
+      if (stdout.length < 512 * 1024) stdout += text;
+    });
+    child.stderr?.on("data", (chunk: Buffer | string) => {
+      const text = flushLines(chunk, true);
+      if (stderr.length < 512 * 1024) stderr += text;
+    });
+
+    child.once("error", (err: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanupListeners();
+      rejectResult(err);
+    });
+
+    child.once("close", (code) => {
+      if (settled) return;
+      settled = true;
+      cleanupListeners();
+      if (stdoutLineBuf.trim()) input.onLine?.(stdoutLineBuf.trim().slice(0, 300), "info");
+      if (stderrLineBuf.trim()) input.onLine?.(stderrLineBuf.trim().slice(0, 300), "warn");
+      const combinedOutput = [stdout.trim(), stderr.trim()].filter((s) => s.length > 0).join("\n");
+      resolveResult({
+        exitCode: code ?? 1,
+        stdout,
+        stderr,
+        combinedOutput,
+      });
+    });
+
+    if (input.stdinPrompt !== undefined) {
+      try {
+        child.stdin?.write(input.stdinPrompt, "utf8");
+        child.stdin?.end();
+      } catch {
+        // ignore EPIPE if child exits quickly
+      }
+    }
+  });
+}
+
+/**
+ * Default production CodingAgentExecutor for Daemon Overnight Factory runs.
+ * Invokes the configured compliant local Coding Agent CLI (Codex / Claude Code / OpenCode / Gemini / DSH)
+ * headlessly inside the isolated git worktree while preserving native CLI identity and stripping Electron env.
+ */
+export function createDefaultOvernightCodingExecutor(
+  options: DefaultOvernightCodingExecutorOptions = {},
+): CodingAgentExecutor {
+  const timeoutMs = Math.max(5_000, options.timeoutMs ?? 15 * 60 * 1000);
+  const findExec =
+    options.findExecutable ??
+    ((cmds: readonly string[]) =>
+      findExecutableOnPath(cmds, { extraDirs: getCliExtraSearchDirs() }));
+  const spawnRunner = options.spawnRunner ?? defaultSpawnAgentCli;
+
+  return async (ctx: CodingAgentExecutionContext): Promise<CodingAgentExecutionResult> => {
+    if (ctx.signal?.aborted) {
+      throw new OvernightTaskCancelledError();
+    }
+    const provider = normalizeExecutorProvider(ctx.routedProvider);
+    const prompt = buildOvernightAgentPrompt(ctx);
+    const plan = buildOvernightCliAgentPlan(provider, ctx.routedModelId, prompt);
+
+    const executablePath = findExec(plan.commands);
+    if (!executablePath) {
+      throw new Error(
+        `未在系统 PATH 中检测到 ${plan.providerLabel} CLI（${plan.commands.join(" / ")}）。请先安装并登录对应 CLI，或在执行策略中切换为已安装的合规执行代理。`,
+      );
+    }
+
+    ctx.onLog?.(
+      `启动 ${plan.providerLabel}（${basename(executablePath)}）于隔离工作树（第 ${ctx.attempt}/${ctx.maxAttempts} 轮）...`,
+      "info",
+    );
+
+    const runRes = await spawnRunner({
+      executablePath,
+      args: plan.args,
+      cwd: ctx.worktreePath,
+      env: ctx.isolationSpec.env,
+      ...(plan.stdinPrompt !== undefined ? { stdinPrompt: plan.stdinPrompt } : {}),
+      timeoutMs,
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
+      onLine: (line, level) => ctx.onLog?.(line, level),
+    });
+
+    if (runRes.exitCode !== 0) {
+      const tail = (runRes.stderr || runRes.stdout).trim().slice(-600);
+      throw new Error(
+        `${plan.providerLabel} 执行返回非零退出码 (${runRes.exitCode})${tail ? `：${tail}` : ""}`,
+      );
+    }
+
+    const summaryLines = runRes.stdout
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+    const tailSummary = summaryLines.slice(-3).join(" ").slice(0, 320);
+
+    return {
+      summary: tailSummary || `${plan.providerLabel} 已在隔离分支 ${ctx.branchName} 完成任务执行。`,
+      tokenStats: {
+        provider,
+        ...(ctx.routedModelId ? { model: ctx.routedModelId } : {}),
+      },
+    };
+  };
 }
 
 /**
@@ -1545,12 +1915,11 @@ export class OvernightFactory {
     this.config = {
       mode: opts.mode ?? "gmail-oauth2",
       matchAliasOrTag: opts.matchAliasOrTag ?? "#factory",
-      pollIntervalMs: opts.pollIntervalMs ?? 60_000
+      pollIntervalMs: opts.pollIntervalMs ?? 60_000,
     };
     this.memoryStore = opts.memoryStore;
     this.handoffEngine = opts.handoffEngine ?? new HandoffEngine();
-    this.hookBus =
-      opts.hookBus ?? new LifecycleHookBus({ defaultPermissionMode: "auto" });
+    this.hookBus = opts.hookBus ?? new LifecycleHookBus({ defaultPermissionMode: "auto" });
     this.sandbox = opts.sandbox ?? new WorktreeSandbox();
     this.policyGuard = opts.policyGuard ?? new AntigravityPolicyGuard();
     this.dispatchRouter = opts.dispatchRouter ?? new TaskDispatchRouter();
@@ -1558,7 +1927,7 @@ export class OvernightFactory {
       opts.artifactBackdoor ??
       new ArtifactResultBackdoor({
         policyGuard: this.policyGuard,
-        now: opts.now
+        now: opts.now,
       });
     this.dispatchHub = opts.dispatchHub;
     this.callerKind = opts.callerKind ?? "overnight_factory";
@@ -1576,8 +1945,7 @@ export class OvernightFactory {
     this.worktreeBaseDir = opts.worktreeBaseDir;
     this.writableTempDirs = [...(opts.writableTempDirs ?? [])];
     this.egressEnabled = opts.egressEnabled ?? false;
-    this.allowedDomains =
-      opts.allowedDomains !== undefined ? [...opts.allowedDomains] : undefined;
+    this.allowedDomains = opts.allowedDomains !== undefined ? [...opts.allowedDomains] : undefined;
     this.maxSelfHealAttempts = Math.max(1, opts.maxSelfHealAttempts ?? 3);
     this.cleanupWorktree = opts.cleanupWorktree ?? true;
     this.testTimeoutMs = Math.max(500, opts.testTimeoutMs ?? 120_000);
@@ -1608,10 +1976,7 @@ export class OvernightFactory {
   }
 
   getWorktreeBaseDir(): string {
-    return (
-      this.worktreeBaseDir ??
-      join(tmpdir(), `${BRAND.appSlug}-factory-worktrees`)
-    );
+    return this.worktreeBaseDir ?? join(tmpdir(), `${BRAND.appSlug}-factory-worktrees`);
   }
 
   async sweepStaleWorktrees(options?: {
@@ -1621,13 +1986,13 @@ export class OvernightFactory {
     return sweepStaleFactoryWorktrees({
       baseDir: this.getWorktreeBaseDir(),
       ...(options?.maxAgeMs !== undefined ? { maxAgeMs: options.maxAgeMs } : {}),
-      ...(options?.nowMs !== undefined ? { nowMs: options.nowMs } : {})
+      ...(options?.nowMs !== undefined ? { nowMs: options.nowMs } : {}),
     });
   }
 
   async pollInbound(
     adapter: MailInboundAdapter,
-    runOptions?: FactoryRunOptions
+    runOptions?: FactoryRunOptions,
   ): Promise<FactoryPipelineResult[]> {
     const pollResult = await adapter.pollIncremental();
     const results: FactoryPipelineResult[] = [];
@@ -1645,7 +2010,7 @@ export class OvernightFactory {
           worktreeCleaned: false,
           memoryContext: [],
           changedFiles: [],
-          reviewComments: []
+          reviewComments: [],
         });
         continue;
       }
@@ -1662,7 +2027,7 @@ export class OvernightFactory {
 
   async runEmailPipeline(
     email: InboundEmailMessage,
-    runOptions?: FactoryRunOptions
+    runOptions?: FactoryRunOptions,
   ): Promise<FactoryPipelineResult> {
     const startedAt = this.now();
     const normMsgId = normalizeMessageId(email.messageId);
@@ -1679,14 +2044,11 @@ export class OvernightFactory {
         worktreeCleaned: false,
         memoryContext: [],
         changedFiles: [],
-        reviewComments: []
+        reviewComments: [],
       };
     }
 
-    if (
-      this.processedMessageIds.has(normMsgId) ||
-      this.inFlightMessageIds.has(normMsgId)
-    ) {
+    if (this.processedMessageIds.has(normMsgId) || this.inFlightMessageIds.has(normMsgId)) {
       return {
         status: "skipped_duplicate",
         jobId: `dup-${normMsgId}`,
@@ -1695,7 +2057,7 @@ export class OvernightFactory {
         worktreeCleaned: false,
         memoryContext: [],
         changedFiles: [],
-        reviewComments: []
+        reviewComments: [],
       };
     }
 
@@ -1705,17 +2067,29 @@ export class OvernightFactory {
     let targetRepoPathForCleanup: string | undefined;
     let worktreeCreated = false;
     let worktreeCleaned = false;
-    const shouldCleanupWorktree =
-      runOptions?.cleanupWorktree ?? this.cleanupWorktree;
+    const shouldCleanupWorktree = runOptions?.cleanupWorktree ?? this.cleanupWorktree;
+
+    const emitProgress = (event: OvernightProgressEvent) => {
+      try {
+        runOptions?.onProgress?.(event);
+      } catch {
+        // Progress observer errors must never crash pipeline execution.
+      }
+    };
+    const assertNotCancelled = () => {
+      if (runOptions?.signal?.aborted) {
+        throw new OvernightTaskCancelledError();
+      }
+    };
 
     try {
+      assertNotCancelled();
       // =====================================================================
       // Pre-flight: Parameter Backdoor Routing & AGY Hard-Lock Role Guard
       // =====================================================================
       const preClean = this.collectCleanEmailBody(email);
       const effectiveCallerKind = runOptions?.callerKind ?? this.callerKind;
-      const effectiveSecretaryBrain =
-        runOptions?.secretaryBrain ?? this.secretaryBrain;
+      const effectiveSecretaryBrain = runOptions?.secretaryBrain ?? this.secretaryBrain;
       const emailProviderDirective =
         extractDirective(preClean.cleanedEmailText, "provider") ??
         extractDirective(preClean.cleanedEmailText, "agent") ??
@@ -1726,36 +2100,42 @@ export class OvernightFactory {
         this.agentProvider?.trim() ||
         undefined;
       const combinedEmailPrompt = `${email.subject}\n${preClean.cleanedEmailText}`;
-      const explicitAgyMention =
-        detectExplicitAntigravityPrompt(combinedEmailPrompt);
+      const explicitAgyMention = detectExplicitAntigravityPrompt(combinedEmailPrompt);
 
       const routedTarget = this.dispatchRouter.route({
         prompt: combinedEmailPrompt,
         callerKind: effectiveCallerKind,
         ...(explicitProvider !== undefined ? { provider: explicitProvider } : {}),
-        ...(runOptions?.agentModel ?? this.agentModel
+        ...((runOptions?.agentModel ?? this.agentModel)
           ? { modelId: (runOptions?.agentModel ?? this.agentModel)!.trim() }
           : {}),
-        ...(runOptions?.reasoningEffort ?? this.reasoningEffort
+        ...((runOptions?.reasoningEffort ?? this.reasoningEffort)
           ? { reasoningEffort: runOptions?.reasoningEffort ?? this.reasoningEffort }
           : {}),
-        ...(explicitAgyMention ? { explicitAntigravityRequested: true } : {})
+        ...(explicitAgyMention ? { explicitAntigravityRequested: true } : {}),
       });
 
       const guardDecision = await this.policyGuard.evaluateDispatchAsync({
         callerKind: effectiveCallerKind,
         targetProvider: routedTarget.provider,
         targetModelId: routedTarget.modelId,
-        explicitAntigravityRequested: routedTarget.explicitAntigravityRequested
+        explicitAntigravityRequested: routedTarget.explicitAntigravityRequested,
       });
 
       if (!guardDecision.allowed) {
         throw new AntigravityGuardDeniedError(
           guardDecision.code ?? "ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED",
           guardDecision.reason,
-          guardDecision
+          guardDecision,
         );
       }
+
+      assertNotCancelled();
+      emitProgress({
+        stage: "preparing_worktree",
+        level: "info",
+        message: `合规校验通过（代理：${routedTarget.provider}），正在召回记忆并准备隔离 Git Worktree...`,
+      });
 
       // =====================================================================
       // Stage A: DocumentCollector -> owner_chief MemoryStore -> HandoffEngine
@@ -1764,17 +2144,14 @@ export class OvernightFactory {
 
       targetRepoPathForCleanup = stageA.repoTarget.repoPath;
       worktreePathForCleanup = stageA.worktreePath;
+      assertNotCancelled();
 
       // Interactive remote secretary (e.g. Gmail `#factory` via `secretary_gmail`) requesting
       // personal Antigravity: NEVER auto-send! Create isolated worktree + stage Draft-Only
       // awaiting explicit human desktop confirmation and reply clearly via email.
       if (guardDecision.decision === "stage_draft_only") {
         const repoPath = stageA.repoTarget.repoPath;
-        const baseBranch = this.runGit(repoPath, [
-          "rev-parse",
-          "--abbrev-ref",
-          "HEAD"
-        ]).trim();
+        const baseBranch = this.runGit(repoPath, ["rev-parse", "--abbrev-ref", "HEAD"]).trim();
         const baseCommitSha = this.runGit(repoPath, ["rev-parse", "HEAD"]).trim();
         mkdirSync(dirname(stageA.worktreePath), { recursive: true });
         this.runGit(repoPath, [
@@ -1783,7 +2160,7 @@ export class OvernightFactory {
           "-b",
           stageA.branchName,
           stageA.worktreePath,
-          "HEAD"
+          "HEAD",
         ]);
         worktreeCreated = true;
 
@@ -1794,8 +2171,7 @@ export class OvernightFactory {
                 .map((h) => `[${h.entry.namespace}] ${h.entry.title}`)
                 .join("；")
             : undefined;
-        const recipient =
-          runOptions?.reportRecipient ?? extractEmailAddressOnly(email.from);
+        const recipient = runOptions?.reportRecipient ?? extractEmailAddressOnly(email.from);
 
         const stagedBase = {
           taskId: jobId,
@@ -1814,9 +2190,9 @@ export class OvernightFactory {
             kind: "gmail" as const,
             recipient,
             inReplyTo: email.messageId,
-            threadId: stageA.handoff.newThreadId
+            threadId: stageA.handoff.newThreadId,
           },
-          threadId: stageA.handoff.newThreadId
+          threadId: stageA.handoff.newThreadId,
         };
 
         const dispatchEnvelope: PrismuxDispatchEnvelope =
@@ -1828,7 +2204,7 @@ export class OvernightFactory {
                 mode: "draft_only",
                 requiresHumanConfirmation: true,
                 createdAt: new Date(this.now()).toISOString(),
-                updatedAt: new Date(this.now()).toISOString()
+                updatedAt: new Date(this.now()).toISOString(),
               };
 
         const deepLink = buildReviewDeepLink(stageA.handoff.newThreadId);
@@ -1839,7 +2215,7 @@ export class OvernightFactory {
           worktreePath: stageA.worktreePath,
           memoryContextSummary,
           deepLink,
-          reason: guardDecision.reason
+          reason: guardDecision.reason,
         });
 
         const mailer = runOptions?.outboundMailer ?? this.outboundMailer;
@@ -1855,14 +2231,12 @@ export class OvernightFactory {
               `- 任务 ID：${jobId}`,
               `- 隔离分支：${stageA.branchName}`,
               `- Worktree 路径：${stageA.worktreePath}`,
-              ...(memoryContextSummary
-                ? [`- 已召回记忆上下文：${memoryContextSummary}`]
-                : []),
-              `请打开桌面端 Prismux 点击「确认放行并发送」后正式执行：${deepLink}`
+              ...(memoryContextSummary ? [`- 已召回记忆上下文：${memoryContextSummary}`] : []),
+              `请打开桌面端 Prismux 点击「确认放行并发送」后正式执行：${deepLink}`,
             ].join("\n"),
             inReplyTo: email.messageId,
             references: [email.messageId],
-            threadId: stageA.handoff.newThreadId
+            threadId: stageA.handoff.newThreadId,
           });
         }
 
@@ -1892,7 +2266,7 @@ export class OvernightFactory {
           routedProvider: routedTarget.provider,
           routedModelId: routedTarget.modelId,
           routedReasoningEffort: routedTarget.reasoningEffort,
-          secretaryBrain: effectiveSecretaryBrain
+          secretaryBrain: effectiveSecretaryBrain,
         };
       }
 
@@ -1906,37 +2280,35 @@ export class OvernightFactory {
         runOptions,
         () => {
           worktreeCreated = true;
-        }
+        },
+        {
+          provider: routedTarget.provider,
+          modelId: routedTarget.modelId,
+        },
       );
+      assertNotCancelled();
 
       // Extract structured deliverables directly via ArtifactResultBackdoor
       // (default v3 straight-to-email pipeline, skipping heavy Oracle second-review!).
-      const totalInsertions = stageB.changedFiles.reduce(
-        (sum, f) => sum + f.additions,
-        0
-      );
-      const totalDeletions = stageB.changedFiles.reduce(
-        (sum, f) => sum + f.deletions,
-        0
-      );
+      const totalInsertions = stageB.changedFiles.reduce((sum, f) => sum + f.additions, 0);
+      const totalDeletions = stageB.changedFiles.reduce((sum, f) => sum + f.deletions, 0);
       const artifact = this.artifactBackdoor.extractArtifact({
         taskId: jobId,
         threadId: stageA.handoff.newThreadId,
         workspacePath: stageA.worktreePath,
-        finalAssistantText:
-          stageB.codingSummary ?? stageA.handoff.summary.goal,
+        finalAssistantText: stageB.codingSummary ?? stageA.handoff.summary.goal,
         modifiedFiles: stageB.changedFiles.map((f) => f.path),
         diffStats: {
           filesChanged: stageB.changedFiles.length,
           insertions: totalInsertions,
-          deletions: totalDeletions
+          deletions: totalDeletions,
         },
         provider: stageB.tokenStats?.provider ?? routedTarget.provider,
         modelId: stageB.tokenStats?.model ?? routedTarget.modelId,
         branchName: stageA.branchName,
         commitSha: stageB.commitSha,
         testPassed: stageB.testPassed,
-        skipGitInspection: true
+        skipGitInspection: true,
       });
 
       // =====================================================================
@@ -1949,20 +2321,33 @@ export class OvernightFactory {
           this.enableOracleReview !== false &&
           explicitReviewer !== undefined);
 
+      if (shouldRunOracleReview) {
+        emitProgress({
+          stage: "verifying",
+          level: "info",
+          message: "正在执行 Oracle 只读风险审阅...",
+          branchName: stageA.branchName,
+        });
+      }
+
       const stageC = shouldRunOracleReview
         ? await this.runStageC(jobId, stageA, stageB, runOptions)
         : {
             reviewThreadId: stageA.handoff.newThreadId,
             reviewComments: [
               `[ArtifactResultBackdoor 直出] 已跳过重型 Oracle 二次审查，直接基于 Diff 与单测输出生成完工早报。`,
-              ...analyzeDiffStaticRisks(
-                stageB.diff,
-                stageB.changedFiles,
-                stageB.testPassed
-              )
-            ]
+              ...analyzeDiffStaticRisks(stageB.diff, stageB.changedFiles, stageB.testPassed),
+            ],
           };
       const oracleReviewSkipped = !shouldRunOracleReview;
+
+      assertNotCancelled();
+      emitProgress({
+        stage: "reporting",
+        level: "info",
+        message: "正在生成完工早报并触发 Stop 钩子与邮件回执...",
+        branchName: stageA.branchName,
+      });
 
       // =====================================================================
       // Stage D: Stop Hook + Rich HTML Morning Report + Mailer + Plugin Push
@@ -1977,8 +2362,8 @@ export class OvernightFactory {
         runOptions,
         {
           artifact,
-          oracleReviewSkipped
-        }
+          oracleReviewSkipped,
+        },
       );
 
       if (shouldCleanupWorktree && worktreeCreated) {
@@ -1987,6 +2372,12 @@ export class OvernightFactory {
       }
 
       this.processedMessageIds.add(normMsgId);
+      emitProgress({
+        stage: "completed",
+        level: "info",
+        message: `任务完成：分支 ${stageA.branchName}（变更 ${stageB.changedFiles.length} 个文件）`,
+        branchName: stageA.branchName,
+      });
 
       return {
         status: "completed",
@@ -2023,7 +2414,7 @@ export class OvernightFactory {
         routedProvider: routedTarget.provider,
         routedModelId: routedTarget.modelId,
         routedReasoningEffort: routedTarget.reasoningEffort,
-        secretaryBrain: effectiveSecretaryBrain
+        secretaryBrain: effectiveSecretaryBrain,
       };
     } catch (error) {
       if (
@@ -2056,25 +2447,28 @@ export class OvernightFactory {
       chunks = this.collector.collect({
         kind: "email",
         raw: email.rawRfc822,
-        sourceRef
+        sourceRef,
       });
     } else if (email.textBody !== undefined && email.textBody.trim().length > 0) {
       chunks = this.collector.collect({
         kind: "email",
         raw: email.textBody,
-        sourceRef
+        sourceRef,
       });
     } else if (email.htmlBody !== undefined && email.htmlBody.trim().length > 0) {
       chunks = this.collector.collect({
         kind: "html",
         raw: email.htmlBody,
-        sourceRef
+        sourceRef,
       });
     }
 
     const cleanedEmailText =
       chunks.length > 0
-        ? chunks.map((chunk) => chunk.text).join("\n\n").trim()
+        ? chunks
+            .map((chunk) => chunk.text)
+            .join("\n\n")
+            .trim()
         : (email.subject ?? "").trim();
 
     return { cleanedEmailText, chunks };
@@ -2083,15 +2477,14 @@ export class OvernightFactory {
   private resolveTargetConfig(
     email: InboundEmailMessage,
     cleanedEmailText: string,
-    runOptions?: FactoryRunOptions
+    runOptions?: FactoryRunOptions,
   ): FactoryRepoTarget {
     if (runOptions?.repoTarget !== undefined) {
       return runOptions.repoTarget;
     }
 
     const repoDirective =
-      extractDirective(cleanedEmailText, "repo") ??
-      extractDirective(email.subject, "repo");
+      extractDirective(cleanedEmailText, "repo") ?? extractDirective(email.subject, "repo");
     if (repoDirective !== undefined && repoDirective in this.repos) {
       return this.repos[repoDirective]!;
     }
@@ -2108,15 +2501,11 @@ export class OvernightFactory {
     }
 
     throw new Error(
-      `OvernightFactory could not resolve target repository for email "${email.subject}". Provide repoTarget or defaultRepoTarget.`
+      `OvernightFactory could not resolve target repository for email "${email.subject}". Provide repoTarget or defaultRepoTarget.`,
     );
   }
 
-  private resolveUniqueBranchName(
-    repoPath: string,
-    subject: string,
-    timestampMs: number
-  ): string {
+  private resolveUniqueBranchName(repoPath: string, subject: string, timestampMs: number): string {
     const baseBranchName = buildFactoryBranchName(subject, timestampMs);
     if (!this.doesGitBranchExist(repoPath, baseBranchName)) {
       return baseBranchName;
@@ -2127,12 +2516,7 @@ export class OvernightFactory {
 
   private doesGitBranchExist(repoPath: string, branchName: string): boolean {
     try {
-      this.runGit(repoPath, [
-        "show-ref",
-        "--verify",
-        "--quiet",
-        `refs/heads/${branchName}`
-      ]);
+      this.runGit(repoPath, ["show-ref", "--verify", "--quiet", `refs/heads/${branchName}`]);
       return true;
     } catch {
       return false;
@@ -2143,7 +2527,7 @@ export class OvernightFactory {
     jobId: string,
     email: InboundEmailMessage,
     startedAt: number,
-    runOptions?: FactoryRunOptions
+    runOptions?: FactoryRunOptions,
   ): Promise<{
     cleanedEmailText: string;
     repoTarget: FactoryRepoTarget;
@@ -2156,11 +2540,7 @@ export class OvernightFactory {
     handoff: HandoffExecutionResult;
   }> {
     const { cleanedEmailText } = this.collectCleanEmailBody(email);
-    const repoTarget = this.resolveTargetConfig(
-      email,
-      cleanedEmailText,
-      runOptions
-    );
+    const repoTarget = this.resolveTargetConfig(email, cleanedEmailText, runOptions);
     const repoSlug =
       repoTarget.repoSlug ??
       (basename(repoTarget.repoPath)
@@ -2173,15 +2553,8 @@ export class OvernightFactory {
     // Query MemoryStore using authoritative `owner_chief` scope across `workspace/<repo>` + `private/chief`.
     const memoryHits: MemoryQueryHit[] = [];
     if (this.memoryStore !== undefined) {
-      const namespaces: MemoryNamespace[] = [
-        workspaceNamespace,
-        "private/chief"
-      ];
-      const primaryQuery = extractSearchKeywords(
-        email.subject,
-        cleanedEmailText,
-        repoSlug
-      );
+      const namespaces: MemoryNamespace[] = [workspaceNamespace, "private/chief"];
+      const primaryQuery = extractSearchKeywords(email.subject, cleanedEmailText, repoSlug);
 
       const seenIds = new Set<string>();
       const pushHits = (hits: ReadonlyArray<MemoryQueryHit>) => {
@@ -2198,29 +2571,20 @@ export class OvernightFactory {
         query: primaryQuery,
         namespaces,
         limit: 8,
-        mode: "hybrid"
+        mode: "hybrid",
       });
-      const primaryRes = await this.memoryStore.query(
-        primaryRequest,
-        "owner_chief"
-      );
+      const primaryRes = await this.memoryStore.query(primaryRequest, "owner_chief");
       pushHits(primaryRes.hits);
 
       if (memoryHits.length === 0) {
-        const fallbackRequest = this.identityGuard.bindCallerScope(
-          "owner_chief",
-          {
-            callerScope: "owner_chief",
-            query: `${repoSlug} architecture convention stack test 规范 架构 技术栈`,
-            namespaces,
-            limit: 8,
-            mode: "hybrid"
-          }
-        );
-        const fallbackRes = await this.memoryStore.query(
-          fallbackRequest,
-          "owner_chief"
-        );
+        const fallbackRequest = this.identityGuard.bindCallerScope("owner_chief", {
+          callerScope: "owner_chief",
+          query: `${repoSlug} architecture convention stack test 规范 架构 技术栈`,
+          namespaces,
+          limit: 8,
+          mode: "hybrid",
+        });
+        const fallbackRes = await this.memoryStore.query(fallbackRequest, "owner_chief");
         pushHits(fallbackRes.hits);
       }
 
@@ -2230,21 +2594,19 @@ export class OvernightFactory {
     const branchName = this.resolveUniqueBranchName(
       repoTarget.repoPath,
       email.subject,
-      email.receivedAt ?? startedAt
+      email.receivedAt ?? startedAt,
     );
 
     const worktreeRoot =
-      this.worktreeBaseDir ??
-      join(tmpdir(), `${BRAND.appSlug}-factory-worktrees`);
-    const worktreePath =
-      runOptions?.worktreePath ?? join(worktreeRoot, jobId);
+      this.worktreeBaseDir ?? join(tmpdir(), `${BRAND.appSlug}-factory-worktrees`);
+    const worktreePath = runOptions?.worktreePath ?? join(worktreeRoot, jobId);
 
     const sourceThreadId = `factory-inbound-${jobId}`;
     const memorySummaryLines =
       memoryHits.length > 0
         ? memoryHits.map(
             (hit) =>
-              `[${hit.entry.namespace}/${hit.entry.kind}] ${hit.entry.title}: ${hit.entry.content}`
+              `[${hit.entry.namespace}/${hit.entry.kind}] ${hit.entry.title}: ${hit.entry.content}`,
           )
         : ["（暂无命中历史仓库记忆，按标准严格工程规范执行）"];
 
@@ -2254,17 +2616,17 @@ export class OvernightFactory {
         content: [
           `Goal: ${email.subject.replace(/\[idea\]|#factory/gi, "").trim() || email.subject}`,
           `From: ${email.from}`,
-          cleanedEmailText
-        ].join("\n\n")
+          cleanedEmailText,
+        ].join("\n\n"),
       },
       {
         role: "assistant",
         content: [
           `Decision: 创建隔离分支 ${branchName} 于工作树 ${worktreePath}，并在完成后执行验收测试 \`${repoTarget.testCommand}\`。`,
           `仓库技术栈与规范记忆（owner_chief 跨 ${workspaceNamespace} 与 private/chief 检索）：`,
-          ...memorySummaryLines
-        ].join("\n")
-      }
+          ...memorySummaryLines,
+        ].join("\n"),
+      },
     ];
 
     const handoff = await this.handoffEngine.executeHandoff({
@@ -2275,9 +2637,9 @@ export class OvernightFactory {
       additionalContext: [
         `目标仓库：${repoTarget.repoPath}`,
         `验收命令：${repoTarget.testCommand}`,
-        `分支名称：${branchName}`
+        `分支名称：${branchName}`,
       ].join("\n"),
-      transcript
+      transcript,
     });
 
     return {
@@ -2289,7 +2651,7 @@ export class OvernightFactory {
       branchName,
       worktreePath,
       sourceThreadId,
-      handoff
+      handoff,
     };
   }
 
@@ -2305,7 +2667,8 @@ export class OvernightFactory {
       handoff: HandoffExecutionResult;
     },
     runOptions: FactoryRunOptions | undefined,
-    onWorktreeCreated: () => void
+    onWorktreeCreated: () => void,
+    routedMeta?: { provider: string; modelId: string },
   ): Promise<{
     baseBranch: string;
     baseCommitSha: string;
@@ -2321,16 +2684,16 @@ export class OvernightFactory {
     const codingExecutor = runOptions?.codingExecutor ?? this.codingExecutor;
     if (codingExecutor === undefined) {
       throw new Error(
-        "OvernightFactory Stage B requires a CodingAgentExecutor (pass codingExecutor in options or runEmailPipeline)."
+        "OvernightFactory Stage B requires a CodingAgentExecutor (pass codingExecutor in options or runEmailPipeline).",
       );
     }
 
+    if (runOptions?.signal?.aborted) {
+      throw new OvernightTaskCancelledError();
+    }
+
     const repoPath = stageA.repoTarget.repoPath;
-    const baseBranch = this.runGit(repoPath, [
-      "rev-parse",
-      "--abbrev-ref",
-      "HEAD"
-    ]).trim();
+    const baseBranch = this.runGit(repoPath, ["rev-parse", "--abbrev-ref", "HEAD"]).trim();
     const baseCommitSha = this.runGit(repoPath, ["rev-parse", "HEAD"]).trim();
 
     mkdirSync(dirname(stageA.worktreePath), { recursive: true });
@@ -2340,14 +2703,22 @@ export class OvernightFactory {
       "-b",
       stageA.branchName,
       stageA.worktreePath,
-      "HEAD"
+      "HEAD",
     ]);
     onWorktreeCreated();
+
+    runOptions?.onProgress?.({
+      stage: "preparing_worktree",
+      level: "info",
+      message: `已创建隔离分支 ${stageA.branchName}（基于 ${baseBranch}@${baseCommitSha.slice(0, 7)}）`,
+      branchName: stageA.branchName,
+      worktreePath: stageA.worktreePath,
+    });
 
     const activeWorktreeBranch = this.runGit(stageA.worktreePath, [
       "rev-parse",
       "--abbrev-ref",
-      "HEAD"
+      "HEAD",
     ]).trim();
     if (
       activeWorktreeBranch === "main" ||
@@ -2355,31 +2726,22 @@ export class OvernightFactory {
       activeWorktreeBranch !== stageA.branchName
     ) {
       throw new Error(
-        `Safety check failed: worktree branch "${activeWorktreeBranch}" must equal isolated branch "${stageA.branchName}" and never mutate main/master.`
+        `Safety check failed: worktree branch "${activeWorktreeBranch}" must equal isolated branch "${stageA.branchName}" and never mutate main/master.`,
       );
     }
 
     const policy = this.sandbox.createPolicy({
       worktreePath: stageA.worktreePath,
-      writableTempDirs:
-        runOptions?.writableTempDirs ?? this.writableTempDirs,
+      writableTempDirs: runOptions?.writableTempDirs ?? this.writableTempDirs,
       egressEnabled: runOptions?.egressEnabled ?? this.egressEnabled,
-      allowedDomains: runOptions?.allowedDomains ?? this.allowedDomains
+      allowedDomains: runOptions?.allowedDomains ?? this.allowedDomains,
     });
-    const isolationSpec = this.sandbox.buildIsolationSpec(
-      policy,
-      process.execPath,
-      []
-    );
+    const isolationSpec = this.sandbox.buildIsolationSpec(policy, process.execPath, []);
 
     const sessionId = `factory-sess-${jobId}`;
     const threadId = stageA.handoff.newThreadId;
-    const testTimeoutMs =
-      runOptions?.testTimeoutMs ?? this.testTimeoutMs;
-    const maxAttempts = Math.max(
-      1,
-      runOptions?.maxSelfHealAttempts ?? this.maxSelfHealAttempts
-    );
+    const testTimeoutMs = runOptions?.testTimeoutMs ?? this.testTimeoutMs;
+    const maxAttempts = Math.max(1, runOptions?.maxSelfHealAttempts ?? this.maxSelfHealAttempts);
 
     await this.hookBus.emit({
       event: "SessionStart",
@@ -2389,15 +2751,13 @@ export class OvernightFactory {
       toolName: "overnight_factory_stage_b",
       toolInput: {
         worktreePath: stageA.worktreePath,
-        branchName: stageA.branchName
+        branchName: stageA.branchName,
       },
-      timestamp: this.now()
+      timestamp: this.now(),
     });
 
     const resolveWorktreeTarget = (filePath: string): string =>
-      isAbsolute(filePath)
-        ? resolve(filePath)
-        : resolve(stageA.worktreePath, filePath);
+      isAbsolute(filePath) ? resolve(filePath) : resolve(stageA.worktreePath, filePath);
 
     const tools = {
       readFile: async (filePath: string): Promise<string> => {
@@ -2409,12 +2769,10 @@ export class OvernightFactory {
           permissionMode: "auto",
           toolName: "read_file",
           toolInput: { filePath: resolved },
-          timestamp: this.now()
+          timestamp: this.now(),
         });
         if (pre.decision === "block") {
-          throw new Error(
-            pre.feedback ?? `PreToolUse blocked read_file on ${resolved}`
-          );
+          throw new Error(pre.feedback ?? `PreToolUse blocked read_file on ${resolved}`);
         }
         const content = readFileSync(resolved, "utf8");
         await this.hookBus.emit({
@@ -2425,7 +2783,7 @@ export class OvernightFactory {
           toolName: "read_file",
           toolInput: { filePath: resolved },
           toolOutput: { bytes: Buffer.byteLength(content, "utf8") },
-          timestamp: this.now()
+          timestamp: this.now(),
         });
         return content;
       },
@@ -2447,12 +2805,10 @@ export class OvernightFactory {
           permissionMode: "auto",
           toolName: "write_file",
           toolInput: { filePath: resolved, bytes: Buffer.byteLength(content) },
-          timestamp: this.now()
+          timestamp: this.now(),
         });
         if (pre.decision === "block") {
-          throw new Error(
-            pre.feedback ?? `PreToolUse blocked write_file on ${resolved}`
-          );
+          throw new Error(pre.feedback ?? `PreToolUse blocked write_file on ${resolved}`);
         }
         mkdirSync(dirname(resolved), { recursive: true });
         writeFileSync(resolved, content, "utf8");
@@ -2464,7 +2820,7 @@ export class OvernightFactory {
           toolName: "write_file",
           toolInput: { filePath: resolved },
           toolOutput: { written: true },
-          timestamp: this.now()
+          timestamp: this.now(),
         });
         return resolved;
       },
@@ -2476,18 +2832,17 @@ export class OvernightFactory {
           permissionMode: "auto",
           toolName: "run_command",
           toolInput: { command },
-          timestamp: this.now()
+          timestamp: this.now(),
         });
         if (pre.decision === "block") {
-          throw new Error(
-            pre.feedback ?? `PreToolUse blocked command: ${command}`
-          );
+          throw new Error(pre.feedback ?? `PreToolUse blocked command: ${command}`);
         }
         const cmdResult = await this.executeSandboxedCommand(
           command,
           stageA.worktreePath,
           isolationSpec.env,
-          testTimeoutMs
+          testTimeoutMs,
+          runOptions?.signal,
         );
         await this.hookBus.emit({
           event: "PostToolUse",
@@ -2497,10 +2852,10 @@ export class OvernightFactory {
           toolName: "run_command",
           toolInput: { command },
           toolOutput: { exitCode: cmdResult.exitCode },
-          timestamp: this.now()
+          timestamp: this.now(),
         });
         return cmdResult;
-      }
+      },
     };
 
     let lastTestFailure: string | undefined;
@@ -2510,7 +2865,17 @@ export class OvernightFactory {
     let codingResult: CodingAgentExecutionResult | undefined;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      if (runOptions?.signal?.aborted) {
+        throw new OvernightTaskCancelledError();
+      }
       attemptsUsed = attempt;
+      runOptions?.onProgress?.({
+        stage: "running_agent",
+        level: "info",
+        message: `正在执行编码代理（第 ${attempt}/${maxAttempts} 轮）...`,
+        branchName: stageA.branchName,
+        worktreePath: stageA.worktreePath,
+      });
       const execRes = await codingExecutor({
         jobId,
         threadId,
@@ -2524,52 +2889,95 @@ export class OvernightFactory {
         cleanedEmailText: stageA.cleanedEmailText,
         testCommand: stageA.repoTarget.testCommand,
         ...(lastTestFailure !== undefined ? { lastTestFailure } : {}),
+        ...(routedMeta?.provider ? { routedProvider: routedMeta.provider } : {}),
+        ...(routedMeta?.modelId ? { routedModelId: routedMeta.modelId } : {}),
+        ...(runOptions?.signal ? { signal: runOptions.signal } : {}),
+        onLog: (message, level = "info") => {
+          runOptions?.onProgress?.({
+            stage: "running_agent",
+            level,
+            message,
+            branchName: stageA.branchName,
+            worktreePath: stageA.worktreePath,
+          });
+        },
         sandbox: this.sandbox,
         sandboxPolicy: policy,
         isolationSpec,
         hookBus: this.hookBus,
-        tools
+        tools,
       });
       if (execRes !== undefined) {
         codingResult = execRes;
       }
 
+      if (runOptions?.signal?.aborted) {
+        throw new OvernightTaskCancelledError();
+      }
+      runOptions?.onProgress?.({
+        stage: "verifying",
+        level: "info",
+        message: `正在运行验收测试：${stageA.repoTarget.testCommand}`,
+        branchName: stageA.branchName,
+      });
       const testRun = await tools.runCommand(stageA.repoTarget.testCommand);
       testOutput = testRun.combinedOutput;
       testPassed = testRun.exitCode === 0;
       if (testPassed) {
+        runOptions?.onProgress?.({
+          stage: "verifying",
+          level: "info",
+          message: "验收测试通过。",
+          branchName: stageA.branchName,
+        });
         break;
       }
+      runOptions?.onProgress?.({
+        stage: "verifying",
+        level: "warn",
+        message: `第 ${attempt} 轮验收测试未通过（退出码 ${testRun.exitCode}）${attempt < maxAttempts ? "，准备进入自愈重试" : ""}`,
+        branchName: stageA.branchName,
+      });
       lastTestFailure = testOutput;
     }
 
     if (!testPassed) {
       throw new Error(
-        `OvernightFactory Stage B tests failed after ${attemptsUsed} attempt(s) for command "${stageA.repoTarget.testCommand}":\n${testOutput}`
+        `OvernightFactory Stage B tests failed after ${attemptsUsed} attempt(s) for command "${stageA.repoTarget.testCommand}":\n${testOutput}`,
       );
     }
 
     // Stage ONLY concrete changed/untracked files inside worktree (never `git add .` / `-A`).
     const filesToStage = this.collectGitChangedPaths(stageA.worktreePath);
     if (filesToStage.length === 0) {
+      if (runOptions?.allowNoFileChanges === true) {
+        return {
+          baseBranch,
+          baseCommitSha,
+          commitSha: baseCommitSha,
+          diff: "",
+          changedFiles: [],
+          testOutput,
+          testPassed,
+          attemptsUsed,
+          ...(codingResult?.summary !== undefined ? { codingSummary: codingResult.summary } : {}),
+          ...(codingResult?.tokenStats !== undefined
+            ? { tokenStats: codingResult.tokenStats }
+            : {}),
+        };
+      }
       throw new Error(
-        `OvernightFactory Stage B produced no file changes in worktree "${stageA.worktreePath}".`
+        `OvernightFactory Stage B produced no file changes in worktree "${stageA.worktreePath}".`,
       );
     }
 
     this.runGit(stageA.worktreePath, ["add", "--", ...filesToStage]);
 
     const commitMessage = `feat(factory): ${stageA.handoff.summary.goal.slice(0, 72).replace(/\r?\n/g, " ")}`;
-    const commitArgs = this.buildGitCommitArgs(
-      stageA.worktreePath,
-      commitMessage
-    );
+    const commitArgs = this.buildGitCommitArgs(stageA.worktreePath, commitMessage);
     this.runGit(stageA.worktreePath, commitArgs);
 
-    const commitSha = this.runGit(stageA.worktreePath, [
-      "rev-parse",
-      "HEAD"
-    ]).trim();
+    const commitSha = this.runGit(stageA.worktreePath, ["rev-parse", "HEAD"]).trim();
     const diff = this.runGit(stageA.worktreePath, ["diff", "HEAD~1"]);
     const changedFiles = this.collectDiffStats(stageA.worktreePath);
 
@@ -2582,12 +2990,8 @@ export class OvernightFactory {
       testOutput,
       testPassed,
       attemptsUsed,
-      ...(codingResult?.summary !== undefined
-        ? { codingSummary: codingResult.summary }
-        : {}),
-      ...(codingResult?.tokenStats !== undefined
-        ? { tokenStats: codingResult.tokenStats }
-        : {})
+      ...(codingResult?.summary !== undefined ? { codingSummary: codingResult.summary } : {}),
+      ...(codingResult?.tokenStats !== undefined ? { tokenStats: codingResult.tokenStats } : {}),
     };
   }
 
@@ -2605,7 +3009,7 @@ export class OvernightFactory {
       testOutput: string;
       testPassed: boolean;
     },
-    runOptions?: FactoryRunOptions
+    runOptions?: FactoryRunOptions,
   ): Promise<{
     reviewThreadId: string;
     reviewComments: string[];
@@ -2621,9 +3025,9 @@ export class OvernightFactory {
         {
           role: "assistant",
           content: `Goal: 对分支 ${stageA.branchName} 执行独立只读 Review。\n变更文件：${stageB.changedFiles.map((f) => f.path).join(", ")}`,
-          touchedFiles: stageB.changedFiles.map((f) => f.path)
-        }
-      ]
+          touchedFiles: stageB.changedFiles.map((f) => f.path),
+        },
+      ],
     });
 
     const reviewThreadId = reviewHandoff.newThreadId;
@@ -2635,7 +3039,7 @@ export class OvernightFactory {
       this.handoffEngine.isToolAllowedForThread(reviewThreadId, "write_file")
     ) {
       throw new Error(
-        `Dial mode invariant violated: write_file must be denied in review mode for thread "${reviewThreadId}".`
+        `Dial mode invariant violated: write_file must be denied in review mode for thread "${reviewThreadId}".`,
       );
     }
 
@@ -2649,7 +3053,7 @@ export class OvernightFactory {
     const heuristicFindings = analyzeDiffStaticRisks(
       stageB.diff,
       stageB.changedFiles,
-      stageB.testPassed
+      stageB.testPassed,
     );
 
     const oracleReviewer = runOptions?.oracleReviewer ?? this.oracleReviewer;
@@ -2670,7 +3074,7 @@ export class OvernightFactory {
         testPassed: stageB.testPassed,
         handoff: reviewHandoff,
         heuristicFindings,
-        assertReadOnlyTool
+        assertReadOnlyTool,
       });
 
       if (Array.isArray(reviewResult)) {
@@ -2707,7 +3111,7 @@ export class OvernightFactory {
     return {
       reviewThreadId,
       reviewComments: mergedComments,
-      ...(reviewTokenStats !== undefined ? { reviewTokenStats } : {})
+      ...(reviewTokenStats !== undefined ? { reviewTokenStats } : {}),
     };
   }
 
@@ -2739,7 +3143,7 @@ export class OvernightFactory {
     backdoorMeta?: {
       artifact?: DispatchTaskArtifact;
       oracleReviewSkipped?: boolean;
-    }
+    },
   ): Promise<{
     stopHookResult: HookDispatchResult;
     tokenStats: MorningReportTokenStats;
@@ -2754,13 +3158,10 @@ export class OvernightFactory {
       stageB.codingSummary,
       stageA.handoff,
       stageB.changedFiles,
-      stageB.testPassed
+      stageB.testPassed,
     );
 
-    const tokenStats = this.mergeTokenStats(
-      stageB.tokenStats,
-      stageC.reviewTokenStats
-    );
+    const tokenStats = this.mergeTokenStats(stageB.tokenStats, stageC.reviewTokenStats);
 
     const stopHookResult = await this.hookBus.emit({
       event: "Stop",
@@ -2773,20 +3174,20 @@ export class OvernightFactory {
         branchName: stageA.branchName,
         commitSha: stageB.commitSha,
         changedFilesCount: stageB.changedFiles.length,
-        testPassed: stageB.testPassed
+        testPassed: stageB.testPassed,
       },
       toolOutput: {
         summary,
         deepLink,
-        tokenStats
+        tokenStats,
       },
-      timestamp: completedAt
+      timestamp: completedAt,
     });
 
     if (stopHookResult.decision === "block") {
       throw new Error(
         stopHookResult.feedback ??
-          `Stop hook blocked OvernightFactory report delivery for job "${jobId}".`
+          `Stop hook blocked OvernightFactory report delivery for job "${jobId}".`,
       );
     }
 
@@ -2807,14 +3208,12 @@ export class OvernightFactory {
       testOutput: stageB.testOutput,
       testPassed: stageB.testPassed,
       tokenStats,
-      ...(backdoorMeta?.artifact !== undefined
-        ? { artifact: backdoorMeta.artifact }
-        : {}),
+      ...(backdoorMeta?.artifact !== undefined ? { artifact: backdoorMeta.artifact } : {}),
       ...(backdoorMeta?.oracleReviewSkipped !== undefined
         ? { oracleReviewSkipped: backdoorMeta.oracleReviewSkipped }
         : {}),
       completedAt,
-      durationMs: Math.max(0, completedAt - startedAt)
+      durationMs: Math.max(0, completedAt - startedAt),
     };
 
     const reportHtml = this.renderMorningReportHtml(report);
@@ -2822,8 +3221,7 @@ export class OvernightFactory {
     const mailer = runOptions?.outboundMailer ?? this.outboundMailer;
     let mailReceipt: OutboundMailReceipt | undefined;
     if (mailer !== undefined) {
-      const recipient =
-        runOptions?.reportRecipient ?? extractEmailAddressOnly(email.from);
+      const recipient = runOptions?.reportRecipient ?? extractEmailAddressOnly(email.from);
       if (recipient.length > 0) {
         mailReceipt = await mailer.send({
           to: [recipient],
@@ -2836,17 +3234,16 @@ export class OvernightFactory {
             `变更文件数：${report.changedFilesCount}`,
             `Oracle 评语：\n${report.reviewComments.map((c) => `- ${c}`).join("\n")}`,
             `Token 消耗：${tokenStats.totalTokens}（估算 $${tokenStats.estimatedCostUsd.toFixed(4)}）`,
-            `工作台审阅深链：${deepLink}`
+            `工作台审阅深链：${deepLink}`,
           ].join("\n\n"),
           inReplyTo: email.messageId,
           references: [email.messageId],
-          threadId: report.threadId
+          threadId: report.threadId,
         });
       }
     }
 
-    const notifyPlugins =
-      runOptions?.onNotifyPlugins ?? this.onNotifyPlugins;
+    const notifyPlugins = runOptions?.onNotifyPlugins ?? this.onNotifyPlugins;
     let notification: FactoryPluginNotification | undefined;
     if (notifyPlugins !== undefined) {
       const islandCard: IslandHookEvent = {
@@ -2856,7 +3253,7 @@ export class OvernightFactory {
         subtitle: report.summary,
         deepLink,
         actions: ["open_workbench", "dismiss"],
-        createdAt: completedAt
+        createdAt: completedAt,
       };
       notification = {
         jobId,
@@ -2871,7 +3268,7 @@ export class OvernightFactory {
         estimatedCostUsd: tokenStats.estimatedCostUsd,
         totalTokens: tokenStats.totalTokens,
         islandCard,
-        shortMessage: `【${BRAND.appName} 早报】${report.summary} | 分支 ${report.branchName} | ${deepLink}`
+        shortMessage: `【${BRAND.appName} 早报】${report.summary} | 分支 ${report.branchName} | ${deepLink}`,
       };
       await notifyPlugins(notification);
     }
@@ -2882,25 +3279,20 @@ export class OvernightFactory {
       report,
       reportHtml,
       ...(mailReceipt !== undefined ? { mailReceipt } : {}),
-      ...(notification !== undefined ? { notification } : {})
+      ...(notification !== undefined ? { notification } : {}),
     };
   }
 
   private mergeTokenStats(
     codingStats?: Partial<MorningReportTokenStats>,
-    reviewStats?: Partial<MorningReportTokenStats>
+    reviewStats?: Partial<MorningReportTokenStats>,
   ): MorningReportTokenStats {
-    const inputTokens =
-      (codingStats?.inputTokens ?? 0) + (reviewStats?.inputTokens ?? 0);
-    const outputTokens =
-      (codingStats?.outputTokens ?? 0) + (reviewStats?.outputTokens ?? 0);
-    const explicitTotal =
-      (codingStats?.totalTokens ?? 0) + (reviewStats?.totalTokens ?? 0);
-    const totalTokens =
-      explicitTotal > 0 ? explicitTotal : inputTokens + outputTokens;
+    const inputTokens = (codingStats?.inputTokens ?? 0) + (reviewStats?.inputTokens ?? 0);
+    const outputTokens = (codingStats?.outputTokens ?? 0) + (reviewStats?.outputTokens ?? 0);
+    const explicitTotal = (codingStats?.totalTokens ?? 0) + (reviewStats?.totalTokens ?? 0);
+    const totalTokens = explicitTotal > 0 ? explicitTotal : inputTokens + outputTokens;
     const estimatedCostUsd =
-      (codingStats?.estimatedCostUsd ?? 0) +
-      (reviewStats?.estimatedCostUsd ?? 0);
+      (codingStats?.estimatedCostUsd ?? 0) + (reviewStats?.estimatedCostUsd ?? 0);
 
     const model = codingStats?.model ?? reviewStats?.model;
     const provider = codingStats?.provider ?? reviewStats?.provider;
@@ -2910,7 +3302,7 @@ export class OvernightFactory {
       totalTokens,
       estimatedCostUsd,
       ...(model !== undefined ? { model } : {}),
-      ...(provider !== undefined ? { provider } : {})
+      ...(provider !== undefined ? { provider } : {}),
     };
   }
 
@@ -2921,7 +3313,7 @@ export class OvernightFactory {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
-      maxBuffer: 16 * 1024 * 1024
+      maxBuffer: 16 * 1024 * 1024,
     });
   }
 
@@ -2929,14 +3321,12 @@ export class OvernightFactory {
     let hasName = false;
     let hasEmail = false;
     try {
-      hasName =
-        this.runGit(worktreePath, ["config", "user.name"]).trim().length > 0;
+      hasName = this.runGit(worktreePath, ["config", "user.name"]).trim().length > 0;
     } catch {
       hasName = false;
     }
     try {
-      hasEmail =
-        this.runGit(worktreePath, ["config", "user.email"]).trim().length > 0;
+      hasEmail = this.runGit(worktreePath, ["config", "user.email"]).trim().length > 0;
     } catch {
       hasEmail = false;
     }
@@ -2960,8 +3350,8 @@ export class OvernightFactory {
         cwd: worktreePath,
         env: sanitizeChildEnv(process.env),
         encoding: "utf8",
-        windowsHide: true
-      }
+        windowsHide: true,
+      },
     );
 
     const tokens = raw.split("\0").filter((t) => t.length > 0);
@@ -2985,16 +3375,8 @@ export class OvernightFactory {
   }
 
   private collectDiffStats(worktreePath: string): FactoryChangedFileStat[] {
-    const numstatRaw = this.runGit(worktreePath, [
-      "diff",
-      "--numstat",
-      "HEAD~1"
-    ]);
-    const nameStatusRaw = this.runGit(worktreePath, [
-      "diff",
-      "--name-status",
-      "HEAD~1"
-    ]);
+    const numstatRaw = this.runGit(worktreePath, ["diff", "--numstat", "HEAD~1"]);
+    const nameStatusRaw = this.runGit(worktreePath, ["diff", "--name-status", "HEAD~1"]);
 
     const statusByPath = new Map<string, FactoryChangedFileStat["status"]>();
     for (const line of nameStatusRaw.split(/\r?\n/)) {
@@ -3009,13 +3391,7 @@ export class OvernightFactory {
         continue;
       }
       const mapped: FactoryChangedFileStat["status"] =
-        code === "A"
-          ? "added"
-          : code === "D"
-            ? "deleted"
-            : code === "R"
-              ? "renamed"
-              : "modified";
+        code === "A" ? "added" : code === "D" ? "deleted" : code === "R" ? "renamed" : "modified";
       statusByPath.set(filePath, mapped);
     }
 
@@ -3038,7 +3414,7 @@ export class OvernightFactory {
         path: filePath,
         status: statusByPath.get(filePath) ?? "modified",
         additions,
-        deletions
+        deletions,
       });
     }
     return stats;
@@ -3063,8 +3439,12 @@ export class OvernightFactory {
     command: string,
     cwd: string,
     env: Record<string, string>,
-    timeoutMs: number
+    timeoutMs: number,
+    signal?: AbortSignal,
   ): Promise<FactoryCommandResult> {
+    if (signal?.aborted) {
+      throw new OvernightTaskCancelledError();
+    }
     const hasShellMeta = /[|&;<>`$\n]/.test(command);
     let executable = command;
     let args: string[] = [];
@@ -3077,11 +3457,7 @@ export class OvernightFactory {
       }
       executable = parsed[0];
       args = parsed.slice(1);
-      if (
-        process.platform === "win32" &&
-        isAbsolute(executable) &&
-        !existsSync(executable)
-      ) {
+      if (process.platform === "win32" && isAbsolute(executable) && !existsSync(executable)) {
         let candidate = executable;
         for (let i = 1; i < parsed.length; i += 1) {
           candidate = `${candidate} ${parsed[i]!}`;
@@ -3109,6 +3485,10 @@ export class OvernightFactory {
     delete childEnv.NODE_TEST_CONTEXT;
 
     return new Promise<FactoryCommandResult>((resolveResult, rejectResult) => {
+      if (signal?.aborted) {
+        rejectResult(new OvernightTaskCancelledError());
+        return;
+      }
       let settled = false;
       let stdout = "";
       let stderr = "";
@@ -3120,22 +3500,34 @@ export class OvernightFactory {
         env: childEnv,
         shell: useShell,
         stdio: ["ignore", "pipe", "pipe"],
-        windowsHide: true
+        windowsHide: true,
       });
+
+      const onAbort = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          // Ignore kill failures.
+        }
+        rejectResult(new OvernightTaskCancelledError());
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
 
       const timer = setTimeout(() => {
         if (settled) {
           return;
         }
         settled = true;
+        signal?.removeEventListener("abort", onAbort);
         try {
           child.kill("SIGTERM");
         } catch {
           // Ignore kill failures.
         }
-        rejectResult(
-          new Error(`Command timed out after ${timeoutMs}ms: ${command}`)
-        );
+        rejectResult(new Error(`Command timed out after ${timeoutMs}ms: ${command}`));
       }, timeoutMs);
 
       child.stdout?.on("data", (chunk: Buffer | string) => {
@@ -3158,6 +3550,7 @@ export class OvernightFactory {
         }
         settled = true;
         clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
         rejectResult(err);
       });
 
@@ -3167,6 +3560,7 @@ export class OvernightFactory {
         }
         settled = true;
         clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
         stdout += stdoutDec.end();
         stderr += stderrDec.end();
         const combinedOutput = [stdout.trim(), stderr.trim()]
@@ -3176,7 +3570,7 @@ export class OvernightFactory {
           exitCode: code ?? 1,
           stdout,
           stderr,
-          combinedOutput
+          combinedOutput,
         });
       });
     });
@@ -3214,7 +3608,7 @@ export class OvernightFactory {
 
     if (truncated) {
       renderedLines.push(
-        `<div style="padding:6px 10px;background:#f6f8fa;color:#57606a;font-style:italic;">... 已截断其余 ${lines.length - maxLines} 行 Diff</div>`
+        `<div style="padding:6px 10px;background:#f6f8fa;color:#57606a;font-style:italic;">... 已截断其余 ${lines.length - maxLines} 行 Diff</div>`,
       );
     }
 
@@ -3267,7 +3661,7 @@ export class OvernightFactory {
       `</div>`,
       `</div>`,
       `</body>`,
-      `</html>`
+      `</html>`,
     ].join("\n");
   }
 
@@ -3280,54 +3674,29 @@ export class OvernightFactory {
     const safeThreadId = escapeHtml(report.threadId);
     const safeBranchName = escapeHtml(report.branchName);
     const safeSummary = escapeHtml(report.summary);
-    const safeDeepLinkUrl = sanitizeDeepLinkUrl(
-      report.deepLink,
-      report.threadId
-    );
+    const safeDeepLinkUrl = sanitizeDeepLinkUrl(report.deepLink, report.threadId);
     const safeDeepLink = escapeHtml(safeDeepLinkUrl);
     const safeRepoName = escapeHtml(report.repoName ?? "Workspace");
     const safeCommitSha =
-      report.commitSha !== undefined
-        ? escapeHtml(report.commitSha.slice(0, 12))
-        : "";
+      report.commitSha !== undefined ? escapeHtml(report.commitSha.slice(0, 12)) : "";
     const safeTestCommand =
-      report.testCommand !== undefined
-        ? escapeHtml(report.testCommand)
-        : "（未指定测试命令）";
+      report.testCommand !== undefined ? escapeHtml(report.testCommand) : "（未指定测试命令）";
     const safeTestOutput = escapeHtml(
       report.testOutput !== undefined && report.testOutput.trim().length > 0
         ? report.testOutput
-        : "（无单测输出记录）"
+        : "（无单测输出记录）",
     );
 
     const testBadgeBg =
-      report.testPassed === false
-        ? "#ffebe9"
-        : report.testPassed === true
-          ? "#dafbe1"
-          : "#f1f5f9";
+      report.testPassed === false ? "#ffebe9" : report.testPassed === true ? "#dafbe1" : "#f1f5f9";
     const testBadgeFg =
-      report.testPassed === false
-        ? "#cf222e"
-        : report.testPassed === true
-          ? "#116329"
-          : "#475569";
+      report.testPassed === false ? "#cf222e" : report.testPassed === true ? "#116329" : "#475569";
     const testBadgeLabel =
-      report.testPassed === false
-        ? "FAILED"
-        : report.testPassed === true
-          ? "PASSED"
-          : "PENDING";
+      report.testPassed === false ? "FAILED" : report.testPassed === true ? "PASSED" : "PENDING";
 
     const changedFiles = report.changedFiles ?? [];
-    const totalAdditions = changedFiles.reduce(
-      (sum, f) => sum + f.additions,
-      0
-    );
-    const totalDeletions = changedFiles.reduce(
-      (sum, f) => sum + f.deletions,
-      0
-    );
+    const totalAdditions = changedFiles.reduce((sum, f) => sum + f.additions, 0);
+    const totalDeletions = changedFiles.reduce((sum, f) => sum + f.deletions, 0);
 
     const fileRowsHtml =
       changedFiles.length > 0
@@ -3341,20 +3710,18 @@ export class OvernightFactory {
                 `<td style="padding:8px 12px;border-top:1px solid #e2e8f0;font-size:12px;color:#475569;">${safeStatus}</td>`,
                 `<td style="padding:8px 12px;border-top:1px solid #e2e8f0;font-family:ui-monospace,monospace;font-size:12px;color:#116329;text-align:right;">+${file.additions}</td>`,
                 `<td style="padding:8px 12px;border-top:1px solid #e2e8f0;font-family:ui-monospace,monospace;font-size:12px;color:#cf222e;text-align:right;">-${file.deletions}</td>`,
-                `</tr>`
+                `</tr>`,
               ].join("");
             })
             .join("")
         : `<tr><td colspan="4" style="padding:10px 12px;border-top:1px solid #e2e8f0;color:#475569;font-size:13px;">共修改 ${report.changedFilesCount} 个文件</td></tr>`;
 
     const reviewItems =
-      report.reviewComments.length > 0
-        ? report.reviewComments
-        : ["（暂无额外 Oracle 审阅意见）"];
+      report.reviewComments.length > 0 ? report.reviewComments : ["（暂无额外 Oracle 审阅意见）"];
     const reviewListHtml = reviewItems
       .map(
         (comment) =>
-          `<li style="margin:0 0 8px 0;padding:8px 12px;background:#f8fafc;border-left:3px solid #2563eb;border-radius:4px;color:#1e293b;font-size:13px;line-height:1.55;">${escapeHtml(comment)}</li>`
+          `<li style="margin:0 0 8px 0;padding:8px 12px;background:#f8fafc;border-left:3px solid #2563eb;border-radius:4px;color:#1e293b;font-size:13px;line-height:1.55;">${escapeHtml(comment)}</li>`,
       )
       .join("");
 
@@ -3362,12 +3729,10 @@ export class OvernightFactory {
       inputTokens: 0,
       outputTokens: 0,
       totalTokens: 0,
-      estimatedCostUsd: 0
+      estimatedCostUsd: 0,
     };
     const modelLine =
-      tokenStats.model !== undefined
-        ? ` · 模型 ${escapeHtml(tokenStats.model)}`
-        : "";
+      tokenStats.model !== undefined ? ` · 模型 ${escapeHtml(tokenStats.model)}` : "";
 
     const diffBlockHtml = this.renderDiffHtmlBlock(report.diff);
 
@@ -3449,7 +3814,7 @@ export class OvernightFactory {
       `</div>`,
       `</div>`,
       `</body>`,
-      `</html>`
+      `</html>`,
     ].join("\n");
   }
 }
