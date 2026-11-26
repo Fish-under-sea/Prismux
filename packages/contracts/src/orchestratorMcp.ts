@@ -95,14 +95,21 @@ export const OrchestratorMcpTargetOptions = Schema.Union([
 ]);
 export type OrchestratorMcpTargetOptions = typeof OrchestratorMcpTargetOptions.Type;
 
+// Accept both canonical instance IDs and common provider aliases / display names (e.g. "dsh",
+// "deepseek-harness", "acp:deepseek-harness", "DeepSeek Harness"); resolved server-side.
+const OrchestratorMcpProviderInstanceSelector = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(128),
+);
+const OrchestratorMcpProviderDriverSelector = TrimmedNonEmptyString.check(Schema.isMaxLength(64));
+
 export const OrchestratorMcpTarget = Schema.Struct({
   providerInstanceId: Schema.optional(
-    ProviderInstanceId.annotate({
+    OrchestratorMcpProviderInstanceSelector.annotate({
       description: "Provider instance id from `orchestrator_capabilities`.",
     }),
   ),
   driverKind: Schema.optional(
-    ProviderDriverKind.annotate({
+    OrchestratorMcpProviderDriverSelector.annotate({
       description: "Prefer `providerInstanceId`.",
     }),
   ),
@@ -658,6 +665,14 @@ export const OrchestratorMcpModelOption = Schema.Struct({
 });
 export type OrchestratorMcpModelOption = typeof OrchestratorMcpModelOption.Type;
 
+export const OrchestratorMcpProviderDispatchPolicy = Schema.Literals([
+  "direct",
+  "waiver_required",
+  "blocked",
+]);
+export type OrchestratorMcpProviderDispatchPolicy =
+  typeof OrchestratorMcpProviderDispatchPolicy.Type;
+
 export const OrchestratorMcpProviderCapability = Schema.Struct({
   providerInstanceId: ProviderInstanceId,
   driverKind: ProviderDriverKind,
@@ -675,6 +690,7 @@ export const OrchestratorMcpProviderCapability = Schema.Struct({
   runtimeModes: Schema.optional(Schema.Array(RuntimeMode)),
   canRunChildTask: Schema.Boolean,
   canRunCrossProviderChildTask: Schema.Boolean,
+  dispatchPolicy: Schema.optional(OrchestratorMcpProviderDispatchPolicy),
   constraints: Schema.Array(Schema.String),
 });
 export type OrchestratorMcpProviderCapability = typeof OrchestratorMcpProviderCapability.Type;
@@ -983,6 +999,14 @@ export const OrchestratorMcpDeleteScheduledTaskResult = Schema.Struct({
 export type OrchestratorMcpDeleteScheduledTaskResult =
   typeof OrchestratorMcpDeleteScheduledTaskResult.Type;
 
+export const OrchestratorMcpSubscriptionBlockedReasonCode = Schema.Literals([
+  "AGY_UNATTENDED_FORBIDDEN",
+  "AGY_CONTROLLED_AGENT_LOCKED",
+  "EXTERNAL_SUBSCRIPTION_SWARM_LOCKED",
+]);
+export type OrchestratorMcpSubscriptionBlockedReasonCode =
+  typeof OrchestratorMcpSubscriptionBlockedReasonCode.Type;
+
 export class OrchestratorMcpFailure extends Schema.TaggedError<OrchestratorMcpFailure>()(
   "OrchestratorMcpFailure",
   {
@@ -1003,7 +1027,11 @@ export class OrchestratorMcpFailure extends Schema.TaggedError<OrchestratorMcpFa
       "orchestration_error",
       "thread_credential_required",
       "target_required",
+      "ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED",
     ]),
     message: Schema.String,
+    reasonCode: Schema.optional(OrchestratorMcpSubscriptionBlockedReasonCode),
+    settingsRoute: Schema.optional(Schema.String),
+    providerId: Schema.optional(Schema.String),
   },
 ) {}

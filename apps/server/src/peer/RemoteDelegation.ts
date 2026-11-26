@@ -14,8 +14,8 @@ import {
   type OrchestrationV2RemoteTaskChild,
   type OrchestrationV2Subagent,
   type ProjectId,
-  type ProviderInstanceId,
   ProviderDriverKind,
+  ProviderInstanceId,
   type RunId,
   type ThreadId,
 } from "@prismux/core-contracts";
@@ -28,12 +28,17 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as Tool from "effect/ai/Tool";
 import { withExecutedModelNote } from "@prismux/provider-core/server/subagentProjection";
 
 import type * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
+import {
+  canonicalizeProviderAlias,
+  normalizeProviderLookupKey,
+} from "../mcp/DelegationSubscriptionGuard.ts";
 import { ProjectToolkit } from "../mcp/toolkits/project/tools.ts";
 import {
   resolveInteractionMode,
@@ -223,31 +228,87 @@ const make = Effect.gen(function* () {
     });
   });
 
-  /** The instance there of the driver the caller named, preferring the one this thread runs on, as a task here does. */
+  const isProviderInstanceId = Schema.is(ProviderInstanceId);
+
+  /** The instance there of the driver/alias the caller named, preferring the one this thread runs on. */
   const resolveRemoteInstance = Effect.fn("RemoteDelegation.resolveRemoteInstance")(function* (
     scope: ThreadScope,
     environmentId: EnvironmentId,
     requested: {
-      readonly driverKind: ProviderDriverKind;
-      readonly providerInstanceId: ProviderInstanceId | undefined;
+      readonly driverKind: string | undefined;
+      readonly providerInstanceId: string | undefined;
       readonly inheritedInstanceId: ProviderInstanceId;
     },
   ) {
     const { providers } = yield* forwarding.call(scope, RemoteCapabilitiesTool, environmentId, {});
-    if (requested.providerInstanceId !== undefined) {
-      const named = providers.find(
-        (provider) => provider.providerInstanceId === requested.providerInstanceId,
+    const driverMatches = (
+      provider: (typeof providers)[number],
+      requestedDriver: string,
+    ): boolean => {
+      if (provider.driverKind === requestedDriver) return true;
+      if (
+        normalizeProviderLookupKey(provider.driverKind) ===
+        normalizeProviderLookupKey(requestedDriver)
+      ) {
+        return true;
+      }
+      const wantedFamily = canonicalizeProviderAlias(requestedDriver);
+      if (wantedFamily === null) return false;
+      return (
+        canonicalizeProviderAlias(provider.driverKind) === wantedFamily ||
+        canonicalizeProviderAlias(provider.providerInstanceId) === wantedFamily ||
+        canonicalizeProviderAlias(provider.displayName) === wantedFamily
       );
-      if (named !== undefined && named.driverKind !== requested.driverKind) {
+    };
+    const matchProvider = (selector: string): (typeof providers)[number] | undefined => {
+      const exact = providers.find((provider) => provider.providerInstanceId === selector);
+      if (exact !== undefined) return exact;
+      const normalized = normalizeProviderLookupKey(selector);
+      const byNormalized = providers.find(
+        (provider) =>
+          normalizeProviderLookupKey(provider.providerInstanceId) === normalized ||
+          (provider.displayName !== null &&
+            normalizeProviderLookupKey(provider.displayName) === normalized),
+      );
+      if (byNormalized !== undefined) return byNormalized;
+      const family = canonicalizeProviderAlias(selector);
+      if (family === null) return undefined;
+      const familyMatches = providers.filter(
+        (provider) =>
+          canonicalizeProviderAlias(provider.providerInstanceId) === family ||
+          canonicalizeProviderAlias(provider.displayName) === family ||
+          (provider.driverKind !== "acpRegistry" &&
+            canonicalizeProviderAlias(provider.driverKind) === family),
+      );
+      return familyMatches.find((provider) => provider.canRunChildTask) ?? familyMatches[0];
+    };
+
+    if (requested.providerInstanceId !== undefined) {
+      const named = matchProvider(requested.providerInstanceId);
+      if (
+        named !== undefined &&
+        requested.driverKind !== undefined &&
+        !driverMatches(named, requested.driverKind)
+      ) {
         return yield* new OrchestratorMcpFailure({
           code: "invalid_request",
           message: `Provider instance ${named.providerInstanceId} there uses driver ${named.driverKind}, not ${requested.driverKind}.`,
         });
       }
-      return requested.providerInstanceId;
+      if (named !== undefined) return named.providerInstanceId;
+      if (isProviderInstanceId(requested.providerInstanceId)) {
+        return requested.providerInstanceId;
+      }
+      return yield* new OrchestratorMcpFailure({
+        code: "provider_unavailable",
+        message: `Provider instance ${requested.providerInstanceId} is not registered there. orchestrator_capabilities with this environmentId lists its providers.`,
+      });
     }
     const candidates = providers.filter(
-      (provider) => provider.driverKind === requested.driverKind && provider.canRunChildTask,
+      (provider) =>
+        requested.driverKind !== undefined &&
+        driverMatches(provider, requested.driverKind) &&
+        provider.canRunChildTask,
     );
     const chosen =
       candidates.find(
@@ -256,7 +317,7 @@ const make = Effect.gen(function* () {
     if (chosen === undefined) {
       return yield* new OrchestratorMcpFailure({
         code: "provider_unavailable",
-        message: `No instance of driver ${requested.driverKind} there can run a child task. orchestrator_capabilities with this environmentId lists its providers.`,
+        message: `No instance of driver ${requested.driverKind ?? "unknown"} there can run a child task. orchestrator_capabilities with this environmentId lists its providers.`,
       });
     }
     return chosen.providerInstanceId;
@@ -300,9 +361,17 @@ const make = Effect.gen(function* () {
       // The provider and model inherit as they do for a task here. Another
       // provider there has no model to inherit, so the caller names one.
       const inherited = parent.thread.modelSelection;
-      const instanceId =
+      const instanceId: ProviderInstanceId =
         target.driverKind === undefined
-          ? (target.providerInstanceId ?? inherited.instanceId)
+          ? target.providerInstanceId === undefined
+            ? inherited.instanceId
+            : isProviderInstanceId(target.providerInstanceId)
+              ? target.providerInstanceId
+              : yield* resolveRemoteInstance(scope, target.environmentId, {
+                  driverKind: undefined,
+                  providerInstanceId: target.providerInstanceId,
+                  inheritedInstanceId: inherited.instanceId,
+                })
           : yield* resolveRemoteInstance(scope, target.environmentId, {
               driverKind: target.driverKind,
               providerInstanceId: target.providerInstanceId,

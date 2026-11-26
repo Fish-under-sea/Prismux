@@ -75,12 +75,37 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as RemoteDelegation from "../peer/RemoteDelegation.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { idleThreadProjection, liveThreadShell } from "./McpToolAccess.testkit.ts";
+import {
+  DelegationSubscriptionGuardConfig,
+  SUBSCRIPTION_ORCHESTRATION_BLOCKED_CODE,
+  SUBSCRIPTION_WAIVER_SETTINGS_ROUTE,
+  type DelegationSubscriptionGuardConfigShape,
+} from "./DelegationSubscriptionGuard.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import { resolveRuntimeMode } from "./delegatedTaskModes.ts";
 import type { ProjectionRecordFilter } from "../orchestration-v2/ProjectionStore.ts";
 import type * as ProviderAdapter from "@prismux/provider-core/server/ProviderAdapter";
 
 const decodeTarget = Schema.decodeUnknownEffect(OrchestratorMcpTarget);
+
+const isolatedGuardLayer = (config: DelegationSubscriptionGuardConfigShape = {}) =>
+  Layer.succeed(DelegationSubscriptionGuardConfig, {
+    env: {},
+    homeDir: "/isolated-test-home",
+    platform: "linux",
+    readTextFile: () => null,
+    ...config,
+  });
+
+const unlockedAntigravityGuardLayer = isolatedGuardLayer({
+  waiverOverride: {
+    signed: true,
+    waiverVersion: "2026-04-20-v1",
+    signedAt: "2026-11-26T00:00:00.000Z",
+    allowAntigravityAsControlledAgent: true,
+    allowExternalSubscriptionAgentsInSwarm: true,
+  },
+});
 
 const layerOrchestratorService = OrchestratorMcpService.layer.pipe(
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
@@ -2239,6 +2264,7 @@ describe("OrchestratorMcpService provider resolution", () => {
           Layer.mock(SecretRequests.SecretRequests)({}),
           Layer.mock(RemoteDelegation.RemoteDelegation)({}),
           Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+          unlockedAntigravityGuardLayer,
         );
 
         yield* Effect.gen(function* () {
@@ -4783,6 +4809,7 @@ describe("OrchestratorMcpService provider resolution", () => {
             Layer.mock(SecretRequests.SecretRequests)({}),
             Layer.mock(RemoteDelegation.RemoteDelegation)({}),
             Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+            unlockedAntigravityGuardLayer,
           );
           yield* Effect.gen(function* () {
             const service = yield* OrchestratorMcpService.OrchestratorMcpService;
@@ -5720,5 +5747,658 @@ describe("OrchestratorMcpService thread stop", () => {
         assert.deepEqual(yield* interruptMessages(childThreadId), [stop.message]);
       }).pipe(Effect.provide(layerTest));
     }),
+  );
+});
+
+describe("OrchestratorMcpService cross-agent alias dispatch and subscription guard", () => {
+  const parentThreadId = ThreadId.make("thread:mcp-cross-agent-parent");
+  const childThreadId = ThreadId.make("thread:mcp-cross-agent-child");
+  const parentRunId = RunId.make("run:mcp-cross-agent-parent");
+  const parentNodeId = NodeId.make("node:mcp-cross-agent-root");
+  const taskId = NodeId.make("node:mcp-cross-agent-task");
+  const projectId = ProjectId.make("project:mcp-cross-agent");
+  const codexId = ProviderInstanceId.make("codex");
+  const claudeId = ProviderInstanceId.make("claudeAgent");
+  const dshId = ProviderInstanceId.make("acp-deepseek-harness");
+  const agyId = ProviderInstanceId.make("antigravity");
+  const opencodeId = ProviderInstanceId.make("opencode");
+  const piId = ProviderInstanceId.make("pi");
+
+  const makeScope = (
+    callerInstanceId: ProviderInstanceId,
+    overrides?: { readonly requestNamespace?: string },
+  ): McpInvocationScope => ({
+    environmentId: EnvironmentId.make("environment:mcp-cross-agent"),
+    requestNamespace: overrides?.requestNamespace ?? "provider-session:mcp-cross-agent",
+    thread: {
+      threadId: parentThreadId,
+      providerSessionId: "provider-session:mcp-cross-agent",
+      providerInstanceId: callerInstanceId,
+    },
+    client: undefined,
+    capabilities: new Set(["orchestration"]),
+    issuedAt: 1,
+  });
+
+  const makeProvider = (input: {
+    readonly instanceId: ProviderInstanceId;
+    readonly driver: string;
+    readonly displayName: string;
+    readonly models: ReadonlyArray<{
+      readonly slug: string;
+      readonly name?: string;
+      readonly isDefault?: boolean;
+    }>;
+    readonly auth?: Partial<ServerProvider["auth"]>;
+    readonly enabled?: boolean;
+  }): ServerProvider => ({
+    instanceId: input.instanceId,
+    driver: ProviderDriverKind.make(input.driver),
+    displayName: input.displayName,
+    enabled: input.enabled ?? true,
+    installed: true,
+    version: "1.0.0",
+    status: "ready",
+    auth: { status: "authenticated", ...input.auth },
+    checkedAt: "2026-11-26T10:00:00.000Z",
+    models: input.models.map((m) => ({
+      slug: m.slug,
+      name: m.name ?? m.slug,
+      isCustom: false,
+      capabilities: null,
+      ...(m.isDefault === undefined ? {} : { isDefault: m.isDefault }),
+    })),
+    slashCommands: [],
+    skills: [],
+  });
+
+  const adapterRegistryLayer = (instanceIds: ReadonlyArray<ProviderInstanceId>) =>
+    Layer.succeed(
+      ProviderAdapterRegistry.ProviderAdapterRegistryV2,
+      ProviderAdapterRegistry.ProviderAdapterRegistryV2.of({
+        list: () => Effect.succeed(instanceIds),
+        get: (instanceId) =>
+          instanceIds.includes(instanceId)
+            ? Effect.succeed({
+                instanceId,
+              } as unknown as ProviderAdapter.ProviderAdapterV2["Service"])
+            : Effect.fail(
+                new ProviderAdapterRegistry.ProviderAdapterRegistryLookupError({ instanceId }),
+              ),
+      }),
+    );
+
+  const makeHarness = (options: {
+    readonly callerInstanceId?: ProviderInstanceId;
+    readonly callerModel?: string;
+    readonly providers: ReadonlyArray<ServerProvider>;
+    readonly refreshedProviders?: ReadonlyArray<ServerProvider>;
+    readonly guardConfig?: DelegationSubscriptionGuardConfigShape;
+    readonly createdBy?: "user" | "system";
+    readonly creationSource?: "web" | "server";
+    readonly threadTags?: ReadonlyArray<string>;
+    readonly userMessageId?: MessageId;
+    readonly scheduledTaskId?: ScheduledTaskId;
+  }) => {
+    const callerInstanceId = options.callerInstanceId ?? codexId;
+    const callerModel = options.callerModel ?? "gpt-5.4";
+    const dispatched: Array<OrchestrationV2ServerCommand> = [];
+    const refreshedInstanceIds: Array<ProviderInstanceId> = [];
+    let currentProviders = options.providers;
+
+    const childProjection = {
+      thread: { id: childThreadId, title: "Child" },
+      runs: [],
+      contextTransfers: [],
+      messages: [],
+      subagents: [],
+      providerThreads: [],
+      providerTurns: [],
+      runtimeRequests: [],
+      turnItems: [],
+    } as unknown as OrchestrationV2ThreadProjection;
+
+    const buildParentProjection = (subagents: ReadonlyArray<unknown>) =>
+      ({
+        thread: {
+          id: parentThreadId,
+          projectId,
+          title: "Cross-Agent Parent",
+          createdBy: options.createdBy ?? "user",
+          creationSource: options.creationSource ?? "web",
+          ...(options.threadTags === undefined ? {} : { tags: options.threadTags }),
+          modelSelection: { instanceId: callerInstanceId, model: callerModel },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+        },
+        runs: [
+          {
+            id: parentRunId,
+            ordinal: 1,
+            status: "running",
+            rootNodeId: parentNodeId,
+            providerInstanceId: callerInstanceId,
+            modelSelection: { instanceId: callerInstanceId, model: callerModel },
+            ...(options.userMessageId === undefined
+              ? {}
+              : { userMessageId: options.userMessageId }),
+          },
+        ],
+        messages:
+          options.userMessageId === undefined
+            ? []
+            : [
+                {
+                  id: options.userMessageId,
+                  role: "user",
+                  text: "scheduled prompt",
+                  ...(options.scheduledTaskId === undefined
+                    ? {}
+                    : { scheduledTaskId: options.scheduledTaskId }),
+                },
+              ],
+        contextTransfers: [],
+        subagents,
+      }) as unknown as OrchestrationV2ThreadProjection;
+
+    const dependencies = Layer.mergeAll(
+      NodeServices.layer,
+      NodeCrypto.layer,
+      Layer.mock(ThreadManagementService.ThreadManagementService)({
+        hasReceipt: () => Effect.succeed(false),
+        assertProviderInstanceEnabled: () => Effect.void,
+        isProviderInstanceEnabledForProject: () => Effect.succeed(true),
+        getThreadRecords: (threadId) =>
+          Effect.succeed(
+            threadId === parentThreadId
+              ? buildParentProjection(
+                  dispatched.length > 0
+                    ? [
+                        {
+                          id: taskId,
+                          threadId: parentThreadId,
+                          origin: "app_owned",
+                          childThreadId,
+                          providerInstanceId:
+                            (
+                              dispatched[dispatched.length - 1] as {
+                                modelSelection?: { instanceId: ProviderInstanceId };
+                              }
+                            ).modelSelection?.instanceId ?? dshId,
+                          model:
+                            (
+                              dispatched[dispatched.length - 1] as {
+                                modelSelection?: { model: string };
+                              }
+                            ).modelSelection?.model ?? "default",
+                          status: "running",
+                          result: null,
+                        },
+                      ]
+                    : [],
+                )
+              : childProjection,
+          ),
+        dispatch: (command) =>
+          Effect.sync(() => {
+            dispatched.push(command);
+            const selection = (
+              command as {
+                modelSelection?: { instanceId: ProviderInstanceId; model: string };
+              }
+            ).modelSelection;
+            return {
+              sequence: dispatched.length,
+              storedEvents: [
+                {
+                  event: {
+                    type: "subagent.updated",
+                    payload: {
+                      id: taskId,
+                      threadId: parentThreadId,
+                      origin: "app_owned",
+                      childThreadId,
+                      providerInstanceId: selection?.instanceId ?? dshId,
+                      model: selection?.model ?? "default",
+                      status: "running",
+                      result: null,
+                    },
+                  },
+                },
+              ],
+            } as never;
+          }),
+      }),
+      ServerSettings.layerTest({
+        providerInstances: {
+          [dshId]: {
+            driver: ProviderDriverKind.make("acpRegistry"),
+            enabled: true,
+            config: {
+              source: "local",
+              commandPath: "dsh",
+              commandArgs: ["acp"],
+              agentId: "deepseek-harness",
+            },
+          },
+          [agyId]: {
+            driver: ProviderDriverKind.make("antigravity"),
+            enabled: true,
+          },
+          [opencodeId]: {
+            driver: ProviderDriverKind.make("opencode"),
+            enabled: true,
+          },
+          [piId]: {
+            driver: ProviderDriverKind.make("pi"),
+            enabled: true,
+          },
+        },
+      }),
+      Layer.mock(ProviderRegistry.ProviderRegistry)({
+        getProviders: Effect.sync(() => currentProviders),
+        refreshInstance: (instanceId) =>
+          Effect.sync(() => {
+            refreshedInstanceIds.push(instanceId);
+            if (options.refreshedProviders !== undefined) {
+              currentProviders = options.refreshedProviders;
+            }
+            return currentProviders;
+          }),
+      }),
+      adapterRegistryLayer(options.providers.map((provider) => provider.instanceId)),
+      Layer.mock(ProjectService.ProjectService)({ getById: () => Effect.succeedNone }),
+      Layer.mock(SecretRequests.SecretRequests)({}),
+      Layer.mock(RemoteDelegation.RemoteDelegation)({}),
+      Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+      isolatedGuardLayer(options.guardConfig),
+    );
+
+    return {
+      dispatched,
+      refreshedInstanceIds,
+      layer: layerOrchestratorService.pipe(Layer.provide(dependencies)),
+    };
+  };
+
+  const standardProviders = (overrides?: {
+    readonly codexAuth?: Partial<ServerProvider["auth"]>;
+    readonly claudeAuth?: Partial<ServerProvider["auth"]>;
+  }): ReadonlyArray<ServerProvider> => [
+    makeProvider({
+      instanceId: codexId,
+      driver: "codex",
+      displayName: "Codex",
+      models: [{ slug: "gpt-5.4", isDefault: true }],
+      auth: overrides?.codexAuth ?? { status: "authenticated", type: "apiKey" },
+    }),
+    makeProvider({
+      instanceId: claudeId,
+      driver: "claudeAgent",
+      displayName: "Claude Code",
+      models: [{ slug: "claude-sonnet-4-6", isDefault: true }],
+      auth: overrides?.claudeAuth ?? { status: "authenticated", type: "apiKey" },
+    }),
+    makeProvider({
+      instanceId: dshId,
+      driver: "acpRegistry",
+      displayName: "DeepSeek Harness",
+      models: [
+        { slug: "default", name: "Default", isDefault: true },
+        { slug: "deepseek-reasoner", name: "DeepSeek Reasoner" },
+      ],
+    }),
+    makeProvider({
+      instanceId: agyId,
+      driver: "antigravity",
+      displayName: "Antigravity",
+      models: [{ slug: "gemini-3-pro", isDefault: true }],
+    }),
+    makeProvider({
+      instanceId: opencodeId,
+      driver: "opencode",
+      displayName: "OpenCode",
+      models: [{ slug: "opencode/default", isDefault: true }],
+    }),
+    makeProvider({
+      instanceId: piId,
+      driver: "pi",
+      displayName: "Pi",
+      models: [{ slug: "pi/default", isDefault: true }],
+    }),
+  ];
+
+  it.effect(
+    "resolves Codex -> DSH aliases in orchestrator_capabilities({ search }) and delegate_task without requiring exact instanceId",
+    () =>
+      Effect.gen(function* () {
+        const harness = makeHarness({ providers: standardProviders() });
+        const scope = makeScope(codexId);
+
+        yield* Effect.gen(function* () {
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+
+          for (const query of [
+            "dsh",
+            "deepseek",
+            "deepseek-harness",
+            "acp:deepseek-harness",
+            "DeepSeek Harness",
+          ]) {
+            const caps = yield* service.capabilities(scope, { search: query });
+            const dshCap = caps.providers.find((p) => p.providerInstanceId === dshId);
+            assert.isDefined(dshCap, `expected DSH provider for search=${query}`);
+            assert.equal(dshCap!.dispatchPolicy, "direct");
+            assert.isTrue(dshCap!.canRunChildTask);
+            assert.deepEqual(
+              dshCap!.models.map((m) => m.id),
+              ["default", "deepseek-reasoner"],
+              `expected DSH models listed for search=${query}`,
+            );
+          }
+
+          // Delegate using aliases on providerInstanceId and driverKind
+          const aliases = [
+            { providerInstanceId: "dsh" },
+            { providerInstanceId: "deepseek" },
+            { providerInstanceId: "deepseek-harness" },
+            { providerInstanceId: "acp:deepseek-harness" },
+            { providerInstanceId: "DeepSeek Harness" },
+            { driverKind: "dsh" },
+          ] as const;
+
+          for (const [index, rawTarget] of aliases.entries()) {
+            const result = yield* service.delegateTask(scope, {
+              task: "Summarize the module.",
+              target: yield* decodeTarget(rawTarget),
+              mode: "async",
+              clientRequestId: `dsh-alias-${index}`,
+            });
+            assert.equal(result.providerInstanceId, dshId);
+            const cmd = harness.dispatched.at(-1) as {
+              modelSelection: { instanceId: ProviderInstanceId; model: string };
+            };
+            assert.equal(cmd.modelSelection.instanceId, dshId);
+            assert.equal(cmd.modelSelection.model, "default");
+          }
+
+          // Other cross-agent aliases resolve cleanly too (claude / cc / opencode / pi)
+          for (const [alias, expectedId] of [
+            ["claude", claudeId],
+            ["cc", claudeId],
+            ["opencode", opencodeId],
+            ["pi", piId],
+          ] as const) {
+            yield* service.delegateTask(scope, {
+              task: `Run check on ${alias}.`,
+              target: yield* decodeTarget({ providerInstanceId: alias }),
+              mode: "async",
+              clientRequestId: `cross-alias-${alias}`,
+            });
+            const cmd = harness.dispatched.at(-1) as {
+              modelSelection: { instanceId: ProviderInstanceId };
+            };
+            assert.equal(cmd.modelSelection.instanceId, expectedId);
+          }
+        }).pipe(Effect.provide(harness.layer));
+      }),
+  );
+
+  it.effect(
+    "refreshes the resolved DSH instanceId via resolveTargetRechecking when delegated by alias",
+    () =>
+      Effect.gen(function* () {
+        const staleProviders = standardProviders().map((p) =>
+          p.instanceId === dshId ? { ...p, models: [] } : p,
+        );
+        const harness = makeHarness({
+          providers: staleProviders,
+          refreshedProviders: standardProviders(),
+        });
+        const scope = makeScope(codexId);
+
+        yield* Effect.gen(function* () {
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          const result = yield* service.delegateTask(scope, {
+            task: "Inspect with DSH after refresh.",
+            target: yield* decodeTarget({ providerInstanceId: "dsh" }),
+            mode: "async",
+            clientRequestId: "dsh-refresh-by-alias",
+          });
+          assert.equal(result.providerInstanceId, dshId);
+          assert.deepEqual(harness.refreshedInstanceIds, [dshId]);
+        }).pipe(Effect.provide(harness.layer));
+      }),
+  );
+
+  it.effect(
+    "Direction A: allows Desktop AGY -> DSH / API Codex / API Claude directly with zero waiver",
+    () =>
+      Effect.gen(function* () {
+        const harness = makeHarness({
+          callerInstanceId: agyId,
+          callerModel: "gemini-3-pro",
+          providers: standardProviders({
+            codexAuth: { status: "authenticated", type: "apiKey" },
+            claudeAuth: { status: "authenticated", type: "customEndpoint" },
+          }),
+        });
+        const scope = makeScope(agyId);
+
+        yield* Effect.gen(function* () {
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          for (const [alias, expectedId] of [
+            ["dsh", dshId],
+            ["codex", codexId],
+            ["claude", claudeId],
+          ] as const) {
+            const res = yield* service.delegateTask(scope, {
+              task: `Delegate from Desktop AGY to ${alias}.`,
+              target: yield* decodeTarget({ providerInstanceId: alias }),
+              mode: "async",
+              clientRequestId: `agy-dir-a-${alias}`,
+            });
+            assert.equal(res.providerInstanceId, expectedId);
+          }
+        }).pipe(Effect.provide(harness.layer));
+      }),
+  );
+
+  it.effect(
+    "Direction B: blocks Codex -> personal AGY by default (delegateTask + createThreads + capabilities) and unlocks with signed waiver + controlled toggle",
+    () =>
+      Effect.gen(function* () {
+        const lockedHarness = makeHarness({ providers: standardProviders() });
+        const scope = makeScope(codexId);
+
+        yield* Effect.gen(function* () {
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          const caps = yield* service.capabilities(scope);
+          const agyCap = caps.providers.find((p) => p.providerInstanceId === agyId);
+          assert.isDefined(agyCap);
+          assert.equal(agyCap!.dispatchPolicy, "waiver_required");
+          assert.isFalse(agyCap!.canRunChildTask);
+          assert.isFalse(agyCap!.canRunCrossProviderChildTask);
+          assert.isTrue(
+            agyCap!.constraints.some((c) => c.includes(SUBSCRIPTION_WAIVER_SETTINGS_ROUTE)),
+          );
+
+          const delegateError = yield* service
+            .delegateTask(scope, {
+              task: "Ask AGY for review.",
+              target: yield* decodeTarget({ providerInstanceId: "agy" }),
+              mode: "async",
+              clientRequestId: "codex-to-agy-locked",
+            })
+            .pipe(Effect.flip);
+          assert.equal(delegateError.code, SUBSCRIPTION_ORCHESTRATION_BLOCKED_CODE);
+          assert.equal(delegateError.reasonCode, "AGY_CONTROLLED_AGENT_LOCKED");
+          assert.equal(delegateError.settingsRoute, SUBSCRIPTION_WAIVER_SETTINGS_ROUTE);
+          assert.equal(delegateError.providerId, "antigravity");
+
+          const createError = yield* service
+            .createThreads(scope, {
+              threads: [
+                {
+                  prompt: "Start an AGY thread.",
+                  target: yield* decodeTarget({ providerInstanceId: "antigravity" }),
+                },
+              ],
+              clientRequestId: "create-agy-locked",
+            })
+            .pipe(Effect.flip);
+          assert.equal(createError.code, SUBSCRIPTION_ORCHESTRATION_BLOCKED_CODE);
+          assert.equal(createError.reasonCode, "AGY_CONTROLLED_AGENT_LOCKED");
+        }).pipe(Effect.provide(lockedHarness.layer));
+
+        // Now with signed waiver + allowAntigravityAsControlledAgent: true
+        const unlockedHarness = makeHarness({
+          providers: standardProviders(),
+          guardConfig: {
+            waiverOverride: {
+              signed: true,
+              waiverVersion: "2026-04-20-v1",
+              signedAt: "2026-11-26T00:00:00.000Z",
+              allowAntigravityAsControlledAgent: true,
+              allowExternalSubscriptionAgentsInSwarm: false,
+            },
+          },
+        });
+        yield* Effect.gen(function* () {
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          const caps = yield* service.capabilities(scope);
+          const agyCap = caps.providers.find((p) => p.providerInstanceId === agyId);
+          assert.equal(agyCap?.dispatchPolicy, "direct");
+          assert.isTrue(agyCap?.canRunChildTask);
+
+          const result = yield* service.delegateTask(scope, {
+            task: "Ask unlocked AGY for review.",
+            target: yield* decodeTarget({ providerInstanceId: "agy" }),
+            mode: "async",
+            clientRequestId: "codex-to-agy-unlocked",
+          });
+          assert.equal(result.providerInstanceId, agyId);
+        }).pipe(Effect.provide(unlockedHarness.layer));
+      }),
+  );
+
+  it.effect(
+    "permanently hard-blocks unattended/scheduled callers targeting personal AGY even when waiver is signed, while allowing DSH",
+    () =>
+      Effect.gen(function* () {
+        const signedWaiver = {
+          signed: true,
+          waiverVersion: "2026-04-20-v1",
+          signedAt: "2026-11-26T00:00:00.000Z",
+          allowAntigravityAsControlledAgent: true,
+          allowExternalSubscriptionAgentsInSwarm: true,
+        } as const;
+
+        const scheduledMessageId = MessageId.make("scheduled-task-message:nightly-1");
+        const harness = makeHarness({
+          providers: standardProviders(),
+          guardConfig: { waiverOverride: signedWaiver },
+          userMessageId: scheduledMessageId,
+          scheduledTaskId: ScheduledTaskId.make("scheduled:nightly-1"),
+        });
+        const scope = makeScope(codexId);
+
+        yield* Effect.gen(function* () {
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          const caps = yield* service.capabilities(scope);
+          const agyCap = caps.providers.find((p) => p.providerInstanceId === agyId);
+          assert.equal(agyCap?.dispatchPolicy, "blocked");
+          assert.isFalse(agyCap?.canRunChildTask);
+
+          const error = yield* service
+            .delegateTask(scope, {
+              task: "Overnight AGY attempt.",
+              target: yield* decodeTarget({ providerInstanceId: "agy" }),
+              mode: "async",
+              clientRequestId: "unattended-agy-attempt",
+            })
+            .pipe(Effect.flip);
+          assert.equal(error.code, SUBSCRIPTION_ORCHESTRATION_BLOCKED_CODE);
+          assert.equal(error.reasonCode, "AGY_UNATTENDED_FORBIDDEN");
+          assert.equal(error.providerId, "antigravity");
+
+          // Same unattended caller targeting DSH succeeds directly
+          const dshResult = yield* service.delegateTask(scope, {
+            task: "Overnight DSH run.",
+            target: yield* decodeTarget({ providerInstanceId: "dsh" }),
+            mode: "async",
+            clientRequestId: "unattended-dsh-ok",
+          });
+          assert.equal(dshResult.providerInstanceId, dshId);
+        }).pipe(Effect.provide(harness.layer));
+      }),
+  );
+
+  it.effect(
+    "gates external subscription_oauth Codex/Claude behind signed waiver while allowing API/custom Codex/Claude directly",
+    () =>
+      Effect.gen(function* () {
+        const oauthProviders = standardProviders({
+          codexAuth: { status: "authenticated", type: "chatgpt", subscriptionType: "plus" },
+          claudeAuth: { status: "authenticated", type: "oauth", subscriptionType: "pro" },
+        });
+        const lockedHarness = makeHarness({
+          callerInstanceId: dshId,
+          callerModel: "default",
+          providers: oauthProviders,
+        });
+        const scope = makeScope(dshId);
+
+        yield* Effect.gen(function* () {
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          const caps = yield* service.capabilities(scope);
+          assert.equal(
+            caps.providers.find((p) => p.providerInstanceId === claudeId)?.dispatchPolicy,
+            "waiver_required",
+          );
+          assert.equal(
+            caps.providers.find((p) => p.providerInstanceId === codexId)?.dispatchPolicy,
+            "waiver_required",
+          );
+
+          const claudeErr = yield* service
+            .delegateTask(scope, {
+              task: "Delegate to personal OAuth Claude.",
+              target: yield* decodeTarget({ providerInstanceId: "claude" }),
+              mode: "async",
+              clientRequestId: "dsh-to-claude-oauth-locked",
+            })
+            .pipe(Effect.flip);
+          assert.equal(claudeErr.code, SUBSCRIPTION_ORCHESTRATION_BLOCKED_CODE);
+          assert.equal(claudeErr.reasonCode, "EXTERNAL_SUBSCRIPTION_SWARM_LOCKED");
+          assert.equal(claudeErr.settingsRoute, SUBSCRIPTION_WAIVER_SETTINGS_ROUTE);
+        }).pipe(Effect.provide(lockedHarness.layer));
+
+        // Unlocked with signed waiver + allowExternalSubscriptionAgentsInSwarm: true
+        const unlockedHarness = makeHarness({
+          callerInstanceId: dshId,
+          callerModel: "default",
+          providers: oauthProviders,
+          guardConfig: {
+            waiverOverride: {
+              signed: true,
+              waiverVersion: "2026-04-20-v1",
+              signedAt: "2026-11-26T00:00:00.000Z",
+              allowAntigravityAsControlledAgent: false,
+              allowExternalSubscriptionAgentsInSwarm: true,
+            },
+          },
+        });
+        yield* Effect.gen(function* () {
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          const res = yield* service.delegateTask(scope, {
+            task: "Delegate to unlocked personal OAuth Claude.",
+            target: yield* decodeTarget({ providerInstanceId: "claude" }),
+            mode: "async",
+            clientRequestId: "dsh-to-claude-oauth-unlocked",
+          });
+          assert.equal(res.providerInstanceId, claudeId);
+        }).pipe(Effect.provide(unlockedHarness.layer));
+      }),
   );
 });
