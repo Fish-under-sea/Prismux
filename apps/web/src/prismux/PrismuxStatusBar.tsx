@@ -64,6 +64,7 @@ import {
   isUpstreamProviderQuotaEligible,
   loadQuotaPreferences,
   saveQuotaPreferences,
+  scheduleSwrQuotaFollowUp,
   shouldFetchAntigravityCreditsOnPopoverOpen,
   shouldRefreshAntigravityOnManualClick,
   shouldShowStatusBarQuota,
@@ -788,6 +789,15 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
       return;
     }
     const requestGen = ++agyQuotaRequestGenRef.current;
+    const applySummarySnapshot = (snapshot: DaemonOfficialQuotaSummaryResponse) => {
+      daemonQuotaRef.current = snapshot;
+      setDaemonQuota(snapshot);
+      setQuotaMinuteTick(Date.now());
+      if (!snapshot.antigravity.available || snapshot.antigravity.status !== "ok") {
+        agyCreditsRef.current = null;
+        setAgyCredits(null);
+      }
+    };
     // Use SWR fast-return when refreshing a previously populated non-forced snapshot so cached quota renders immediately.
     const requestPromise =
       !force && daemonQuotaRef.current !== null && hasRequestJson
@@ -799,13 +809,18 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
             );
     const run = requestPromise.then(
       (snapshot) => {
-        if (requestGen < agyQuotaRequestGenRef.current) return;
-        daemonQuotaRef.current = snapshot;
-        setDaemonQuota(snapshot);
-        setQuotaMinuteTick(Date.now());
-        if (!snapshot.antigravity.available || snapshot.antigravity.status !== "ok") {
-          agyCreditsRef.current = null;
-          setAgyCredits(null);
+        if (requestGen !== agyQuotaRequestGenRef.current) return;
+        applySummarySnapshot(snapshot);
+        if (hasRequestJson) {
+          void scheduleSwrQuotaFollowUp({
+            force,
+            payload: snapshot,
+            endpoint: "/v1/quota/summary",
+            requestGen,
+            getCurrentGen: () => agyQuotaRequestGenRef.current,
+            requestJson: (path) => runtime.daemon.requestJson(path),
+            onFresh: applySummarySnapshot,
+          });
         }
       },
       () => {
@@ -831,23 +846,36 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
       return;
     }
     const requestGen = ++agyCreditsRequestGenRef.current;
+    const applyCreditsSnapshot = (credits: DaemonOfficialQuotaCreditsResponse) => {
+      if (credits.status === "unauthenticated" || credits.status === "not_installed") {
+        agyQuotaRequestGenRef.current += 1;
+        daemonQuotaRef.current = null;
+        agyCreditsRef.current = null;
+        setDaemonQuota(null);
+        setAgyCredits(null);
+        agyColdStartFetchedRef.current = false;
+        return;
+      }
+      agyCreditsRef.current = credits;
+      setAgyCredits(credits);
+    };
     setAgyCreditsLoading(true);
     const suffix = force ? "?force=1" : agyCreditsRef.current !== null ? "?swr=1" : "";
     const run = runtime.daemon
       .requestJson<DaemonOfficialQuotaCreditsResponse>(`/v1/quota/credits${suffix}`)
       .then(
         (credits) => {
-          if (requestGen < agyCreditsRequestGenRef.current) return;
-          if (credits.status === "unauthenticated" || credits.status === "not_installed") {
-            daemonQuotaRef.current = null;
-            agyCreditsRef.current = null;
-            setDaemonQuota(null);
-            setAgyCredits(null);
-            agyColdStartFetchedRef.current = false;
-            return;
-          }
-          agyCreditsRef.current = credits;
-          setAgyCredits(credits);
+          if (requestGen !== agyCreditsRequestGenRef.current) return;
+          applyCreditsSnapshot(credits);
+          void scheduleSwrQuotaFollowUp({
+            force,
+            payload: credits,
+            endpoint: "/v1/quota/credits",
+            requestGen,
+            getCurrentGen: () => agyCreditsRequestGenRef.current,
+            requestJson: (path) => runtime.daemon.requestJson(path),
+            onFresh: applyCreditsSnapshot,
+          });
         },
         () => {
           // Credits hydration is best-effort; never disrupt `/usage` display.
@@ -927,6 +955,8 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
 
     if (!agyAuthAllowed) {
       agyColdStartFetchedRef.current = false;
+      agyQuotaRequestGenRef.current += 1;
+      agyCreditsRequestGenRef.current += 1;
       const hasFrontendAgyCache = daemonQuotaRef.current !== null || agyCreditsRef.current !== null;
       const clearFrontendAgyCache = () => {
         if (daemonQuotaRef.current !== null) {

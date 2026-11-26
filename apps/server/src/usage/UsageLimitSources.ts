@@ -206,6 +206,49 @@ export const make = Effect.gen(function* () {
     if (changed) yield* PubSub.publish(changes, next);
   });
 
+  const publishProgressiveSnapshot = Effect.fn("UsageLimitSources.publishProgressiveSnapshot")(
+    function* (snapshot: UsageLimitSourceSnapshot) {
+      const nextToPublish = yield* Ref.modify(
+        stateRef,
+        (
+          previous,
+        ): readonly [
+          ReadonlyArray<UsageLimitSourceSnapshot> | null,
+          ReadonlyArray<UsageLimitSourceSnapshot>,
+        ] => {
+          const merged = previous.map((existing) =>
+            existing.id === snapshot.id ? snapshot : existing,
+          );
+          const reconciled = keepLastGoodReadings(previous, merged);
+          return Equal.equals(previous, reconciled) ? [null, previous] : [reconciled, reconciled];
+        },
+      );
+      if (nextToPublish !== null) {
+        yield* PubSub.publish(changes, nextToPublish);
+      }
+    },
+  );
+
+  const publishReconciled = Effect.fn("UsageLimitSources.publishReconciled")(function* (
+    snapshots: ReadonlyArray<UsageLimitSourceSnapshot>,
+  ) {
+    const nextToPublish = yield* Ref.modify(
+      stateRef,
+      (
+        previous,
+      ): readonly [
+        ReadonlyArray<UsageLimitSourceSnapshot> | null,
+        ReadonlyArray<UsageLimitSourceSnapshot>,
+      ] => {
+        const reconciled = keepLastGoodReadings(previous, snapshots);
+        return Equal.equals(previous, reconciled) ? [null, previous] : [reconciled, reconciled];
+      },
+    );
+    if (nextToPublish !== null) {
+      yield* PubSub.publish(changes, nextToPublish);
+    }
+  });
+
   // Serialize refreshes against redemptions and deduplicate concurrent refresh callers (singleflight).
   const refreshLock = yield* Semaphore.make(1);
   const inflightRefreshRef = yield* Ref.make<Deferred.Deferred<void, never> | null>(null);
@@ -228,20 +271,12 @@ export const make = Effect.gen(function* () {
       ([id, config]) =>
         readSource(id as UsageLimitSourceId, config).pipe(
           Effect.tap((snapshot) =>
-            canPublishProgressively
-              ? Effect.gen(function* () {
-                  const current = yield* Ref.get(stateRef);
-                  const merged = current.map((existing) =>
-                    existing.id === snapshot.id ? snapshot : existing,
-                  );
-                  yield* publish(keepLastGoodReadings(current, merged));
-                })
-              : Effect.void,
+            canPublishProgressively ? publishProgressiveSnapshot(snapshot) : Effect.void,
           ),
         ),
       { concurrency: USAGE_LIMIT_SOURCE_CONCURRENCY },
     );
-    yield* publish(keepLastGoodReadings(yield* Ref.get(stateRef), snapshots));
+    yield* publishReconciled(snapshots);
   }).pipe(refreshLock.withPermits(1), Effect.ignoreCause({ log: true }));
 
   const refresh: Effect.Effect<void> = Effect.uninterruptibleMask((restore) =>

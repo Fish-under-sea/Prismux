@@ -933,10 +933,11 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
       cliRunner: async (_exe, args) => {
         assert.equal(args.includes("/credits"), false);
         usageCalls += 1;
-        if (usageCalls === 2) {
+        if (usageCalls === 2 || usageCalls === 3) {
           await gatePromise;
         }
-        const pct = usageCalls === 1 ? "90%" : usageCalls === 2 ? "65%" : "40%";
+        const pct =
+          usageCalls === 1 ? "90%" : usageCalls === 2 ? "65%" : usageCalls === 3 ? "40%" : "25%";
         return {
           stdout: `Gemini\tweekly\t${pct}\t2026-11-30T20:03:11Z\n`,
           stderr: "",
@@ -975,8 +976,46 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
     assert.equal(afterRevalidate.antigravity.windows[0]?.remainingPercent, 65);
     assert.equal(usageCalls, 2);
 
-    // 3. QuotaRoutes ?swr=1 honors SWR, while ?force=1 bypasses cache immediately
+    // 2b. Plain follow-up GET /v1/quota/summary (no ?swr=1) joins the active singleflight refresh
+    //     triggered by ?swr=1 with ZERO duplicate agy spawn and delivers the revalidated snapshot.
     clock += OFFICIAL_QUOTA_CACHE_TTL_MS + 1;
+    closeGate();
+    const swrRouteRes = await handleQuotaRoute(
+      {
+        method: "GET",
+        pathname: "/v1/quota/summary",
+        searchParams: new URLSearchParams("swr=1"),
+        callerScope: "owner_chief",
+      },
+      service,
+    );
+    assert.ok(swrRouteRes);
+    const swrPayload = swrRouteRes.payload as OfficialQuotaSummaryResponse;
+    assert.equal(swrPayload.stale, true);
+    assert.equal(swrPayload.refreshing, true);
+    assert.equal(swrPayload.antigravity.windows[0]?.remainingPercent, 65);
+    assert.equal(usageCalls, 3);
+
+    const joinFollowUpPromise = handleQuotaRoute(
+      {
+        method: "GET",
+        pathname: "/v1/quota/summary",
+        searchParams: new URLSearchParams(),
+        callerScope: "owner_chief",
+      },
+      service,
+    );
+    // Still only 3 CLI spawns total (plain follow-up joined singleflight inflightNormal!)
+    assert.equal(usageCalls, 3);
+    openGate();
+    const joinedRouteRes = await joinFollowUpPromise;
+    assert.ok(joinedRouteRes);
+    const joinedPayload = joinedRouteRes.payload as OfficialQuotaSummaryResponse;
+    assert.equal(joinedPayload.cached, false);
+    assert.equal(joinedPayload.antigravity.windows[0]?.remainingPercent, 40);
+    assert.equal(usageCalls, 3);
+
+    // 3. QuotaRoutes ?force=1 bypasses cache immediately
     const routeForced = await handleQuotaRoute(
       {
         method: "GET",
@@ -989,8 +1028,8 @@ describe("OfficialQuotaService TSV parser, 15m±90s jitter TTL, and split /usage
     assert.ok(routeForced);
     const forcedPayload = routeForced.payload as OfficialQuotaSummaryResponse;
     assert.equal(forcedPayload.cached, false);
-    assert.equal(forcedPayload.antigravity.windows[0]?.remainingPercent, 40);
-    assert.equal(usageCalls, 3);
+    assert.equal(forcedPayload.antigravity.windows[0]?.remainingPercent, 25);
+    assert.equal(usageCalls, 4);
   });
 
   it("live local official probe: reads real agy -p '/usage' TSV on this machine without spawning /credits", async (t) => {

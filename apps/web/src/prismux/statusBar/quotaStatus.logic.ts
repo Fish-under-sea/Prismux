@@ -13,11 +13,7 @@ import {
   canonicalProviderDisplayName,
   type StatusBarProviderDisplayOptions,
 } from "./statusBarUsage";
-import type {
-  StorageLike,
-  UsagePercentMode,
-  UsagePopoverDensity,
-} from "./statusBarVisibility";
+import type { StorageLike, UsagePercentMode, UsagePopoverDensity } from "./statusBarVisibility";
 
 export type QuotaViewMode = UsagePopoverDensity;
 export type QuotaPercentMode = UsagePercentMode;
@@ -276,10 +272,7 @@ function selectPrimaryAgentWindow(windows: readonly QuotaWindowItem[]): QuotaWin
   return [...windows].sort((a, b) => b.usedPercent - a.usedPercent)[0] ?? windows[0]!;
 }
 
-function findSoonestFutureResetMs(
-  windows: readonly QuotaWindowItem[],
-  now: number,
-): number | null {
+function findSoonestFutureResetMs(windows: readonly QuotaWindowItem[], now: number): number | null {
   let soonest: number | null = null;
   for (const win of windows) {
     if (win.resetAtMs === null || !Number.isFinite(win.resetAtMs)) continue;
@@ -452,9 +445,7 @@ export function shouldFetchAntigravityCreditsOnPopoverOpen(
   if (hasAgyEntry) {
     return false;
   }
-  return Boolean(
-    daemonQuota?.antigravity?.available && daemonQuota.antigravity.status === "ok",
-  );
+  return Boolean(daemonQuota?.antigravity?.available && daemonQuota.antigravity.status === "ok");
 }
 
 export function buildProviderDriverMap(
@@ -711,7 +702,8 @@ export function aggregateQuotaSummary(
       available: true,
       status: agy.status,
       error: null,
-      fetchedAt: typeof agy.fetchedAt === "number" ? agy.fetchedAt : daemonQuota?.fetchedAt ?? null,
+      fetchedAt:
+        typeof agy.fetchedAt === "number" ? agy.fetchedAt : (daemonQuota?.fetchedAt ?? null),
       remainingCredits: hydratedCredits,
       windows,
       primaryWindow: selectPrimaryAgentWindow(windows),
@@ -819,7 +811,7 @@ export function aggregateQuotaSummary(
       ? "未检测到官方 agy CLI 登录态"
       : null
     : agy && (!agy.available || agy.status !== "ok")
-      ? agy.error ?? "未检测到官方 agy CLI 登录态"
+      ? (agy.error ?? "未检测到官方 agy CLI 登录态")
       : null;
 
   return {
@@ -832,7 +824,7 @@ export function aggregateQuotaSummary(
     fetchedAt:
       (agyLiveOk ? agy.fetchedAt : null) ??
       primaryAgent?.fetchedAt ??
-      (agyAuthAllowed ? daemonQuota?.fetchedAt ?? null : null),
+      (agyAuthAllowed ? (daemonQuota?.fetchedAt ?? null) : null),
     resetTimes,
   };
 }
@@ -944,4 +936,42 @@ export function buildQuotaStatusBarDisplay(
     segments,
     fullText,
   };
+}
+
+export function isSwrRefreshingPayload(payload: unknown): boolean {
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    (payload as { readonly refreshing?: unknown }).refreshing === true
+  );
+}
+
+/**
+ * Joins Daemon's active singleflight revalidation after a `?swr=1` stale hit without spawning a
+ * duplicate `agy` CLI process, delivering the fresh payload only if the request generation still wins.
+ */
+export function scheduleSwrQuotaFollowUp<T>(options: {
+  readonly force: boolean;
+  readonly payload: T;
+  readonly endpoint: "/v1/quota/summary" | "/v1/quota/credits";
+  readonly requestGen: number;
+  readonly getCurrentGen: () => number;
+  readonly requestJson: <R>(path: string) => Promise<R>;
+  readonly onFresh: (fresh: T) => void;
+}): Promise<void> | null {
+  if (options.force || !isSwrRefreshingPayload(options.payload)) {
+    return null;
+  }
+  if (options.requestGen !== options.getCurrentGen()) {
+    return null;
+  }
+  return options.requestJson<T>(options.endpoint).then(
+    (fresh) => {
+      if (options.requestGen !== options.getCurrentGen()) return;
+      options.onFresh(fresh);
+    },
+    () => {
+      // Best-effort join; keep already-rendered stale snapshot visible on transient failure.
+    },
+  );
 }

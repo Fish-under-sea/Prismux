@@ -14,7 +14,9 @@ import {
   buildProviderDriverMap,
   detectCompletedAntigravityTurns,
   isAntigravityEnabledAndAuthenticated,
+  isSwrRefreshingPayload,
   resolveThreadProviderDriver,
+  scheduleSwrQuotaFollowUp,
   shouldFetchAntigravityCreditsOnPopoverOpen,
   shouldRefreshAntigravityOnManualClick,
   shouldShowStatusBarQuota,
@@ -31,7 +33,13 @@ function makeProvider(overrides: {
   installed?: boolean;
   status?: string;
   authStatus?: string;
-  windows?: Array<{ id: string; kind?: string; label: string; usedPercent: number; resetsAt?: string }>;
+  windows?: Array<{
+    id: string;
+    kind?: string;
+    label: string;
+    usedPercent: number;
+    resetsAt?: string;
+  }>;
 }): ServerProvider {
   return {
     instanceId: overrides.instanceId,
@@ -128,7 +136,13 @@ describe("AGY-ONLY event-driven lazy quota refresh (Ban-Proof v3 Section 三-1)"
     displayName: "Codex",
     authStatus: "authenticated",
     windows: [
-      { id: "weekly", kind: "weekly", label: "7d", usedPercent: 22, resetsAt: "2026-12-01T08:00:00Z" },
+      {
+        id: "weekly",
+        kind: "weekly",
+        label: "7d",
+        usedPercent: 22,
+        resetsAt: "2026-12-01T08:00:00Z",
+      },
     ],
   });
   const authedClaude = makeProvider({
@@ -137,7 +151,13 @@ describe("AGY-ONLY event-driven lazy quota refresh (Ban-Proof v3 Section 三-1)"
     displayName: "Claude Code",
     authStatus: "authenticated",
     windows: [
-      { id: "session", kind: "session", label: "5h", usedPercent: 35, resetsAt: "2026-11-25T13:00:00Z" },
+      {
+        id: "session",
+        kind: "session",
+        label: "5h",
+        usedPercent: 35,
+        resetsAt: "2026-11-25T13:00:00Z",
+      },
     ],
   });
   const authedOpenCode = makeProvider({
@@ -425,7 +445,12 @@ describe("AGY-ONLY event-driven lazy quota refresh (Ban-Proof v3 Section 三-1)"
     );
 
     // Before popover opens: AGY summary has remainingCredits=null while Codex & Claude live quota work normally.
-    const beforeCredits = aggregateQuotaSummary(agySummary, [authedAgy, authedCodex, authedClaude], now, null);
+    const beforeCredits = aggregateQuotaSummary(
+      agySummary,
+      [authedAgy, authedCodex, authedClaude],
+      now,
+      null,
+    );
     expect(beforeCredits.availableAgents.map((a) => a.id)).toEqual([
       "antigravity",
       "codex-main",
@@ -536,5 +561,105 @@ describe("AGY-ONLY event-driven lazy quota refresh (Ban-Proof v3 Section 三-1)"
     // Claude Code / Codex upstream refresh remains intact.
     expect(source).toContain("refreshUsageLimits");
     expect(source).toContain("refreshProviders");
+    expect(source).toContain("scheduleSwrQuotaFollowUp");
+  });
+
+  it("joins Daemon singleflight revalidation after ?swr=1 (stale+refreshing) and discards stale generations", async () => {
+    const requestedPaths: string[] = [];
+    const appliedCredits: number[] = [];
+    let currentGen = 1;
+
+    const staleCredits = {
+      ok: true as const,
+      cached: true,
+      stale: true,
+      refreshing: true,
+      cacheTtlMs: 900_000,
+      fetchedAt: 1_000,
+      fetchedAtIso: "2026-11-26T00:00:00.000Z",
+      remainingCredits: 120,
+      status: "ok" as const,
+      available: true,
+      error: null,
+    };
+    const freshCredits = {
+      ...staleCredits,
+      cached: false,
+      stale: undefined,
+      refreshing: undefined,
+      remainingCredits: 84,
+      fetchedAt: 2_000,
+    };
+
+    expect(isSwrRefreshingPayload(staleCredits)).toBe(true);
+    expect(isSwrRefreshingPayload(freshCredits)).toBe(false);
+
+    // 1. Non-forced `?swr=1` stale hit -> schedules plain `/v1/quota/credits` follow-up (no `?swr=1`, no `?force=1`)
+    //    which joins Daemon's singleflight refresh and hot-updates credits from 120 -> 84.
+    const followUp = scheduleSwrQuotaFollowUp({
+      force: false,
+      payload: staleCredits,
+      endpoint: "/v1/quota/credits",
+      requestGen: 1,
+      getCurrentGen: () => currentGen,
+      requestJson: async <R>(path: string) => {
+        requestedPaths.push(path);
+        return freshCredits as unknown as R;
+      },
+      onFresh: (fresh) => {
+        if (fresh.remainingCredits !== null) appliedCredits.push(fresh.remainingCredits);
+      },
+    });
+    expect(followUp).not.toBeNull();
+    await followUp;
+    expect(requestedPaths).toEqual(["/v1/quota/credits"]);
+    expect(appliedCredits).toEqual([84]);
+
+    // 2. If a newer manual refresh or logout bumps requestGen while follow-up is in flight, stale follow-up is ignored.
+    let resolveInflight!: (value: typeof freshCredits) => void;
+    const staleFollowUp = scheduleSwrQuotaFollowUp({
+      force: false,
+      payload: staleCredits,
+      endpoint: "/v1/quota/credits",
+      requestGen: 1,
+      getCurrentGen: () => currentGen,
+      requestJson: async <R>(path: string) => {
+        requestedPaths.push(path);
+        return (await new Promise<typeof freshCredits>((resolve) => {
+          resolveInflight = resolve;
+        })) as unknown as R;
+      },
+      onFresh: (fresh) => {
+        if (fresh.remainingCredits !== null) appliedCredits.push(fresh.remainingCredits);
+      },
+    });
+    currentGen = 2;
+    resolveInflight({ ...freshCredits, remainingCredits: 5 });
+    await staleFollowUp;
+    expect(appliedCredits).toEqual([84]);
+
+    // 3. Forced or non-refreshing responses never schedule a follow-up.
+    expect(
+      scheduleSwrQuotaFollowUp({
+        force: true,
+        payload: staleCredits,
+        endpoint: "/v1/quota/summary",
+        requestGen: 2,
+        getCurrentGen: () => currentGen,
+        requestJson: async <R>() => freshCredits as unknown as R,
+        onFresh: () => {},
+      }),
+    ).toBeNull();
+    expect(
+      scheduleSwrQuotaFollowUp({
+        force: false,
+        payload: freshCredits,
+        endpoint: "/v1/quota/summary",
+        requestGen: 2,
+        getCurrentGen: () => currentGen,
+        requestJson: async <R>() => freshCredits as unknown as R,
+        onFresh: () => {},
+      }),
+    ).toBeNull();
   });
 });
