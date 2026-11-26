@@ -1,6 +1,6 @@
 {
   "name": "@prismux/plugin-fishdock-hook",
-  "version": "0.2.2-rc.1",
+  "version": "0.2.2-rc.2",
   "private": true,
   "type": "module",
   "description": "Official optional FISH-Dock Dynamic Island hook bridge plugin for Prismux.",
