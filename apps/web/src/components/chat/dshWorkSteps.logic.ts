@@ -14,7 +14,11 @@ import {
   toolGroupAction,
   workEntryViewedImagePath,
 } from "@prismux/client-runtime/work-log/presentation";
-import { collectToolFilePaths, isJavaScriptReplTool } from "@prismux/core-shared/toolActivity";
+import {
+  claudeSkillInvocation,
+  collectToolFilePaths,
+  isJavaScriptReplTool,
+} from "@prismux/core-shared/toolActivity";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import type { WorkLogEntry } from "../../session-logic";
 import { extractTodoChecklistFromWorkEntry } from "./AgyTodoChecklist.logic";
@@ -80,7 +84,7 @@ const PRESENTATION_POLICY_BY_MODE: Readonly<Record<WorkStepsDisplay, WorkStepsPr
       mode: "detailed",
       foldCompletedTurns: true,
       defaultTurnFoldOpen: false,
-      stepGrouping: "none",
+      stepGrouping: "history",
       liveProcessDetail: true,
       settledReasoningPreview: true,
       defaultExpandLongItems: false,
@@ -104,16 +108,26 @@ export function resolveWorkStepsPolicy(
 
 export function shouldGroupWorkStepsForTurn(
   policy: WorkStepsPresentationPolicy,
-  options: {
+  _options?: {
     readonly isActiveTurn: boolean;
     readonly isBottomCompletedTurn: boolean;
     readonly collapseTiming: WorkStepsCollapseTiming;
   },
 ): boolean {
   if (policy.stepGrouping === "none") return false;
-  if (policy.stepGrouping === "collapsed") return true;
-  if (options.isActiveTurn) return false;
-  if (options.isBottomCompletedTurn && options.collapseTiming === "next-message") return false;
+  // Both "collapsed" (concise/standard) and "history" (detailed) converge steps inside a single ProcessGroup container.
+  return true;
+}
+
+export function shouldProcessGroupDefaultOpen(
+  policy: WorkStepsPresentationPolicy | null,
+  _options?: {
+    readonly isActiveTurn: boolean;
+    readonly isBottomCompletedTurn: boolean;
+    readonly collapseTiming: WorkStepsCollapseTiming;
+  },
+): boolean {
+  if (!policy || policy.stepGrouping !== "history") return false;
   return true;
 }
 
@@ -167,7 +181,391 @@ export type DshActivityCategory =
   | "plan"
   | "questions"
   | "tools"
-  | "context";
+  | "context"
+  | "skill";
+
+export type ContextInjectionSourceKind =
+  | "agent-instructions"
+  | "runtime-context"
+  | "skill-catalog"
+  | "time-context"
+  | "prismux-instructions"
+  | "other";
+
+export type ContextInjectionForm = "instructions" | "catalog" | "snapshot" | "notice";
+
+export interface ContextInjectionFileEntry {
+  readonly action: "set" | "replace" | "remove";
+  readonly path: string;
+  readonly scope?: string | undefined;
+  readonly statusLabel?: string | undefined;
+}
+
+export interface ContextInjectionSectionEntry {
+  readonly name: string;
+  readonly text: string;
+}
+
+export interface ContextInjectionCatalogEntry {
+  readonly name: string;
+  readonly description: string;
+}
+
+export interface ContextInjectionStepData {
+  readonly sourceKind: ContextInjectionSourceKind;
+  readonly form: ContextInjectionForm;
+  readonly label: string;
+  readonly sourcePath: string | null;
+  readonly statusLabel: string | null;
+  readonly supersedesPrevious: boolean;
+  readonly files: ReadonlyArray<ContextInjectionFileEntry>;
+  readonly sections: ReadonlyArray<ContextInjectionSectionEntry>;
+  readonly entries: ReadonlyArray<ContextInjectionCatalogEntry>;
+  readonly content: string | null;
+  readonly contentOmitted: boolean;
+}
+
+export interface SkillStepData {
+  readonly skillName: string;
+  readonly sourcePath: string | null;
+  readonly instructions: string | null;
+  readonly args: string | null;
+  readonly isNativeSkillTool: boolean;
+}
+
+const VALID_CONTEXT_SOURCE_KINDS = new Set<string>([
+  "agent-instructions",
+  "runtime-context",
+  "skill-catalog",
+  "time-context",
+  "prismux-instructions",
+  "other",
+]);
+
+const VALID_CONTEXT_FORMS = new Set<string>(["instructions", "catalog", "snapshot", "notice"]);
+
+const NATIVE_SKILL_TOOL_NAMES = new Set(["skill", "load_skill", "use_skill", "read_skill"]);
+const SKILL_MD_PATH_RE = /(?:^|[\\/])([^\\/]+)[\\/]SKILL\.md$/iu;
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function asNonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function inferContextAction(statusLabel: string | null): "set" | "replace" | "remove" {
+  const normalized = (statusLabel ?? "").toLowerCase();
+  if (normalized.includes("remove") || normalized.includes("移除")) return "remove";
+  if (
+    normalized.includes("update") ||
+    normalized.includes("replace") ||
+    normalized.includes("更新")
+  )
+    return "replace";
+  return "set";
+}
+
+function inferContextForm(sourceKind: ContextInjectionSourceKind): ContextInjectionForm {
+  if (sourceKind === "agent-instructions" || sourceKind === "prismux-instructions") {
+    return "instructions";
+  }
+  if (sourceKind === "skill-catalog") return "catalog";
+  if (sourceKind === "runtime-context" || sourceKind === "time-context") return "snapshot";
+  return "notice";
+}
+
+/**
+ * Defensively reads `context_injection` fields from `WorkLogEntry` / projected TurnItem so this UI
+ * compiles standalone before contract merge AND consumes every field from `w2-dsh-backend` seamlessly.
+ */
+export function extractContextInjectionData(entry: WorkLogEntry): ContextInjectionStepData | null {
+  const rawItem = asRecord(entry.projectedItem?.item ?? entry.structuredPayload);
+  const rawToolData = asRecord(entry.toolData);
+  const itemTypeStr =
+    asNonEmptyString(rawItem?.type) ??
+    asNonEmptyString(entry.itemType as unknown) ??
+    asNonEmptyString(entry.sourceActivityKind);
+  if (itemTypeStr !== "context_injection") {
+    return null;
+  }
+
+  const rawSourceKind = asNonEmptyString(rawItem?.sourceKind ?? rawToolData?.sourceKind);
+  const sourceKind: ContextInjectionSourceKind =
+    rawSourceKind && VALID_CONTEXT_SOURCE_KINDS.has(rawSourceKind)
+      ? (rawSourceKind as ContextInjectionSourceKind)
+      : "other";
+  const rawForm = asNonEmptyString(rawItem?.form ?? rawToolData?.form);
+  const form: ContextInjectionForm =
+    rawForm && VALID_CONTEXT_FORMS.has(rawForm)
+      ? (rawForm as ContextInjectionForm)
+      : inferContextForm(sourceKind);
+
+  const sourcePath = asNonEmptyString(rawItem?.sourcePath ?? rawToolData?.sourcePath);
+  const label =
+    asNonEmptyString(rawItem?.label ?? rawToolData?.label) ??
+    sourcePath ??
+    asNonEmptyString(entry.label) ??
+    sourceKind;
+  const statusLabel = asNonEmptyString(rawItem?.statusLabel ?? rawToolData?.statusLabel);
+  const supersedesPrevious =
+    rawItem?.supersedesPrevious === true ||
+    rawToolData?.supersedesPrevious === true ||
+    inferContextAction(statusLabel) === "replace";
+
+  const rawFiles = Array.isArray(rawItem?.files)
+    ? rawItem.files
+    : Array.isArray(rawToolData?.files)
+      ? rawToolData.files
+      : [];
+  const parsedFiles: ContextInjectionFileEntry[] = [];
+  for (const candidate of rawFiles) {
+    const rec = asRecord(candidate);
+    const path = asNonEmptyString(rec?.path);
+    if (!path) continue;
+    const rawAction = asNonEmptyString(rec?.action);
+    const action: "set" | "replace" | "remove" =
+      rawAction === "replace" || rawAction === "remove" || rawAction === "set"
+        ? rawAction
+        : inferContextAction(asNonEmptyString(rec?.statusLabel) ?? statusLabel);
+    parsedFiles.push({
+      action,
+      path,
+      scope: asNonEmptyString(rec?.scope) ?? undefined,
+      statusLabel: asNonEmptyString(rec?.statusLabel) ?? undefined,
+    });
+  }
+  if (parsedFiles.length === 0 && (sourcePath !== null || form === "instructions")) {
+    parsedFiles.push({
+      action: inferContextAction(statusLabel),
+      path: sourcePath ?? label,
+      statusLabel: statusLabel ?? undefined,
+    });
+  }
+
+  const rawSections = Array.isArray(rawItem?.sections)
+    ? rawItem.sections
+    : Array.isArray(rawToolData?.sections)
+      ? rawToolData.sections
+      : [];
+  const sections: ContextInjectionSectionEntry[] = [];
+  for (const candidate of rawSections) {
+    const rec = asRecord(candidate);
+    const name = asNonEmptyString(rec?.name);
+    const text = typeof rec?.text === "string" ? rec.text : null;
+    if (name && text !== null) {
+      sections.push({ name, text });
+    }
+  }
+
+  const rawEntries = Array.isArray(rawItem?.entries)
+    ? rawItem.entries
+    : Array.isArray(rawToolData?.entries)
+      ? rawToolData.entries
+      : [];
+  const entries: ContextInjectionCatalogEntry[] = [];
+  for (const candidate of rawEntries) {
+    const rec = asRecord(candidate);
+    const name = asNonEmptyString(rec?.name);
+    if (!name) continue;
+    entries.push({
+      name,
+      description: typeof rec?.description === "string" ? rec.description : "",
+    });
+  }
+
+  const content =
+    typeof rawItem?.content === "string"
+      ? rawItem.content
+      : typeof rawToolData?.content === "string"
+        ? rawToolData.content
+        : typeof entry.detail === "string" && entry.detail.length > 0
+          ? entry.detail
+          : null;
+  const contentOmitted = rawItem?.contentOmitted === true || rawToolData?.contentOmitted === true;
+
+  return {
+    sourceKind,
+    form,
+    label,
+    sourcePath,
+    statusLabel,
+    supersedesPrevious,
+    files: parsedFiles,
+    sections,
+    entries,
+    content,
+    contentOmitted,
+  };
+}
+
+export function isContextInjectionWorkEntry(entry: WorkLogEntry): boolean {
+  return extractContextInjectionData(entry) !== null;
+}
+
+function extractFrontmatterSkillName(content: string | null | undefined): string | null {
+  if (!content) return null;
+  const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/u);
+  if (!frontmatterMatch?.[1]) return null;
+  const nameMatch = frontmatterMatch[1].match(/^name:\s*["']?([^"'\r\n]+)["']?\s*$/mu);
+  return nameMatch?.[1]?.trim() || null;
+}
+
+function readOutputTextFromEntry(entry: WorkLogEntry): string | null {
+  const payload = entry.structuredPayload ?? entry.projectedItem?.item;
+  if (payload?.type === "dynamic_tool") {
+    if (typeof payload.output === "string" && payload.output.trim().length > 0) {
+      return payload.output;
+    }
+    const outRec = asRecord(payload.output);
+    for (const key of ["text", "content", "instructions", "output"] as const) {
+      if (typeof outRec?.[key] === "string" && (outRec[key] as string).trim().length > 0) {
+        return outRec[key] as string;
+      }
+    }
+  }
+  const toolData = asRecord(entry.toolData);
+  if (typeof toolData?.output === "string" && toolData.output.trim().length > 0) {
+    return toolData.output;
+  }
+  if (typeof entry.detail === "string" && entry.detail.trim().length > 0) {
+    return entry.detail;
+  }
+  return null;
+}
+
+/**
+ * Recognizes BOTH Priority 1 native skill tool invocations (DSH `skill`, Claude `Skill`, OpenCode/Pi/ACP
+ * `load_skill`/`use_skill`/`read_skill`) AND Priority 2 `SKILL.md` file-read promotions.
+ */
+export function extractSkillStepData(entry: WorkLogEntry): SkillStepData | null {
+  if (entry.itemType === "reasoning" || entry.tone === "thinking") return null;
+  const payload = entry.structuredPayload ?? entry.projectedItem?.item;
+  const toolData = asRecord(entry.toolData);
+  const inputRec =
+    payload?.type === "dynamic_tool" ? asRecord(payload.input) : asRecord(toolData?.input);
+  const outputText = readOutputTextFromEntry(entry);
+
+  // Priority 1a: Claude Skill tool
+  if (payload?.type === "dynamic_tool") {
+    const claudeSkill = claudeSkillInvocation(payload.toolName, payload.input);
+    if (claudeSkill) {
+      return {
+        skillName: claudeSkill.name,
+        sourcePath: asNonEmptyString(inputRec?.path ?? inputRec?.file_path ?? toolData?.path),
+        instructions: outputText,
+        args: claudeSkill.args ?? null,
+        isNativeSkillTool: true,
+      };
+    }
+  }
+
+  // Priority 1b: DSH native `_meta.dshToolName === "skill"` or explicit `skillName` or native skill tool names
+  const rawToolName =
+    (payload?.type === "dynamic_tool"
+      ? payload.toolName
+      : (asNonEmptyString(toolData?.dshToolName) ?? entry.toolTitle)) ?? "";
+  const normalizedToolName = rawToolName.trim().toLowerCase();
+  const baseToolName = normalizedToolName.split(/[.:/]/u).at(-1) ?? normalizedToolName;
+  const dshToolName = asNonEmptyString(toolData?.dshToolName)?.toLowerCase();
+  const explicitSkillName = asNonEmptyString(
+    toolData?.skillName ?? (asRecord(payload)?.skillName as unknown),
+  );
+  if (
+    dshToolName === "skill" ||
+    explicitSkillName !== null ||
+    NATIVE_SKILL_TOOL_NAMES.has(normalizedToolName) ||
+    NATIVE_SKILL_TOOL_NAMES.has(baseToolName)
+  ) {
+    const skillName =
+      explicitSkillName ??
+      asNonEmptyString(
+        inputRec?.name ??
+          inputRec?.skill ??
+          inputRec?.skillName ??
+          inputRec?.skill_name ??
+          toolData?.name ??
+          (payload?.type === "dynamic_tool" ? payload.title : null),
+      ) ??
+      extractFrontmatterSkillName(outputText) ??
+      asNonEmptyString(entry.label) ??
+      "skill";
+    return {
+      skillName,
+      sourcePath: asNonEmptyString(
+        inputRec?.path ?? inputRec?.file_path ?? inputRec?.filePath ?? toolData?.sourcePath,
+      ),
+      instructions: outputText,
+      args: asNonEmptyString(inputRec?.args),
+      isNativeSkillTool: true,
+    };
+  }
+
+  // Priority 2: `*/SKILL.md` file read promotion
+  const isReadLike =
+    toolGroupAction(entry) === "read" ||
+    normalizedToolName === "read" ||
+    normalizedToolName === "read_file" ||
+    normalizedToolName === "view_file" ||
+    normalizedToolName === "read_workspace_file" ||
+    baseToolName === "read_file" ||
+    baseToolName === "view_file";
+  if (isReadLike) {
+    const candidatePaths = [
+      ...(entry.changedFiles ?? []),
+      ...collectToolFilePaths(inputRec ? { input: inputRec } : toolData),
+      ...[inputRec?.path, inputRec?.file_path, inputRec?.filePath, inputRec?.Path, toolData?.path]
+        .map(asNonEmptyString)
+        .filter((p): p is string => p !== null),
+    ];
+    for (const candidatePath of candidatePaths) {
+      const match = SKILL_MD_PATH_RE.exec(candidatePath.trim());
+      if (!match?.[1]) continue;
+      const skillName = extractFrontmatterSkillName(outputText) ?? match[1].trim();
+      return {
+        skillName,
+        sourcePath: candidatePath.trim(),
+        instructions: outputText,
+        args: null,
+        isNativeSkillTool: false,
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Deduplicates `SKILL.md` read promotions against native `skill` tool calls for the same skill
+ * inside a ProcessGroup (Blueprint §4.4 zero-duplicate rule).
+ */
+export function dedupeSkillLoadWorkEntries(entries: ReadonlyArray<WorkLogEntry>): WorkLogEntry[] {
+  const nativeSkills = new Map<string, number>();
+  const parsed = entries.map((entry) => extractSkillStepData(entry));
+  for (let i = 0; i < entries.length; i += 1) {
+    const skill = parsed[i];
+    if (skill?.isNativeSkillTool) {
+      nativeSkills.set(skill.skillName.toLowerCase(), i);
+    }
+  }
+  if (nativeSkills.size === 0) {
+    return [...entries];
+  }
+
+  const result: WorkLogEntry[] = [];
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i]!;
+    const skill = parsed[i];
+    if (skill && !skill.isNativeSkillTool && nativeSkills.has(skill.skillName.toLowerCase())) {
+      continue;
+    }
+    result.push(entry);
+  }
+  return result;
+}
 
 function isZhLocale(locale: string | undefined): boolean {
   if (!locale) return true;
@@ -183,11 +581,17 @@ function workEntryToolNameLower(entry: WorkLogEntry): string {
 }
 
 export function classifyWorkEntryActivity(entry: WorkLogEntry): DshActivityCategory {
+  if (isContextInjectionWorkEntry(entry)) {
+    return "context";
+  }
   if (entry.itemType === "reasoning" || entry.tone === "thinking") {
     return "thinking";
   }
   if (entry.sourceActivityKind === "context-compaction") {
     return "context";
+  }
+  if (extractSkillStepData(entry) !== null) {
+    return "skill";
   }
   if (workEntryViewedImagePath(entry)) {
     return "readImage";
@@ -204,7 +608,9 @@ export function classifyWorkEntryActivity(entry: WorkLogEntry): DshActivityCateg
   }
   if (
     entry.itemType === "subagent" ||
+    entry.itemType === "handoff" ||
     entry.structuredPayload?.type === "notification" ||
+    entry.itemType === "notification" ||
     entry.projectedItem?.item.type === "thread_created"
   ) {
     return "subagents";
@@ -314,6 +720,8 @@ export function dshActivityCategoryIconName(category: DshActivityCategory): Work
       return "message-circle";
     case "context":
       return "zap";
+    case "skill":
+      return "eye";
     case "tools":
       return "wrench";
   }
@@ -440,11 +848,27 @@ export function extractWorkEntryLiveDetail(
   entry: WorkLogEntry,
   workspaceRoot?: string,
 ): string | null {
+  const ctxData = extractContextInjectionData(entry);
+  if (ctxData) {
+    return truncateGraphemes(ctxData.label);
+  }
+  const skillData = extractSkillStepData(entry);
+  if (skillData) {
+    return truncateGraphemes(skillData.skillName);
+  }
   if (entry.itemType === "reasoning" || entry.tone === "thinking") {
     return extractReasoningSummaryLine(entry.detail, {
       live: true,
       settledReasoningPreview: true,
     });
+  }
+  if (entry.itemType === "subagent" || entry.structuredPayload?.type === "subagent") {
+    const title =
+      entry.structuredPayload?.type === "subagent"
+        ? (entry.structuredPayload.title ?? entry.structuredPayload.prompt)
+        : entry.label;
+    const cleaned = title ? sanitizeInlineLine(title) : "";
+    return cleaned ? truncateGraphemes(cleaned) : null;
   }
   const structuredInput =
     entry.structuredPayload?.type === "dynamic_tool" &&
@@ -492,25 +916,36 @@ export function extractWorkEntryLiveDetail(
 }
 
 const LIVE_VERB_ZH: Readonly<Record<DshActivityCategory, string>> = {
-  thinking: "正在思考",
+  thinking: "正在分析请求",
   read: "正在读取文件",
   readImage: "正在查看图片",
   search: "正在搜索代码",
-  edit: "正在修改文件",
+  edit: "正在编辑文件",
   write: "正在写入文件",
-  commands: "正在执行命令",
+  commands: "正在运行命令",
   code: "正在运行代码",
   webSearch: "正在搜索网页",
   webFetch: "正在获取网页",
-  subagents: "正在调度子代理",
+  subagents: "正在协调子智能体",
   plan: "正在更新计划",
   questions: "正在等待确认",
-  context: "正在整理上下文",
+  context: "正在注入上下文",
+  skill: "正在加载技能",
   tools: "正在调用工具",
 };
 
+const PREPARING_VERB_ZH: Readonly<Partial<Record<DshActivityCategory, string>>> = {
+  commands: "准备运行命令",
+  read: "准备读取文件",
+  search: "准备搜索代码",
+  edit: "准备编辑文件",
+  write: "准备写入文件",
+  subagents: "准备协调子智能体",
+  tools: "准备调用工具",
+};
+
 const LIVE_VERB_EN: Readonly<Record<DshActivityCategory, string>> = {
-  thinking: "Thinking",
+  thinking: "Analyzing request",
   read: "Reading file",
   readImage: "Viewing image",
   search: "Searching code",
@@ -520,12 +955,28 @@ const LIVE_VERB_EN: Readonly<Record<DshActivityCategory, string>> = {
   code: "Running code",
   webSearch: "Searching web",
   webFetch: "Fetching web page",
-  subagents: "Running subagent",
+  subagents: "Coordinating subagent",
   plan: "Updating plan",
   questions: "Waiting for confirmation",
-  context: "Compacting context",
+  context: "Injecting context",
+  skill: "Loading skill",
   tools: "Calling tool",
 };
+
+const PREPARING_VERB_EN: Readonly<Partial<Record<DshActivityCategory, string>>> = {
+  commands: "Preparing command",
+  read: "Preparing to read file",
+  search: "Preparing to search code",
+  edit: "Preparing to edit file",
+  write: "Preparing to write file",
+  subagents: "Preparing subagent",
+  tools: "Preparing tool call",
+};
+
+function isPreparingWorkEntry(entry: WorkLogEntry): boolean {
+  const rawItem = asRecord(entry.projectedItem?.item ?? entry.structuredPayload);
+  return rawItem?.status === "pending" || entry.toolLifecycleStatus === "idle";
+}
 
 export function formatDshLiveActivityLabel(
   entry: WorkLogEntry,
@@ -541,7 +992,11 @@ export function formatDshLiveActivityLabel(
   readonly category: DshActivityCategory;
 } {
   const category = classifyWorkEntryActivity(entry);
-  const verb = isZhLocale(options.locale) ? LIVE_VERB_ZH[category] : LIVE_VERB_EN[category];
+  const zh = isZhLocale(options.locale);
+  const preparing = isPreparingWorkEntry(entry);
+  const verb = zh
+    ? ((preparing ? PREPARING_VERB_ZH[category] : undefined) ?? LIVE_VERB_ZH[category])
+    : ((preparing ? PREPARING_VERB_EN[category] : undefined) ?? LIVE_VERB_EN[category]);
   const detail = options.liveProcessDetail
     ? extractWorkEntryLiveDetail(entry, options.workspaceRoot)
     : null;
@@ -556,25 +1011,26 @@ export function formatDshLiveActivityLabel(
 const CLOSED_CHIP_ZH: Readonly<
   Record<DshActivityCategory, { readonly primary: string; readonly secondary: string }>
 > = {
-  thinking: { primary: "已思考", secondary: "进行了思考" },
+  thinking: { primary: "已完成分析", secondary: "完成了分析" },
   read: { primary: "已读取文件", secondary: "读取了文件" },
   readImage: { primary: "已查看图片", secondary: "查看了图片" },
   search: { primary: "已搜索代码", secondary: "搜索了代码" },
-  edit: { primary: "已修改文件", secondary: "修改了文件" },
+  edit: { primary: "修改了文件", secondary: "修改了文件" },
   write: { primary: "已写入文件", secondary: "写入了文件" },
-  commands: { primary: "已执行命令", secondary: "执行了命令" },
-  code: { primary: "已运行代码", secondary: "运行了代码" },
+  commands: { primary: "执行了命令", secondary: "执行了命令" },
+  code: { primary: "运行了代码", secondary: "运行了代码" },
   webSearch: { primary: "已搜索网页", secondary: "搜索了网页" },
   webFetch: { primary: "已获取网页", secondary: "获取了网页" },
-  subagents: { primary: "已调用子代理", secondary: "调用了子代理" },
+  subagents: { primary: "已协调子智能体", secondary: "协调了子智能体" },
   plan: { primary: "已更新计划", secondary: "更新了计划" },
   questions: { primary: "已完成交互", secondary: "完成了交互" },
-  context: { primary: "已整理上下文", secondary: "整理了上下文" },
+  context: { primary: "已注入上下文", secondary: "注入了上下文" },
+  skill: { primary: "已加载技能", secondary: "加载了技能" },
   tools: { primary: "已调用工具", secondary: "调用了工具" },
 };
 
 const CLOSED_CHIP_EN: Readonly<Record<DshActivityCategory, string>> = {
-  thinking: "Thought",
+  thinking: "Analyzed request",
   read: "Read files",
   readImage: "Viewed images",
   search: "Searched code",
@@ -584,10 +1040,11 @@ const CLOSED_CHIP_EN: Readonly<Record<DshActivityCategory, string>> = {
   code: "Ran code",
   webSearch: "Searched web",
   webFetch: "Fetched web pages",
-  subagents: "Ran subagents",
+  subagents: "Coordinated subagents",
   plan: "Updated plan",
   questions: "Completed prompts",
-  context: "Compacted context",
+  context: "Injected context",
+  skill: "Loaded skills",
   tools: "Used tools",
 };
 
@@ -632,20 +1089,25 @@ export function classifyPrimaryStepGroupActivity(
   return best ?? (entries.length > 0 ? classifyWorkEntryActivity(entries[0]!) : "tools");
 }
 
-/** Formats DSH count-free step-group category summaries (up to 3 categories plus ellipsis). */
+/** Formats DSH count-free step-group category summaries (sorted by frequency, up to 3 categories plus ellipsis). */
 export function formatDshStepGroupSummary(
   entries: ReadonlyArray<WorkLogEntry>,
   locale?: string,
 ): string {
-  const ordered: DshActivityCategory[] = [];
-  const seen = new Set<DshActivityCategory>();
-  for (const entry of entries) {
+  const counts = new Map<DshActivityCategory, number>();
+  const firstOrder = new Map<DshActivityCategory, number>();
+  for (const [index, entry] of entries.entries()) {
     const category = classifyWorkEntryActivity(entry);
-    if (!seen.has(category)) {
-      seen.add(category);
-      ordered.push(category);
+    counts.set(category, (counts.get(category) ?? 0) + 1);
+    if (!firstOrder.has(category)) {
+      firstOrder.set(category, index);
     }
   }
+  const ordered = [...counts.keys()].toSorted(
+    (a, b) =>
+      (counts.get(b) ?? 0) - (counts.get(a) ?? 0) ||
+      (firstOrder.get(a) ?? 0) - (firstOrder.get(b) ?? 0),
+  );
   const nonThinking = ordered.filter((category) => category !== "thinking");
   const categories = nonThinking.length > 0 ? nonThinking : ordered;
   if (categories.length === 0) {
@@ -677,7 +1139,7 @@ export function formatDshStepGroupSummary(
     if (first.startsWith("已") && second.startsWith("已")) {
       return `${first}并${second.slice(1)}`;
     }
-    return `${first}，${second}`;
+    return `${first}并${second}`;
   }
   const first = CLOSED_CHIP_ZH[top3[0]!].primary;
   const second = CLOSED_CHIP_ZH[top3[1]!].secondary;
@@ -686,18 +1148,25 @@ export function formatDshStepGroupSummary(
   return hasMore ? `${joined}等` : joined;
 }
 
-export function formatDshDurationCompact(elapsedMs: number): string {
+export function formatDshDurationCompact(elapsedMs: number, locale?: string): string {
   const totalSeconds = Math.max(1, Math.round(elapsedMs / 1000));
+  const zh = locale !== undefined && isZhLocale(locale);
   if (totalSeconds < 60) {
-    return `${totalSeconds}s`;
+    return zh ? `${totalSeconds}秒` : `${totalSeconds}s`;
   }
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   if (minutes < 60) {
+    if (zh) {
+      return seconds > 0 ? `${minutes}分${seconds}秒` : `${minutes}分`;
+    }
     return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
   }
   const hours = Math.floor(minutes / 60);
   const remMinutes = minutes % 60;
+  if (zh) {
+    return remMinutes > 0 ? `${hours}小时${remMinutes}分` : `${hours}小时`;
+  }
   return remMinutes > 0 ? `${hours}h ${remMinutes}m` : `${hours}h`;
 }
 
@@ -712,7 +1181,8 @@ export function formatDshTurnFoldLabel(input: {
   readonly status: "completed" | "interrupted" | "error";
   readonly locale?: string | undefined;
 }): FormattedTurnFoldLabel {
-  const copy = isZhLocale(input.locale) ? DSH_TURN_FOLD_COPY.zh : DSH_TURN_FOLD_COPY.en;
+  const zh = isZhLocale(input.locale);
+  const copy = zh ? DSH_TURN_FOLD_COPY.zh : DSH_TURN_FOLD_COPY.en;
   if (input.status === "error") {
     return { prefix: copy.failed, durationNumber: null, fullText: copy.failed };
   }
@@ -720,7 +1190,7 @@ export function formatDshTurnFoldLabel(input: {
     return { prefix: copy.interrupted, durationNumber: null, fullText: copy.interrupted };
   }
   if (input.elapsedMs !== null && Number.isFinite(input.elapsedMs)) {
-    const durationNumber = formatDshDurationCompact(input.elapsedMs);
+    const durationNumber = formatDshDurationCompact(input.elapsedMs, zh ? "zh" : "en");
     return {
       prefix: copy.completedPrefix,
       durationNumber,

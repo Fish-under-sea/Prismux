@@ -7,24 +7,28 @@ import {
   resolveViewedImageAsset,
   workEntriesViewedImagePaths,
 } from "@prismux/client-runtime/work-log/presentation";
-import { resolveWorkGroupScrollAnchor } from "@prismux/client-runtime/work-log/scroll-anchor";
 import { useAssetUrls } from "~/assets/assetUrls";
 import { observeResize } from "~/lib/observeResize";
 import { tickTextContent } from "~/lib/tickTextContent";
 import { observeVisibleAnimation } from "../../lib/visibleAnimation";
 import { T, useGT, useMessages } from "gt-react";
-import { memo, use, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { LegendList, type LegendListRef } from "@legendapp/list/react";
+import {
+  memo,
+  use,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { workEntryDisplayIndicatesToolFailure } from "../../session-logic";
 import ChatMarkdown from "../ChatMarkdown";
 import { assetMediaActionsSource } from "./ChatMarkdownMedia";
-import { Minimize2Icon, XIcon } from "lucide-react";
+import { AtomIcon, BookOpenIcon, LayersIcon, Minimize2Icon, XIcon } from "lucide-react";
 import { Button } from "../ui/button";
-import { getVirtualizedScrollFadeClassName } from "../ui/scroll-area";
 import {
   liveWorkEntryLabel,
-  resolveWorkGroupScrollIndex,
-  shouldFollowWorkGroupAppend,
   workEntryIsVisibleInGroup,
   type MessagesTimelineRow,
 } from "./MessagesTimeline.logic";
@@ -52,7 +56,6 @@ import {
   useThreadReadTarget,
   threadReadLabel,
   ThreadReadLabel,
-  ReasoningTraceContent,
   SimpleWorkEntryRow,
 } from "./TimelineWorkEntryRow";
 import {
@@ -66,7 +69,109 @@ import {
   dshActivityCategoryIconName,
   formatDshLiveActivityLabel,
   PROCESS_TITLE_MINIMUM_MS,
+  type DshActivityCategory,
 } from "./dshWorkSteps.logic";
+
+const PROCESS_SCROLL_REARM_PX = 8;
+
+const PROCESS_SCROLL_INTERRUPT_KEYS = new Set([
+  "ArrowUp",
+  "ArrowDown",
+  "PageUp",
+  "PageDown",
+  "Home",
+  "End",
+  " ",
+]);
+
+/** Watches the fixed-height process drawer body/content to auto-follow bottom while armed and compute 24px edge fade flags. */
+export function useProcessScroll(
+  bodyRef: RefObject<HTMLDivElement | null>,
+  contentRef: RefObject<HTMLDivElement | null>,
+  options: { readonly isLive: boolean; readonly itemCount: number },
+): { readonly top: boolean; readonly bottom: boolean } {
+  const [fades, setFades] = useState({ top: false, bottom: false });
+  const followRef = useRef(options.isLive);
+  const initializedRef = useRef(false);
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- manages ResizeObserver auto-follow-bottom and edge fade flags for fixed-height process drawer
+  useLayoutEffect(() => {
+    const body = bodyRef.current;
+    const content = contentRef.current;
+    if (!body) return;
+
+    const updateFades = () => {
+      const distanceFromBottom = body.scrollHeight - body.clientHeight - body.scrollTop;
+      const top = body.scrollTop > 1;
+      const bottom = distanceFromBottom > 1;
+      setFades((prev) => (prev.top === top && prev.bottom === bottom ? prev : { top, bottom }));
+    };
+
+    const syncScrollPosition = () => {
+      const maxScrollTop = Math.max(0, body.scrollHeight - body.clientHeight);
+      if (!initializedRef.current) {
+        initializedRef.current = true;
+        followRef.current = options.isLive;
+        body.scrollTop = options.isLive ? maxScrollTop : 0;
+        updateFades();
+        return;
+      }
+      if (followRef.current) {
+        body.scrollTop = maxScrollTop;
+      }
+      updateFades();
+    };
+
+    const pauseFollow = () => {
+      followRef.current = false;
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (PROCESS_SCROLL_INTERRUPT_KEYS.has(event.key)) {
+        followRef.current = false;
+      }
+    };
+
+    const handleScroll = () => {
+      const distanceFromBottom = body.scrollHeight - body.clientHeight - body.scrollTop;
+      if (distanceFromBottom <= PROCESS_SCROLL_REARM_PX) {
+        followRef.current = true;
+      }
+      updateFades();
+    };
+
+    syncScrollPosition();
+    const stopResize = observeResize(content ? [body, content] : body, syncScrollPosition);
+    body.addEventListener("wheel", pauseFollow, { passive: true });
+    body.addEventListener("touchstart", pauseFollow, { passive: true });
+    body.addEventListener("pointerdown", pauseFollow, { passive: true });
+    body.addEventListener("keydown", handleKeyDown);
+    body.addEventListener("scroll", handleScroll, { passive: true });
+
+    return () => {
+      stopResize();
+      body.removeEventListener("wheel", pauseFollow);
+      body.removeEventListener("touchstart", pauseFollow);
+      body.removeEventListener("pointerdown", pauseFollow);
+      body.removeEventListener("keydown", handleKeyDown);
+      body.removeEventListener("scroll", handleScroll);
+    };
+  }, [bodyRef, contentRef, options.isLive]);
+
+  return fades;
+}
+
+function getDshWorkingCopy(locale: string | undefined) {
+  const isZh = (locale ?? "zh").toLowerCase().startsWith("zh");
+  return isZh
+    ? {
+        prefix: "正在处理，用时 ",
+        suffix: " ···",
+        idle: "正在处理 ···",
+        timerLocale: "zh" as const,
+      }
+    : { prefix: "Working, ", suffix: " ···", idle: "Working ···", timerLocale: "en" as const };
+}
 
 function useDebouncedLiveTitle(value: string, active: boolean): string {
   const [displayed, setDisplayed] = useState(value);
@@ -85,6 +190,36 @@ function useDebouncedLiveTitle(value: string, active: boolean): string {
     return () => window.clearTimeout(timer);
   }, [active, value]);
   return active ? displayed : value;
+}
+
+function renderDshCategoryIcon(input: {
+  readonly category?: DshActivityCategory | undefined;
+  readonly iconName: WorkEntryIconName;
+  readonly toolIcon?: ToolActivityIcon | undefined;
+}): ReactNode {
+  if (!input.toolIcon) {
+    if (input.category === "thinking" || input.iconName === "brain") {
+      return <AtomIcon aria-hidden="true" strokeWidth={1.8} className="block size-3.5 shrink-0" />;
+    }
+    if (input.category === "context") {
+      return (
+        <LayersIcon aria-hidden="true" strokeWidth={1.8} className="block size-3.5 shrink-0" />
+      );
+    }
+    if (input.category === "skill") {
+      return (
+        <BookOpenIcon aria-hidden="true" strokeWidth={1.8} className="block size-3.5 shrink-0" />
+      );
+    }
+  }
+  return (
+    <ToolActivityIconView
+      icon={input.toolIcon}
+      fallbackName={input.iconName}
+      className="block size-3.5 shrink-0 stroke-2"
+      muted={false}
+    />
+  );
 }
 
 export const WorkGroupSection = memo(function WorkGroupSection({
@@ -123,17 +258,6 @@ export const WorkGroupSection = memo(function WorkGroupSection({
   });
 
   if (nonEmptyEntries.length === 0) return null;
-  if (isExpandedToolGroup && nonEmptyEntries.every((entry) => entry.itemType === "reasoning")) {
-    return (
-      <div
-        data-work-group-tree-rail="true"
-        data-work-group-depth="2"
-        className="pmx-disclosure-enter relative ml-2.5 mt-0.5 mb-1.5 border-l border-border/45 pl-3 [[data-pmx-glass='1']_&]:border-foreground/15"
-      >
-        <ReasoningTraceContent entries={nonEmptyEntries} />
-      </div>
-    );
-  }
   if (isExpandedToolGroup) {
     return (
       <ExpandedWorkGroupEntries
@@ -169,17 +293,18 @@ export const WorkGroupSection = memo(function WorkGroupSection({
   );
 });
 
-function WorkingTimer({ createdAt }: { createdAt: string }) {
+function WorkingTimer({ createdAt, locale }: { createdAt: string; locale?: string | undefined }) {
   const { activeThreadEnvironmentId } = use(TimelineRowCtx);
   return (
     <span
-      ref={tickTextContent(() => formatWorkingTimerNow(createdAt, activeThreadEnvironmentId), true)}
+      ref={tickTextContent(
+        () => formatWorkingTimerNow(createdAt, activeThreadEnvironmentId, locale),
+        true,
+      )}
       className="tabular-nums"
     />
   );
 }
-
-const compactWorkEntryHeight = 24;
 
 // The thumbnail strip below the group is its own virtualized row, so the gallery an expanded
 // entry opens is built from the same entries rather than from the strip's mounted images.
@@ -227,7 +352,6 @@ function useWorkGroupViewedImages(
 }
 
 function ExpandedWorkGroupEntries({
-  anchorKey,
   disclosureAnchorKey,
   entries,
   groupedEntries,
@@ -249,24 +373,12 @@ function ExpandedWorkGroupEntries({
     onWorkEntryContentReady,
   } = use(TimelineRowCtx);
   const gt = useGT();
-  const [initialScrollIndex] = useState(() =>
-    resolveWorkGroupScrollIndex(entries, viewState.scrollPositions.get(anchorKey)),
-  );
-  const [restoringPosition, setRestoringPosition] = useState(initialScrollIndex !== undefined);
-  const listRef = useRef<LegendListRef>(null);
-  const [expandedContentHeight, setExpandedContentHeight] = useState(0);
-  const [fades, setFades] = useState({ top: false, bottom: false, viewportHeight: 0 });
-  const [appendState, setAppendState] = useState({ entries, follow: false });
-  // Capture the pre-change edge once per incoming array, before new layout
-  // metrics arrive. Edge/viewport changes never turn a status update into a follow.
-  if (appendState.entries !== entries) {
-    setAppendState({
-      entries,
-      follow:
-        fades.viewportHeight > 0 &&
-        shouldFollowWorkGroupAppend(appendState.entries, entries, fades.bottom ? Infinity : 0),
-    });
-  }
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const fades = useProcessScroll(bodyRef, contentRef, {
+    isLive,
+    itemCount: entries.length,
+  });
 
   const viewedImages = useWorkGroupViewedImages(groupedEntries);
   const groupView = {
@@ -276,149 +388,103 @@ function ExpandedWorkGroupEntries({
       onToggleWorkEntry(disclosureAnchorKey, collapsed, entryId),
     onContentReady: (entryId: string) => onWorkEntryContentReady?.(disclosureAnchorKey, entryId),
   };
-  const updateScrollFades = () => {
-    const element = listRef.current?.getScrollableNode();
-    if (!element) return;
-    const distanceFromEnd = element.scrollHeight - element.clientHeight - element.scrollTop;
-    const viewportHeight = element.clientHeight;
-    const top = element.scrollTop > 1;
-    const bottom = distanceFromEnd > 1;
-    setFades((previous) =>
-      previous.top === top &&
-      previous.bottom === bottom &&
-      previous.viewportHeight === viewportHeight
-        ? previous
-        : { top, bottom, viewportHeight },
-    );
-  };
-
-  const handleScroll = () => {
-    const state = listRef.current?.getState();
-    const position = state && resolveWorkGroupScrollAnchor(state);
-    if (position) {
-      viewState.scrollPositions.set(anchorKey, {
-        entryId: position.rowId,
-        offset: position.offsetWithinRow,
-      });
-    }
-    updateScrollFades();
-  };
-
-  const handleLoad = () => {
-    const list = listRef.current;
-    const element = list?.getScrollableNode();
-    if (initialScrollIndex && list && element) {
-      // Bootstrap can report the restored target before the DOM has applied it.
-      // Reconcile once at load, before releasing the measured anchor row.
-      const offset = Math.max(
-        0,
-        Math.min(list.getState().scroll, element.scrollHeight - element.clientHeight),
-      );
-      if (Math.abs(element.scrollTop - offset) > 1) {
-        void list.scrollToOffset({ offset, animated: false });
-      }
-    }
-    setRestoringPosition(false);
-  };
-
-  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- observes the list scroller and its content with ResizeObserver to update scroll fades
-  useLayoutEffect(() => {
-    const element = listRef.current?.getScrollableNode();
-    if (!element) return;
-    updateScrollFades();
-    const content = element.firstElementChild;
-    return observeResize(content ? [element, content] : element, updateScrollFades);
-  }, [updateScrollFades]);
-
-  const renderEntry = ({ item }: { item: TimelineWorkEntry }) => (
-    <SimpleWorkEntryRow
-      key={item.id}
-      workEntry={item}
-      workspaceRoot={workspaceRoot}
-      autoExpandDetails={autoExpandDetails}
-    />
-  );
-
-  const updateExpandedContentHeight = () => {
-    const state = listRef.current?.getState();
-    let height = 0;
-    for (const entryId of viewState.expandedEntries) {
-      if (state?.indexByKey(entryId) === undefined) continue;
-      height += Math.max(
-        0,
-        (state.sizes.get(entryId) ?? compactWorkEntryHeight) - compactWorkEntryHeight,
-      );
-    }
-    setExpandedContentHeight(height);
-  };
-
-  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- reads expanded row sizes from LegendList's measured state after layout
-  useLayoutEffect(updateExpandedContentHeight, [entries, updateExpandedContentHeight]);
 
   return (
     <WorkGroupViewCtx value={groupView}>
       <div
-        data-work-group-tree-rail="true"
         data-work-group-depth="2"
-        className="pmx-disclosure-enter relative ml-2.5 mt-0.5 mb-1.5 border-l border-border/45 pl-3 [[data-pmx-glass='1']_&]:border-foreground/15"
+        className="pmx-disclosure-enter relative mt-0.5 mb-1.5 min-w-0"
       >
         <WorkLogList>
-          <LegendList
-            ref={listRef}
-            data={entries}
-            extraData={workspaceRoot}
-            keyExtractor={workEntryKey}
-            renderItem={renderEntry}
-            estimatedItemSize={compactWorkEntryHeight}
-            drawDistance={240}
-            recycleItems
-            {...(initialScrollIndex ? { initialScrollIndex } : { initialScrollAtEnd: isLive })}
-            maintainScrollAtEnd={
-              appendState.follow || isLive ? { animated: false, on: { dataChange: true } } : false
-            }
-            maintainScrollAtEndThreshold={1 / Math.max(1, fades.viewportHeight)}
-            // Measure the restored row even when an intra-row offset puts its
-            // estimated bounds outside the list's small bootstrap render window.
-            {...(restoringPosition && initialScrollIndex
-              ? { alwaysRender: { indices: [initialScrollIndex.index] } }
-              : {})}
-            maintainVisibleContentPosition
-            onLoad={handleLoad}
-            onScroll={handleScroll}
-            onLayout={updateScrollFades}
-            onItemSizeChanged={updateExpandedContentHeight}
+          <div
+            ref={bodyRef}
             tabIndex={0}
             role="region"
             aria-label={gt("Tool calls")}
-            data-tool-group-scroll
+            data-tool-group-scroll="true"
+            data-process-drawer-body="true"
             data-scroll-fade-top={fades.top ? "true" : undefined}
             data-scroll-fade-bottom={fades.bottom ? "true" : undefined}
-            style={{ maxHeight: `calc(min(25rem, 50dvh) + ${expandedContentHeight}px)` }}
-            className={cn(
-              "scrollbar-gutter-stable scroll-py-6 overflow-x-hidden rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60",
-              getVirtualizedScrollFadeClassName(fades),
-            )}
-          />
+            style={{ maxHeight: "min(400px, 50vh)" }}
+            className="pmx-process-drawer-body scroll-py-6 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
+          >
+            <div ref={contentRef} className="flex min-w-0 flex-col gap-1 py-0.5">
+              {entries.map((item) => (
+                <SimpleWorkEntryRow
+                  key={item.id}
+                  workEntry={item}
+                  workspaceRoot={workspaceRoot}
+                  autoExpandDetails={autoExpandDetails}
+                />
+              ))}
+            </div>
+          </div>
         </WorkLogList>
       </div>
     </WorkGroupViewCtx>
   );
 }
 
-const workEntryKey = (entry: TimelineWorkEntry) => entry.id;
-
 export function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "working" }> }) {
+  const ctx = use(TimelineRowCtx);
   const { isCompacting, isPreparingWorktree, backgroundWorktreeSetup } =
     use(TimelineRowActivityCtx);
   const compacting = row.compacting === true || isCompacting;
   const shimmer = isPreparingWorktree || compacting;
+  const dshWorkingCopy = getDshWorkingCopy(ctx.locale);
+
+  if (row.dshStyle || ctx.workStepsPolicy !== undefined) {
+    const dshLabel = isPreparingWorktree ? (
+      <T>Setting up worktree…</T>
+    ) : compacting ? (
+      <CompactingLabel createdAt={row.createdAt} locale={ctx.locale} />
+    ) : row.createdAt ? (
+      <span>
+        {dshWorkingCopy.prefix}
+        <WorkingTimer createdAt={row.createdAt} locale={dshWorkingCopy.timerLocale} />
+        {dshWorkingCopy.suffix}
+      </span>
+    ) : (
+      <span>{dshWorkingCopy.idle}</span>
+    );
+
+    return (
+      <div data-running-status="true" className="relative mt-1">
+        {row.showDividerAbove ? (
+          <div aria-hidden="true" data-running-divider="true" className="pmx-running-divider" />
+        ) : null}
+        <div
+          data-running-status-bar="true"
+          className="flex h-7 min-w-0 items-center gap-2 px-0.5 text-xs leading-5 font-medium tabular-nums"
+          style={{ color: "var(--pmx-accent-text)" }}
+        >
+          <span
+            aria-hidden="true"
+            className="size-1.5 shrink-0 animate-pulse rounded-full motion-reduce:animate-none"
+            style={{ backgroundColor: "var(--pmx-accent-text)" }}
+          />
+          <span
+            ref={shimmer ? observeVisibleAnimation : undefined}
+            className="relative min-w-0 truncate whitespace-nowrap"
+          >
+            {dshLabel}
+            {shimmer ? <ActivityShimmerOverlay>{dshLabel}</ActivityShimmerOverlay> : null}
+          </span>
+          {backgroundWorktreeSetup ? (
+            <BackgroundWorktreeSetupChip snapshot={backgroundWorktreeSetup} />
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
   const label = isPreparingWorktree ? (
     <T>Setting up worktree…</T>
   ) : compacting ? (
-    <CompactingLabel createdAt={row.createdAt} />
+    <CompactingLabel createdAt={row.createdAt} locale={ctx.locale} />
   ) : row.createdAt ? (
     <T>
-      Working for <WorkingTimer createdAt={row.createdAt} />
+      Working for <WorkingTimer createdAt={row.createdAt} locale={ctx.locale} />
     </T>
   ) : (
     <T>Working...</T>
@@ -481,14 +547,24 @@ function BackgroundWorktreeSetupChip({ snapshot }: { snapshot: WorktreeSetupSnap
   );
 }
 
-function CompactingLabel({ createdAt }: { createdAt: string | null }) {
+function CompactingLabel({
+  createdAt,
+  locale,
+}: {
+  createdAt: string | null;
+  locale?: string | undefined;
+}) {
   return (
     <span className="inline-flex items-center gap-1.5">
-      <Minimize2Icon aria-hidden="true" className="size-3 text-primary" />
+      <Minimize2Icon
+        aria-hidden="true"
+        className="size-3"
+        style={{ color: "var(--pmx-accent-text)" }}
+      />
       {createdAt ? (
         <span>
           <T>
-            Compacting for <WorkingTimer createdAt={createdAt} />
+            Compacting for <WorkingTimer createdAt={createdAt} locale={locale} />
           </T>
         </span>
       ) : (
@@ -518,11 +594,11 @@ export function ThinkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind:
         gt("Thinking")
       }
       iconName="brain"
+      dshCategory="thinking"
       active={live}
       shimmer={live}
       expandable={expandable}
       expanded={row.expanded === true}
-      accentLabel
     />
   );
   if (!expandable) return activity;
@@ -531,7 +607,7 @@ export function ThinkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind:
       type="button"
       className="group/live-work flex min-h-6 w-full max-w-full cursor-pointer items-center rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
       aria-expanded={row.expanded === true}
-      onClick={() => ctx.onToggleWorkGroup(groupId, row.id)}
+      onClick={() => ctx.onToggleWorkGroup(groupId, row.id, row.expanded === true)}
     >
       {activity}
     </button>
@@ -541,23 +617,23 @@ export function ThinkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind:
 function LiveActivityRow({
   label,
   iconName,
+  dshCategory,
   toolIcon,
   failed = false,
   active = false,
   shimmer = false,
   expandable = false,
   expanded = false,
-  accentLabel = false,
 }: {
   label: ReactNode;
   iconName?: WorkEntryIconName;
+  dshCategory?: DshActivityCategory | undefined;
   toolIcon?: ToolActivityIcon | undefined;
   failed?: boolean;
   active?: boolean;
   shimmer?: boolean;
   expandable?: boolean;
   expanded?: boolean;
-  accentLabel?: boolean;
 }) {
   const animated = active && !failed;
   const showShimmer = animated && shimmer;
@@ -565,33 +641,32 @@ function LiveActivityRow({
     <div
       ref={animated ? observeVisibleAnimation : undefined}
       className={cn(
-        "relative min-h-6 max-w-full min-w-0 overflow-hidden rounded-md text-sm leading-relaxed",
+        "relative min-h-6 max-w-full min-w-0 overflow-hidden rounded-md text-sm leading-6",
         expandable ? "w-full" : "w-fit",
+        expanded && "pb-2",
       )}
     >
       <LiveActivityContent
         label={label}
         iconName={iconName}
+        dshCategory={dshCategory}
         toolIcon={toolIcon}
         failed={failed}
         announceFailure={failed}
         active={animated && !shimmer}
-        liveAccent={animated}
         expandable={expandable}
         expanded={expanded}
-        accentLabel={accentLabel}
       />
       {showShimmer ? (
         <ActivityShimmerOverlay>
           <LiveActivityContent
             label={label}
             iconName={iconName}
+            dshCategory={dshCategory}
             toolIcon={toolIcon}
             highlighted
-            liveAccent={animated}
             expandable={false}
             expanded={expanded}
-            accentLabel={accentLabel}
           />
         </ActivityShimmerOverlay>
       ) : null}
@@ -602,48 +677,41 @@ function LiveActivityRow({
 function LiveActivityContent({
   label,
   iconName,
+  dshCategory,
   toolIcon,
   failed = false,
   announceFailure = false,
   active = false,
   highlighted = false,
-  liveAccent = false,
   expandable = false,
   expanded = false,
-  accentLabel = false,
 }: {
   label: ReactNode;
   iconName: WorkEntryIconName | undefined;
+  dshCategory?: DshActivityCategory | undefined;
   toolIcon?: ToolActivityIcon | undefined;
   failed?: boolean;
   announceFailure?: boolean;
   active?: boolean;
   highlighted?: boolean;
-  liveAccent?: boolean;
   expandable?: boolean;
   expanded?: boolean;
-  accentLabel?: boolean;
 }) {
   const gt = useGT();
   const showTrailingFailureMark =
     failed && iconName !== undefined && !toolIconAcceptsTint(toolIcon);
   const iconContent = iconName ? (
     <DshDisclosureLeadingSlot
-      icon={
-        <ToolActivityIconView
-          icon={toolIcon}
-          fallbackName={iconName}
-          className="block size-3.5 shrink-0 stroke-2"
-          muted={false}
-        />
-      }
+      icon={renderDshCategoryIcon({ category: dshCategory, iconName, toolIcon })}
       expandable={expandable && !highlighted}
       expanded={expanded}
       groupScope="live-work"
-      iconClassName={failed ? "text-destructive" : "text-primary"}
+      iconClassName={
+        failed ? "text-destructive" : "text-muted-foreground group-hover/live-work:text-foreground"
+      }
       role={announceFailure ? "img" : undefined}
       ariaLabel={announceFailure ? gt("Tool call failed") : undefined}
-      liveDot={liveAccent && !highlighted}
+      liveDot={false}
       wideIcon={isWideToolActivityIcon(toolIcon, iconName)}
     />
   ) : null;
@@ -655,14 +723,8 @@ function LiveActivityContent({
         data-live-activity-label="true"
         className={cn(
           "min-w-0 flex-1 truncate",
-          accentLabel && !failed
-            ? highlighted
-              ? "font-medium text-foreground"
-              : "font-medium text-primary"
-            : highlighted
-              ? "text-foreground"
-              : "text-inherit",
-          active && !accentLabel && "live-tool-shine",
+          highlighted ? "text-foreground" : "text-inherit",
+          active && "live-tool-shine",
         )}
       >
         {label}
@@ -716,6 +778,7 @@ export function LiveWorkEntryTimelineRow({
       type="button"
       data-work-live-header="true"
       data-work-live-mode={row.dshMode}
+      data-open={row.expanded ? "true" : undefined}
       className={cn(
         "group/live-work flex w-full max-w-full cursor-pointer rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60",
         thoughtLine ? "flex-col items-start" : "min-h-6 items-center",
@@ -728,18 +791,13 @@ export function LiveWorkEntryTimelineRow({
           : undefined
       }
       aria-expanded={row.expanded}
-      onClick={() => ctx.onToggleWorkGroup(row.groupId, row.id)}
+      onClick={() => ctx.onToggleWorkGroup(row.groupId, row.id, row.expanded)}
     >
       {thoughtLine ? (
         <WorkLogRow
           icon={
-            <span className="flex size-4 items-center justify-center text-primary">
-              <ToolActivityIconView
-                icon={undefined}
-                fallbackName="brain"
-                className="block size-4 shrink-0 stroke-2"
-                muted={false}
-              />
+            <span className="flex size-4 items-center justify-center text-muted-foreground">
+              <AtomIcon aria-hidden="true" strokeWidth={1.8} className="block size-3.5 shrink-0" />
             </span>
           }
           label={
@@ -789,15 +847,13 @@ export function LiveWorkEntryTimelineRow({
           )
         }
         iconName={iconName}
+        dshCategory={dshLive?.category}
         toolIcon={row.entry.toolIcon ?? row.entry.toolSource?.icon}
         failed={failed}
         active={row.active}
         shimmer={useDshHeader && row.active}
         expandable
         expanded={row.expanded}
-        accentLabel={
-          dshLive?.category === "thinking" || row.entry.itemType === "reasoning" || thoughtIsStatus
-        }
       />
     </button>
   );
@@ -818,10 +874,11 @@ export function WorkGroupToggleTimelineRow({
     <WorkGroupHeader
       label={row.summary}
       iconName={iconName}
+      dshCategory={row.dshPrimaryCategory}
       toolIcon={row.toolIcon}
       failed={row.hasFailure}
       expanded={row.expanded}
-      onToggle={() => ctx.onToggleWorkGroup(row.groupId, row.id)}
+      onToggle={() => ctx.onToggleWorkGroup(row.groupId, row.id, row.expanded)}
     />
   );
 }
@@ -829,6 +886,7 @@ export function WorkGroupToggleTimelineRow({
 function WorkGroupHeader(props: {
   label: string;
   iconName: WorkEntryIconName;
+  dshCategory?: DshActivityCategory | undefined;
   toolIcon?: ToolActivityIcon | undefined;
   failed?: boolean | undefined;
   expanded: boolean;
@@ -847,31 +905,26 @@ function WorkGroupHeader(props: {
       onClick={props.onToggle}
       className={cn(
         "group/timeline-row flex min-h-6 w-full max-w-full min-w-0 cursor-pointer select-none items-center gap-1.5 rounded-md text-left text-sm leading-6 text-muted-foreground transition-colors duration-200 ease-out hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 motion-reduce:transition-none",
-        props.expanded && "pb-1",
+        props.expanded && "pb-2",
       )}
     >
       <DshDisclosureLeadingSlot
-        icon={
-          <ToolActivityIconView
-            icon={props.toolIcon}
-            fallbackName={props.iconName}
-            className="block size-3.5 shrink-0 stroke-2"
-            muted={false}
-          />
-        }
+        icon={renderDshCategoryIcon({
+          category: props.dshCategory,
+          iconName: props.iconName,
+          toolIcon: props.toolIcon,
+        })}
         expandable
         expanded={props.expanded}
         groupScope="timeline-row"
-        iconClassName={props.failed ? "text-destructive" : "text-primary"}
+        iconClassName={
+          props.failed
+            ? "text-destructive"
+            : "text-muted-foreground group-hover/timeline-row:text-foreground"
+        }
         wideIcon={isWideToolActivityIcon(props.toolIcon, props.iconName)}
       />
-      <span
-        data-work-group-label="true"
-        className={cn(
-          "min-w-0 truncate",
-          props.iconName === "brain" && !props.failed && "font-medium text-primary",
-        )}
-      >
+      <span data-work-group-label="true" className="min-w-0 truncate">
         {props.label}
       </span>
     </button>

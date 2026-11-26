@@ -1,4 +1,4 @@
-import { useGT } from "gt-react";
+import { useGT, useLocale } from "gt-react";
 import { PlayIcon, WrapTextIcon, CheckIcon, CopyIcon } from "lucide-react";
 import { toHtml } from "hast-util-to-html";
 import React, { startTransition, use, useEffect, useState, type ReactNode } from "react";
@@ -66,19 +66,19 @@ export function MarkdownCodeBlockFrame({
   return (
     <Wrapper
       dir="ltr"
-      className="chat-markdown-codeblock my-[0.65rem] text-start overflow-hidden rounded-lg border border-border/70 bg-secondary leading-snug dark:border-transparent dark:bg-input/32"
+      className="chat-markdown-codeblock my-4 overflow-hidden text-start leading-snug"
       data-language={language}
       data-wrap={wrapped ? "true" : "false"}
     >
       <div
         {...headerProps}
         className={cn(
-          "chat-markdown-codeblock-header flex items-center justify-between gap-2 pt-1.5 pr-1.5 pb-0 pl-3 select-none",
+          "chat-markdown-codeblock-header flex items-center justify-between gap-2 pt-2.5 pr-4.5 pb-2 pl-5.5 text-2xs leading-4.5 select-none",
           headerProps?.className,
         )}
       >
         {title ?? (
-          <span className="inline-flex min-w-0 items-center gap-1.5 font-mono text-2xs">
+          <span className="inline-flex min-w-0 items-center gap-1.5 font-mono text-2xs leading-4.5">
             <MarkdownCodeBlockTitleContent
               fenceTitle={fenceTitle}
               language={language}
@@ -93,6 +93,12 @@ export function MarkdownCodeBlockFrame({
   );
 }
 
+const PLAIN_CODE_LANGUAGES = new Set(["", "text", "txt", "plain", "plaintext"]);
+
+function resolvePlainCodeBlockLabel(locale: unknown, fallback: string): string {
+  return typeof locale === "string" && locale.toLowerCase().startsWith("zh") ? "代码块" : fallback;
+}
+
 function MarkdownCodeBlockTitleContent({
   fenceTitle,
   language,
@@ -103,6 +109,7 @@ function MarkdownCodeBlockTitleContent({
   theme: "light" | "dark";
 }) {
   const gt = useGT();
+  const locale = useLocale();
   if (fenceTitle) {
     return (
       <>
@@ -112,21 +119,36 @@ function MarkdownCodeBlockTitleContent({
     );
   }
 
-  const fileName = syntheticFileNameForLanguageId(language);
+  const normalizedLanguage = language.trim();
+  if (PLAIN_CODE_LANGUAGES.has(normalizedLanguage.toLowerCase())) {
+    return (
+      <span className="truncate font-sans" data-codeblock-fallback-label="true">
+        {resolvePlainCodeBlockLabel(locale, gt("Code block"))}
+      </span>
+    );
+  }
+
+  const fileName = syntheticFileNameForLanguageId(normalizedLanguage);
   if (!hasSpecificPierreIconForFileName(fileName)) {
-    return <span className="truncate">{language}</span>;
+    return <span className="truncate">{normalizedLanguage}</span>;
   }
   return (
     <SharedTooltipTrigger
-      label={language}
+      label={normalizedLanguage}
       render={
         <span
-          className="inline-flex shrink-0 rounded-sm"
-          aria-label={gt("Language: {language}", { language })}
+          className="inline-flex min-w-0 items-center gap-1.5 rounded-sm"
+          aria-label={gt("Language: {language}", { language: normalizedLanguage })}
         />
       }
     >
-      <PierreEntryIcon pathValue={fileName} kind="file" theme={theme} className="size-3.5" />
+      <PierreEntryIcon
+        pathValue={fileName}
+        kind="file"
+        theme={theme}
+        className="size-3.5 shrink-0"
+      />
+      <span className="truncate">{normalizedLanguage}</span>
     </SharedTooltipTrigger>
   );
 }
@@ -194,18 +216,24 @@ export function MarkdownCodeBlock({
           type="button"
           variant="ghost-muted"
           size="icon-xs"
+          data-accent-active={copied ? "true" : undefined}
+          className="size-6"
           onClick={handleCopy}
           aria-label={copyLabel}
         />
       }
     >
-      {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+      {copied ? (
+        <CheckIcon className="size-3.5" style={{ color: "var(--pmx-accent-text)" }} />
+      ) : (
+        <CopyIcon className="size-3.5" />
+      )}
     </SharedTooltipTrigger>
   );
 
   if (diagram) {
     return (
-      <div className="my-[0.65rem] border border-transparent" data-language={language}>
+      <div className="my-2.5 border border-transparent" data-language={language}>
         <div className="flex items-center justify-end gap-0.5 pt-1.5 pr-1.5 select-none">
           {viewToggle}
           {copyButton}
@@ -224,7 +252,7 @@ export function MarkdownCodeBlock({
       headerProps={THREAD_FIND_IGNORE_PROPS}
       actions={
         <span
-          className="flex items-center gap-0.5"
+          className="flex items-center gap-1"
           role="toolbar"
           aria-label={gt("Code block actions")}
         >
@@ -236,13 +264,15 @@ export function MarkdownCodeBlock({
                   type="button"
                   variant={wrapped ? "secondary" : "ghost-muted"}
                   size="icon-xs"
+                  data-accent-active={wrapped ? "true" : undefined}
+                  className="size-6"
                   aria-pressed={wrapped}
                   onClick={() => setWrapOverride(!wrapped)}
                   aria-label={wrapLabel}
                 />
               }
             >
-              <WrapTextIcon className="size-3" />
+              <WrapTextIcon className="size-3.5" />
             </SharedTooltipTrigger>
           ) : null}
           {canRun ? (
@@ -253,12 +283,13 @@ export function MarkdownCodeBlock({
                   type="button"
                   variant="ghost-muted"
                   size="icon-xs"
+                  className="size-6"
                   onClick={() => onRunShellCommand(command)}
                   aria-label={gt("Run in terminal")}
                 />
               }
             >
-              <PlayIcon className="size-3" />
+              <PlayIcon className="size-3.5" />
             </SharedTooltipTrigger>
           ) : null}
           {viewToggle}
@@ -383,7 +414,11 @@ function DeferredLargeShikiCodeBlock({
 
     return () => {
       cancelled = true;
-      if (idleHandle !== null && typeof window !== "undefined" && typeof window.cancelIdleCallback === "function") {
+      if (
+        idleHandle !== null &&
+        typeof window !== "undefined" &&
+        typeof window.cancelIdleCallback === "function"
+      ) {
         window.cancelIdleCallback(idleHandle);
       }
       if (timeoutHandle !== null) {

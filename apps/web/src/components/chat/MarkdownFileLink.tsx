@@ -9,7 +9,7 @@ import {
 import type { ContextMenuSource, EnvironmentId, ScopedThreadRef } from "@prismux/core-contracts";
 import { memo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useGT } from "gt-react";
-import { FolderIcon } from "lucide-react";
+import { Code2Icon, FileTextIcon, FolderIcon } from "lucide-react";
 
 import { contextMenuSourceOf } from "../../contextMenuSource";
 import { readLocalApi } from "../../localApi";
@@ -55,6 +55,101 @@ interface MarkdownFileLinkProps {
 }
 
 const MARKDOWN_FILE_LINK_CLASS_NAME = "chat-markdown-file-link";
+
+const CODE_AND_CONFIG_EXTENSIONS = new Set([
+  "ts",
+  "tsx",
+  "mts",
+  "cts",
+  "js",
+  "jsx",
+  "mjs",
+  "cjs",
+  "json",
+  "jsonc",
+  "yaml",
+  "yml",
+  "toml",
+  "xml",
+  "py",
+  "pyi",
+  "rs",
+  "go",
+  "java",
+  "kt",
+  "kts",
+  "swift",
+  "c",
+  "cc",
+  "cpp",
+  "cxx",
+  "h",
+  "hh",
+  "hpp",
+  "cs",
+  "rb",
+  "php",
+  "sh",
+  "bash",
+  "zsh",
+  "fish",
+  "ps1",
+  "psm1",
+  "bat",
+  "cmd",
+  "css",
+  "scss",
+  "sass",
+  "less",
+  "html",
+  "htm",
+  "vue",
+  "svelte",
+  "astro",
+  "sql",
+  "graphql",
+  "gql",
+  "dockerfile",
+  "env",
+  "ini",
+  "cfg",
+  "conf",
+  "lock",
+  "gradle",
+  "tf",
+  "hcl",
+  "nix",
+  "lua",
+  "zig",
+  "ex",
+  "exs",
+  "erl",
+  "scala",
+]);
+
+function DshFileLinkGlyph({ pathValue, targetPath }: { pathValue: string; targetPath: string }) {
+  const normalized = (pathValue || targetPath).trim().replaceAll("\\", "/");
+  const isDirectory = normalized.endsWith("/");
+  const baseName = normalized.replace(/\/+$/, "").split("/").pop() ?? normalized;
+  const dotIndex = baseName.lastIndexOf(".");
+  const ext = dotIndex > 0 ? baseName.slice(dotIndex + 1).toLowerCase() : "";
+  const Icon = isDirectory
+    ? FolderIcon
+    : CODE_AND_CONFIG_EXTENSIONS.has(ext) ||
+        /^dockerfile$/i.test(baseName) ||
+        /^makefile$/i.test(baseName)
+      ? Code2Icon
+      : FileTextIcon;
+  return (
+    <span
+      data-pmx-file-link-icon="true"
+      aria-hidden="true"
+      className="chat-markdown-file-link-glyph inline-flex shrink-0 items-center justify-center"
+    >
+      <Icon strokeWidth={1.85} />
+    </span>
+  );
+}
 
 export const MarkdownFileLink = memo(function MarkdownFileLink({
   environmentId,
@@ -366,7 +461,11 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
     >
       <FileTagChipContent
         icon={
-          isAppBundle ? <AppBundleIcon environmentId={environmentId} path={iconPath} /> : undefined
+          isAppBundle ? (
+            <AppBundleIcon environmentId={environmentId} path={iconPath} />
+          ) : (
+            <DshFileLinkGlyph pathValue={iconPath} targetPath={targetPath} />
+          )
         }
         path={iconPath}
         environmentId={environmentId}
@@ -389,7 +488,11 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
     >
       <FileTagChipContent
         icon={
-          isAppBundle ? <AppBundleIcon environmentId={environmentId} path={iconPath} /> : undefined
+          isAppBundle ? (
+            <AppBundleIcon environmentId={environmentId} path={iconPath} />
+          ) : (
+            <DshFileLinkGlyph pathValue={iconPath} targetPath={targetPath} />
+          )
         }
         path={iconPath}
         environmentId={environmentId}

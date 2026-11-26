@@ -32,6 +32,7 @@ import { type TimestampFormat } from "@prismux/core-contracts/settings";
 import type { WorkStepsPresentationPolicy } from "./dshWorkSteps.logic";
 import type { TurnItemDetailSource } from "../../state/queries";
 import { type HandoffTimelineRun } from "./V2LifecycleRow";
+import type { ResolvedTurnUsageDisplay } from "./TurnUsagePopover";
 
 /**
  * Where an expanded row reads an item's detail and a command's output. The owner's rows read them
@@ -100,7 +101,7 @@ export interface TimelineRowSharedState {
   onFileOpen: (attachment: ChatFileAttachment) => void;
   onFileDownload: (attachment: ChatFileAttachment) => void;
   openPullRequest: (event: MouseEvent<HTMLElement>, url: string) => void;
-  onToggleWorkGroup: (groupId: string, anchorKey: string) => void;
+  onToggleWorkGroup: (groupId: string, anchorKey: string, currentlyExpanded?: boolean) => void;
   onToggleWorkEntry: (anchorKey: string, collapsed: boolean, entryId?: string) => void;
   onWorkEntryContentReady?: (anchorKey: string, entryId: string) => void;
   onCancelWorktreeSetup: (() => void) | null;
@@ -112,6 +113,7 @@ export interface TimelineRowSharedState {
   workStepsPolicy?: WorkStepsPresentationPolicy;
   locale?: string;
   turnDisclosureResetCount?: number;
+  turnUsageByRunId?: ReadonlyMap<RunId, ResolvedTurnUsageDisplay> | undefined;
 }
 
 export interface TimelineRowActivityState {
