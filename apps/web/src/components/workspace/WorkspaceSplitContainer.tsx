@@ -18,7 +18,9 @@ import { resolveProjectSettings } from "@prismux/core-shared/projectSettings";
 import { resolveNewThreadModelSelection } from "@prismux/core-shared/usageLimits";
 import { useNavigate } from "@tanstack/react-router";
 import {
+  lazy,
   memo,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -29,9 +31,10 @@ import {
   type ReactNode,
 } from "react";
 
-import { cn } from "~/lib/utils";
+import { cn, newDraftId, newThreadId } from "~/lib/utils";
 import { useComposerDraftStore, type DraftId } from "../../composerDraftStore";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useScratchProject } from "../../hooks/useScratchProject";
 import { useClientSettings } from "../../hooks/useSettings";
 import { useStableCallback } from "../../hooks/useStableCallback";
@@ -50,7 +53,12 @@ import {
   resolveProjectDefaultProviderModelSelection,
   type ProviderInstanceEntry,
 } from "../../providerInstances";
-import { useRightPanelStore, type AgentSessionSurface } from "../../rightPanelStore";
+import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../../rightPanelLayout";
+import {
+  selectPaneOverviewOpen,
+  useRightPanelStore,
+  type AgentSessionSurface,
+} from "../../rightPanelStore";
 import { useProjects, useQuietThreadShell, useVisibleThreadShells } from "../../state/entities";
 import { useEnvironmentProviders, usePrimaryEnvironmentId } from "../../state/environments";
 import { environmentServerConfigsAtom } from "../../state/server";
@@ -60,10 +68,23 @@ import {
   type ThreadRouteTarget,
 } from "../../threadRoutes";
 import { resolveComposerProviderSelection } from "../ChatView.logic";
+import { BackgroundThreadContext } from "../chat/backgroundThread";
 import { orderProviderInstanceEntries } from "../chat/ProviderModelPicker.logic";
 import type { ModelEsque } from "../chat/providerIconUtils";
 import { RightPanelAgentSessionPane } from "./RightPanelAgentSessionPane";
+import {
+  isWorkspaceConversationTab,
+  resolveFocusedSplitRightPanelContext,
+  resolveSplitRouteOwnership,
+  type WorkspaceDraftSessionLookup,
+} from "./splitPaneIsolation.logic";
 import { WorkspacePaneContent } from "./WorkspacePaneContent";
+
+const WorkspaceSplitRightPanelDock = lazy(() =>
+  import("./WorkspaceSplitRightPanelDock").then((module) => ({
+    default: module.WorkspaceSplitRightPanelDock,
+  })),
+);
 import {
   buildQuickLaunchAgentOptions,
   resolveProviderBrandIdForEntry,
@@ -582,6 +603,76 @@ export async function launchPrimaryAgentDraft(input: {
   return null;
 }
 
+/**
+ * Creates a completely isolated draft session + workspace tab inside a secondary split pane.
+ * Never mutates the primary pane's draft, global router target, or `stickyActiveProvider`,
+ * so launching Codex / Claude / DSH in Pane B preserves Pane A's conversation & model 100%.
+ */
+export async function launchSecondaryPaneAgentDraft(input: {
+  readonly agent: QuickLaunchAgentOption;
+  readonly targetPaneId: string;
+  readonly instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
+  readonly resolveProjectRef: () => Promise<{
+    readonly projectRef: ReturnType<typeof scopeProjectRef>;
+    readonly fromScratch: boolean;
+  } | null>;
+}): Promise<{
+  readonly tabId: string;
+  readonly draftId: DraftId;
+  readonly threadId: ThreadId;
+} | null> {
+  const { agent, targetPaneId, instanceEntries, resolveProjectRef } = input;
+  const resolvedProject = await resolveProjectRef();
+  if (!resolvedProject) return null;
+
+  const { projectRef } = resolvedProject;
+  const resolved = resolveQuickLaunchAgentTarget(agent, instanceEntries);
+  const draftId = newDraftId();
+  const threadId = newThreadId();
+  const createdAt = new Date().toISOString();
+  const paneScopedLogicalKey = `split:${targetPaneId}:${draftId}`;
+
+  const draftStore = useComposerDraftStore.getState();
+  draftStore.setLogicalProjectDraftThreadId(paneScopedLogicalKey, projectRef, draftId, {
+    threadId,
+    createdAt,
+    branch: null,
+    worktreePath: null,
+    envMode: "local",
+    preservePreviousDraft: true,
+  });
+  if (resolved.modelSelection) {
+    draftStore.setModelSelection(draftId, resolved.modelSelection, {
+      explicit: true,
+      replaceOptions: true,
+    });
+  }
+
+  const tabId = useWorkspaceTabsStore.getState().openTab(
+    {
+      kind: "draft",
+      title: agent.displayName,
+      providerId: resolved.providerId,
+      instanceId: resolved.instanceId,
+      model: resolved.model,
+      environmentId: projectRef.environmentId,
+      threadId,
+      draftId,
+      reuseExisting: false,
+    },
+    targetPaneId,
+  );
+  return { tabId, draftId, threadId };
+}
+
+const HIDDEN_SPLIT_OUTLET_PANE_CONTEXT = {
+  inSplit: true,
+  edges: ROOT_SPLIT_PANE_EDGES,
+  paneId: null,
+  isFocused: false,
+  isPrimary: false,
+} as const;
+
 export interface WorkspaceSplitContainerProps {
   /** The primary Prismux route view (`ThreadRouteView` or `<Outlet />`), kept mounted in primary pane. */
   readonly primaryContent: ReactNode;
@@ -812,15 +903,29 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
 
   // Unified single-topbar portal slot + fallback right-sidebar drawer when no thread is active
   const tabBarRef = useRef<HTMLDivElement | null>(null);
-  const [topbarSlotElement, setTopbarSlotElement] = useState<HTMLDivElement | null>(null);
+  const [workspaceLayoutElement, setWorkspaceLayoutElement] = useState<HTMLDivElement | null>(null);
+  const [tabBarTopbarSlotElement, setTabBarTopbarSlotElement] = useState<HTMLDivElement | null>(
+    null,
+  );
+  const [dockTopbarSlotElement, setDockTopbarSlotElement] = useState<HTMLDivElement | null>(null);
   const [hasActiveChatControls, setHasActiveChatControls] = useState(false);
   const [activeChatProvider, setActiveChatProvider] =
     useState<WorkspaceActiveChatProviderSnapshot | null>(null);
+  const [paneChatProviders, setPaneChatProviders] = useState<
+    Readonly<Record<string, WorkspaceActiveChatProviderSnapshot>>
+  >({});
   const [standaloneRightPanel, setStandaloneRightPanel] = useState<
     | { readonly kind: "agent-session"; readonly session: AgentSessionSurface }
     | { readonly kind: "wallpaper" }
     | null
   >(null);
+
+  const prefersRightPanelSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const splitDockOpenStore = useRightPanelStore((state) => state.splitDockOpen);
+  const splitDockMaximizedStore = useRightPanelStore((state) => state.splitDockMaximized);
+  const splitGlobalWallpaperOpenStore = useRightPanelStore(
+    (state) => state.splitGlobalWallpaperOpen,
+  );
 
   const handleSetActiveChatProvider = useStableCallback(
     (next: WorkspaceActiveChatProviderSnapshot | null) => {
@@ -841,6 +946,43 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
       });
     },
   );
+
+  const handleSetPaneChatProvider = useStableCallback(
+    (paneId: string, next: WorkspaceActiveChatProviderSnapshot | null) => {
+      setPaneChatProviders((current) => {
+        const existing = current[paneId] ?? null;
+        if (existing === next) return current;
+        if (
+          existing &&
+          next &&
+          existing.routeKey === next.routeKey &&
+          existing.instanceId === next.instanceId &&
+          existing.providerId === next.providerId &&
+          existing.model === next.model &&
+          existing.displayName === next.displayName
+        ) {
+          return current;
+        }
+        if (next === null) {
+          if (!(paneId in current)) return current;
+          const copy = { ...current };
+          delete copy[paneId];
+          return copy;
+        }
+        return { ...current, [paneId]: next };
+      });
+    },
+  );
+
+  const paneCount = countLeafPanes(layout);
+  const isSplitWorkspace = paneCount > 1;
+  const anySplitDockOpen = splitDockOpenStore || splitGlobalWallpaperOpenStore;
+  const splitDockInline = anySplitDockOpen && (!prefersRightPanelSheet || splitDockMaximizedStore);
+  const dockOwnsTopRightSlot = isSplitWorkspace && splitDockInline;
+  const splitDockMaximized = dockOwnsTopRightSlot && splitDockMaximizedStore;
+  const topbarSlotElement = dockOwnsTopRightSlot
+    ? dockTopbarSlotElement
+    : tabBarTopbarSlotElement;
 
   // Resolve current route thread metadata for seamless Tab Bar sync
   const routeServerRef = shownTarget?.kind === "server" ? shownTarget.threadRef : null;
@@ -913,9 +1055,16 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
       tabBarRef,
       setHasActiveChatControls,
       setActiveChatProvider: handleSetActiveChatProvider,
+      setPaneChatProvider: handleSetPaneChatProvider,
       standaloneRightPanelOpen: Boolean(standaloneRightPanel && !activeHostThreadRef),
     }),
-    [activeHostThreadRef, handleSetActiveChatProvider, standaloneRightPanel, topbarSlotElement],
+    [
+      activeHostThreadRef,
+      handleSetActiveChatProvider,
+      handleSetPaneChatProvider,
+      standaloneRightPanel,
+      topbarSlotElement,
+    ],
   );
 
   const openChiefSettings = useCallback(() => {
@@ -1123,6 +1272,46 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
     shownTarget,
     visibleThreads,
   ]);
+
+  // Sync each split pane's own live ChatView provider/model snapshot strictly onto that pane's
+  // active tab without touching other panes or the global route tab.
+  useEffect(() => {
+    if (!isSplitWorkspace) return;
+    const store = useWorkspaceTabsStore.getState();
+    for (const [paneId, snapshot] of Object.entries(paneChatProviders)) {
+      const pane = store.panes[paneId];
+      if (!pane?.activeTabId) continue;
+      const activeTab = store.tabs[pane.activeTabId];
+      if (!activeTab) continue;
+      const tabRouteKey =
+        activeTab.kind === "thread" && activeTab.environmentId && activeTab.threadId
+          ? `server:${activeTab.environmentId}:${activeTab.threadId}`
+          : activeTab.kind === "draft" && activeTab.draftId
+            ? `draft:${activeTab.draftId}`
+            : null;
+      if (!tabRouteKey || tabRouteKey !== snapshot.routeKey) continue;
+      const nextProviderId = snapshot.providerId ?? activeTab.providerId ?? null;
+      const nextInstanceId = snapshot.instanceId ?? activeTab.instanceId ?? null;
+      const nextModel = snapshot.model ?? activeTab.model ?? null;
+      const nextTitle =
+        activeTab.kind === "draft" && snapshot.displayName?.trim()
+          ? snapshot.displayName.trim()
+          : activeTab.title;
+      if (
+        activeTab.providerId !== nextProviderId ||
+        activeTab.instanceId !== nextInstanceId ||
+        activeTab.model !== nextModel ||
+        activeTab.title !== nextTitle
+      ) {
+        store.updateTab(activeTab.id, {
+          providerId: nextProviderId,
+          instanceId: nextInstanceId,
+          model: nextModel,
+          title: nextTitle,
+        });
+      }
+    }
+  }, [isSplitWorkspace, paneChatProviders]);
 
   useEffect(() => {
     if (!shownTarget || !routeKey) return;
@@ -1621,9 +1810,18 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
       const resolvedPaneId =
         targetPaneId && store.panes[targetPaneId] ? targetPaneId : store.primaryPaneId;
 
-      // Secondary panes route parallel agent sessions to the right sidebar instead of a blank shell.
+      // Secondary split panes create their own isolated draft session & tab directly inside the pane
+      // without touching Pane A's route, draft, or provider/model selection.
       if (resolvedPaneId !== store.primaryPaneId) {
-        openAgentInRightSidebar(agent);
+        const created = await launchSecondaryPaneAgentDraft({
+          agent,
+          targetPaneId: resolvedPaneId,
+          instanceEntries,
+          resolveProjectRef: resolveProjectRefForMainLaunch,
+        });
+        if (!created) {
+          openAgentInRightSidebar(agent);
+        }
         return;
       }
 
@@ -1902,27 +2100,82 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
         );
         return;
       }
-      store.splitPane(
-        targetPaneId,
-        "horizontal",
-        {
-          kind: "agent",
-          title: agent.displayName,
-          providerId: resolved.providerId,
-          instanceId: resolved.instanceId,
-          model: resolved.model,
-          hostThreadRef: activeHostThreadRef,
-          reuseExisting: false,
-        },
-        "after",
-      );
+      void (async () => {
+        const resolvedProject = await resolveProjectRefForMainLaunch();
+        const latestStore = useWorkspaceTabsStore.getState();
+        if (resolvedProject && countLeafPanes(latestStore.layout) < WORKSPACE_MAX_SPLIT_PANES) {
+          const { projectRef } = resolvedProject;
+          const draftId = newDraftId();
+          const threadId = newThreadId();
+          const createdAt = new Date().toISOString();
+          const draftStore = useComposerDraftStore.getState();
+          draftStore.setLogicalProjectDraftThreadId(
+            `split:new:${draftId}`,
+            projectRef,
+            draftId,
+            {
+              threadId,
+              createdAt,
+              branch: null,
+              worktreePath: null,
+              envMode: "local",
+              preservePreviousDraft: true,
+            },
+          );
+          if (resolved.modelSelection) {
+            draftStore.setModelSelection(draftId, resolved.modelSelection, {
+              explicit: true,
+              replaceOptions: true,
+            });
+          }
+          latestStore.splitPane(
+            targetPaneId,
+            "horizontal",
+            {
+              kind: "draft",
+              title: agent.displayName,
+              providerId: resolved.providerId,
+              instanceId: resolved.instanceId,
+              model: resolved.model,
+              environmentId: projectRef.environmentId,
+              threadId,
+              draftId,
+              reuseExisting: false,
+            },
+            "after",
+          );
+          return;
+        }
+        latestStore.splitPane(
+          targetPaneId,
+          "horizontal",
+          {
+            kind: "agent",
+            title: agent.displayName,
+            providerId: resolved.providerId,
+            instanceId: resolved.instanceId,
+            model: resolved.model,
+            hostThreadRef: activeHostThreadRef,
+            reuseExisting: false,
+          },
+          "after",
+        );
+      })();
     },
-    [activeHostThreadRef, instanceEntries, openAgentInRightSidebar],
+    [
+      activeHostThreadRef,
+      instanceEntries,
+      openAgentInRightSidebar,
+      resolveProjectRefForMainLaunch,
+    ],
   );
 
   const handleDropItemIntoPane = useCallback(
     (payload: SplitDragPayload, targetPaneId: string, zone: SplitDropZone) => {
       setHoveredDrop(null);
+      const beforePrimaryActiveTabId =
+        useWorkspaceTabsStore.getState().panes[useWorkspaceTabsStore.getState().primaryPaneId]
+          ?.activeTabId ?? null;
       const result = useWorkspaceTabsStore
         .getState()
         .dropItemIntoPane(payload, targetPaneId, zone, {
@@ -1931,8 +2184,18 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
       dispatchSplitDragEvent(false, null);
       if (result) {
         const after = useWorkspaceTabsStore.getState();
+        const afterPrimaryPane = after.panes[after.primaryPaneId];
+        const afterPrimaryActiveTabId = afterPrimaryPane?.activeTabId ?? null;
         if (result.paneId === after.primaryPaneId) {
           navigateToTabIfPrimaryRoute(result.paneId, after.tabs[result.tabId]);
+        } else if (
+          afterPrimaryActiveTabId &&
+          afterPrimaryActiveTabId !== beforePrimaryActiveTabId
+        ) {
+          navigateToTabIfPrimaryRoute(
+            after.primaryPaneId,
+            after.tabs[afterPrimaryActiveTabId],
+          );
         }
       }
     },
@@ -2019,8 +2282,99 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
     [handleNewThread, instanceEntries, resolveProjectRefForMainLaunch, routeKey],
   );
 
-  const paneCount = countLeafPanes(layout);
   const allLeafIds = useMemo(() => listLeafPaneIds(layout), [layout]);
+
+  const liveDraftSessionLookup = useMemo<WorkspaceDraftSessionLookup>(() => {
+    const base = getLiveComposerDraftStateLookup();
+    return {
+      ...base,
+      getDraftSessionWithCoords: (draftId) => {
+        const session = useComposerDraftStore.getState().getDraftSession(draftId);
+        return session
+          ? {
+              environmentId: session.environmentId,
+              threadId: session.threadId,
+              promotedTo: session.promotedTo ?? null,
+            }
+          : null;
+      },
+    };
+  }, [draftThreadsByThreadKey, promotedDraftRedirects]);
+
+  const routeOwnership = useMemo(
+    () =>
+      resolveSplitRouteOwnership({
+        layout,
+        panes,
+        tabs,
+        primaryPaneId,
+        focusedPaneId,
+        shownTarget,
+        modalOpen,
+        draftLookup: liveDraftSessionLookup,
+      }),
+    [
+      focusedPaneId,
+      layout,
+      liveDraftSessionLookup,
+      modalOpen,
+      panes,
+      primaryPaneId,
+      shownTarget,
+      tabs,
+    ],
+  );
+
+  const focusedSplitContext = useMemo(
+    () =>
+      resolveFocusedSplitRightPanelContext({
+        layout,
+        panes,
+        tabs,
+        focusedPaneId,
+        primaryPaneId,
+        draftLookup: liveDraftSessionLookup,
+      }),
+    [focusedPaneId, layout, liveDraftSessionLookup, panes, primaryPaneId, tabs],
+  );
+
+  const paneOverviewOpenByPaneId = useRightPanelStore((state) => state.paneOverviewOpenByPaneId);
+  const threadPanelVisibilityByThreadKey = useRightPanelStore(
+    (state) => state.threadPanelVisibilityByThreadKey,
+  );
+
+  const handleFocusPane = useStableCallback((paneId: string) => {
+    useWorkspaceTabsStore.getState().focusPane(paneId);
+  });
+
+  const handleTogglePaneOverview = useStableCallback((paneId: string) => {
+    useRightPanelStore.getState().togglePaneOverview(paneId, true);
+  });
+
+  const handleClosePane = useStableCallback((id: string) => {
+    const before = useWorkspaceTabsStore.getState();
+    const beforePrimaryActiveTabId = before.panes[before.primaryPaneId]?.activeTabId ?? null;
+    before.closePane(id, { mergeTabs: true });
+    useRightPanelStore.getState().clearPaneOverview(id);
+    const after = useWorkspaceTabsStore.getState();
+    const afterPrimaryActiveTabId = after.panes[after.primaryPaneId]?.activeTabId ?? null;
+    if (afterPrimaryActiveTabId && afterPrimaryActiveTabId !== beforePrimaryActiveTabId) {
+      navigateToTabIfPrimaryRoute(after.primaryPaneId, after.tabs[afterPrimaryActiveTabId]);
+    }
+  });
+
+  const handleMoveTabToPane = useStableCallback(
+    (tabId: string, fromPaneId: string, toPaneId: string, insertIndex?: number) => {
+      const before = useWorkspaceTabsStore.getState();
+      const beforePrimaryActiveTabId = before.panes[before.primaryPaneId]?.activeTabId ?? null;
+      before.moveTabToPane(tabId, fromPaneId, toPaneId, insertIndex);
+      const after = useWorkspaceTabsStore.getState();
+      const afterPrimaryActiveTabId = after.panes[after.primaryPaneId]?.activeTabId ?? null;
+      if (afterPrimaryActiveTabId && afterPrimaryActiveTabId !== beforePrimaryActiveTabId) {
+        navigateToTabIfPrimaryRoute(after.primaryPaneId, after.tabs[afterPrimaryActiveTabId]);
+      }
+    },
+  );
 
   const newTabPopoverBase = useMemo(
     () => ({
@@ -2175,19 +2529,39 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
     const paneDropZone =
       effectiveHoveredDrop?.paneId === pane.id ? effectiveHoveredDrop.zone : null;
 
-    // Primary pane ALWAYS hosts the real full ChatView / route stage for any conversation tab
-    // (thread, draft, or legacy agent) — never a stripped blank agent shell.
-    const primaryShowsRoute =
-      isPrimaryPane &&
-      (activeTab === null ||
-        activeTab.kind === "thread" ||
-        activeTab.kind === "draft" ||
-        activeTab.kind === "agent");
+    // Strictly decide whether THIS pane hosts `primaryContent` (single-pane preserves 100% legacy
+    // behavior including `activeTab.kind === "agent"`; split view binds `primaryContent` ONLY to
+    // the single pane whose active tab matches `shownTarget`, preventing any cross-pane mirroring).
+    const paneOwnsRoute = routeOwnership.routeOwnerPaneId === pane.id;
+    const primaryShowsRoute = paneOwnsRoute && routeOwnership.ownerShowsRoute;
+    const paneConversationActive =
+      isSplit &&
+      (isWorkspaceConversationTab(activeTab) ||
+        (primaryShowsRoute && activeTab?.kind === "agent"));
+    const paneThreadRef =
+      activeTab?.kind === "thread" && activeTab.environmentId && activeTab.threadId
+        ? scopeThreadRef(activeTab.environmentId, activeTab.threadId)
+        : null;
+    const paneOverviewOpen = selectPaneOverviewOpen(
+      paneOverviewOpenByPaneId,
+      threadPanelVisibilityByThreadKey,
+      pane.id,
+      paneThreadRef,
+      isSplit,
+    );
+    const tabBarTouchesWindowRight = edges.right && !dockOwnsTopRightSlot;
 
     return (
       <WorkspaceSplitPaneContext.Provider
         key={pane.id}
-        value={{ inSplit: isSplit, edges }}
+        value={{
+          inSplit: isSplit,
+          edges,
+          paneId: pane.id,
+          isFocused,
+          isPrimary: isPrimaryPane,
+          onFocusPane: handleFocusPane,
+        }}
       >
         <section
           data-workspace-pane={pane.id}
@@ -2212,11 +2586,13 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
             otherPaneIds={otherPaneIds}
             touchesTopEdge={edges.top}
             touchesLeftEdge={edges.left}
-            touchesRightEdge={edges.right}
-            tabBarRef={edges.top && edges.right ? tabBarRef : undefined}
-            topbarRightSlotRef={edges.top && edges.right ? setTopbarSlotElement : undefined}
+            touchesRightEdge={tabBarTouchesWindowRight}
+            tabBarRef={edges.top && tabBarTouchesWindowRight ? tabBarRef : undefined}
+            topbarRightSlotRef={
+              edges.top && tabBarTouchesWindowRight ? setTabBarTopbarSlotElement : undefined
+            }
             fallbackRightControls={
-              edges.top && edges.right && !hasActiveChatControls ? (
+              !isSplit && edges.top && tabBarTouchesWindowRight && !hasActiveChatControls ? (
                 <PrismuxTopbarControls
                   wallpaperOpen={standaloneRightPanel?.kind === "wallpaper"}
                   wallpaperAvailable
@@ -2226,6 +2602,9 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
               ) : null
             }
             showSplitControls
+            paneOverviewAvailable={paneConversationActive}
+            paneOverviewOpen={paneOverviewOpen}
+            onTogglePaneOverview={handleTogglePaneOverview}
             newTabPopover={newTabPopoverBase}
             onActivateTab={handleActivateTab}
             onCloseTab={handleCloseTab}
@@ -2235,12 +2614,8 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
                 ? () => useWorkspaceTabsStore.getState().resetSplitRatio(parentSplitId)
                 : undefined
             }
-            onClosePane={(id) => useWorkspaceTabsStore.getState().closePane(id, { mergeTabs: true })}
-            onMoveTabToPane={(tabId, fromPaneId, toPaneId, insertIndex) =>
-              useWorkspaceTabsStore
-                .getState()
-                .moveTabToPane(tabId, fromPaneId, toPaneId, insertIndex)
-            }
+            onClosePane={handleClosePane}
+            onMoveTabToPane={handleMoveTabToPane}
             onReorderTab={(pId, tabId, targetIndex) =>
               useWorkspaceTabsStore.getState().reorderTab(pId, tabId, targetIndex)
             }
@@ -2259,7 +2634,7 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
             )}
           >
             <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-              {isPrimaryPane ? (
+              {paneOwnsRoute ? (
                 <PrimaryPaneBody active={primaryShowsRoute}>{primaryContent}</PrimaryPaneBody>
               ) : null}
 
@@ -2267,6 +2642,8 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
                 <WorkspacePaneContent
                   paneId={pane.id}
                   tab={activeTab}
+                  isFocused={isFocused}
+                  onFocusPane={handleFocusPane}
                   activeHostThreadRef={activeHostThreadRef}
                   environmentId={activeEnvironmentId}
                   instanceEntries={instanceEntries}
@@ -2357,7 +2734,7 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
               ) : null}
             </div>
 
-            {isPrimaryPane && standaloneRightPanel && !activeHostThreadRef ? (
+            {!isSplit && isPrimaryPane && standaloneRightPanel && !activeHostThreadRef ? (
               <aside
                 data-pmx-glass-zone="rightSidebar"
                 data-preview-panel-mode="inline"
@@ -2426,14 +2803,56 @@ export const WorkspaceSplitContainer = memo(function WorkspaceSplitContainer(
   return (
     <WorkspaceTopbarPortalContext.Provider value={topbarPortalValue}>
       <div
+        ref={setWorkspaceLayoutElement}
         data-workspace-split-container="true"
         data-pane-count={paneCount}
         data-workspace-dragging={activeDrag !== null ? "1" : "0"}
         data-workspace-resizing={isResizingSplit ? "1" : "0"}
         inert={modalOpen}
-        className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-sidebar [[data-pmx-glass='1']_&]:bg-transparent [[data-pmx-wallpaper='1']_&]:bg-transparent [[data-pmx-wallpaper-visible='1']_&]:bg-transparent"
+        className={cn(
+          "relative flex h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-sidebar [[data-pmx-glass='1']_&]:bg-transparent [[data-pmx-wallpaper='1']_&]:bg-transparent [[data-pmx-wallpaper-visible='1']_&]:bg-transparent",
+          isSplitWorkspace ? "flex-row" : "flex-col",
+        )}
       >
-        {renderNode(layout, ROOT_SPLIT_PANE_EDGES)}
+        <div
+          data-workspace-split-grid="true"
+          className={cn(
+            "flex min-h-0 min-w-0 flex-col overflow-hidden",
+            splitDockMaximized ? "hidden" : "flex-1",
+          )}
+        >
+          {renderNode(layout, ROOT_SPLIT_PANE_EDGES)}
+        </div>
+
+        {/* Keep TanStack Router <Outlet /> mounted without leaking into any split pane when no pane owns shownTarget. */}
+        {isSplitWorkspace && routeOwnership.routeOwnerPaneId === null ? (
+          <WorkspaceSplitPaneContext.Provider value={HIDDEN_SPLIT_OUTLET_PANE_CONTEXT}>
+            <BackgroundThreadContext value>
+              <div
+                className="hidden"
+                aria-hidden="true"
+                data-workspace-hidden-outlet="1"
+              >
+                {primaryContent}
+              </div>
+            </BackgroundThreadContext>
+          </WorkspaceSplitPaneContext.Provider>
+        ) : null}
+
+        {/* Unified single right sidebar dock for split view (mounted outside WorkspaceSplitPaneContext
+            so maximized <PrismuxStageFrame> preserves full 14px concave corners). */}
+        {isSplitWorkspace ? (
+          <Suspense fallback={null}>
+            <WorkspaceSplitRightPanelDock
+              focusedContext={focusedSplitContext}
+              topbarSlotElement={topbarSlotElement}
+              workspaceLayoutElement={workspaceLayoutElement}
+              onOpenChiefSettings={openChiefSettings}
+              dockTopbarSlotRef={setDockTopbarSlotElement}
+              dockOwnsTopRightSlot={dockOwnsTopRightSlot}
+            />
+          </Suspense>
+        ) : null}
       </div>
     </WorkspaceTopbarPortalContext.Provider>
   );
