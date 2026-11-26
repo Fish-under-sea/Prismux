@@ -30,7 +30,6 @@ import {
 } from "./updateNotifierStore";
 
 const STARTUP_CHECK_DELAY_MS = 4_000;
-const PERIODIC_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 const RECENT_CHECK_FRESHNESS_MS = 5 * 60 * 1000;
 const FLY_DURATION_MS = 460;
 
@@ -346,6 +345,7 @@ export const PrismuxAutoUpdateHost = memo(function PrismuxAutoUpdateHost() {
   const daemonReady = runtime?.daemonInfo.ready ?? false;
   const state = useUpdateNotifierState();
   const ownerIdRef = useRef<number>(nextHostOwnerSeq++);
+  const daemonManagesScheduleRef = useRef<boolean>(false);
   const [isPrimaryHost, setIsPrimaryHost] = useState(false);
 
   // Claim single-instance host ownership so portals & timers never duplicate across sidebars.
@@ -398,6 +398,14 @@ export const PrismuxAutoUpdateHost = memo(function PrismuxAutoUpdateHost() {
         .fetchUpdaterStatus()
         .then(async (raw) => {
           if (cancelled) return;
+          if (
+            raw &&
+            typeof raw === "object" &&
+            typeof raw.nextAutoCheckAt === "number" &&
+            Number.isFinite(raw.nextAutoCheckAt)
+          ) {
+            daemonManagesScheduleRef.current = true;
+          }
           const parsed = parseUpdaterStatusPayload(raw, APP_VERSION);
           if (!parsed) return;
           if (prismuxUpdateNotifierStore.isLocalAutoCheckDirty()) {
@@ -464,28 +472,26 @@ export const PrismuxAutoUpdateHost = memo(function PrismuxAutoUpdateHost() {
     });
   }, [daemon, daemonReady, isPrimaryHost, isTransferActive]);
 
-  // Schedule startup delayed check & 4-hour periodic silent check while autoCheckEnabled is on.
+  // Daemon owns scheduled background update checks and broadcasts results over SSE.
+  // Eliminate redundant 4-hour browser polling; only run a single fallback startup check if Daemon
+  // has neither reported a recent check nor scheduled its own `nextAutoCheckAt`.
   useEffect(() => {
     if (!isPrimaryHost || !daemonReady || !state.autoCheckEnabled) return;
 
-    let periodicTimer: number | null = null;
     const startupTimer = window.setTimeout(() => {
+      if (daemonManagesScheduleRef.current) {
+        return;
+      }
       const snapshot = prismuxUpdateNotifierStore.getState();
       const lastCheckedAt = snapshot.updaterStatus?.lastCheck?.checkedAt ?? 0;
       const isFresh = lastCheckedAt > 0 && Date.now() - lastCheckedAt < RECENT_CHECK_FRESHNESS_MS;
       if (!isFresh) {
         void runSilentUpdateCheck();
       }
-      periodicTimer = window.setInterval(() => {
-        void runSilentUpdateCheck();
-      }, PERIODIC_CHECK_INTERVAL_MS);
     }, STARTUP_CHECK_DELAY_MS);
 
     return () => {
       window.clearTimeout(startupTimer);
-      if (periodicTimer !== null) {
-        window.clearInterval(periodicTimer);
-      }
     };
   }, [daemonReady, isPrimaryHost, runSilentUpdateCheck, state.autoCheckEnabled]);
 

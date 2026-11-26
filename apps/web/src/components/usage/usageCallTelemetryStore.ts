@@ -6,6 +6,8 @@ import { getDisplayModelName, type ModelEsque } from "../chat/providerIconUtils"
 const EMPTY_METRIC_DASH = "—";
 
 export const MAX_USAGE_CALL_LOGS = 500;
+export const MAX_LIVE_TELEMETRY_THREADS = 50;
+export const USAGE_CALL_PERSIST_DEBOUNCE_MS = 1_000;
 export const USAGE_CALL_TELEMETRY_STORAGE_KEY = "prismux.usage.callTelemetry.v1";
 
 export type UsageCallStatus = "completed" | "streaming" | "interrupted" | "error";
@@ -546,7 +548,11 @@ function loadFromStorage(): readonly UsageCallLogRecord[] {
   }
 }
 
-function persistLogs(logs: readonly UsageCallLogRecord[]): void {
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingPersistLogs: readonly UsageCallLogRecord[] | null = null;
+let unloadFlushInstalled = false;
+
+function writeLogsToStorage(logs: readonly UsageCallLogRecord[]): void {
   if (typeof globalThis.localStorage === "undefined") return;
   try {
     globalThis.localStorage.setItem(
@@ -556,6 +562,71 @@ function persistLogs(logs: readonly UsageCallLogRecord[]): void {
   } catch {
     // Ignore storage quota or private browsing errors gracefully.
   }
+}
+
+/** Immediately flushes any pending debounced `localStorage` persistence write. */
+export function flushUsageCallLogsPersistence(): void {
+  if (persistTimer !== null) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  if (pendingPersistLogs !== null) {
+    const toWrite = pendingPersistLogs;
+    pendingPersistLogs = null;
+    writeLogsToStorage(toWrite);
+  }
+}
+
+function ensureUnloadFlushInstalled(): void {
+  if (unloadFlushInstalled || typeof window === "undefined" || typeof window.addEventListener !== "function") {
+    return;
+  }
+  unloadFlushInstalled = true;
+  window.addEventListener("pagehide", flushUsageCallLogsPersistence);
+  window.addEventListener("beforeunload", flushUsageCallLogsPersistence);
+}
+
+function persistLogsDebounced(logs: readonly UsageCallLogRecord[]): void {
+  if (typeof globalThis.localStorage === "undefined") return;
+  ensureUnloadFlushInstalled();
+  pendingPersistLogs = logs;
+  if (persistTimer !== null) {
+    clearTimeout(persistTimer);
+  }
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    const toWrite = pendingPersistLogs;
+    pendingPersistLogs = null;
+    if (toWrite !== null) {
+      writeLogsToStorage(toWrite);
+    }
+  }, USAGE_CALL_PERSIST_DEBOUNCE_MS);
+}
+
+function pruneLiveByThreadLru(
+  liveByThread: Readonly<Record<string, SessionLiveTelemetrySnapshot>>,
+  keepThreadId?: string,
+): Readonly<Record<string, SessionLiveTelemetrySnapshot>> {
+  const keys = Object.keys(liveByThread);
+  if (keys.length <= MAX_LIVE_TELEMETRY_THREADS) {
+    return liveByThread;
+  }
+  const sorted = keys
+    .map((key) => liveByThread[key]!)
+    .toSorted((a, b) => {
+      if (keepThreadId) {
+        if (a.threadId === keepThreadId) return -1;
+        if (b.threadId === keepThreadId) return 1;
+      }
+      if (a.active !== b.active) return a.active ? -1 : 1;
+      return b.updatedAt - a.updatedAt;
+    })
+    .slice(0, MAX_LIVE_TELEMETRY_THREADS);
+  const pruned: Record<string, SessionLiveTelemetrySnapshot> = {};
+  for (const snapshot of sorted) {
+    pruned[snapshot.threadId] = snapshot;
+  }
+  return pruned;
 }
 
 function ensureHydrated(): void {
@@ -695,39 +766,42 @@ export function recordModelCallTelemetry(
   if (record.threadId) {
     const prev = state.liveByThread[record.threadId];
     const threadTotal = sumThreadTokens(nextLogs, record.threadId);
-    nextLiveByThread = {
-      ...state.liveByThread,
-      [record.threadId]: {
-        threadId: record.threadId,
-        provider: record.provider,
-        model: record.model,
-        active: record.status === "streaming",
-        turnStartedAt: turnStartedAt ?? prev?.turnStartedAt ?? timestamp,
-        firstTokenAt: firstTokenAt ?? prev?.firstTokenAt ?? null,
-        ttftMs: record.ttftMs ?? prev?.ttftMs ?? null,
-        tps: record.tps ?? prev?.tps ?? null,
-        inputTokens: record.inputTokens,
-        cachedInputTokens: record.cachedInputTokens,
-        cacheCreationTokens: record.cacheCreationTokens,
-        outputTokens: record.outputTokens,
-        ...(record.reasoningTokens ? { reasoningTokens: record.reasoningTokens } : {}),
-        totalTokens: record.totalTokens,
-        sessionTotalTokens: Math.max(threadTotal, record.totalTokens),
-        cacheHitRate: record.cacheHitRate ?? prev?.cacheHitRate ?? null,
-        contextPercent:
-          record.contextPercent !== undefined
-            ? (record.contextPercent ?? null)
-            : (prev?.contextPercent ?? null),
-        updatedAt: now,
+    nextLiveByThread = pruneLiveByThreadLru(
+      {
+        ...state.liveByThread,
+        [record.threadId]: {
+          threadId: record.threadId,
+          provider: record.provider,
+          model: record.model,
+          active: record.status === "streaming",
+          turnStartedAt: turnStartedAt ?? prev?.turnStartedAt ?? timestamp,
+          firstTokenAt: firstTokenAt ?? prev?.firstTokenAt ?? null,
+          ttftMs: record.ttftMs ?? prev?.ttftMs ?? null,
+          tps: record.tps ?? prev?.tps ?? null,
+          inputTokens: record.inputTokens,
+          cachedInputTokens: record.cachedInputTokens,
+          cacheCreationTokens: record.cacheCreationTokens,
+          outputTokens: record.outputTokens,
+          ...(record.reasoningTokens ? { reasoningTokens: record.reasoningTokens } : {}),
+          totalTokens: record.totalTokens,
+          sessionTotalTokens: Math.max(threadTotal, record.totalTokens),
+          cacheHitRate: record.cacheHitRate ?? prev?.cacheHitRate ?? null,
+          contextPercent:
+            record.contextPercent !== undefined
+              ? (record.contextPercent ?? null)
+              : (prev?.contextPercent ?? null),
+          updatedAt: now,
+        },
       },
-    };
+      record.threadId,
+    );
   }
 
   state = {
     logs: nextLogs,
     liveByThread: nextLiveByThread,
   };
-  persistLogs(nextLogs);
+  persistLogsDebounced(nextLogs);
   notifyListeners();
   return record;
 }
@@ -827,10 +901,13 @@ export function updateSessionLiveTelemetry(
 
   state = {
     ...state,
-    liveByThread: {
-      ...state.liveByThread,
-      [threadId]: nextSnapshot,
-    },
+    liveByThread: pruneLiveByThreadLru(
+      {
+        ...state.liveByThread,
+        [threadId]: nextSnapshot,
+      },
+      threadId,
+    ),
   };
   notifyListeners();
   return nextSnapshot;
@@ -846,6 +923,11 @@ export function clearSessionLiveTelemetry(threadId: string): void {
 }
 
 export function clearUsageCallLogs(): void {
+  if (persistTimer !== null) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  pendingPersistLogs = null;
   hydrated = true;
   state = { logs: [], liveByThread: {} };
   if (typeof globalThis.localStorage !== "undefined") {
@@ -928,16 +1010,33 @@ export function mergeUsageCallLogs(
   backendLogs?: readonly BackendUsageCallLogLike[] | null,
 ): readonly UsageCallLogRecord[] {
   const byId = new Map<string, UsageCallLogRecord>();
+  // Map-indexed bucket lookup keyed by `${provider}\0${outputTokens}` gives O(N + M) dedupe
+  // instead of O(N * M) full-table scans on every render.
+  const liveBuckets = new Map<
+    string,
+    Array<{ readonly key: string; readonly unwrappedModel: string }>
+  >();
+
   for (const log of localLogs) {
     const clampedTtftMs = clampTtftToDuration(log.ttftMs, log.durationMs);
     const cleanedModel = unwrapUsageModelSlug(log.model) || log.model;
-    byId.set(
-      log.id,
+    const entry =
       clampedTtftMs === log.ttftMs && cleanedModel === log.model
         ? log
-        : { ...log, ttftMs: clampedTtftMs, model: cleanedModel },
-    );
+        : { ...log, ttftMs: clampedTtftMs, model: cleanedModel };
+    byId.set(log.id, entry);
+    if (entry.source === "live") {
+      const bucketKey = `${entry.provider}\0${entry.outputTokens}`;
+      const bucket = liveBuckets.get(bucketKey);
+      const item = { key: log.id, unwrappedModel: unwrapUsageModelSlug(entry.model) };
+      if (bucket) {
+        bucket.push(item);
+      } else {
+        liveBuckets.set(bucketKey, [item]);
+      }
+    }
   }
+
   if (backendLogs && backendLogs.length > 0) {
     for (const raw of backendLogs) {
       if (!raw || typeof raw.id !== "string" || !raw.id) continue;
@@ -966,22 +1065,27 @@ export function mergeUsageCallLogs(
         });
         continue;
       }
-      // Deduplicate live vs backend records that represent the same turn within 15s
+
+      // Deduplicate live vs backend records that represent the same turn within 15s (O(1) bucket scan)
+      const bucketKey = `${normalized.provider}\0${normalized.outputTokens}`;
+      const candidates = liveBuckets.get(bucketKey);
       let matchedKey: string | null = null;
-      for (const [key, candidate] of byId.entries()) {
-        if (
-          candidate.source === "live" &&
-          candidate.provider === normalized.provider &&
-          candidate.outputTokens === normalized.outputTokens &&
-          Math.abs(candidate.timestamp - normalized.timestamp) <= 15_000 &&
-          (unwrapUsageModelSlug(candidate.model) === unwrapUsageModelSlug(normalized.model) ||
-            (candidate.outputTokens > 0 &&
-              candidate.inputTokens === normalized.inputTokens &&
-              candidate.cachedInputTokens === normalized.cachedInputTokens &&
-              candidate.totalTokens === normalized.totalTokens))
-        ) {
-          matchedKey = key;
-          break;
+      if (candidates && candidates.length > 0) {
+        const normalizedModel = unwrapUsageModelSlug(normalized.model);
+        for (const item of candidates) {
+          const candidate = byId.get(item.key);
+          if (!candidate || candidate.source !== "live") continue;
+          if (
+            Math.abs(candidate.timestamp - normalized.timestamp) <= 15_000 &&
+            (item.unwrappedModel === normalizedModel ||
+              (candidate.outputTokens > 0 &&
+                candidate.inputTokens === normalized.inputTokens &&
+                candidate.cachedInputTokens === normalized.cachedInputTokens &&
+                candidate.totalTokens === normalized.totalTokens))
+          ) {
+            matchedKey = item.key;
+            break;
+          }
         }
       }
       if (matchedKey !== null) {

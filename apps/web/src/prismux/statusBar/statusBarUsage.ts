@@ -10,6 +10,7 @@ import {
   resolveConfiguredProviderLabel,
   type ProviderInstanceEntry,
 } from "../../providerInstances";
+import { resolveAcpAgentBrandKey } from "../agentBrand";
 import type { UsagePercentMode } from "./statusBarVisibility";
 
 export interface StatusBarProviderDisplayOptions {
@@ -148,7 +149,6 @@ export function canonicalProviderDisplayName(rawName: string | undefined, driver
     case "grok":
       return "Grok";
     case "dsh":
-      // oxlint-disable-next-line prismux/no-untranslated-copy -- Brand name
       return "DeepSeek Harness";
     case "pi":
       return "Pi";
@@ -190,9 +190,16 @@ export function normalizeUsageProviderKind(raw: string): UsageProviderKind | str
     case "open_code":
       return "opencode";
     case "dsh":
+    case "dsh-acp":
+    case "dsh_acp":
+    case "dsh-cli":
+    case "dsh_cli":
     case "dsh-next":
     case "dsh_next":
     case "deepseek-harness":
+    case "deepseek_harness":
+    case "deepseek-harness-acp":
+    case "deepseek_harness_acp":
       return "dsh";
     case "pi":
     case "pi-coding-agent":
@@ -277,8 +284,38 @@ export function extractAntigravityAcpTierLabel(provider: ServerProvider): string
   return null;
 }
 
-function detectCustomEndpointProvider(provider: ServerProvider): boolean {
-  if (normalizeUsageProviderKind(provider.driver) === "antigravity") {
+/**
+ * Resolves the canonical usage provider kind for a `ServerProvider`.
+ * For `acpRegistry` instances, resolves via `resolveAcpAgentBrandKey` (checking
+ * `acpRegistryAgentId`, `acpCommandPath`, `instanceId`, and `displayName`) and falls back
+ * to `acpRegistryAgentId` or `instanceId` — never raw `"acpRegistry"`.
+ */
+export function resolveServerProviderUsageKind(
+  provider: ServerProvider,
+  entries?: ReadonlyArray<ProviderInstanceEntry>,
+): UsageProviderKind | string {
+  if (provider.driver === "acpRegistry") {
+    const entry = entries?.find((candidate) => candidate.instanceId === provider.instanceId);
+    const acpBrand = resolveAcpAgentBrandKey({
+      agentId: entry?.acpRegistryAgentId,
+      commandPath: entry?.acpCommandPath,
+      instanceId: provider.instanceId,
+      displayName: entry?.displayName ?? provider.displayName,
+    });
+    if (acpBrand) {
+      return normalizeUsageProviderKind(acpBrand);
+    }
+    const fallback = entry?.acpRegistryAgentId?.trim().toLowerCase() || provider.instanceId;
+    return normalizeUsageProviderKind(fallback);
+  }
+  return normalizeUsageProviderKind(provider.driver);
+}
+
+function detectCustomEndpointProvider(
+  provider: ServerProvider,
+  entries?: ReadonlyArray<ProviderInstanceEntry>,
+): boolean {
+  if (resolveServerProviderUsageKind(provider, entries) === "antigravity") {
     // Official local `agy` CLI account login is never a custom endpoint.
     return false;
   }
@@ -382,14 +419,27 @@ export function buildUsageTelemetrySummary(
       ? mergedUsage.daily.find((entry) => entry.day === todayDayKey) ?? null
       : mergedUsage?.daily.at(-1) ?? null;
 
-  // Per-provider cache hit computed from mergedUsage.models
+  // Per-provider today totals aggregated by normalized usage provider kind
+  const todayByNormalizedKind = new Map<string, { totalTokens: number; costUsd: number }>();
+  if (todayBucket) {
+    for (const [rawKey, totals] of todayBucket.byProvider) {
+      const normalized = normalizeUsageProviderKind(rawKey);
+      const cur = todayByNormalizedKind.get(normalized) ?? { totalTokens: 0, costUsd: 0 };
+      cur.totalTokens += totals.totalTokens;
+      cur.costUsd += totals.costUsd;
+      todayByNormalizedKind.set(normalized, cur);
+    }
+  }
+
+  // Per-provider cache hit computed from mergedUsage.models (keyed by normalized provider kind)
   const cacheAggByProvider = new Map<
     string,
     { uncached: number; cached: number; creation: number }
   >();
   if (mergedUsage) {
     for (const model of mergedUsage.models) {
-      const cur = cacheAggByProvider.get(model.provider) ?? {
+      const normalized = normalizeUsageProviderKind(model.provider);
+      const cur = cacheAggByProvider.get(normalized) ?? {
         uncached: 0,
         cached: 0,
         creation: 0,
@@ -397,7 +447,7 @@ export function buildUsageTelemetrySummary(
       cur.uncached += model.tokens.uncachedInputTokens;
       cur.cached += model.tokens.cachedInputTokens;
       cur.creation += model.tokens.cacheCreationTokens;
-      cacheAggByProvider.set(model.provider, cur);
+      cacheAggByProvider.set(normalized, cur);
     }
   }
 
@@ -424,14 +474,14 @@ export function buildUsageTelemetrySummary(
     { displayName: string; isCustomEndpoint: boolean; enabled: boolean; autoInsert: boolean }
   >();
   for (const provider of providers) {
-    const kind = normalizeUsageProviderKind(provider.driver);
+    const kind = resolveServerProviderUsageKind(provider, displayOptions?.entries);
     const displayName = resolveStatusBarProviderName(
       provider.instanceId,
       provider.displayName,
-      provider.driver,
+      provider.driver === "acpRegistry" ? kind : provider.driver,
       displayOptions?.entries,
     );
-    const isCustomEndpoint = detectCustomEndpointProvider(provider);
+    const isCustomEndpoint = detectCustomEndpointProvider(provider, displayOptions?.entries);
     const isAntigravity = kind === "antigravity";
     const autoInsert = provider.enabled && !isAntigravity;
     const existing = configuredByKind.get(kind);
@@ -474,8 +524,8 @@ export function buildUsageTelemetrySummary(
       const kind = provTotals.provider;
       const normalizedKind = normalizeUsageProviderKind(kind);
       seenNormalizedKinds.add(normalizedKind);
-      const todayProv = todayBucket?.byProvider.get(kind);
-      const cacheAgg = cacheAggByProvider.get(kind);
+      const todayProv = todayByNormalizedKind.get(normalizedKind);
+      const cacheAgg = cacheAggByProvider.get(normalizedKind);
       const configured = configuredByKind.get(normalizedKind);
       const probeSnapshot = probeByKind.get(normalizedKind);
       const hasQuotaWindow = normalizedWindowKinds.has(normalizedKind);
@@ -484,29 +534,42 @@ export function buildUsageTelemetrySummary(
         configured,
         probeSnapshot,
       );
-      ledgerByKind.set(kind, {
-        key: `usage:${kind}`,
-        providerKind: kind,
-        providerName:
-          configured?.displayName ??
-          resolveStatusBarProviderName(
-            normalizedKind,
-            undefined,
-            normalizedKind,
-            displayOptions?.entries,
-          ),
-        todayTokens: todayProv?.totalTokens ?? 0,
-        todayCostUsd: todayProv?.costUsd ?? 0,
-        weekTokens: provTotals.totalTokens,
-        weekCostUsd: provTotals.costUsd,
-        weekRecords: provTotals.records,
-        weekSessions: provTotals.sessions,
-        cacheHitPercent: cacheAgg
-          ? computeCacheHitPercent(cacheAgg.uncached, cacheAgg.cached, cacheAgg.creation)
-          : null,
-        hasQuotaWindow,
-        isCustomEndpoint,
-      });
+      const existingLedger = ledgerByKind.get(normalizedKind);
+      if (existingLedger) {
+        ledgerByKind.set(normalizedKind, {
+          ...existingLedger,
+          weekTokens: existingLedger.weekTokens + provTotals.totalTokens,
+          weekCostUsd: existingLedger.weekCostUsd + provTotals.costUsd,
+          weekRecords: existingLedger.weekRecords + provTotals.records,
+          weekSessions: existingLedger.weekSessions + provTotals.sessions,
+          hasQuotaWindow: existingLedger.hasQuotaWindow || hasQuotaWindow,
+          isCustomEndpoint: existingLedger.isCustomEndpoint || isCustomEndpoint,
+        });
+      } else {
+        ledgerByKind.set(normalizedKind, {
+          key: `usage:${normalizedKind}`,
+          providerKind: normalizedKind,
+          providerName:
+            configured?.displayName ??
+            resolveStatusBarProviderName(
+              normalizedKind,
+              undefined,
+              normalizedKind,
+              displayOptions?.entries,
+            ),
+          todayTokens: todayProv?.totalTokens ?? 0,
+          todayCostUsd: todayProv?.costUsd ?? 0,
+          weekTokens: provTotals.totalTokens,
+          weekCostUsd: provTotals.costUsd,
+          weekRecords: provTotals.records,
+          weekSessions: provTotals.sessions,
+          cacheHitPercent: cacheAgg
+            ? computeCacheHitPercent(cacheAgg.uncached, cacheAgg.cached, cacheAgg.creation)
+            : null,
+          hasQuotaWindow,
+          isCustomEndpoint,
+        });
+      }
     }
   }
 
@@ -598,15 +661,17 @@ export function collectStatusBarUsageSummary(
   for (const provider of providers) {
     if (!provider.enabled) continue;
 
+    const providerKind = resolveServerProviderUsageKind(provider, displayOptions?.entries);
+
     // HARD COMPLIANCE BOUNDARY: Antigravity must never display or call non-ACP quota endpoints.
-    if (provider.driver === "antigravity") {
+    if (providerKind === "antigravity") {
       const authenticated = provider.auth?.status === "authenticated";
       antigravityEntries.push({
         providerInstanceId: provider.instanceId,
         providerName: resolveStatusBarProviderName(
           provider.instanceId,
           provider.displayName,
-          provider.driver,
+          provider.driver === "acpRegistry" ? providerKind : provider.driver,
           displayOptions?.entries,
         ),
         authenticated,
@@ -630,7 +695,7 @@ export function collectStatusBarUsageSummary(
     const rawWindows = provider.usageLimits?.windows;
     if (!Array.isArray(rawWindows) || rawWindows.length === 0) continue;
 
-    windowProviderKinds.add(normalizeUsageProviderKind(provider.driver));
+    windowProviderKinds.add(providerKind);
 
     for (const win of rawWindows) {
       const usedPercent = readWindowUsedPercent(win);

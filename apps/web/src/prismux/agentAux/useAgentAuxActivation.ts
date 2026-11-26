@@ -3,8 +3,9 @@ import type {
   OrchestrationV2GetNativeChildWorkResult,
   ScopedThreadRef,
 } from "@prismux/core-contracts";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { useStableCallback } from "../../hooks/useStableCallback";
 import { useRightPanelStore } from "../../rightPanelStore";
 import { orchestrationEnvironment } from "../../state/orchestration";
 import { useEnvironmentQuery } from "../../state/query";
@@ -24,10 +25,76 @@ import {
   type AgentAuxOverviewEntryData,
 } from "./AgentAuxPanel";
 
-const POLL_INTERVAL_MS = 4000;
+export const AGENT_AUX_POLL_INTERVAL_MS = 12_000;
 
-// Module-level memory so auto-open fires strictly ONCE per (threadKey + activationKey),
-// even if the user closes the right sidebar tab and switches back and forth.
+const ACTIVE_AUX_STATUSES = new Set([
+  "running",
+  "streaming",
+  "in_progress",
+  "active",
+  "working",
+  "pending",
+  "queued",
+  "starting",
+  "thinking",
+  "tool_calling",
+]);
+
+function isActiveStatusValue(raw: unknown): boolean {
+  return typeof raw === "string" && ACTIVE_AUX_STATUSES.has(raw.trim().toLowerCase());
+}
+
+/**
+ * Determines whether the active thread (or any of its direct child subagents) is currently
+ * executing so `/v1/agent-aux/inspect` polling stays strictly gated.
+ */
+export function isAgentAuxThreadActivelyRunning(
+  projection: AgentAuxProjectionLike | null | undefined,
+  relationshipShells?: ReadonlyArray<AgentAuxThreadShellLike> | undefined,
+): boolean {
+  if (projection && typeof projection === "object") {
+    const rec = projection as unknown as Record<string, unknown>;
+    const thread =
+      rec.thread && typeof rec.thread === "object" ? (rec.thread as Record<string, unknown>) : null;
+    if (
+      isActiveStatusValue(thread?.status) ||
+      isActiveStatusValue(rec.status) ||
+      isActiveStatusValue((rec.runtime as Record<string, unknown> | undefined)?.status) ||
+      isActiveStatusValue((rec.latestRun as Record<string, unknown> | undefined)?.status) ||
+      isActiveStatusValue((rec.session as Record<string, unknown> | undefined)?.status)
+    ) {
+      return true;
+    }
+    if (rec.activeTurn && typeof rec.activeTurn === "object") {
+      const turnStatus = (rec.activeTurn as Record<string, unknown>).status;
+      if (turnStatus === undefined || isActiveStatusValue(turnStatus)) {
+        return true;
+      }
+    }
+    if (Array.isArray(projection.subagents)) {
+      for (const subagent of projection.subagents) {
+        if (isActiveStatusValue((subagent as Record<string, unknown>)?.status)) {
+          return true;
+        }
+      }
+    }
+  }
+  if (Array.isArray(relationshipShells)) {
+    for (const shell of relationshipShells) {
+      const rec = shell as unknown as Record<string, unknown>;
+      if (
+        isActiveStatusValue((rec.runtime as Record<string, unknown> | undefined)?.status) ||
+        isActiveStatusValue((rec.latestRun as Record<string, unknown> | undefined)?.status) ||
+        isActiveStatusValue((rec.source as Record<string, unknown> | undefined)?.status) ||
+        isActiveStatusValue(rec.status)
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 const autoOpenedActivationKeys = new Set<string>();
 
 export function resetAgentAuxAutoOpenMemoryForTest(): void {
@@ -109,102 +176,114 @@ export function useAgentAuxActivation(
     isProviderNativeSubagent = false,
   } = input;
 
-  const [daemonSnapshot, setDaemonSnapshot] = useState<DaemonAgentAuxInspectResponse | null>(null);
+  const [snapshotState, setSnapshotState] = useState<{
+    readonly threadKey: string | null;
+    readonly snapshot: DaemonAgentAuxInspectResponse | null;
+  }>({ threadKey: null, snapshot: null });
   const [isLoading, setIsLoading] = useState(false);
   const fetchSeqRef = useRef(0);
 
   const threadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
-  const providerSessionId = useMemo(
-    () => extractAgentAuxProviderSessionId(projection),
-    [projection],
-  );
+  const daemonSnapshot = snapshotState.threadKey === threadKey ? snapshotState.snapshot : null;
 
-  // Read nativeChildWork only for server threads that are provider-native subagents
-  const nativeChildWorkAtom = useMemo(() => {
-    if (!isServerThread || !activeThreadRef || !isProviderNativeSubagent) return null;
-    return orchestrationEnvironment.nativeChildWork({
-      environmentId: activeThreadRef.environmentId,
-      input: { threadId: activeThreadRef.threadId },
-    });
-  }, [isServerThread, activeThreadRef, isProviderNativeSubagent]);
+  const isAuxPanelOpen = useRightPanelStore((state) => {
+    if (!threadKey) return false;
+    const panel = state.byThreadKey[threadKey];
+    return Boolean(panel?.isOpen && panel.activeSurfaceId === "agent-aux");
+  });
+  const isThreadRunning = isAgentAuxThreadActivelyRunning(projection, relationshipShells);
+  const shouldPollAux =
+    isServerThread && Boolean(activeThreadRef) && (isThreadRunning || isAuxPanelOpen);
+  const providerSessionId = extractAgentAuxProviderSessionId(projection);
+
+  const nativeChildWorkAtom =
+    isServerThread && activeThreadRef && isProviderNativeSubagent
+      ? orchestrationEnvironment.nativeChildWork({
+          environmentId: activeThreadRef.environmentId,
+          input: { threadId: activeThreadRef.threadId },
+        })
+      : null;
 
   const nativeChildWorkQuery = useEnvironmentQuery<
     OrchestrationV2GetNativeChildWorkResult,
     unknown
   >(nativeChildWorkAtom);
 
-  const fetchSnapshot = useCallback(async () => {
-    if (!isServerThread || !activeThreadRef) {
-      setDaemonSnapshot(null);
-      return;
-    }
-    if (!providerSessionId && !cwd?.trim()) {
-      setDaemonSnapshot(null);
-      return;
-    }
-    const seq = ++fetchSeqRef.current;
-    setIsLoading(true);
-    try {
-      const result = await inspectAgentAux({
-        provider: provider ?? null,
-        sessionId: providerSessionId,
-        cwd: cwd ?? null,
-      });
-      if (fetchSeqRef.current === seq) {
-        setDaemonSnapshot(result);
+  const fetchSnapshot = useStableCallback(
+    async (params?: {
+      readonly targetThreadKey?: string | null;
+      readonly targetProvider?: string | null | undefined;
+      readonly targetSessionId?: string | null;
+      readonly targetCwd?: string | null | undefined;
+    }) => {
+      const effectiveThreadKey = params ? (params.targetThreadKey ?? null) : threadKey;
+      const effectiveProvider = params ? params.targetProvider : provider;
+      const effectiveSessionId = params ? (params.targetSessionId ?? null) : providerSessionId;
+      const effectiveCwd = params ? params.targetCwd : cwd;
+      if (!isServerThread || !activeThreadRef || !effectiveThreadKey) {
+        setSnapshotState({ threadKey: effectiveThreadKey, snapshot: null });
+        return;
       }
-    } catch {
-      // Daemon may be offline in standalone dev or test environments; keep T3 live subagents working.
-      if (fetchSeqRef.current === seq) {
-        setDaemonSnapshot(null);
+      if (!effectiveSessionId && !effectiveCwd?.trim()) {
+        setSnapshotState({ threadKey: effectiveThreadKey, snapshot: null });
+        return;
       }
-    } finally {
-      if (fetchSeqRef.current === seq) {
-        setIsLoading(false);
+      const seq = ++fetchSeqRef.current;
+      setIsLoading(true);
+      try {
+        const result = await inspectAgentAux({
+          provider: effectiveProvider ?? null,
+          sessionId: effectiveSessionId,
+          cwd: effectiveCwd ?? null,
+        });
+        if (fetchSeqRef.current === seq) {
+          setSnapshotState({ threadKey: effectiveThreadKey, snapshot: result });
+        }
+      } catch {
+        if (fetchSeqRef.current === seq) {
+          setSnapshotState({ threadKey: effectiveThreadKey, snapshot: null });
+        }
+      } finally {
+        if (fetchSeqRef.current === seq) {
+          setIsLoading(false);
+        }
       }
-    }
-  }, [isServerThread, activeThreadRef, provider, providerSessionId, cwd]);
-
-  // Reset snapshot on thread switch and poll periodically while mounted on server threads
-  useEffect(() => {
-    setDaemonSnapshot(null);
-    if (!isServerThread || !activeThreadRef) return;
-    void fetchSnapshot();
-    const timer = window.setInterval(() => {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      void fetchSnapshot();
-    }, POLL_INTERVAL_MS);
-    return () => window.clearInterval(timer);
-  }, [isServerThread, activeThreadRef, fetchSnapshot]);
-
-  const model = useMemo(
-    () =>
-      buildAgentAuxViewModel({
-        provider,
-        threadId: activeThreadRef?.threadId ?? null,
-        daemonSnapshot,
-        projection,
-        relationshipShells,
-        nativeChildWork: nativeChildWorkQuery.data?.children,
-      }),
-    [
-      provider,
-      activeThreadRef?.threadId,
-      daemonSnapshot,
-      projection,
-      relationshipShells,
-      nativeChildWorkQuery.data?.children,
-    ],
+    },
   );
 
-  const overviewEntry = useMemo(() => toAgentAuxOverviewEntry(model), [model]);
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- manages 12s daemon polling timer gated to running threads or an open agent-aux panel
+  useEffect(() => {
+    if (!shouldPollAux) return;
+    const params = {
+      targetThreadKey: threadKey,
+      targetProvider: provider,
+      targetSessionId: providerSessionId,
+      targetCwd: cwd,
+    };
+    void fetchSnapshot(params);
+    const timer = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      void fetchSnapshot(params);
+    }, AGENT_AUX_POLL_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [shouldPollAux, threadKey, provider, providerSessionId, cwd, fetchSnapshot]);
 
-  // Strict activation-only one-shot auto-popup + silent metadata sync when already open
+  const model = buildAgentAuxViewModel({
+    provider,
+    threadId: activeThreadRef?.threadId ?? null,
+    daemonSnapshot,
+    projection,
+    relationshipShells,
+    nativeChildWork: nativeChildWorkQuery.data?.children,
+  });
+
+  const overviewEntry = toAgentAuxOverviewEntry(model);
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- pushes active agent-aux metadata and one-shot auto-open into external zustand right-panel store
   useEffect(() => {
     if (!activeThreadRef || !model.active || !model.kind) return;
     const store = useRightPanelStore.getState();
 
-    // Keep open tab title/badge up to date without stealing focus or reopening
     store.updateAgentAux(activeThreadRef, {
       title: model.title || model.badgeLabel,
       auxKind: model.kind,
@@ -232,15 +311,9 @@ export function useAgentAuxActivation(
       },
       true,
     );
-  }, [
-    activeThreadRef,
-    embedded,
-    isServerThread,
-    model,
-    threadKey,
-  ]);
+  }, [activeThreadRef, embedded, isServerThread, model, threadKey]);
 
-  const openAuxPanel = useCallback(() => {
+  const openAuxPanel = () => {
     if (!activeThreadRef || !model.active || !model.kind) return;
     useRightPanelStore.getState().openAgentAux(activeThreadRef, {
       title: model.title || model.badgeLabel,
@@ -248,12 +321,12 @@ export function useAgentAuxActivation(
       provider: model.provider,
       activeCount: model.activeCount,
     });
-  }, [activeThreadRef, model]);
+  };
 
-  const refresh = useCallback(() => {
+  const refresh = () => {
     void fetchSnapshot();
     if (nativeChildWorkAtom) nativeChildWorkQuery.refresh();
-  }, [fetchSnapshot, nativeChildWorkAtom, nativeChildWorkQuery]);
+  };
 
   return {
     model,

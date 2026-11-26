@@ -1,7 +1,7 @@
 import { useGT } from "gt-react";
 import { PlayIcon, WrapTextIcon, CheckIcon, CopyIcon } from "lucide-react";
 import { toHtml } from "hast-util-to-html";
-import React, { use, useEffect, useState, type ReactNode } from "react";
+import React, { startTransition, use, useEffect, useState, type ReactNode } from "react";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useClientSettings } from "../../hooks/useSettings";
@@ -30,6 +30,8 @@ import { PierreEntryIcon } from "./PierreEntryIcon";
 
 const MAX_HIGHLIGHT_CACHE_ENTRIES = 500;
 const MAX_HIGHLIGHT_CACHE_MEMORY_BYTES = 50 * 1024 * 1024;
+/** Defer main-thread Shiki tokenization for large completed blocks (> 5 KB) so thread switching stays non-blocking. */
+const LARGE_CODE_BLOCK_THRESHOLD_BYTES = 5 * 1024;
 
 const highlightedCodeCache = new LRUCache<string>(
   MAX_HIGHLIGHT_CACHE_ENTRIES,
@@ -300,6 +302,17 @@ export function SuspenseShikiCodeBlock({
     );
   }
 
+  if (!isStreaming && !hasStreamed && code.length > LARGE_CODE_BLOCK_THRESHOLD_BYTES) {
+    return (
+      <DeferredLargeShikiCodeBlock
+        code={code}
+        language={language}
+        themeName={themeName}
+        cacheKey={cacheKey}
+      />
+    );
+  }
+
   return (
     <UncachedShikiCodeBlock
       code={code}
@@ -309,6 +322,88 @@ export function SuspenseShikiCodeBlock({
       isStreaming={isStreaming}
       preserveLines={isStreaming || hasStreamed}
     />
+  );
+}
+
+interface DeferredLargeShikiCodeBlockProps {
+  code: string;
+  language: string;
+  themeName: DiffThemeName;
+  cacheKey: string;
+}
+
+function DeferredLargeShikiCodeBlock({
+  code,
+  language,
+  themeName,
+  cacheKey,
+}: DeferredLargeShikiCodeBlockProps) {
+  const [rendered, setRendered] = useState<{ readonly key: string; readonly html: string } | null>(
+    null,
+  );
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- schedules non-blocking idle tokenization for completed >5 KB code blocks and cancels on unmount
+  useEffect(() => {
+    let cancelled = false;
+    let idleHandle: number | null = null;
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+    const runHighlight = () => {
+      void getSyntaxHighlighterPromise(language).then(
+        (highlighter) => {
+          if (cancelled) return;
+          let html: string;
+          try {
+            html = highlighter.codeToHtml(code, { lang: language, theme: themeName });
+          } catch (error) {
+            console.warn(
+              `Code highlighting failed for language "${language}", falling back to plain text.`,
+              error instanceof Error ? error.message : error,
+            );
+            html = highlighter.codeToHtml(code, { lang: "text", theme: themeName });
+          }
+          highlightedCodeCache.set(cacheKey, html, estimateHighlightedSize(html, cacheKey));
+          startTransition(() => {
+            if (!cancelled) {
+              setRendered({ key: cacheKey, html });
+            }
+          });
+        },
+        () => {
+          // Keep plain fallback visible if the grammar loader fails.
+        },
+      );
+    };
+
+    if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+      idleHandle = window.requestIdleCallback(runHighlight, { timeout: 150 });
+    } else {
+      timeoutHandle = setTimeout(runHighlight, 0);
+    }
+
+    return () => {
+      cancelled = true;
+      if (idleHandle !== null && typeof window !== "undefined" && typeof window.cancelIdleCallback === "function") {
+        window.cancelIdleCallback(idleHandle);
+      }
+      if (timeoutHandle !== null) {
+        clearTimeout(timeoutHandle);
+      }
+    };
+  }, [cacheKey, code, language, themeName]);
+
+  if (rendered?.key === cacheKey) {
+    return (
+      <div className="chat-markdown-shiki" dangerouslySetInnerHTML={{ __html: rendered.html }} />
+    );
+  }
+
+  return (
+    <div className="chat-markdown-shiki" data-deferred-highlight="pending">
+      <pre className="shiki">
+        <code>{code}</code>
+      </pre>
+    </div>
   );
 }
 

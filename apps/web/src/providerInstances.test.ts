@@ -639,6 +639,7 @@ describe("provider icon metadata", () => {
     );
     expect(localEntry?.acpRegistryAgentId).toBeUndefined();
     expect(localEntry?.acpRegistryIconUrl).toBeUndefined();
+    expect(localEntry?.acpCommandPath).toBe("dsh");
     expect(localEntry?.enabled).toBe(false);
     expect(localEntry?.snapshot).toBe(snapshots[0]?.snapshot);
 
@@ -652,6 +653,7 @@ describe("provider icon metadata", () => {
     );
     expect(restoredEntry?.acpRegistryAgentId).toBe("swe-agent");
     expect(restoredEntry?.acpRegistryIconUrl).toBe(iconUrl);
+    expect(restoredEntry?.acpCommandPath).toBeUndefined();
     expect(restoredEntry?.enabled).toBe(true);
   });
 
@@ -849,5 +851,39 @@ describe("global provider SSOT ordering & custom naming helpers", () => {
       "cursor",
       "gemini",
     ]);
+  });
+
+  it("resolves renamed local ACP command entries via acpCommandPath without setting acpRegistryAgentId", () => {
+    const localDshId = ProviderInstanceId.make("acp_local_custom_7");
+    const entries = providerInstanceEntriesFor(
+      [
+        provider({
+          provider: ProviderDriverKind.make("acpRegistry"),
+          instanceId: localDshId,
+          displayName: "我的本地助手",
+        }),
+      ],
+      {
+        providerOrder: [localDshId],
+        providerInstances: {
+          [localDshId]: {
+            driver: ProviderDriverKind.make("acpRegistry"),
+            enabled: true,
+            displayName: "我的本地助手",
+            config: {
+              source: "local",
+              commandPath: "C:\\Tools\\DeepSeek\\dsh.exe",
+            },
+          },
+        },
+        projectSettingsOverrides: {},
+      },
+      null,
+    );
+
+    expect(entries[0]?.acpRegistryAgentId).toBeUndefined();
+    expect(entries[0]?.acpCommandPath).toBe("C:\\Tools\\DeepSeek\\dsh.exe");
+    expect(resolveConfiguredProviderLabel("dsh", entries)).toBe("我的本地助手");
+    expect(resolveConfiguredProviderLabel("deepseek-harness", entries)).toBe("我的本地助手");
   });
 });

@@ -463,6 +463,41 @@ export default defineConfig(({ command }) => {
             asset.originalFileNames.some((path) => /[/\\]pdfjs-dist[/\\]wasm[/\\]/.test(path))
               ? `assets/pdfjs-${pdfjsPkg.version}/[name][extname]`
               : "assets/[name]-[hash][extname]",
+          codeSplitting: {
+            groups: [
+              {
+                name: "vendor-react",
+                test: /[\\/]node_modules[\\/](?:react|react-dom|scheduler)[\\/]/,
+                priority: 40,
+              },
+              {
+                name: "vendor-tanstack",
+                test: /[\\/]node_modules[\\/]@tanstack[\\/]/,
+                priority: 30,
+              },
+              {
+                name: "vendor-lucide",
+                test: /[\\/]node_modules[\\/]lucide-react[\\/]/,
+                priority: 25,
+              },
+              {
+                name: "vendor-xterm",
+                test: /[\\/]node_modules[\\/]@xterm[\\/]/,
+                priority: 25,
+              },
+              {
+                name: "vendor-shiki-core",
+                // Keep @shikijs/langs and @shikijs/themes individually lazy-loaded on demand.
+                test: /[\\/]node_modules[\\/](?:@shikijs[\\/](?:core|engine-oniguruma|types)|vscode-oniguruma)[\\/]/,
+                priority: 20,
+              },
+              {
+                name: "vendor-markdown",
+                test: /[\\/]node_modules[\\/](?:react-markdown|remark-|rehype-|unified|micromark|mdast-|hast-|unist-|katex)[\\/]/,
+                priority: 20,
+              },
+            ],
+          },
         },
       },
     },

@@ -2,17 +2,20 @@ import { ProviderDriverKind, ProviderInstanceId } from "@prismux/core-contracts"
 import { GTProvider, initializeGT } from "gt-react";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { ProviderInstanceEntry } from "../../providerInstances";
 import {
+  CALL_LOGS_PAGE_SIZE,
   UsageCallLogsSection,
   filterAndSortCallLogs,
   formatCallTimestamp,
 } from "./UsageCallLogsSection";
 import { deriveSessionTelemetryFromProjection } from "../chat/useSessionCallTelemetry";
 import {
+  MAX_LIVE_TELEMETRY_THREADS,
   MAX_USAGE_CALL_LOGS,
+  USAGE_CALL_PERSIST_DEBOUNCE_MS,
   USAGE_CALL_TELEMETRY_STORAGE_KEY,
   clampTtftToDuration,
   clearSessionLiveTelemetry,
@@ -20,6 +23,7 @@ import {
   computeCacheHitRate,
   computeOutputTps,
   computeUsageCallSummaryMetrics,
+  flushUsageCallLogsPersistence,
   formatCacheHitRate,
   formatDurationMs,
   formatTps,
@@ -505,5 +509,109 @@ describe("usageCallTelemetryStore", () => {
     expect(htmlWithoutConfigured).toContain("group/deepseek");
     expect(htmlWithoutConfigured).not.toContain('["magpie"');
     expect(htmlWithoutConfigured).not.toContain(">acpRegistry<");
+  });
+
+  it("caps liveByThread at 50 threads LRU, debounces localStorage writes by 1000ms, and paginates large call logs tables", () => {
+    vi.useFakeTimers();
+    const previousStorage = globalThis.localStorage;
+    const setItemSpy = vi.fn();
+    const backing = new Map<string, string>();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (key: string) => backing.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          setItemSpy(key, value);
+          backing.set(key, value);
+        },
+        removeItem: (key: string) => {
+          backing.delete(key);
+        },
+      },
+    });
+    try {
+      // 1. Recording 65 distinct threads caps liveByThread to MAX_LIVE_TELEMETRY_THREADS (50)
+      for (let i = 0; i < MAX_LIVE_TELEMETRY_THREADS + 15; i += 1) {
+        vi.advanceTimersByTime(10);
+        updateSessionLiveTelemetry(`thread-${i}`, {
+          provider: "codex",
+          model: "gpt-5.4-codex",
+          outputTokens: 10 + i,
+          active: false,
+        });
+      }
+      expect(getSessionLiveTelemetry("thread-0")).toBeNull();
+      expect(getSessionLiveTelemetry(`thread-${MAX_LIVE_TELEMETRY_THREADS + 14}`)).not.toBeNull();
+
+      // 2. Rapid recordModelCallTelemetry writes coalesce into a single debounced localStorage serialization
+      setItemSpy.mockClear();
+      for (let i = 0; i < 10; i += 1) {
+        recordModelCallTelemetry({
+          id: `debounced-${i}`,
+          timestamp: 500_000 + i * 100,
+          provider: "codex",
+          model: "gpt-5.4-codex",
+          inputTokens: 100,
+          outputTokens: 20 + i,
+        });
+      }
+      expect(setItemSpy).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(USAGE_CALL_PERSIST_DEBOUNCE_MS);
+      expect(setItemSpy).toHaveBeenCalledTimes(1);
+
+      // Flush writes immediately when requested
+      recordModelCallTelemetry({
+        id: "debounced-flush",
+        timestamp: 600_000,
+        provider: "codex",
+        model: "gpt-5.4-codex",
+        inputTokens: 50,
+        outputTokens: 10,
+      });
+      expect(setItemSpy).toHaveBeenCalledTimes(1);
+      flushUsageCallLogsPersistence();
+      expect(setItemSpy).toHaveBeenCalledTimes(2);
+
+      // 3. UsageCallLogsSection paginates 120 rows to CALL_LOGS_PAGE_SIZE (50) rows per page
+      initializeGT({ defaultLocale: "en", locales: ["en", "zh"] });
+      const manyLogs = Array.from({ length: CALL_LOGS_PAGE_SIZE * 2 + 20 }, (_, idx) => ({
+        id: `paged-${idx}`,
+        timestamp: 1_764_000_000_000 + idx * 1000,
+        provider: "codex",
+        model: "gpt-5.4-codex",
+        ttftMs: 250,
+        durationMs: 1250,
+        tps: 80,
+        inputTokens: 500,
+        cachedInputTokens: 500,
+        cacheCreationTokens: 0,
+        outputTokens: 80,
+        totalTokens: 1080,
+        cacheHitRate: 0.5,
+        status: "completed" as const,
+        source: "backend" as const,
+      }));
+      const pagedHtml = renderToStaticMarkup(
+        createElement(
+          GTProvider,
+          { locale: "en", translations: {} },
+          createElement(UsageCallLogsSection, {
+            logs: manyLogs,
+            timeZone: "UTC",
+            hour12: false,
+            providerEntries: [],
+          }),
+        ),
+      );
+      expect(pagedHtml).toContain('data-testid="usage-call-logs-pagination"');
+      expect(pagedHtml).toContain(`1–${CALL_LOGS_PAGE_SIZE} / ${manyLogs.length}`);
+      expect(pagedHtml.match(/aria-expanded="false"/g)).toHaveLength(CALL_LOGS_PAGE_SIZE);
+    } finally {
+      vi.useRealTimers();
+      Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        value: previousStorage,
+      });
+    }
   });
 });

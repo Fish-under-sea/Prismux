@@ -51,6 +51,7 @@ import type {
   DaemonSystemResourcesResponse,
 } from "./daemonClient";
 import { useOptionalPrismuxRuntime } from "./PrismuxRuntimeProvider";
+import { useOptionalPrismuxTelemetry } from "./PrismuxTelemetryContext";
 import { KeepAwakeStatusPopover } from "./statusBar/KeepAwakeStatusPopover";
 import { PortsStatusPopover } from "./statusBar/PortsStatusPopover";
 import {
@@ -93,6 +94,7 @@ import {
 import {
   collectStatusBarUsageSummary,
   formatCompactUsageTokens,
+  resolveServerProviderUsageKind,
   type PrismuxProviderProbeSnapshot,
 } from "./statusBar/statusBarUsage";
 import {
@@ -131,8 +133,8 @@ interface NavigatorWithWakeLock {
   };
 }
 
-const RESOURCES_OPEN_POLL_MS = 2_000;
-const RESOURCES_IDLE_POLL_MS = 5_000;
+const RESOURCES_OPEN_POLL_MS = 3_000;
+const RESOURCES_IDLE_POLL_MS = 15_000;
 const RESOURCES_EARLY_WARMUP_MS = 1_200;
 
 const STATUS_POPOVER_POPUP_CLASS =
@@ -162,6 +164,12 @@ export interface PrismuxStatusBarProps {
 export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBarProps = {}) {
   usePrismuxTraySync();
   const runtime = useOptionalPrismuxRuntime();
+  const telemetry = useOptionalPrismuxTelemetry();
+  const setSystemResourcesSnapshot = telemetry?.setSystemResourcesSnapshot;
+  const setPortsPopoverOpen = telemetry?.setPortsPopoverOpen;
+  const refreshSystemResourcesAction =
+    telemetry?.refreshSystemResources ?? runtime?.refreshSystemResources;
+  const refreshSystemPortsAction = telemetry?.refreshSystemPorts ?? runtime?.refreshSystemPorts;
   const scrollStripRef = useRef<HTMLDivElement | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
 
@@ -340,6 +348,24 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
     };
   }, [quotaOpen]);
 
+  const configuredProbeProviderIds = useMemo(() => {
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const provider of allProviders) {
+      if (!provider.enabled) continue;
+      const kind = resolveServerProviderUsageKind(
+        provider,
+        statusBarProviderDisplayOptions.entries,
+      );
+      const normalized = kind.trim().toLowerCase();
+      if (!normalized || seen.has(normalized)) continue;
+      seen.add(normalized);
+      ids.push(normalized);
+    }
+    ids.sort();
+    return ids;
+  }, [allProviders, statusBarProviderDisplayOptions.entries]);
+
   const fetchProviderProbeSnapshots = useCallback(
     async (refresh = false) => {
       if (!runtime?.daemonInfo.ready) return;
@@ -348,7 +374,13 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
         await providerProbeInflightRef.current;
         return;
       }
-      const endpoint = refresh ? "/v1/providers/probe?refresh=1" : "/v1/providers/probe";
+      const params = new URLSearchParams();
+      if (refresh) params.set("refresh", "1");
+      if (configuredProbeProviderIds.length > 0) {
+        params.set("providers", configuredProbeProviderIds.join(","));
+      }
+      const qs = params.toString();
+      const endpoint = qs ? `/v1/providers/probe?${qs}` : "/v1/providers/probe";
       const run = runtime.daemon.requestJson<DaemonProvidersProbeResponse>(endpoint).then(
         (response) => {
           if (Array.isArray(response?.providers)) {
@@ -368,7 +400,7 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
         }
       }
     },
-    [runtime?.daemon, runtime?.daemonInfo.ready],
+    [configuredProbeProviderIds, runtime?.daemon, runtime?.daemonInfo.ready],
   );
 
   // Lightweight single-shot `/v1/providers/probe` read on mount/daemon-ready (zero polling timer).
@@ -419,15 +451,15 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
     setQuotaOpen(false);
   }
 
-  // Prefer whichever resources snapshot is newer between runtime context and live status-bar sampling.
+  // Prefer whichever resources snapshot is newer between telemetry context and live status-bar sampling.
   const effectiveResources = useMemo(() => {
-    const ctxRes = runtime?.systemResources ?? null;
+    const ctxRes = telemetry?.systemResources ?? runtime?.systemResources ?? null;
     if (!liveResources) return ctxRes;
     if (!ctxRes) return liveResources;
     const liveTs = liveResources.collectedAt ?? liveResources.sampledAt ?? 0;
     const ctxTs = ctxRes.collectedAt ?? ctxRes.sampledAt ?? 0;
     return liveTs >= ctxTs ? liveResources : ctxRes;
-  }, [liveResources, runtime?.systemResources]);
+  }, [liveResources, runtime?.systemResources, telemetry?.systemResources]);
 
   const resourcesSummary = useMemo(
     () => normalizeResourcesSummary(effectiveResources),
@@ -610,19 +642,22 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
     }
   }, []);
 
+  const daemonReady = Boolean(runtime?.daemonInfo.ready);
+  const daemonClient = runtime?.daemon ?? null;
   const fetchLiveResources = useCallback(
     async (options: { forceRefresh: boolean; showSpinner: boolean }) => {
-      if (!runtime?.daemonInfo.ready) return;
+      if (!daemonReady) return;
       if (options.showSpinner) {
         setManualResourcesLoading(true);
       }
       try {
-        if (typeof runtime.daemon?.fetchSystemResources === "function") {
-          const res = await runtime.daemon.fetchSystemResources(options.forceRefresh);
+        if (typeof daemonClient?.fetchSystemResources === "function") {
+          const res = await daemonClient.fetchSystemResources(options.forceRefresh);
           setLiveResources(res);
+          setSystemResourcesSnapshot?.(res);
           setLiveResourcesError(null);
         } else {
-          await runtime.refreshSystemResources();
+          await refreshSystemResourcesAction?.();
           setLiveResourcesError(null);
         }
       } catch (err) {
@@ -635,12 +670,14 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
         }
       }
     },
-    [runtime],
+    [daemonClient, daemonReady, refreshSystemResourcesAction, setSystemResourcesSnapshot],
   );
 
-  // Silent live resource polling (3s while popover open, 8s while visible, paused when occluded).
+  // Silent live resource polling: ONLY runs when `visibility.resources` is enabled OR Resources popover is open
+  // (3s while popover open, 15s while segment visible, completely stopped when hidden/disabled/occluded).
+  const shouldPollResources = visibility.resources || resourcesOpen;
   useEffect(() => {
-    if (!runtime?.daemonInfo.ready || runtime.occluded) return;
+    if (!runtime?.daemonInfo.ready || runtime.occluded || !shouldPollResources) return;
     let cancelled = false;
 
     const silentPoll = () => {
@@ -653,7 +690,7 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
       void fetchLiveResources({ forceRefresh: false, showSpinner: false });
     };
 
-    // Fast follow-up right after daemon boot so post-warmup Electron & CPU% deltas appear within ~2s.
+    // Fast follow-up right after daemon boot so post-warmup Electron & CPU% deltas appear within ~1.2s.
     const warmupTimer = setTimeout(silentPoll, RESOURCES_EARLY_WARMUP_MS);
     const intervalMs = resourcesOpen ? RESOURCES_OPEN_POLL_MS : RESOURCES_IDLE_POLL_MS;
     const pollTimer = setInterval(silentPoll, intervalMs);
@@ -663,7 +700,21 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
       clearTimeout(warmupTimer);
       clearInterval(pollTimer);
     };
-  }, [fetchLiveResources, resourcesOpen, runtime?.daemonInfo.ready, runtime?.occluded]);
+  }, [
+    fetchLiveResources,
+    resourcesOpen,
+    runtime?.daemonInfo.ready,
+    runtime?.occluded,
+    shouldPollResources,
+  ]);
+
+  // Gate Ports polling in PrismuxTelemetryProvider strictly on Ports popover open.
+  useEffect(() => {
+    setPortsPopoverOpen?.(portsOpen);
+    return () => {
+      setPortsPopoverOpen?.(false);
+    };
+  }, [portsOpen, setPortsPopoverOpen]);
 
   // Respond to external requests from left sidebar port badges to open the Ports Popover.
   const lastPortsRequestIdRef = useRef<number>(0);
@@ -675,8 +726,8 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
     lastPortsRequestIdRef.current = portsPopoverRequest.id;
     setOverridePortsWorkspace(portsPopoverRequest.workspace ?? null);
     setPortsOpen(true);
-    void runtime?.refreshSystemPorts(portsPopoverRequest.workspace ?? undefined);
-  }, [portsPopoverRequest, runtime]);
+    void refreshSystemPortsAction?.(portsPopoverRequest.workspace ?? undefined);
+  }, [portsPopoverRequest, refreshSystemPortsAction]);
 
   // Dismiss custom right-click menu on outside pointerdown or Escape.
   useEffect(() => {
@@ -1030,12 +1081,12 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
       if (open) {
         setUsageOpen(false);
         setQuotaOpen(false);
-        void runtime?.refreshSystemPorts(activeWorkspaceRoot ?? undefined);
+        void refreshSystemPortsAction?.(activeWorkspaceRoot ?? undefined);
       } else {
         setOverridePortsWorkspace(null);
       }
     },
-    [activeWorkspaceRoot, runtime],
+    [activeWorkspaceRoot, refreshSystemPortsAction],
   );
 
   const handleResourcesOpenChange = useCallback(
@@ -1061,11 +1112,14 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
     }
   }, []);
 
-  const portsCount = runtime?.portsState.ports.length ?? 0;
+  const activePortsState = telemetry?.portsState ?? runtime?.portsState;
+  const portsCount = activePortsState?.ports.length ?? 0;
   const { telemetry: usageTelemetry } = usageSummary;
 
-  const effectiveResourcesLoading = manualResourcesLoading || Boolean(runtime?.resourcesLoading);
-  const effectiveResourcesError = liveResourcesError ?? runtime?.resourcesError ?? null;
+  const effectiveResourcesLoading =
+    manualResourcesLoading || Boolean(telemetry?.resourcesLoading ?? runtime?.resourcesLoading);
+  const effectiveResourcesError =
+    liveResourcesError ?? telemetry?.resourcesError ?? runtime?.resourcesError ?? null;
 
   return (
     <footer
@@ -1392,16 +1446,16 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
                 className={STATUS_POPOVER_POPUP_CLASS}
               >
                 <PortsStatusPopover
-                  state={runtime?.portsState ?? { ports: [], loading: false, error: null, failureStreak: 0, lastScannedAt: null }}
+                  state={activePortsState ?? { ports: [], loading: false, error: null, failureStreak: 0, lastScannedAt: null }}
                   activeWorkspaceRoot={activeWorkspaceRoot}
                   daemonReady={Boolean(runtime?.daemonInfo.ready)}
                   onRefresh={() =>
-                    runtime?.refreshSystemPorts(activeWorkspaceRoot ?? undefined) ??
+                    (telemetry ?? runtime)?.refreshSystemPorts(activeWorkspaceRoot ?? undefined) ??
                     Promise.resolve()
                   }
                   onKillPort={(pid) =>
-                    runtime
-                      ? runtime.killSystemPort(pid)
+                    (telemetry ?? runtime)
+                      ? (telemetry ?? runtime)!.killSystemPort(pid)
                       : Promise.resolve({ ok: false, error: "Daemon 未连接" })
                   }
                   onOpenUrl={handleOpenPortUrl}
@@ -1448,10 +1502,11 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
                     fetchLiveResources({ forceRefresh: true, showSpinner: true })
                   }
                   onKillPty={async (sessionId) => {
-                    if (!runtime) {
+                    const target = telemetry ?? runtime;
+                    if (!target) {
                       return { ok: false, sessionId, error: "Daemon 未连接" };
                     }
-                    const res = await runtime.killStalePty(sessionId);
+                    const res = await target.killStalePty(sessionId);
                     void fetchLiveResources({ forceRefresh: true, showSpinner: false });
                     return res;
                   }}

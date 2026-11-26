@@ -845,6 +845,111 @@ export interface DaemonKillStalePtyResponse {
   [key: string]: unknown;
 }
 
+export type DaemonStorageSafetyTier = "disposable" | "managed" | "protected";
+
+export type DaemonStorageCleanAction =
+  | "clean-cache"
+  | "clean-logs"
+  | "clean-updates"
+  | "clean-legacy"
+  | "clean-artifacts"
+  | "clean-worktrees"
+  | "clean-wallpapers"
+  | "compact-db";
+
+export interface DaemonStorageRootDto {
+  readonly id: string;
+  readonly label: string;
+  readonly path: string;
+  readonly bytes: number;
+  readonly exists: boolean;
+}
+
+export interface DaemonStorageNodeDto {
+  readonly id: string;
+  readonly name: string;
+  readonly path: string;
+  readonly bytes: number;
+  readonly fileCount: number;
+  readonly tier: DaemonStorageSafetyTier;
+  readonly categoryId: string;
+  readonly cleanable: boolean;
+  readonly cleanAction?: DaemonStorageCleanAction | undefined;
+  readonly children?: readonly DaemonStorageNodeDto[] | undefined;
+}
+
+export interface DaemonStoragePolicyDto {
+  readonly id: string;
+  readonly label: string;
+  readonly limitLabel: string;
+  readonly active: boolean;
+}
+
+export interface DaemonStorageInventoryResponse {
+  readonly ok?: boolean;
+  readonly scannedAt: string;
+  readonly durationMs: number;
+  readonly totalBytes: number;
+  readonly reclaimableDisposableBytes: number;
+  readonly reclaimableManagedBytes: number;
+  readonly protectedBytes: number;
+  readonly warningThresholdBytes: number;
+  readonly roots: readonly DaemonStorageRootDto[];
+  readonly categories: readonly DaemonStorageNodeDto[];
+  readonly policies: readonly DaemonStoragePolicyDto[];
+}
+
+export interface DaemonStorageCleanRequest {
+  readonly targetIds?: readonly string[];
+  readonly actions?: readonly (DaemonStorageCleanAction | string)[];
+}
+
+export interface DaemonStorageCleanResponse {
+  readonly ok: boolean;
+  readonly freedBytes: number;
+  readonly removedCount: number;
+  readonly errors: readonly string[];
+  readonly inventory: DaemonStorageInventoryResponse;
+}
+
+export interface DaemonDiagnosticsQueryOptions {
+  readonly force?: boolean | undefined;
+  readonly providers?: readonly string[] | undefined;
+  readonly includeAll?: boolean | undefined;
+}
+
+export interface DaemonProviderProbesQueryOptions {
+  readonly refresh?: boolean | undefined;
+  readonly providers?: readonly string[] | undefined;
+  readonly includeAll?: boolean | undefined;
+}
+
+export interface DaemonProviderProbeItemDto {
+  readonly providerId: string;
+  readonly displayName?: string | undefined;
+  readonly installed?: boolean | undefined;
+  readonly version?: string | null | undefined;
+  readonly binaryPath?: string | null | undefined;
+  readonly status?: string | undefined;
+  readonly authMode:
+    | "api_or_custom"
+    | "subscription_oauth"
+    | "local"
+    | "unauthenticated"
+    | "unknown"
+    | string;
+  readonly authSource: string;
+  readonly endpoint?: string | null | undefined;
+  readonly authLabel?: string | undefined;
+  readonly checkedAt?: string | undefined;
+}
+
+export interface DaemonProviderProbesResponse {
+  readonly ok?: boolean;
+  readonly providers?: readonly DaemonProviderProbeItemDto[];
+  readonly [key: string]: unknown;
+}
+
 export type DaemonCliInstallMethod = "npm-global" | "native-self-update" | "unsupported";
 
 export interface DaemonCliUpdateItemDto {
@@ -955,6 +1060,21 @@ function encodeSubPath(subPath: string): string {
     .filter((segment) => segment.length > 0)
     .map((segment) => encodeURIComponent(segment))
     .join("/");
+}
+
+function normalizeProviderQueryList(providers?: readonly string[]): string | null {
+  if (!providers || providers.length === 0) return null;
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const item of providers) {
+    const trimmed = item.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(trimmed);
+  }
+  return deduped.length > 0 ? deduped.join(",") : null;
 }
 
 export class PrismuxDaemonClient {
@@ -1384,25 +1504,81 @@ export class PrismuxDaemonClient {
     });
   }
 
-  fetchDiagnosticsServices(force = false): Promise<DaemonDiagnosticsServicesResponse> {
-    const suffix = force ? "?force=1" : "";
+  fetchDiagnosticsServices(
+    forceOrOptions: boolean | DaemonDiagnosticsQueryOptions = false,
+  ): Promise<DaemonDiagnosticsServicesResponse> {
+    const opts: DaemonDiagnosticsQueryOptions =
+      typeof forceOrOptions === "boolean" ? { force: forceOrOptions } : forceOrOptions;
+    const params = new URLSearchParams();
+    if (opts.force) {
+      params.set("force", "1");
+    }
+    const providers = normalizeProviderQueryList(opts.providers);
+    if (providers) {
+      params.set("providers", providers);
+    }
+    if (opts.includeAll) {
+      params.set("includeAll", "1");
+    }
+    const query = params.toString();
     return this.requestJson<DaemonDiagnosticsServicesResponse>(
-      `/v1/diagnostics/services${suffix}`,
+      query.length > 0 ? `/v1/diagnostics/services?${query}` : "/v1/diagnostics/services",
     );
   }
 
-  async refreshDiagnosticsServices(): Promise<DaemonDiagnosticsServicesResponse> {
+  async refreshDiagnosticsServices(
+    options: Omit<DaemonDiagnosticsQueryOptions, "force"> = {},
+  ): Promise<DaemonDiagnosticsServicesResponse> {
+    const params = new URLSearchParams();
+    const providers = normalizeProviderQueryList(options.providers);
+    if (providers) {
+      params.set("providers", providers);
+    }
+    if (options.includeAll) {
+      params.set("includeAll", "1");
+    }
+    const query = params.toString();
+    const path = query.length > 0 ? `/v1/diagnostics/refresh?${query}` : "/v1/diagnostics/refresh";
     try {
-      return await this.requestJson<DaemonDiagnosticsServicesResponse>(
-        "/v1/diagnostics/refresh",
-        { method: "POST" },
-      );
+      return await this.requestJson<DaemonDiagnosticsServicesResponse>(path, { method: "POST" });
     } catch (error) {
       if (error instanceof PrismuxDaemonError && (error.status === 404 || error.status === 405)) {
-        return this.fetchDiagnosticsServices(true);
+        return this.fetchDiagnosticsServices({ ...options, force: true });
       }
       throw error;
     }
+  }
+
+  runDiagnostics(
+    options: DaemonDiagnosticsQueryOptions = {},
+  ): Promise<DaemonDiagnosticsServicesResponse> {
+    if (options.force) {
+      return this.refreshDiagnosticsServices({
+        providers: options.providers,
+        includeAll: options.includeAll,
+      });
+    }
+    return this.fetchDiagnosticsServices(options);
+  }
+
+  getProviderProbes(
+    options: DaemonProviderProbesQueryOptions = {},
+  ): Promise<DaemonProviderProbesResponse> {
+    const params = new URLSearchParams();
+    if (options.refresh) {
+      params.set("refresh", "1");
+    }
+    const providers = normalizeProviderQueryList(options.providers);
+    if (providers) {
+      params.set("providers", providers);
+    }
+    if (options.includeAll) {
+      params.set("includeAll", "1");
+    }
+    const query = params.toString();
+    return this.requestJson<DaemonProviderProbesResponse>(
+      query.length > 0 ? `/v1/providers/probe?${query}` : "/v1/providers/probe",
+    );
   }
 
   fetchSystemPorts(workspace?: string): Promise<DaemonSystemPortsResponse> {
@@ -1421,6 +1597,18 @@ export class PrismuxDaemonClient {
   fetchSystemResources(forceRefresh = false): Promise<DaemonSystemResourcesResponse> {
     const suffix = forceRefresh ? "?refresh=1" : "";
     return this.requestJson<DaemonSystemResourcesResponse>(`/v1/system/resources${suffix}`);
+  }
+
+  getStorageInventory(refresh = false): Promise<DaemonStorageInventoryResponse> {
+    const suffix = refresh ? "?refresh=1" : "";
+    return this.requestJson<DaemonStorageInventoryResponse>(`/v1/system/storage${suffix}`);
+  }
+
+  cleanStorage(payload: DaemonStorageCleanRequest): Promise<DaemonStorageCleanResponse> {
+    return this.requestJson<DaemonStorageCleanResponse>("/v1/system/storage/clean", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
   }
 
   killStalePty(sessionId: string): Promise<DaemonKillStalePtyResponse> {
@@ -1793,9 +1981,24 @@ export class PrismuxDaemonClient {
 export const prismuxDaemonClient = new PrismuxDaemonClient();
 
 export const fetchDiagnosticsServices = (
-  force?: boolean,
+  forceOrOptions?: boolean | DaemonDiagnosticsQueryOptions,
 ): Promise<DaemonDiagnosticsServicesResponse> =>
-  prismuxDaemonClient.fetchDiagnosticsServices(force);
+  prismuxDaemonClient.fetchDiagnosticsServices(forceOrOptions);
+
+export const runDiagnostics = (
+  options?: DaemonDiagnosticsQueryOptions,
+): Promise<DaemonDiagnosticsServicesResponse> => prismuxDaemonClient.runDiagnostics(options);
+
+export const getProviderProbes = (
+  options?: DaemonProviderProbesQueryOptions,
+): Promise<DaemonProviderProbesResponse> => prismuxDaemonClient.getProviderProbes(options);
+
+export const getStorageInventory = (refresh = false): Promise<DaemonStorageInventoryResponse> =>
+  prismuxDaemonClient.getStorageInventory(refresh);
+
+export const cleanStorage = (
+  payload: DaemonStorageCleanRequest,
+): Promise<DaemonStorageCleanResponse> => prismuxDaemonClient.cleanStorage(payload);
 
 export const triggerSyncNow = (
   payload?: DaemonSyncTriggerRequest,

@@ -12,22 +12,13 @@ import {
 } from "@tanstack/react-router";
 import { msg, T, useGT, Var } from "gt-react";
 import { CheckIcon, CopyIcon } from "lucide-react";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { APP_DISPLAY_NAME, APP_VERSION } from "../branding";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { CommandPalette } from "../components/CommandPalette";
-import { CustomSnoozeDialogHost } from "../components/CustomSnoozeDialog";
-import { GuestShareDialogHost } from "../components/chat/GuestShareControls";
-import { UseInAnotherAppDialogHost } from "../components/mcp/UseInAnotherAppDialog";
-import { AddProjectToMachineDialogHost } from "../components/AddProjectToMachineDialog";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
-import { DevReplayHost } from "../components/DevReplayHost";
 import { FirstRunGate } from "../components/onboarding/FirstRunGate";
-import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
-import { PrismuxRemoteConnectDialogHost } from "../components/cloud/PrismuxRemoteConnectDialog";
-import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstallDialog";
-import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
 import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
 import { DesktopAppActivationCoordinator } from "../components/desktop/DesktopAppActivationCoordinator";
 import { DesktopWebLinkCoordinator } from "../components/desktop/DesktopWebLinkCoordinator";
@@ -36,7 +27,41 @@ import { ReopenClosedViewShortcut } from "../components/ReopenClosedViewShortcut
 import { ProjectCloneToastCoordinator } from "../components/ProjectCloneToastCoordinator";
 import { ConnectDeviceApprovalCoordinator } from "../components/ConnectDeviceApprovalCoordinator";
 import { ChatGptWelcomeCoordinator } from "../components/settings/ChatGptWelcomeCoordinator";
-import { ThemeEditorHost } from "../components/settings/ThemeEditorHost";
+import { CustomSnoozeDialogHost } from "../components/CustomSnoozeDialog";
+import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
+import { UseInAnotherAppDialogHost } from "../components/mcp/UseInAnotherAppDialog";
+
+const GuestShareDialogHost = lazy(() =>
+  import("../components/chat/GuestShareControls").then((m) => ({
+    default: m.GuestShareDialogHost,
+  })),
+);
+const AddProjectToMachineDialogHost = lazy(() =>
+  import("../components/AddProjectToMachineDialog").then((m) => ({
+    default: m.AddProjectToMachineDialogHost,
+  })),
+);
+const DevReplayHost = lazy(() =>
+  import("../components/DevReplayHost").then((m) => ({ default: m.DevReplayHost })),
+);
+const ConnectOnboardingDialog = lazy(() =>
+  import("../components/cloud/ConnectOnboardingDialog").then((m) => ({
+    default: m.ConnectOnboardingDialog,
+  })),
+);
+const PrismuxRemoteConnectDialogHost = lazy(() =>
+  import("../components/cloud/PrismuxRemoteConnectDialog").then((m) => ({
+    default: m.PrismuxRemoteConnectDialogHost,
+  })),
+);
+const RelayClientInstallDialog = lazy(() =>
+  import("../components/cloud/RelayClientInstallDialog").then((m) => ({
+    default: m.RelayClientInstallDialog,
+  })),
+);
+const ThemeEditorHost = lazy(() =>
+  import("../components/settings/ThemeEditorHost").then((m) => ({ default: m.ThemeEditorHost })),
+);
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { Button } from "../components/ui/button";
 import { StandalonePage } from "../components/ui/standalone-page";
@@ -199,22 +224,24 @@ function RootRouteBranch() {
         </>
       ) : null}
       {isElectron ? <RunningThreadKeepAlive /> : null}
-      <RelayClientInstallDialog />
-      <ConnectOnboardingDialog />
-      <PrismuxRemoteConnectDialogHost />
       <PrismuxIpcDispatchBridge />
-      <SshPasswordPromptDialog />
       <SnapShotCoordinator />
       <ReopenClosedViewShortcut />
       <ConfirmDialogHost />
-      <CustomSnoozeDialogHost />
-      <GuestShareDialogHost />
       <ProjectCloneToastCoordinator />
       <ThreadUndoToast />
       <ConnectDeviceApprovalCoordinator />
-      <AddProjectToMachineDialogHost />
-      <UseInAnotherAppDialogHost />
-      {import.meta.env.DEV && primaryEnvironmentAuthenticated ? <DevReplayHost /> : null}
+      <Suspense fallback={null}>
+        <RelayClientInstallDialog />
+        <ConnectOnboardingDialog />
+        <PrismuxRemoteConnectDialogHost />
+        <SshPasswordPromptDialog />
+        <CustomSnoozeDialogHost />
+        <GuestShareDialogHost />
+        <AddProjectToMachineDialogHost />
+        <UseInAnotherAppDialogHost />
+        {import.meta.env.DEV && primaryEnvironmentAuthenticated ? <DevReplayHost /> : null}
+      </Suspense>
     </>
   );
   const showStatusBar = !isWelcome;
@@ -260,7 +287,9 @@ function RootRouteBranch() {
         </FirstRunGate>
       )}
       {/* Above both shells and the router, so drafts survive navigation, including to /welcome. */}
-      <ThemeEditorHost />
+      <Suspense fallback={null}>
+        <ThemeEditorHost />
+      </Suspense>
     </>
   );
 }
@@ -281,7 +310,7 @@ function RootRouteErrorView({ error }: ErrorComponentProps) {
             src="/prismux-logo.png"
             alt=""
             aria-hidden
-            className="size-4 shrink-0 rounded-[4px] object-cover"
+            className="size-4 shrink-0 rounded-sm object-cover"
           />
           <span className="text-lg font-semibold tracking-tight text-foreground">
             {APP_DISPLAY_NAME}
