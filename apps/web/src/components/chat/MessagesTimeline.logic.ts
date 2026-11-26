@@ -1708,7 +1708,14 @@ function deriveTimelineTurnFolds(
     return new Map<string, TurnFold>();
   }
   const timelineEntries = timelineRowEntries(input);
-  const unsettledRunId = deriveUnsettledRunId(input.latestRun ?? null, input.runningRunId ?? null);
+  const rawUnsettledRunId = deriveUnsettledRunId(
+    input.latestRun ?? null,
+    input.runningRunId ?? null,
+  );
+  const unsettledRunId =
+    !input.isWorking && input.runningRunId == null && input.latestRun?.status === "completed"
+      ? null
+      : rawUnsettledRunId;
   const failedRunIds = failedTimelineRunIds(timelineEntries, input.latestRun ?? null);
   const activeVisualResponseRunIds = deriveActiveVisualResponseRunIds({
     timelineEntries,
@@ -1791,7 +1798,14 @@ export function deriveMessagesTimelineRows(
       turnDiffSummaryByAssistantMessageId.set(summary.assistantMessageId, summary);
     }
   }
-  const unsettledRunId = deriveUnsettledRunId(input.latestRun ?? null, input.runningRunId ?? null);
+  const rawUnsettledRunId = deriveUnsettledRunId(
+    input.latestRun ?? null,
+    input.runningRunId ?? null,
+  );
+  const unsettledRunId =
+    !input.isWorking && input.runningRunId == null && input.latestRun?.status === "completed"
+      ? null
+      : rawUnsettledRunId;
   const revertTurnCountByUserMessageId = input.supportsConversationRollback
     ? deriveRevertTurnCountByUserMessageId({
         timelineEntries: input.timelineEntries,

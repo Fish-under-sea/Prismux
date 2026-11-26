@@ -5,10 +5,14 @@ import type {
   ScopedThreadRef,
   ThreadId,
 } from "@prismux/core-contracts";
+import {
+  DEFAULT_WORK_STEPS_COLLAPSE_TIMING,
+  type WorkStepsCollapseTiming,
+  type WorkStepsDisplay,
+} from "@prismux/core-contracts/settings";
 
 import type { SidebarThreadSummary } from "../../types";
 import { resolveSidebarRowStatus, resolveThreadLastVisitedAt } from "../Sidebar.logic";
-import { resolveAgentRuntimeLamp } from "./sidebarMicroIndicators";
 
 export type DelegatedChildThreadLike = Pick<
   SidebarThreadSummary,
@@ -30,6 +34,7 @@ export type DelegatedChildThreadLike = Pick<
   | "lastVisitedAt"
   | "pendingBackgroundTasks"
 > & {
+  readonly latestUserMessageAt?: string | null | undefined;
   readonly creationSource?: OrchestrationV2CreationSource | null | undefined;
   readonly source?:
     | {
@@ -39,11 +44,25 @@ export type DelegatedChildThreadLike = Pick<
     | undefined;
 };
 
+export type DelegatedTreeCollapseTiming = WorkStepsCollapseTiming | "never";
+
 export interface DelegatedTreeExpansionEntry {
-  /** Whether the parent had at least one running/active delegated child on last sync. */
+  /** Last reconciled auto-expand signal (`true` = should auto-expand, `false` = should auto-collapse). */
   readonly wasRunning: boolean;
-  /** User manual override (`null` = automatic expand-on-running / collapse-on-complete). */
+  /** User manual override (`null` = follow automatic expand/collapse timing). */
   readonly manualExpanded: boolean | null;
+}
+
+/**
+ * Maps chat work-steps settings to the sidebar delegated-tree collapse policy so
+ * level-2 subagent trees auto-collapse in lockstep with work steps.
+ */
+export function resolveDelegatedTreeCollapseTiming(input: {
+  readonly workStepsDisplay?: WorkStepsDisplay | undefined;
+  readonly workStepsCollapseTiming?: WorkStepsCollapseTiming | undefined;
+}): DelegatedTreeCollapseTiming {
+  if (input.workStepsDisplay === "expanded") return "never";
+  return input.workStepsCollapseTiming ?? DEFAULT_WORK_STEPS_COLLAPSE_TIMING;
 }
 
 /**
@@ -76,16 +95,125 @@ export function isPrismuxDelegatedChildThread(
 }
 
 /**
- * Returns whether a delegated child thread is currently running/active (driving both the
- * SVG branch RGB energy conduction and auto-expand policy).
+ * Returns whether a thread (parent or delegated child) is genuinely actively running right now
+ * (preparing, working, waiting on child while runtime is running, or paused mid-turn on
+ * approval/user input). NEVER returns `true` for completed (including unseen green-check ✓),
+ * failed, limited, or idle threads.
  */
-export function isDelegatedChildThreadActive(
+export function isThreadActivelyRunning(
   thread: DelegatedChildThreadLike,
   localLastVisitedAt?: string | undefined,
 ): boolean {
   const lastVisitedAt = resolveThreadLastVisitedAt(thread.lastVisitedAt, localLastVisitedAt);
   const status = resolveSidebarRowStatus({ ...thread, lastVisitedAt });
-  return resolveAgentRuntimeLamp(status).state !== "idle";
+  if (
+    status === "preparing" ||
+    status === "working" ||
+    status === "approval" ||
+    status === "input"
+  ) {
+    return true;
+  }
+  if (status === "waiting" && thread.runtime?.status === "running") {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Returns whether a delegated child thread is currently running/active (driving both the
+ * SVG branch RGB energy conduction and active-child indicators).
+ */
+export function isDelegatedChildThreadActive(
+  thread: DelegatedChildThreadLike,
+  localLastVisitedAt?: string | undefined,
+): boolean {
+  return isThreadActivelyRunning(thread, localLastVisitedAt);
+}
+
+function parseOptionalTimestampMs(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function latestTimestampMs(candidates: ReadonlyArray<string | null | undefined>): number | null {
+  let latest: number | null = null;
+  for (const candidate of candidates) {
+    const ms = parseOptionalTimestampMs(candidate);
+    if (ms !== null && (latest === null || ms > latest)) {
+      latest = ms;
+    }
+  }
+  return latest;
+}
+
+/**
+ * Returns whether any delegated child belongs to the parent's latest/current turn
+ * (i.e. no newer user message or run started in the parent after all delegated children ended).
+ */
+export function hasDelegatedChildInLatestParentTurn(
+  parent: DelegatedChildThreadLike | undefined,
+  children: readonly DelegatedChildThreadLike[],
+): boolean {
+  if (children.length === 0) return false;
+  if (parent === undefined) return true;
+  const parentTurnBoundaryMs = latestTimestampMs([
+    parent.latestUserMessageAt,
+    parent.latestRun?.requestedAt,
+    parent.latestRun?.startedAt,
+  ]);
+  if (parentTurnBoundaryMs === null) return true;
+  const latestChildMs = latestTimestampMs(
+    children.flatMap((child) => [
+      child.createdAt,
+      child.latestRun?.requestedAt,
+      child.latestRun?.startedAt,
+      child.latestRun?.completedAt,
+    ]),
+  );
+  if (latestChildMs === null) return true;
+  return latestChildMs >= parentTurnBoundaryMs;
+}
+
+/**
+ * Auto-expands while any delegated child or the parent's delegated turn is actively running,
+ * then collapses in lockstep with `workStepsCollapseTiming` (`after-turn` / `next-message` / `never`).
+ */
+export function shouldDelegatedTreeAutoExpand(input: {
+  readonly parent: DelegatedChildThreadLike | undefined;
+  readonly children: readonly DelegatedChildThreadLike[];
+  readonly collapseTiming?: DelegatedTreeCollapseTiming | undefined;
+  readonly localLastVisitedAtById?: Readonly<Record<string, string | undefined>> | undefined;
+}): boolean {
+  const {
+    parent,
+    children,
+    collapseTiming = DEFAULT_WORK_STEPS_COLLAPSE_TIMING,
+    localLastVisitedAtById,
+  } = input;
+  if (children.length === 0) return false;
+  if (collapseTiming === "never") return true;
+
+  const anyChildActive = children.some((child) => {
+    const childKey = scopedThreadKey(scopeThreadRef(child.environmentId, child.id));
+    return isDelegatedChildThreadActive(child, localLastVisitedAtById?.[childKey]);
+  });
+  if (anyChildActive) return true;
+
+  const inLatestTurn = hasDelegatedChildInLatestParentTurn(parent, children);
+  const parentActive =
+    parent !== undefined &&
+    isThreadActivelyRunning(
+      parent,
+      localLastVisitedAtById?.[scopedThreadKey(scopeThreadRef(parent.environmentId, parent.id))],
+    );
+  if (parentActive && inLatestTurn) return true;
+
+  if (collapseTiming === "next-message") {
+    return inLatestTurn;
+  }
+  return false;
 }
 
 function compareChildThreadsChronologically(

@@ -39,7 +39,7 @@ export interface WorkStepsPresentationPolicy {
   readonly mode: WorkStepsDisplay;
   /** Whether completed turns emit an outer whole-turn collapsible bar. */
   readonly foldCompletedTurns: boolean;
-  /** Whether outer completed turn bars start open by default (`detailed` shows all steps flat while remaining collapsible). */
+  /** Whether outer completed turn bars stay open unconditionally regardless of collapseTiming (`expanded` never folds). */
   readonly defaultTurnFoldOpen: boolean;
   /**
    * How contiguous tool calls between assistant replies are grouped:
@@ -79,7 +79,7 @@ const PRESENTATION_POLICY_BY_MODE: Readonly<Record<WorkStepsDisplay, WorkStepsPr
     detailed: {
       mode: "detailed",
       foldCompletedTurns: true,
-      defaultTurnFoldOpen: true,
+      defaultTurnFoldOpen: false,
       stepGrouping: "none",
       liveProcessDetail: true,
       settledReasoningPreview: true,
@@ -322,7 +322,10 @@ export function dshActivityCategoryIconName(category: DshActivityCategory): Work
 function truncateGraphemes(text: string, maxLength = LIVE_PROCESS_DETAIL_MAX_GRAPHEMES): string {
   const chars = Array.from(text);
   if (chars.length <= maxLength) return text;
-  return `${chars.slice(0, Math.max(1, maxLength - 1)).join("").trimEnd()}…`;
+  return `${chars
+    .slice(0, Math.max(1, maxLength - 1))
+    .join("")
+    .trimEnd()}…`;
 }
 
 function sanitizeInlineLine(raw: string): string {
@@ -353,9 +356,7 @@ export function latestCompletedParagraphFirstLine(text: string): string {
   while (true) {
     const nextParagraph = separator.exec(text);
     const paragraphEnd =
-      nextParagraph === null
-        ? text.length
-        : nextParagraph.index + nextParagraph[0].indexOf("\n");
+      nextParagraph === null ? text.length : nextParagraph.index + nextParagraph[0].indexOf("\n");
     const newline = text.indexOf("\n", paragraphStart);
     if (newline !== -1 && newline <= paragraphEnd) {
       const candidate = sanitizeInlineLine(text.slice(paragraphStart, newline));
@@ -471,7 +472,9 @@ export function extractWorkEntryLiveDetail(
   if (fromToolData) return fromToolData;
 
   if (entry.command?.trim()) {
-    return truncateGraphemes(sanitizeInlineLine(stripShellCommandWrapper(entry.command).displayCommand));
+    return truncateGraphemes(
+      sanitizeInlineLine(stripShellCommandWrapper(entry.command).displayCommand),
+    );
   }
   const paths = [
     ...(entry.changedFiles ?? []),
@@ -777,11 +780,7 @@ function unwrapBalancedShellQuote(text: string): string {
 }
 
 function detectShellWrapperName(rawCommand: string): string | null {
-  const match = rawCommand
-    .trim()
-    .match(
-      /^(?:"([^"]+)"|'([^']+)'|([^\s]+))/u,
-    );
+  const match = rawCommand.trim().match(/^(?:"([^"]+)"|'([^']+)'|([^\s]+))/u);
   const exe = (match?.[1] ?? match?.[2] ?? match?.[3] ?? "")
     .replaceAll("\\\\", "\\")
     .split(/[\\/]/u)
@@ -1232,7 +1231,10 @@ export function parseCompactDiffPreview(input: {
 
   const oldText = input.oldStr?.replace(/\r\n/gu, "\n");
   const newText = input.newStr?.replace(/\r\n/gu, "\n");
-  if ((oldText !== undefined && oldText.length > 0) || (newText !== undefined && newText.length > 0)) {
+  if (
+    (oldText !== undefined && oldText.length > 0) ||
+    (newText !== undefined && newText.length > 0)
+  ) {
     if (oldText) {
       for (const [idx, line] of oldText.split("\n").entries()) {
         deletions += 1;
@@ -1270,9 +1272,16 @@ export function extractReadLineRangeLabel(entry: WorkLogEntry): string | null {
   const startRaw = input.startLine ?? input.StartLine ?? input.start_line ?? input.offset;
   const endRaw = input.endLine ?? input.EndLine ?? input.end_line;
   const limitRaw = input.limit ?? input.numLines ?? input.lines;
-  const start = typeof startRaw === "number" && Number.isFinite(startRaw) && startRaw > 0 ? Math.floor(startRaw) : null;
-  const end = typeof endRaw === "number" && Number.isFinite(endRaw) && endRaw > 0 ? Math.floor(endRaw) : null;
-  const limit = typeof limitRaw === "number" && Number.isFinite(limitRaw) && limitRaw > 0 ? Math.floor(limitRaw) : null;
+  const start =
+    typeof startRaw === "number" && Number.isFinite(startRaw) && startRaw > 0
+      ? Math.floor(startRaw)
+      : null;
+  const end =
+    typeof endRaw === "number" && Number.isFinite(endRaw) && endRaw > 0 ? Math.floor(endRaw) : null;
+  const limit =
+    typeof limitRaw === "number" && Number.isFinite(limitRaw) && limitRaw > 0
+      ? Math.floor(limitRaw)
+      : null;
   if (start !== null && end !== null && end >= start) {
     return `L${start}-L${end}`;
   }
@@ -1426,14 +1435,14 @@ export function localizeWorkStepLabel(rawLabel: string, locale?: string): string
       (_m, glob, target) => `已在 ${target} 中搜索文件 ${glob}`,
     ],
     [/^Searched files\s+(.+)$/iu, (_m, glob) => `已搜索文件 ${glob}`],
-    [
-      /^Searched\s+(.+)\s+in\s+(.+)$/iu,
-      (_m, query, target) => `已在 ${target} 中搜索 ${query}`,
-    ],
+    [/^Searched\s+(.+)\s+in\s+(.+)$/iu, (_m, query, target) => `已在 ${target} 中搜索 ${query}`],
     [/^Searched in\s+(.+)$/iu, (_m, target) => `已在 ${target} 中搜索`],
     [/^Searched\s+(.+)$/iu, (_m, query) => `已搜索 ${query}`],
     [/^Web search(?:\s*[:·-]\s*|\s+)(.+)$/iu, (_m, query) => `网页搜索：${query}`],
-    [/^(?:Web fetch|Fetched|Fetch)(?:\s*[:·-]\s*|\s+)(.+)$/iu, (_m, target) => `网页抓取：${target}`],
+    [
+      /^(?:Web fetch|Fetched|Fetch)(?:\s*[:·-]\s*|\s+)(.+)$/iu,
+      (_m, target) => `网页抓取：${target}`,
+    ],
     [
       /^Tasks\s+(\d+\/\d+)(?:\s*·\s*(.+))?$/iu,
       (_m, progress, current) => (current ? `任务 ${progress} · ${current}` : `任务 ${progress}`),
@@ -1571,7 +1580,9 @@ export function extractWorkStepCollapsedPreview(
   if (todoSnapshot) {
     const activeStep = todoSnapshot.steps.find((step) => step.status === "in_progress");
     return accept(
-      activeStep ? `${todoSnapshot.summaryPillZh} · ${activeStep.title}` : todoSnapshot.summaryPillZh,
+      activeStep
+        ? `${todoSnapshot.summaryPillZh} · ${activeStep.title}`
+        : todoSnapshot.summaryPillZh,
     );
   }
 
@@ -1585,8 +1596,9 @@ export function extractWorkStepCollapsedPreview(
       newStr: payload.newStr,
     });
     const highlightLine =
-      parsedDiff?.lines.find((line) => (line.kind === "add" || line.kind === "del") && line.text.trim()) ??
-      parsedDiff?.lines.find((line) => line.kind === "context" && line.text.trim());
+      parsedDiff?.lines.find(
+        (line) => (line.kind === "add" || line.kind === "del") && line.text.trim(),
+      ) ?? parsedDiff?.lines.find((line) => line.kind === "context" && line.text.trim());
     if (highlightLine) {
       return accept(`${highlightLine.prefix}${highlightLine.text.trim()}`);
     }

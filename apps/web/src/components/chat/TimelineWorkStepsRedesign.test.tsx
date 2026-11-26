@@ -22,7 +22,7 @@ import {
   sharedReasoningTranslationCache,
 } from "../../prismux/reasoningTranslation";
 import type { WorkLogEntry } from "../../session-logic";
-import { SimpleWorkEntryRow } from "./TimelineWorkEntryRow";
+import { DshDisclosureLeadingSlot, SimpleWorkEntryRow } from "./TimelineWorkEntryRow";
 import {
   LiveWorkEntryTimelineRow,
   ThinkingTimelineRow,
@@ -1223,6 +1223,37 @@ describe("1:1 DSH NEXT Thinking & Command/Tool hierarchy & disclosure guarantees
     expect(todoHtml).toMatch(
       /class="[^"]*text-success-foreground[^"]*"[^>]*data-agy-step-indicator="completed"/,
     );
+  });
+
+  it("left-aligns disclosure chevron at the 16px leading column on wideIcon rows when collapsed and shrinks slot to size-4 when expanded", () => {
+    const collapsedWideHtml = renderToStaticMarkup(
+      <DshDisclosureLeadingSlot
+        icon={<span data-prismux-wordmark="true">Ciallo～(∠・ω&lt; )⌒★</span>}
+        expandable
+        expanded={false}
+        wideIcon
+        iconClassName="mr-1.5 relative flex items-center justify-center h-4 w-auto text-primary"
+      />,
+    );
+    expect(collapsedWideHtml).toContain('data-disclosure-wide-icon="true"');
+    expect(collapsedWideHtml).toMatch(/data-disclosure-leading="true"[^>]*justify-start/);
+    expect(collapsedWideHtml).toMatch(/data-disclosure-leading="true"[^>]*h-4 w-auto/);
+    expect(collapsedWideHtml).toMatch(/data-disclosure-chevron="true"[^>]*inset-y-0 left-0 size-4/);
+    expect(collapsedWideHtml).not.toMatch(/data-disclosure-chevron="true"[^>]*\binset-0\b/);
+
+    const expandedWideHtml = renderToStaticMarkup(
+      <DshDisclosureLeadingSlot
+        icon={<span data-prismux-wordmark="true">Ciallo～(∠・ω&lt; )⌒★</span>}
+        expandable
+        expanded
+        wideIcon
+        iconClassName="mr-1.5 relative flex items-center justify-center h-4 w-auto text-primary"
+      />,
+    );
+    expect(expandedWideHtml).not.toContain('data-disclosure-icon-idle="true"');
+    expect(expandedWideHtml).toMatch(/data-disclosure-leading="true"[^>]*size-4/);
+    expect(expandedWideHtml).not.toMatch(/data-disclosure-leading="true"[^>]*w-auto/);
+    expect(expandedWideHtml).toMatch(/data-disclosure-chevron="true"[^>]*size-4 opacity-100/);
   });
 
   // Reference MessageId to verify contract import stays clean if extended later

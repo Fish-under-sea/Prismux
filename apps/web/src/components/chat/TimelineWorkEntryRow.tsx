@@ -263,14 +263,16 @@ export function DshDisclosureLeadingSlot({
         ? "group-hover/timeline-row:opacity-100 group-focus-visible/timeline-row:opacity-100"
         : "group-hover/disclosure-row:opacity-100 group-focus-visible/disclosure-row:opacity-100";
 
+  const keepWideSlot = wideIcon && (!expandable || !expanded);
+
   return (
     <span
       data-disclosure-leading="true"
       data-disclosure-wide-icon={wideIcon ? "true" : undefined}
       className={cn(
-        "relative inline-flex shrink-0 items-center justify-center",
-        wideIcon ? "h-4 w-auto" : "size-4",
         iconClassName,
+        "relative inline-flex shrink-0 items-center",
+        keepWideSlot ? "h-4 w-auto justify-start" : "size-4 justify-center",
       )}
       role={role}
       aria-label={ariaLabel}
@@ -281,8 +283,8 @@ export function DshDisclosureLeadingSlot({
             <span
               data-disclosure-icon-idle="true"
               className={cn(
-                "inline-flex items-center justify-center opacity-100 transition-opacity duration-200 ease-out motion-reduce:transition-none",
-                wideIcon ? "h-4 w-auto" : "size-4",
+                "inline-flex items-center opacity-100 transition-opacity duration-200 ease-out motion-reduce:transition-none",
+                wideIcon ? "h-4 w-auto justify-start" : "size-4 justify-center",
                 hideOnHoverFocus,
               )}
             >
@@ -297,7 +299,11 @@ export function DshDisclosureLeadingSlot({
               "inline-flex items-center justify-center text-current transition-opacity duration-200 ease-out motion-reduce:transition-none",
               expanded
                 ? "size-4 opacity-100"
-                : cn("pointer-events-none absolute inset-0 opacity-0", showOnHoverFocus),
+                : cn(
+                    "pointer-events-none absolute opacity-0",
+                    wideIcon ? "inset-y-0 left-0 size-4" : "inset-0",
+                    showOnHoverFocus,
+                  ),
             )}
           >
             <ChevronDownIcon
@@ -311,8 +317,8 @@ export function DshDisclosureLeadingSlot({
       ) : (
         <span
           className={cn(
-            "inline-flex items-center justify-center",
-            wideIcon ? "h-4 w-auto" : "size-4",
+            "inline-flex items-center",
+            wideIcon ? "h-4 w-auto justify-start" : "size-4 justify-center",
           )}
         >
           {icon}

@@ -304,7 +304,9 @@ import {
   groupDelegatedChildThreadsByParent,
   isDelegatedChildThreadActive,
   reconcileDelegatedTreeExpansionMap,
+  resolveDelegatedTreeCollapseTiming,
   resolveDelegatedTreeExpanded,
+  shouldDelegatedTreeAutoExpand,
   toggleDelegatedTreeExpansion,
   type DelegatedTreeExpansionEntry,
 } from "./sidebar/delegatedThreadTree.logic";
@@ -968,6 +970,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
+  const workStepsDisplay = useClientSettings((s) => s.workStepsDisplay);
+  const workStepsCollapseTiming = useClientSettings((s) => s.workStepsCollapseTiming);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
     settleThread,
@@ -1190,7 +1194,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     }
     return map;
   })();
-  const delegatedRunningByParent = (() => {
+  const listedThreadByKey = new Map(
+    listedThreads.map((thread) => [threadShellKey(thread), thread] as const),
+  );
+  const delegatedCollapseTiming = resolveDelegatedTreeCollapseTiming({
+    workStepsDisplay,
+    workStepsCollapseTiming,
+  });
+  const delegatedChildRunningByParent = (() => {
     const map = new Map<string, boolean>();
     for (const [parentKey, children] of delegatedChildrenByParent) {
       map.set(
@@ -1202,19 +1213,35 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     }
     return map;
   })();
+  const delegatedAutoExpandByParent = (() => {
+    const map = new Map<string, boolean>();
+    for (const [parentKey, children] of delegatedChildrenByParent) {
+      map.set(
+        parentKey,
+        shouldDelegatedTreeAutoExpand({
+          parent: listedThreadByKey.get(parentKey),
+          children,
+          collapseTiming: delegatedCollapseTiming,
+          localLastVisitedAtById,
+        }),
+      );
+    }
+    return map;
+  })();
   const [delegatedExpansionByParent, setDelegatedExpansionByParent] = useState<
     ReadonlyMap<string, DelegatedTreeExpansionEntry>
   >(() => new Map());
   const reconciledDelegatedExpansion = reconcileDelegatedTreeExpansionMap(
     delegatedExpansionByParent,
-    delegatedRunningByParent,
+    delegatedAutoExpandByParent,
   );
   if (reconciledDelegatedExpansion !== delegatedExpansionByParent) {
     setDelegatedExpansionByParent(reconciledDelegatedExpansion);
   }
-  const handleToggleDelegatedTree = useStableCallback((parentKey: string, hasRunning: boolean) => {
+  const handleToggleDelegatedTree = useStableCallback((parentKey: string) => {
+    const shouldAutoExpand = delegatedAutoExpandByParent.get(parentKey) ?? false;
     setDelegatedExpansionByParent((current) =>
-      toggleDelegatedTreeExpansion(current, parentKey, hasRunning),
+      toggleDelegatedTreeExpansion(current, parentKey, shouldAutoExpand),
     );
   });
   const routeRowThreadKey =
@@ -4052,11 +4079,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               : "slim";
                         const delegatedChildren = delegatedChildrenByParent.get(threadKey);
                         const delegatedTreeHasRunning =
-                          delegatedRunningByParent.get(threadKey) ?? false;
+                          delegatedChildRunningByParent.get(threadKey) ?? false;
+                        const delegatedTreeAutoExpand =
+                          delegatedAutoExpandByParent.get(threadKey) ?? false;
                         const delegatedTreeExpanded =
                           delegatedChildren !== undefined && delegatedChildren.length > 0
                             ? resolveDelegatedTreeExpanded({
-                                hasRunningChild: delegatedTreeHasRunning,
+                                hasRunningChild: delegatedTreeAutoExpand,
                                 entry: reconciledDelegatedExpansion.get(threadKey),
                               })
                             : false;

@@ -571,6 +571,57 @@ const ConversationTimeline = memo(function ConversationTimeline({
     list.anchorVisibleContent({ key: anchorKey });
   };
 
+  const collectRunEntryIds = (runId: RunId | null) => {
+    const baseRunId =
+      runId !== null && runId.includes(":steer:")
+        ? runId.slice(0, runId.indexOf(":steer:"))
+        : runId;
+    return new Set(
+      timelineEntries.flatMap((entry) =>
+        entry.kind === "work" &&
+        (runId === null
+          ? entry.entry.runId == null
+          : entry.entry.runId === runId ||
+            entry.entry.runId === baseRunId ||
+            (baseRunId !== null && baseRunId.startsWith("runless:") && entry.entry.runId == null))
+          ? [entry.id, entry.entry.id]
+          : [],
+      ),
+    );
+  };
+
+  const pruneRunIds = (existing: ReadonlySet<RunId>, runId: RunId): ReadonlySet<RunId> => {
+    const steerPrefix = `${runId}:steer:`;
+    let changed = false;
+    const next = new Set(existing);
+    for (const candidate of existing) {
+      if (candidate === runId || candidate.startsWith(steerPrefix)) {
+        next.delete(candidate);
+        changed = true;
+      }
+    }
+    return changed ? next : existing;
+  };
+
+  const pruneWorkGroupsForEntries = (
+    existing: ReadonlySet<string>,
+    runEntryIds: ReadonlySet<string>,
+  ): ReadonlySet<string> => {
+    if (existing.size === 0 || runEntryIds.size === 0) return existing;
+    const next = new Set(existing);
+    let changed = false;
+    for (const groupId of existing) {
+      const anchorId = groupId.startsWith("work-group:")
+        ? groupId.slice("work-group:".length)
+        : groupId;
+      if (runEntryIds.has(anchorId)) {
+        next.delete(groupId);
+        changed = true;
+      }
+    }
+    return changed ? next : existing;
+  };
+
   // Turn and attempt folds reveal later rows rather than growing their own row.
   const onToggleTurnFold = (runId: RunId, currentlyExpanded?: boolean) => {
     preserveDisclosurePosition(`turn-fold:${runId}`);
@@ -587,35 +638,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
         return new Set(existing).add(runId);
       });
       // DSH disclosure reset: folding an outer turn resets inner step groups & reasoning disclosures.
-      const baseRunId = runId.includes(":steer:") ? runId.slice(0, runId.indexOf(":steer:")) : runId;
-      const runEntryIds = new Set(
-        timelineEntries.flatMap((entry) =>
-          entry.kind === "work" &&
-          (entry.entry.runId === runId ||
-            entry.entry.runId === baseRunId ||
-            (baseRunId.startsWith("runless:") && entry.entry.runId == null))
-            ? [entry.id, entry.entry.id]
-            : [],
-        ),
-      );
+      const runEntryIds = collectRunEntryIds(runId);
       for (const entryId of runEntryIds) {
         workGroupViewState.expandedEntries.delete(entryId);
       }
-      setExpandedWorkGroupIds((existing) => {
-        if (existing.size === 0) return existing;
-        const next = new Set(existing);
-        let changed = false;
-        for (const groupId of existing) {
-          const anchorId = groupId.startsWith("work-group:")
-            ? groupId.slice("work-group:".length)
-            : groupId;
-          if (runEntryIds.has(anchorId)) {
-            next.delete(groupId);
-            changed = true;
-          }
-        }
-        return changed ? next : existing;
-      });
+      setExpandedWorkGroupIds((existing) => pruneWorkGroupsForEntries(existing, runEntryIds));
       setTurnDisclosureResetCount((count) => count + 1);
     } else {
       setCollapsedRunIds((existing) => {
@@ -658,49 +685,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
     });
   };
 
-  // An interrupted run opens its fold; a newer run closes the previous run's.
-  const [observedLatestRun, setObservedLatestRun] = useState({
-    identity: listIdentityKey,
-    runId: latestRun?.runId,
-    status: latestRun?.status,
-  });
-  if (
-    observedLatestRun.identity !== listIdentityKey ||
-    observedLatestRun.runId !== latestRun?.runId ||
-    observedLatestRun.status !== latestRun?.status
-  ) {
-    setObservedLatestRun({
-      identity: listIdentityKey,
-      runId: latestRun?.runId,
-      status: latestRun?.status,
-    });
-    const previousRunId = observedLatestRun.runId;
-    if (
-      observedLatestRun.identity === listIdentityKey &&
-      latestRun &&
-      previousRunId !== undefined
-    ) {
-      if (latestRun.runId === previousRunId) {
-        if (observedLatestRun.status === "running" && latestRun.status === "interrupted") {
-          setExpandedRunIds((existing) => new Set(existing).add(latestRun.runId));
-        }
-      } else {
-        setExpandedRunIds((existing) => {
-          if (!existing.has(previousRunId)) return existing;
-          const next = new Set(existing);
-          next.delete(previousRunId);
-          return next;
-        });
-        setCollapsedRunIds((existing) => {
-          if (!existing.has(previousRunId)) return existing;
-          const next = new Set(existing);
-          next.delete(previousRunId);
-          return next;
-        });
-      }
-    }
-  }
-
   const preferredToolCallVisibility = useClientSettings((settings) => settings.toolCallVisibility);
   const workStepsDisplay = useClientSettings((settings) => settings.workStepsDisplay);
   const workStepsCollapseTiming = useClientSettings((settings) => settings.workStepsCollapseTiming);
@@ -711,6 +695,128 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const screenReaderAnnouncements = useClientSettings(
     (settings) => settings.screenReaderAnnouncements,
   );
+
+  // Sync turn & step disclosure state on run lifecycle transitions and timing preference changes:
+  // - Interrupted runs open their fold so the user sees where work stopped.
+  // - Completed runs auto-collapse cleanly under "after-turn" without stale live disclosure latches.
+  // - Starting a newer run clears the previous run's fold overrides (honoring "next-message" too).
+  const [observedTurnLifecycle, setObservedTurnLifecycle] = useState({
+    identity: listIdentityKey,
+    runId: latestRun?.runId,
+    status: latestRun?.status,
+    isWorking,
+    collapseTiming: workStepsCollapseTiming,
+  });
+  if (
+    observedTurnLifecycle.identity !== listIdentityKey ||
+    observedTurnLifecycle.runId !== latestRun?.runId ||
+    observedTurnLifecycle.status !== latestRun?.status ||
+    observedTurnLifecycle.isWorking !== isWorking ||
+    observedTurnLifecycle.collapseTiming !== workStepsCollapseTiming
+  ) {
+    setObservedTurnLifecycle({
+      identity: listIdentityKey,
+      runId: latestRun?.runId,
+      status: latestRun?.status,
+      isWorking,
+      collapseTiming: workStepsCollapseTiming,
+    });
+    const previousRunId = observedTurnLifecycle.runId;
+    const isActiveStatus = (status: TimelineLatestRun["status"] | undefined) =>
+      status === "running" ||
+      status === "starting" ||
+      status === "queued" ||
+      status === "waiting" ||
+      status === "preparing";
+    if (observedTurnLifecycle.identity === listIdentityKey) {
+      if (observedTurnLifecycle.collapseTiming !== workStepsCollapseTiming) {
+        paintedExpandedRunIds = new Set();
+        paintedCollapsedRunIds = new Set();
+        setExpandedRunIds(paintedExpandedRunIds);
+        setCollapsedRunIds(paintedCollapsedRunIds);
+      }
+      if (latestRun && previousRunId !== undefined) {
+        if (latestRun.runId === previousRunId) {
+          if (observedTurnLifecycle.status === "running" && latestRun.status === "interrupted") {
+            paintedExpandedRunIds = new Set(paintedExpandedRunIds).add(latestRun.runId);
+            setExpandedRunIds(paintedExpandedRunIds);
+          } else if (
+            workStepsCollapseTiming === "after-turn" &&
+            !isWorking &&
+            latestRun.status === "completed" &&
+            (isActiveStatus(observedTurnLifecycle.status) || observedTurnLifecycle.isWorking)
+          ) {
+            const nextExpandedRuns = pruneRunIds(paintedExpandedRunIds, latestRun.runId);
+            const nextCollapsedRuns = pruneRunIds(paintedCollapsedRunIds, latestRun.runId);
+            const runEntryIds = collectRunEntryIds(latestRun.runId);
+            for (const entryId of runEntryIds) {
+              workGroupViewState.expandedEntries.delete(entryId);
+            }
+            const nextExpandedGroups = pruneWorkGroupsForEntries(
+              paintedExpandedWorkGroupIds,
+              runEntryIds,
+            );
+            if (nextExpandedRuns !== paintedExpandedRunIds) {
+              paintedExpandedRunIds = nextExpandedRuns;
+              setExpandedRunIds(nextExpandedRuns);
+            }
+            if (nextCollapsedRuns !== paintedCollapsedRunIds) {
+              paintedCollapsedRunIds = nextCollapsedRuns;
+              setCollapsedRunIds(nextCollapsedRuns);
+            }
+            if (nextExpandedGroups !== paintedExpandedWorkGroupIds) {
+              paintedExpandedWorkGroupIds = nextExpandedGroups;
+              setExpandedWorkGroupIds(nextExpandedGroups);
+            }
+            setTurnDisclosureResetCount((count) => count + 1);
+          }
+        } else {
+          const nextExpandedRuns = pruneRunIds(paintedExpandedRunIds, previousRunId);
+          const nextCollapsedRuns = pruneRunIds(paintedCollapsedRunIds, previousRunId);
+          const previousEntryIds = collectRunEntryIds(previousRunId);
+          for (const entryId of previousEntryIds) {
+            workGroupViewState.expandedEntries.delete(entryId);
+          }
+          const nextExpandedGroups = pruneWorkGroupsForEntries(
+            paintedExpandedWorkGroupIds,
+            previousEntryIds,
+          );
+          if (nextExpandedRuns !== paintedExpandedRunIds) {
+            paintedExpandedRunIds = nextExpandedRuns;
+            setExpandedRunIds(nextExpandedRuns);
+          }
+          if (nextCollapsedRuns !== paintedCollapsedRunIds) {
+            paintedCollapsedRunIds = nextCollapsedRuns;
+            setCollapsedRunIds(nextCollapsedRuns);
+          }
+          if (nextExpandedGroups !== paintedExpandedWorkGroupIds) {
+            paintedExpandedWorkGroupIds = nextExpandedGroups;
+            setExpandedWorkGroupIds(nextExpandedGroups);
+          }
+        }
+      } else if (
+        workStepsCollapseTiming === "after-turn" &&
+        observedTurnLifecycle.isWorking &&
+        !isWorking &&
+        latestRun?.status !== "interrupted" &&
+        latestRun?.status !== "failed"
+      ) {
+        const runEntryIds = collectRunEntryIds(latestRun?.runId ?? null);
+        for (const entryId of runEntryIds) {
+          workGroupViewState.expandedEntries.delete(entryId);
+        }
+        const nextExpandedGroups = pruneWorkGroupsForEntries(
+          paintedExpandedWorkGroupIds,
+          runEntryIds,
+        );
+        if (nextExpandedGroups !== paintedExpandedWorkGroupIds) {
+          paintedExpandedWorkGroupIds = nextExpandedGroups;
+          setExpandedWorkGroupIds(nextExpandedGroups);
+        }
+        setTurnDisclosureResetCount((count) => count + 1);
+      }
+    }
+  }
   const toolCallVisibility =
     findActive && preferredToolCallVisibility === "zen" ? "hideAll" : preferredToolCallVisibility;
   const revealedMessageId = citationRequest?.citation.messageId ?? null;
@@ -844,7 +950,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     expandedRunIds: visibleExpandedRunIds,
     collapsedRunIds: visibleCollapsedRunIds,
     expandedAttemptIds: visibleExpandedAttemptIds,
-    expandedWorkGroupIds,
+    expandedWorkGroupIds: paintedExpandedWorkGroupIds,
     isWorking,
     runlessWorkActive,
     activeTurnStartedAt,
@@ -2006,10 +2112,7 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
           )}
         />
         <span className="ms-auto">
-          <TimelineRowTimestamp
-            createdAt={row.createdAt}
-            timestampFormat={ctx.timestampFormat}
-          />
+          <TimelineRowTimestamp createdAt={row.createdAt} timestampFormat={ctx.timestampFormat} />
         </span>
       </button>
       {loading ? <WorkHistorySkeleton /> : null}

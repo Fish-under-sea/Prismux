@@ -84,7 +84,7 @@ describe("dshWorkSteps.logic", () => {
     expect(resolveWorkStepsPolicy("detailed")).toEqual({
       mode: "detailed",
       foldCompletedTurns: true,
-      defaultTurnFoldOpen: true,
+      defaultTurnFoldOpen: false,
       stepGrouping: "none",
       liveProcessDetail: true,
       settledReasoningPreview: true,
@@ -249,7 +249,9 @@ describe("dshWorkSteps.logic", () => {
 
     // Count-free DSH Chinese summaries
     expect(formatDshStepGroupSummary([readEntry], "zh-CN")).toBe("已读取文件");
-    expect(formatDshStepGroupSummary([readEntry, searchEntry], "zh-CN")).toBe("已读取文件并搜索代码");
+    expect(formatDshStepGroupSummary([readEntry, searchEntry], "zh-CN")).toBe(
+      "已读取文件并搜索代码",
+    );
     expect(formatDshStepGroupSummary([readEntry, editEntry, cmdEntry], "zh-CN")).toBe(
       "已读取文件，修改了文件，执行了命令",
     );
@@ -351,7 +353,13 @@ describe("dshWorkSteps.logic", () => {
         id: "a-1-mid",
         kind: "message",
         createdAt: "2026-11-25T10:00:03.000Z",
-        message: makeMessage("a-1-mid", "assistant", "Intermediate note", "2026-11-25T10:00:03.000Z", run1),
+        message: makeMessage(
+          "a-1-mid",
+          "assistant",
+          "Intermediate note",
+          "2026-11-25T10:00:03.000Z",
+          run1,
+        ),
       },
       {
         id: "r1-cmd",
@@ -370,7 +378,13 @@ describe("dshWorkSteps.logic", () => {
         id: "a-1-final",
         kind: "message",
         createdAt: "2026-11-25T10:00:10.000Z",
-        message: makeMessage("a-1-final", "assistant", "First final answer", "2026-11-25T10:00:10.000Z", run1),
+        message: makeMessage(
+          "a-1-final",
+          "assistant",
+          "First final answer",
+          "2026-11-25T10:00:10.000Z",
+          run1,
+        ),
       },
       {
         id: "u-2",
@@ -409,7 +423,13 @@ describe("dshWorkSteps.logic", () => {
         id: "a-2-final",
         kind: "message",
         createdAt: "2026-11-25T10:01:12.000Z",
-        message: makeMessage("a-2-final", "assistant", "Second final answer", "2026-11-25T10:01:12.000Z", run2),
+        message: makeMessage(
+          "a-2-final",
+          "assistant",
+          "Second final answer",
+          "2026-11-25T10:01:12.000Z",
+          run2,
+        ),
       },
     ];
 
@@ -452,25 +472,37 @@ describe("dshWorkSteps.logic", () => {
       standardFinalOnly.some((r) => r.kind === "message" && r.message.text === "Intermediate note"),
     ).toBe(false);
     expect(
-      standardFinalOnly.some((r) => r.kind === "message" && r.message.text === "First final answer"),
+      standardFinalOnly.some(
+        (r) => r.kind === "message" && r.message.text === "First final answer",
+      ),
     ).toBe(true);
 
-    // 3. detailed: ALL turns default open & flat un-grouped (zero work-toggle) while still manually collapsible
-    const detailedRows = deriveMessagesTimelineRows({
+    // 3a. detailed + after-turn: completed turns auto-collapse when answer ends,
+    // and expanding a turn shows all steps transparently flat (zero work-toggle) with long items still folded
+    const detailedAfterTurnRows = deriveMessagesTimelineRows({
       ...baseInput,
       timelineEntries: buildTwoTurnTimeline(),
       workStepsDisplay: "detailed",
       workStepsCollapseTiming: "after-turn",
       collapsedAssistantReplyMode: "all",
     });
-    const detailedFolds = detailedRows.filter((r) => r.kind === "turn-fold");
-    const detailedFold1 = detailedFolds.find((r) => r.runId === run1);
-    const detailedFold2 = detailedFolds.find((r) => r.runId === run2);
-    expect(detailedFold1?.expanded).toBe(true);
-    expect(detailedFold2?.expanded).toBe(true);
-    expect(detailedRows.filter((r) => r.kind === "work-toggle")).toHaveLength(0);
-    // Every step across both turns renders transparently as flat `work` rows with long items still folded by default
-    const detailedFlatWorkRows = detailedRows.filter((r) => r.kind === "work");
+    const detailedAfterTurnFolds = detailedAfterTurnRows.filter((r) => r.kind === "turn-fold");
+    expect(detailedAfterTurnFolds.find((r) => r.runId === run1)?.expanded).toBe(false);
+    expect(detailedAfterTurnFolds.find((r) => r.runId === run2)?.expanded).toBe(false);
+    expect(detailedAfterTurnRows.filter((r) => r.kind === "work")).toHaveLength(0);
+    expect(detailedAfterTurnRows.filter((r) => r.kind === "work-toggle")).toHaveLength(0);
+
+    // Expanding both turns in detailed mode renders every step flat & un-grouped (zero work-toggle)
+    const detailedExpandedBoth = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: buildTwoTurnTimeline(),
+      expandedRunIds: new Set([run1, run2]),
+      workStepsDisplay: "detailed",
+      workStepsCollapseTiming: "after-turn",
+      collapsedAssistantReplyMode: "all",
+    });
+    expect(detailedExpandedBoth.filter((r) => r.kind === "work-toggle")).toHaveLength(0);
+    const detailedFlatWorkRows = detailedExpandedBoth.filter((r) => r.kind === "work");
     expect(detailedFlatWorkRows.flatMap((r) => r.groupedEntries.map((entry) => entry.id))).toEqual([
       "r1-think",
       "r1-read",
@@ -481,18 +513,54 @@ describe("dshWorkSteps.logic", () => {
     expect(detailedFlatWorkRows.every((r) => r.autoExpandDetails === undefined)).toBe(true);
     expect(detailedFlatWorkRows.every((r) => r.autoExpandReasoning === undefined)).toBe(true);
 
-    // Manually collapsing turn 1 in detailed mode still folds it cleanly
-    const detailedCollapsedTurn1 = deriveMessagesTimelineRows({
+    // 3b. detailed + next-message: bottom completed turn stays open & flat while earlier turn auto-collapses
+    const detailedNextMessageRows = deriveMessagesTimelineRows({
       ...baseInput,
       timelineEntries: buildTwoTurnTimeline(),
-      collapsedRunIds: new Set([run1]),
       workStepsDisplay: "detailed",
-      workStepsCollapseTiming: "after-turn",
+      workStepsCollapseTiming: "next-message",
       collapsedAssistantReplyMode: "all",
     });
-    const detailedCollapsedFolds = detailedCollapsedTurn1.filter((r) => r.kind === "turn-fold");
+    const detailedNextMessageFolds = detailedNextMessageRows.filter((r) => r.kind === "turn-fold");
+    expect(detailedNextMessageFolds.find((r) => r.runId === run1)?.expanded).toBe(false);
+    expect(detailedNextMessageFolds.find((r) => r.runId === run2)?.expanded).toBe(true);
+    expect(detailedNextMessageRows.filter((r) => r.kind === "work-toggle")).toHaveLength(0);
+    expect(
+      detailedNextMessageRows
+        .filter((r) => r.kind === "work")
+        .flatMap((r) => r.groupedEntries.map((entry) => entry.id)),
+    ).toEqual(["r2-think", "r2-edit"]);
+
+    // Manually collapsing bottom turn in detailed + next-message still folds it cleanly
+    const detailedCollapsedTurn2 = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: buildTwoTurnTimeline(),
+      collapsedRunIds: new Set([run2]),
+      workStepsDisplay: "detailed",
+      workStepsCollapseTiming: "next-message",
+      collapsedAssistantReplyMode: "all",
+    });
+    const detailedCollapsedFolds = detailedCollapsedTurn2.filter((r) => r.kind === "turn-fold");
     expect(detailedCollapsedFolds.find((r) => r.runId === run1)?.expanded).toBe(false);
-    expect(detailedCollapsedFolds.find((r) => r.runId === run2)?.expanded).toBe(true);
+    expect(detailedCollapsedFolds.find((r) => r.runId === run2)?.expanded).toBe(false);
+
+    // 3c. Completed latestRun with omitted completedAt still auto-collapses cleanly under after-turn
+    const completedWithoutTimestamp = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: buildTwoTurnTimeline(),
+      latestRun: {
+        runId: run2,
+        status: "completed",
+        startedAt: "2026-11-25T10:01:00.000Z",
+        completedAt: null,
+      },
+      workStepsDisplay: "detailed",
+      workStepsCollapseTiming: "after-turn",
+    });
+    expect(
+      completedWithoutTimestamp.filter((r) => r.kind === "turn-fold").find((r) => r.runId === run2)
+        ?.expanded,
+    ).toBe(false);
 
     // 4. expanded: NEVER folds turns or groups steps; ALL work rows default open inline (`autoExpandDetails: true` & `autoExpandReasoning: true`)
     const expandedRows = deriveMessagesTimelineRows({
@@ -583,7 +651,7 @@ describe("dshWorkSteps.logic", () => {
 
   it("strips noisy Windows/POSIX shell wrappers while keeping raw command inspectable", () => {
     const doubleEscapedPwsh = stripShellCommandWrapper(
-      '"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe" -Command \'pwd; ls -Name\'',
+      "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'pwd; ls -Name'",
     );
     expect(doubleEscapedPwsh.displayCommand).toBe("pwd; ls -Name");
     expect(doubleEscapedPwsh.wasWrapped).toBe(true);
@@ -613,7 +681,7 @@ describe("dshWorkSteps.logic", () => {
       id: "w-pwsh",
       label: "Ran command",
       itemType: "command_execution",
-      command: '"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe" -Command \'pwd; ls -Name\'',
+      command: "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'pwd; ls -Name'",
     });
     expect(extractWorkEntryLiveDetail(cmdEntry)).toBe("pwd; ls -Name");
     expect(workEntryDisplayLabel(cmdEntry, undefined)).toBe("pwd; ls -Name");
@@ -660,7 +728,13 @@ describe("dshWorkSteps.logic", () => {
     expect(unified).not.toBeNull();
     expect(unified?.additions).toBe(2);
     expect(unified?.deletions).toBe(1);
-    expect(unified?.lines.map((line) => line.kind)).toEqual(["hunk", "context", "del", "add", "add"]);
+    expect(unified?.lines.map((line) => line.kind)).toEqual([
+      "hunk",
+      "context",
+      "del",
+      "add",
+      "add",
+    ]);
 
     const oldNew = parseCompactDiffPreview({ oldStr: "a\nb", newStr: "a\nc\nd" });
     expect(oldNew?.deletions).toBe(2);
@@ -681,7 +755,10 @@ describe("dshWorkSteps.logic", () => {
     });
     expect(workEntryIsVisibleInGroup(thinkToneOnly, false)).toBe(true);
     expect(
-      extractReasoningSummaryLine(thinkToneOnly.detail, { live: false, settledReasoningPreview: true }),
+      extractReasoningSummaryLine(thinkToneOnly.detail, {
+        live: false,
+        settledReasoningPreview: true,
+      }),
     ).toBe("Inspecting reasoning chain");
   });
 
@@ -779,10 +856,18 @@ describe("dshWorkSteps.logic", () => {
         workStepsDisplay: mode,
         locale: "zh-CN",
       });
-      expect(rows.map((r) => r.kind)).toEqual(["message", "turn-fold", "work", "work-toggle", "message"]);
+      expect(rows.map((r) => r.kind)).toEqual([
+        "message",
+        "turn-fold",
+        "work",
+        "work-toggle",
+        "message",
+      ]);
       const reasonRow = rows[2]!;
       const toggleRow = rows[3]!;
-      expect(reasonRow.kind === "work" && reasonRow.groupedEntries.map((e) => e.id)).toEqual(["t1"]);
+      expect(reasonRow.kind === "work" && reasonRow.groupedEntries.map((e) => e.id)).toEqual([
+        "t1",
+      ]);
       expect(reasonRow.kind === "work" && reasonRow.autoExpandReasoning).toBeUndefined();
       expect(toggleRow).toMatchObject({
         kind: "work-toggle",
