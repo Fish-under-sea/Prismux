@@ -20,6 +20,7 @@ import {
   doesWorkspaceTabMatchRouteTarget,
   resolveFocusedSplitRightPanelContext,
   resolveFollowSurfaceKindForPaneSwitch,
+  resolveSplitDockCopy,
   resolveSplitRouteOwnership,
 } from "./splitPaneIsolation.logic";
 import { launchSecondaryPaneAgentDraft } from "./WorkspaceSplitContainer";
@@ -668,6 +669,65 @@ describe("Track #9: Split-pane thread, model, overview & right sidebar isolation
           nextDiffAvailable: true,
         }),
       ).toBe("show-empty");
+    });
+
+    it("reopens split dock and exits global wallpaper when re-opening an already-open surface from Pane Overview (QA #58 Repro A & B)", () => {
+      const dshRef = scopeThreadRef(ENV_ID, DSH_THREAD_ID);
+      const codexRef = scopeThreadRef(ENV_ID, CODEX_THREAD_ID);
+      const store = useRightPanelStore.getState();
+
+      // Repro A: Open diff on Pane A -> close split dock via Pane B (leaving Pane A's byThreadKey.isOpen=true, activeSurfaceId="diff")
+      // -> click "审查" in Pane A's Overview (`open(dshRef, "diff")`) MUST reopen splitDockOpen!
+      store.open(dshRef, "diff");
+      expect(useRightPanelStore.getState().splitDockOpen).toBe(true);
+      store.setSplitDockOpen(false);
+      store.close(codexRef);
+      expect(useRightPanelStore.getState().splitDockOpen).toBe(false);
+      expect(
+        selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, dshRef).isOpen,
+      ).toBe(true);
+
+      useRightPanelStore.getState().open(dshRef, "diff");
+      expect(useRightPanelStore.getState().splitDockOpen).toBe(true);
+      expect(useRightPanelStore.getState().splitGlobalWallpaperOpen).toBe(false);
+
+      // Repro B: Pane B has diff already active -> open global wallpaper -> click "审查" in Pane B's Overview (`open(codexRef, "diff")`)
+      // MUST exit global wallpaper and reveal Pane B's diff surface!
+      useRightPanelStore.getState().open(codexRef, "diff");
+      useRightPanelStore.getState().toggleSplitGlobalWallpaper();
+      expect(useRightPanelStore.getState().splitGlobalWallpaperOpen).toBe(true);
+
+      useRightPanelStore.getState().open(codexRef, "diff");
+      expect(useRightPanelStore.getState().splitDockOpen).toBe(true);
+      expect(useRightPanelStore.getState().splitGlobalWallpaperOpen).toBe(false);
+
+      // Metadata-only mutations (updateAgentSession / renameDevice) MUST NOT reopen a closed dock or hijack global wallpaper!
+      const sessionId = useRightPanelStore.getState().openAgentSession(dshRef, {
+        title: "Codex",
+        providerId: "codex",
+      });
+      useRightPanelStore.getState().setSplitDockOpen(false);
+      useRightPanelStore.getState().updateAgentSession(dshRef, sessionId, { title: "Codex 2" });
+      expect(useRightPanelStore.getState().splitDockOpen).toBe(false);
+
+      useRightPanelStore.getState().setSplitGlobalWallpaperOpen(true);
+      useRightPanelStore.getState().renameDevice(dshRef, "device", "iPhone 16 Pro");
+      expect(useRightPanelStore.getState().splitGlobalWallpaperOpen).toBe(true);
+    });
+
+    it("renders localized Chinese and English split dock copy without mutating zh.json", () => {
+      const zh = resolveSplitDockCopy("zh-CN");
+      expect(zh.followingPane).toBe("跟随分屏");
+      expect(zh.paneLabel(2)).toBe("分屏 2");
+      expect(zh.collapseRightSidebar).toBe("收起右侧边栏");
+      expect(zh.unboundTabTitle("手机模拟器")).toBe("标签页「手机模拟器」未绑定会话");
+      expect(zh.wallpaperAndAppearance).toBe("壁纸与外观");
+      expect(zh.collapseSidebar).toBe("收起边栏");
+
+      const en = resolveSplitDockCopy("en-US");
+      expect(en.followingPane).toBe("Following pane");
+      expect(en.paneLabel(2)).toBe("Pane 2");
+      expect(en.wallpaperAndAppearance).toBe("Wallpaper & Appearance");
     });
   });
 

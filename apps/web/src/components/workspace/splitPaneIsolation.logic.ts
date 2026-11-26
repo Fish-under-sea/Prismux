@@ -1,8 +1,7 @@
 import { scopedThreadKey, scopeThreadRef } from "@prismux/client-runtime/environment";
 import type { ScopedThreadRef } from "@prismux/core-contracts";
-import { msg } from "gt-react";
 
-import { m } from "../../i18n/messages";
+import { getActiveLocale } from "../../i18n/messages";
 import type { RightPanelKind, RightPanelSurface } from "../../rightPanelStore";
 import type { ThreadRouteTarget } from "../../threadRoutes";
 import {
@@ -203,6 +202,41 @@ export function resolveSplitRouteOwnership(input: {
   return { routeOwnerPaneId: null, ownerShowsRoute: false };
 }
 
+export interface SplitDockCopy {
+  readonly followingPane: string;
+  readonly paneLabel: (index: number) => string;
+  readonly collapseRightSidebar: string;
+  readonly unboundTabTitle: (title: string) => string;
+  readonly unboundTabBody: string;
+  readonly wallpaperAndAppearance: string;
+  readonly collapseSidebar: string;
+}
+
+export function resolveSplitDockCopy(locale: string = getActiveLocale()): SplitDockCopy {
+  const isZh = locale.toLowerCase().startsWith("zh");
+  return isZh
+    ? {
+        followingPane: "跟随分屏",
+        paneLabel: (index) => `分屏 ${index}`,
+        collapseRightSidebar: "收起右侧边栏",
+        unboundTabTitle: (title) => `标签页「${title}」未绑定会话`,
+        unboundTabBody:
+          "点击任意对话分屏可自动同步其差异审查、文件列表与终端侧栏；也可随时打开全局壁纸与外观面板。",
+        wallpaperAndAppearance: "壁纸与外观",
+        collapseSidebar: "收起边栏",
+      }
+    : {
+        followingPane: "Following pane",
+        paneLabel: (index) => `Pane ${index}`,
+        collapseRightSidebar: "Collapse right sidebar",
+        unboundTabTitle: (title) => `Tab "${title}" has no bound thread`,
+        unboundTabBody:
+          "Focus any conversation pane to sync its diff review, files, and terminal sidebar, or open global wallpaper and appearance controls.",
+        wallpaperAndAppearance: "Wallpaper & Appearance",
+        collapseSidebar: "Collapse sidebar",
+      };
+}
+
 export interface FocusedSplitRightPanelContext {
   readonly paneId: string;
   readonly paneIndex: number;
@@ -228,8 +262,9 @@ export function resolveFocusedSplitRightPanelContext(input: {
   readonly focusedPaneId: string;
   readonly primaryPaneId: string;
   readonly draftLookup?: WorkspaceDraftSessionLookup | null;
+  readonly locale?: string | undefined;
 }): FocusedSplitRightPanelContext {
-  const { layout, panes, tabs, focusedPaneId, primaryPaneId, draftLookup } = input;
+  const { layout, panes, tabs, focusedPaneId, primaryPaneId, draftLookup, locale } = input;
   const leafIds = listLeafPaneIds(layout);
   const resolvedPaneId = panes[focusedPaneId]
     ? focusedPaneId
@@ -251,7 +286,7 @@ export function resolveFocusedSplitRightPanelContext(input: {
     isConversationTab,
     isDraftTab: tab?.kind === "draft",
     draftId: tab?.kind === "draft" ? (tab.draftId ?? null) : null,
-    title: tab?.title?.trim() || m(msg("Pane {index}"), { index: paneIndex + 1 }),
+    title: tab?.title?.trim() || resolveSplitDockCopy(locale).paneLabel(paneIndex + 1),
     providerId: tab?.providerId ?? null,
   };
 }

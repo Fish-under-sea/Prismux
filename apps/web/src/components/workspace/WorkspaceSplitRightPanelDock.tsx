@@ -21,7 +21,7 @@ import { resolveProjectSettings } from "@prismux/core-shared/projectSettings";
 import { resolveTerminalSessionLabel } from "@prismux/core-shared/terminalLabelsCopy";
 import { visibleThreadPullRequests } from "@prismux/core-shared/threadPullRequests";
 import { orchestrationV2WorktreePending } from "@prismux/core-shared/orchestrationV2ThreadError";
-import { T, useGT, useMessages } from "gt-react";
+import { useGT, useLocale, useMessages } from "gt-react";
 import { ImageIcon, LayersIcon, XIcon } from "lucide-react";
 import { memo, useEffect, useRef, useState, type Ref } from "react";
 import { createPortal } from "react-dom";
@@ -101,6 +101,7 @@ import { toastManager } from "../ui/toast";
 import { RightPanelAgentSessionPane } from "./RightPanelAgentSessionPane";
 import {
   resolveFollowSurfaceKindForPaneSwitch,
+  resolveSplitDockCopy,
   type FocusedSplitRightPanelContext,
 } from "./splitPaneIsolation.logic";
 import { PrismuxStageFrame } from "./WorkspaceTopbarPortalContext";
@@ -155,7 +156,8 @@ function SplitRightPanelContextBar({
   readonly focusedContext: FocusedSplitRightPanelContext;
   readonly onClose: () => void;
 }) {
-  const gt = useGT();
+  const locale = useLocale();
+  const copy = resolveSplitDockCopy(locale);
   return (
     <div
       data-split-right-panel-context="1"
@@ -169,18 +171,16 @@ function SplitRightPanelContextBar({
         ) : (
           <LayersIcon className="size-3 shrink-0 opacity-75" aria-hidden />
         )}
-        <span className="shrink-0 opacity-75">
-          <T>Following pane</T>
-        </span>
+        <span className="shrink-0 opacity-75">{copy.followingPane}</span>
         <span className="min-w-0 truncate font-medium text-foreground">{focusedContext.title}</span>
       </div>
       <div className="flex shrink-0 items-center gap-1">
         <span className="rounded border border-border/60 bg-background/60 px-1.5 py-0.5 text-3xs leading-none font-medium text-muted-foreground">
-          {gt("Pane {index}", { index: focusedContext.paneIndex + 1 })}
+          {copy.paneLabel(focusedContext.paneIndex + 1)}
         </span>
         <button
           type="button"
-          aria-label={gt("Collapse right sidebar")}
+          aria-label={copy.collapseRightSidebar}
           data-split-right-panel-close="1"
           onClick={onClose}
           className="flex size-5 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
@@ -201,7 +201,8 @@ function NonThreadFallbackBody({
   readonly onOpenWallpaper: () => void;
   readonly onClose: () => void;
 }) {
-  const gt = useGT();
+  const locale = useLocale();
+  const copy = resolveSplitDockCopy(locale);
   return (
     <div
       data-split-right-panel-fallback="non-thread"
@@ -212,24 +213,19 @@ function NonThreadFallbackBody({
       </div>
       <div className="space-y-1">
         <p className="text-xs font-medium text-foreground">
-          {gt('Tab "{title}" has no bound thread', { title: focusedContext.title })}
+          {copy.unboundTabTitle(focusedContext.title)}
         </p>
         <p className="max-w-xs text-2xs leading-relaxed text-muted-foreground">
-          <T>
-            Focus any conversation pane to sync its diff review, files, and terminal sidebar, or
-            open global wallpaper and appearance controls.
-          </T>
+          {copy.unboundTabBody}
         </p>
       </div>
       <div className="flex items-center gap-2">
         <Button type="button" size="xs" variant="outline" onClick={onOpenWallpaper}>
           <ImageIcon className="size-3.5" aria-hidden />
-          <span>
-            <T>Wallpaper & Appearance</T>
-          </span>
+          <span>{copy.wallpaperAndAppearance}</span>
         </Button>
         <Button type="button" size="xs" variant="ghost" onClick={onClose}>
-          <T>Collapse sidebar</T>
+          {copy.collapseSidebar}
         </Button>
       </div>
     </div>
@@ -949,7 +945,15 @@ export const WorkspaceSplitRightPanelDock = memo(function WorkspaceSplitRightPan
     activeSurface: RightPanelSurface | null;
   }>({ threadKey: null, activeSurface: null });
 
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- resets previous-pane surface tracking ref whenever the split dock closes or switches to global wallpaper
+  useEffect(() => {
+    if (!splitDockOpen || splitGlobalWallpaperOpen) {
+      previousSurfaceRef.current = { threadKey: null, activeSurface: null };
+    }
+  }, [splitDockOpen, splitGlobalWallpaperOpen]);
+
   const handleCloseDock = useStableCallback(() => {
+    previousSurfaceRef.current = { threadKey: null, activeSurface: null };
     const store = useRightPanelStore.getState();
     store.setSplitGlobalWallpaperOpen(false);
     store.setSplitDockMaximized(false);

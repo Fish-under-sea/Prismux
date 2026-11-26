@@ -970,10 +970,11 @@ const userAction = (
   guestKey: string,
   updater: (current: ThreadRightPanelState) => ThreadRightPanelState,
   closesView = false,
+  revealsView = !closesView,
 ): Partial<RightPanelStoreState> => {
   const host = panelHosts.get(guestKey);
   const threadKey = host === undefined ? guestKey : scopedThreadKey(host);
-  return userActionOnThread(state, threadKey, updater, closesView);
+  return userActionOnThread(state, threadKey, updater, closesView, revealsView);
 };
 
 const userActionOnThread = (
@@ -981,6 +982,7 @@ const userActionOnThread = (
   threadKey: string,
   updater: (current: ThreadRightPanelState) => ThreadRightPanelState,
   closesView: boolean,
+  revealsView: boolean,
 ): Partial<RightPanelStoreState> => {
   const before = state.byThreadKey[threadKey] ?? EMPTY_THREAD_STATE;
   const updated = updateThread(state, threadKey, (current) => {
@@ -1003,14 +1005,17 @@ const userActionOnThread = (
   });
   const after = updated.byThreadKey[threadKey] ?? EMPTY_THREAD_STATE;
   const activeAfter = after.surfaces.find((surface) => surface.id === after.activeSurfaceId);
+  const hasThreadScopedSurfaceAfter =
+    after.isOpen && activeAfter !== undefined && activeAfter.kind !== "wallpaper";
+  const threadSurfaceChanged =
+    !before.isOpen ||
+    before.activeSurfaceId !== after.activeSurfaceId ||
+    before.surfaces.length !== after.surfaces.length;
   const openedThreadScopedSurface =
     !closesView &&
-    after.isOpen &&
-    activeAfter !== undefined &&
-    activeAfter.kind !== "wallpaper" &&
-    (!before.isOpen ||
-      before.activeSurfaceId !== after.activeSurfaceId ||
-      before.surfaces.length !== after.surfaces.length);
+    hasThreadScopedSurfaceAfter &&
+    (threadSurfaceChanged ||
+      (revealsView && (!state.splitDockOpen || state.splitGlobalWallpaperOpen)));
   const closedThreadPanel = before.isOpen && !after.isOpen;
 
   return {
@@ -1450,27 +1455,33 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
       },
       updateAgentSession: (ref, surfaceId, patch) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) => {
-            let changed = false;
-            const surfaces = current.surfaces.map((surface) => {
-              if (surface.id !== surfaceId || surface.kind !== "agent-session") {
-                return surface;
-              }
-              changed = true;
-              return {
-                ...surface,
-                ...(patch.title !== undefined ? { title: patch.title } : {}),
-                ...(patch.providerId !== undefined ? { providerId: patch.providerId } : {}),
-                ...(patch.instanceId !== undefined ? { instanceId: patch.instanceId } : {}),
-                ...(patch.model !== undefined ? { model: patch.model } : {}),
-                ...(patch.environmentId !== undefined
-                  ? { environmentId: patch.environmentId }
-                  : {}),
-                ...(patch.threadId !== undefined ? { threadId: patch.threadId } : {}),
-              };
-            });
-            return changed ? { ...current, surfaces } : current;
-          }),
+          userAction(
+            state,
+            scopedThreadKey(ref),
+            (current) => {
+              let changed = false;
+              const surfaces = current.surfaces.map((surface) => {
+                if (surface.id !== surfaceId || surface.kind !== "agent-session") {
+                  return surface;
+                }
+                changed = true;
+                return {
+                  ...surface,
+                  ...(patch.title !== undefined ? { title: patch.title } : {}),
+                  ...(patch.providerId !== undefined ? { providerId: patch.providerId } : {}),
+                  ...(patch.instanceId !== undefined ? { instanceId: patch.instanceId } : {}),
+                  ...(patch.model !== undefined ? { model: patch.model } : {}),
+                  ...(patch.environmentId !== undefined
+                    ? { environmentId: patch.environmentId }
+                    : {}),
+                  ...(patch.threadId !== undefined ? { threadId: patch.threadId } : {}),
+                };
+              });
+              return changed ? { ...current, surfaces } : current;
+            },
+            false,
+            false,
+          ),
         ),
       openAgentAux: (ref, input, automatic = false) =>
         set((state) =>
@@ -1601,20 +1612,26 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         }),
       renameDevice: (ref, surfaceId, title) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) => ({
-            ...current,
-            surfaces: current.surfaces.map((surface) =>
-              surface.id === surfaceId && surface.kind === "device"
-                ? {
-                    ...surface,
-                    title:
-                      title.trim() ||
-                      surface.target?.name ||
-                      m(msg("Device", { $context: "a simulator or emulator" })),
-                  }
-                : surface,
-            ),
-          })),
+          userAction(
+            state,
+            scopedThreadKey(ref),
+            (current) => ({
+              ...current,
+              surfaces: current.surfaces.map((surface) =>
+                surface.id === surfaceId && surface.kind === "device"
+                  ? {
+                      ...surface,
+                      title:
+                        title.trim() ||
+                        surface.target?.name ||
+                        m(msg("Device", { $context: "a simulator or emulator" })),
+                    }
+                  : surface,
+              ),
+            }),
+            false,
+            false,
+          ),
         ),
       openBrowser: (ref, tabId) =>
         set((state) =>
