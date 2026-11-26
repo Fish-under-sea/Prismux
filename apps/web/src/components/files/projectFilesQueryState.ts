@@ -35,13 +35,50 @@ export function optimisticFileAtom(
   return projectEnvironment.optimisticFile({ environmentId, cwd, relativePath });
 }
 
-// Dirty contents must survive a closed preview, including failed or unauthorized saves.
-const unsavedFileMounts = new Map<ReturnType<typeof optimisticFileAtom>, () => void>();
+export const MAX_UNSAVED_FILE_MOUNTS = 64;
+
+interface UnsavedFileMountEntry {
+  readonly environmentId: EnvironmentId;
+  readonly cwd: string;
+  readonly relativePath: string;
+  readonly unmount: () => void;
+}
+
+// Dirty contents must survive a closed preview, including failed or unauthorized saves,
+// bounded by LRU eviction and cleared when a workspace or project is removed.
+const unsavedFileMounts = new Map<ReturnType<typeof optimisticFileAtom>, UnsavedFileMountEntry>();
 
 function releaseUnsavedFile(atom: ReturnType<typeof optimisticFileAtom>): void {
-  const unmount = unsavedFileMounts.get(atom);
+  const entry = unsavedFileMounts.get(atom);
+  if (!entry) return;
   unsavedFileMounts.delete(atom);
-  unmount?.();
+  entry.unmount();
+}
+
+function retainUnsavedFile(
+  atom: ReturnType<typeof optimisticFileAtom>,
+  environmentId: EnvironmentId,
+  cwd: string,
+  relativePath: string,
+): void {
+  const existing = unsavedFileMounts.get(atom);
+  if (existing) {
+    unsavedFileMounts.delete(atom);
+    unsavedFileMounts.set(atom, existing);
+    return;
+  }
+  unsavedFileMounts.set(atom, {
+    environmentId,
+    cwd,
+    relativePath,
+    unmount: appAtomRegistry.mount(atom),
+  });
+  while (unsavedFileMounts.size > MAX_UNSAVED_FILE_MOUNTS) {
+    const oldestAtom = unsavedFileMounts.keys().next().value;
+    if (oldestAtom === undefined || oldestAtom === atom) break;
+    appAtomRegistry.set(oldestAtom, null);
+    releaseUnsavedFile(oldestAtom);
+  }
 }
 
 interface ProjectQueryState<A> {
@@ -90,9 +127,7 @@ export function setProjectFileQueryData(
   contents: string,
 ): void {
   const atom = optimisticFileAtom(environmentId, cwd, relativePath);
-  if (!unsavedFileMounts.has(atom)) {
-    unsavedFileMounts.set(atom, appAtomRegistry.mount(atom));
-  }
+  retainUnsavedFile(atom, environmentId, cwd, relativePath);
   appAtomRegistry.set(atom, {
     saved: false,
     data: {
@@ -173,6 +208,33 @@ export function clearProjectFileQueryData(
   appAtomRegistry.set(atom, null);
   releaseUnsavedFile(atom);
 }
+
+/** Releases all mounted unsaved file overlays belonging to a deleted workspace or worktree. */
+export function clearProjectFileQueryDataForWorkspace(
+  environmentId: EnvironmentId,
+  cwd: string,
+): void {
+  const matchingAtoms: Array<ReturnType<typeof optimisticFileAtom>> = [];
+  for (const [atom, entry] of unsavedFileMounts) {
+    if (entry.environmentId === environmentId && entry.cwd === cwd) {
+      matchingAtoms.push(atom);
+    }
+  }
+  for (const atom of matchingAtoms) {
+    appAtomRegistry.set(atom, null);
+    releaseUnsavedFile(atom);
+  }
+}
+
+export const __projectFilesQueryStateTesting = {
+  getUnsavedFileMountCount: () => unsavedFileMounts.size,
+  clearAllUnsavedFileMountsForTests: () => {
+    for (const atom of unsavedFileMounts.keys()) {
+      appAtomRegistry.set(atom, null);
+      releaseUnsavedFile(atom);
+    }
+  },
+};
 
 function failureCause<A>(result: AsyncResult.AsyncResult<A, unknown>): unknown {
   return result._tag === "Failure" ? Cause.squash(result.cause) : null;

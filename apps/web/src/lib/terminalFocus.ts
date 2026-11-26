@@ -36,8 +36,43 @@ interface TerminalFocusTarget {
   readonly focus: () => boolean;
 }
 
+export const MAX_LAST_THREAD_FOCUS_ENTRIES = 200;
+
 const focusTargets = new Set<TerminalFocusTarget>();
 const lastThreadFocus = new Map<string, "composer" | { terminalId: string }>();
+
+function rememberThreadFocus(threadKey: string, target: "composer" | { terminalId: string }): void {
+  lastThreadFocus.delete(threadKey);
+  lastThreadFocus.set(threadKey, target);
+  while (lastThreadFocus.size > MAX_LAST_THREAD_FOCUS_ENTRIES) {
+    const oldestKey = lastThreadFocus.keys().next().value;
+    if (oldestKey === undefined) break;
+    lastThreadFocus.delete(oldestKey);
+  }
+}
+
+export function clearThreadTerminalFocus(threadRef: ScopedThreadRef): void {
+  const threadKey = scopedThreadKey(threadRef);
+  lastThreadFocus.delete(threadKey);
+  if (pendingFocus?.threadKey === threadKey) pendingFocus = null;
+  if (navigationRequestThreadKey === threadKey) navigationRequestThreadKey = null;
+  if (enteredThreadKey === threadKey) enteredThreadKey = null;
+}
+
+export const __terminalFocusTesting = {
+  getLastThreadFocusSize: () => lastThreadFocus.size,
+  hasLastThreadFocus: (threadRef: ScopedThreadRef) =>
+    lastThreadFocus.has(scopedThreadKey(threadRef)),
+  seedLastThreadFocusForTests: (
+    threadRef: ScopedThreadRef,
+    target: "composer" | { terminalId: string },
+  ) => {
+    rememberThreadFocus(scopedThreadKey(threadRef), target);
+  },
+  resetLastThreadFocusForTests: () => {
+    lastThreadFocus.clear();
+  },
+};
 // One request at a time: the newest terminal the user asked for wins, so an
 // older request never fires later and steals focus.
 let pendingFocus: { readonly threadKey: string; readonly terminalId: string } | null = null;
@@ -141,18 +176,21 @@ export function restoreFocusOnThreadEnter(
   navigationRequestThreadKey = null;
   enteredThreadKey = threadKey;
   const previous = lastThreadFocus.get(threadKey);
+  if (previous !== undefined) {
+    rememberThreadFocus(threadKey, previous);
+  }
   const remember = () => {
     const element = content.root.ownerDocument.activeElement;
     if (!element) return;
     const terminal = Array.from(focusTargets).find((target) => target.element?.contains(element));
     if (terminal) {
       if (scopedThreadKey(terminal.threadRef) === threadKey)
-        lastThreadFocus.set(threadKey, { terminalId: terminal.terminalId });
+        rememberThreadFocus(threadKey, { terminalId: terminal.terminalId });
     } else if (
       content.root.contains(element) &&
       element.closest('[data-workspace-area="composer"]')
     ) {
-      lastThreadFocus.set(threadKey, "composer");
+      rememberThreadFocus(threadKey, "composer");
     }
   };
   content.root.ownerDocument.addEventListener("focusin", remember);

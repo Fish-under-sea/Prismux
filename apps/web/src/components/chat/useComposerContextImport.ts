@@ -73,6 +73,40 @@ async function downloadAttachmentBlob(url: string): Promise<Blob | null> {
   }
 }
 
+export function attachImportedImageToDraft(input: {
+  readonly file: File;
+  readonly localId: string;
+  readonly name: string;
+  readonly source?: Extract<ComposerContextRecord, { kind: "image" }>["source"];
+  readonly allowDuplicates: boolean;
+  readonly addImages: (
+    images: ComposerImageAttachment[],
+    options: { readonly allowDuplicates: boolean },
+  ) => ReadonlyArray<string>;
+}): boolean {
+  const previewUrl = URL.createObjectURL(input.file);
+  const accepted = input.addImages(
+    [
+      {
+        type: "image",
+        id: input.localId,
+        name: input.name,
+        mimeType: input.file.type,
+        sizeBytes: input.file.size,
+        previewUrl,
+        file: input.file,
+        ...(input.source ? { source: input.source } : {}),
+      },
+    ],
+    { allowDuplicates: input.allowDuplicates },
+  );
+  if (!accepted.includes(input.localId)) {
+    URL.revokeObjectURL(previewUrl);
+    return false;
+  }
+  return true;
+}
+
 /**
  * Imports copied composer context (terminal output, review comments, annotations, threads,
  * images and files) into the open draft, and counts the attachment slots already spoken for.
@@ -237,29 +271,21 @@ export function useComposerContextImport(input: {
       return;
     }
     if (record.kind === "image") {
-      const accepted = addComposerDraftImages(
-        attachmentDraftTarget,
-        [
-          {
-            type: "image",
-            id: localId,
-            name: record.name,
-            mimeType: file.type,
-            sizeBytes: file.size,
-            previewUrl: URL.createObjectURL(file),
-            file,
-            ...(record.source ? { source: record.source } : {}),
-          },
-        ],
-        {
-          allowDuplicates:
-            getComposerDraft(composerDraftTarget)?.previewAnnotations.some(
-              (annotation) => annotation.id === localId,
-            ) ?? false,
-        },
-      );
-      if (!accepted.includes(localId))
+      const accepted = attachImportedImageToDraft({
+        file,
+        localId,
+        name: record.name,
+        ...(record.source ? { source: record.source } : {}),
+        allowDuplicates:
+          getComposerDraft(composerDraftTarget)?.previewAnnotations.some(
+            (annotation) => annotation.id === localId,
+          ) ?? false,
+        addImages: (images, options) =>
+          addComposerDraftImages(attachmentDraftTarget, images, options),
+      });
+      if (!accepted) {
         fail(m(msg("The draft rejected this attachment (duplicate or attachment limit reached).")));
+      }
     } else {
       const accepted = addComposerFilesToDraft([
         {

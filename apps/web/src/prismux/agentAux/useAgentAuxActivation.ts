@@ -9,10 +9,7 @@ import { useStableCallback } from "../../hooks/useStableCallback";
 import { useRightPanelStore } from "../../rightPanelStore";
 import { orchestrationEnvironment } from "../../state/orchestration";
 import { useEnvironmentQuery } from "../../state/query";
-import {
-  inspectAgentAux,
-  type DaemonAgentAuxInspectResponse,
-} from "../daemonClient";
+import { inspectAgentAux, type DaemonAgentAuxInspectResponse } from "../daemonClient";
 import {
   buildAgentAuxViewModel,
   shouldAutoOpenAgentAux,
@@ -20,10 +17,7 @@ import {
   type AgentAuxThreadShellLike,
   type AgentAuxViewModel,
 } from "./agentAux.logic";
-import {
-  toAgentAuxOverviewEntry,
-  type AgentAuxOverviewEntryData,
-} from "./AgentAuxPanel";
+import { toAgentAuxOverviewEntry, type AgentAuxOverviewEntryData } from "./AgentAuxPanel";
 
 export const AGENT_AUX_POLL_INTERVAL_MS = 12_000;
 
@@ -95,10 +89,29 @@ export function isAgentAuxThreadActivelyRunning(
   return false;
 }
 
+export const MAX_AUTO_OPENED_ACTIVATION_KEYS = 200;
 const autoOpenedActivationKeys = new Set<string>();
+
+export function recordAutoOpenedActivationKey(compositeKey: string): void {
+  autoOpenedActivationKeys.delete(compositeKey);
+  autoOpenedActivationKeys.add(compositeKey);
+  while (autoOpenedActivationKeys.size > MAX_AUTO_OPENED_ACTIVATION_KEYS) {
+    const oldestKey = autoOpenedActivationKeys.values().next().value;
+    if (oldestKey === undefined) break;
+    autoOpenedActivationKeys.delete(oldestKey);
+  }
+}
 
 export function resetAgentAuxAutoOpenMemoryForTest(): void {
   autoOpenedActivationKeys.clear();
+}
+
+export function getAutoOpenedActivationKeyCountForTest(): number {
+  return autoOpenedActivationKeys.size;
+}
+
+export function hasAutoOpenedActivationKeyForTest(compositeKey: string): boolean {
+  return autoOpenedActivationKeys.has(compositeKey);
 }
 
 function sanitizeNativeSessionId(raw: unknown): string | null {
@@ -135,9 +148,7 @@ export function extractAgentAuxProviderSessionId(
   }
   const thread = rec.thread;
   if (thread && typeof thread === "object") {
-    const direct = sanitizeNativeSessionId(
-      (thread as Record<string, unknown>).providerSessionId,
-    );
+    const direct = sanitizeNativeSessionId((thread as Record<string, unknown>).providerSessionId);
     if (direct) return direct;
   }
   return null;
@@ -300,7 +311,7 @@ export function useAgentAuxActivation(
     });
     if (!compositeKey) return;
 
-    autoOpenedActivationKeys.add(compositeKey);
+    recordAutoOpenedActivationKey(compositeKey);
     store.openAgentAux(
       activeThreadRef,
       {

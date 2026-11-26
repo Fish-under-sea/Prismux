@@ -5,6 +5,7 @@ import {
   type PreviewSessionSnapshot,
   ThreadId,
 } from "@prismux/core-contracts";
+import { AtomRegistry } from "effect/reactivity";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
@@ -14,9 +15,12 @@ import {
   applyPreviewServerSnapshot,
   beginPreviewSessionClose,
   cancelPreviewSessionClose,
+  clearThreadPreviewState,
   previewStateAtom,
+  previewThreadRefsAtom,
   readThreadPreviewState,
   reconcilePreviewServerSessions,
+  rememberPreviewUrl,
   resetPreviewStateForTests,
   setActivePreviewTab,
 } from "./previewStateStore";
@@ -433,5 +437,74 @@ describe("previewStateStore (single-tab)", () => {
       url: "http://localhost:5173/new",
       title: "New",
     });
+  });
+
+  it("evicts derived previewStateAtom nodes after unsubscribe and deletes previewThreadRefsAtom entries on clear", () => {
+    const transientRef = scopeThreadRef(environmentId, ThreadId.make("transient-thread"));
+    const transientKey = scopedThreadKey(transientRef);
+    const derivedAtom = previewStateAtom(transientKey);
+
+    // Read-only access must not populate previewThreadRefsAtom or store an entry.
+    expect(readThreadPreviewState(transientRef)).toBe(__testing.EMPTY_THREAD_PREVIEW_STATE);
+    expect(appAtomRegistry.get(previewThreadRefsAtom).has(transientKey)).toBe(false);
+    expect(__testing.getStoredPreviewStateCount()).toBe(0);
+
+    const scheduledTasks = new Set<() => void>();
+    const probeRegistry = AtomRegistry.make({
+      scheduleTask: (task) => {
+        scheduledTasks.add(task);
+        return () => {
+          scheduledTasks.delete(task);
+        };
+      },
+    });
+    try {
+      const unsubscribe = probeRegistry.subscribe(derivedAtom, () => {});
+      expect(probeRegistry.getNodes().has(derivedAtom)).toBe(true);
+      unsubscribe();
+      for (const task of scheduledTasks) {
+        scheduledTasks.delete(task);
+        task();
+      }
+      expect(probeRegistry.getNodes().has(derivedAtom)).toBe(false);
+    } finally {
+      probeRegistry.dispose();
+    }
+
+    rememberPreviewUrl(transientRef, "http://localhost:3000/");
+    expect(appAtomRegistry.get(previewThreadRefsAtom).has(transientKey)).toBe(true);
+    expect(__testing.getStoredPreviewStateCount()).toBe(1);
+
+    // clearThreadPreviewState removes both state and previewThreadRefsAtom even with no active sessions.
+    clearThreadPreviewState(transientRef);
+    expect(appAtomRegistry.get(previewThreadRefsAtom).has(transientKey)).toBe(false);
+    expect(__testing.getStoredPreviewStateCount()).toBe(0);
+    expect(readThreadPreviewState(transientRef)).toBe(__testing.EMPTY_THREAD_PREVIEW_STATE);
+  });
+
+  it("bounds inactive preview states by LRU while keeping active preview sessions", () => {
+    const activeRef = scopeThreadRef(environmentId, ThreadId.make("active-thread"));
+    applyPreviewServerSnapshot(
+      activeRef,
+      makeSnapshot({ threadId: "active-thread", tabId: "tab_live" }),
+    );
+
+    const totalInactive = __testing.MAX_INACTIVE_PREVIEW_STATES + 10;
+    for (let i = 0; i < totalInactive; i += 1) {
+      const idleRef = scopeThreadRef(environmentId, ThreadId.make(`idle-${i}`));
+      rememberPreviewUrl(idleRef, `http://localhost:4000/${i}`);
+    }
+
+    expect(__testing.getStoredPreviewStateCount()).toBe(__testing.MAX_INACTIVE_PREVIEW_STATES);
+    expect(readThreadPreviewState(activeRef).sessions.tab_live).toBeDefined();
+    expect(
+      readThreadPreviewState(scopeThreadRef(environmentId, ThreadId.make("idle-0")))
+        .recentlySeenUrls,
+    ).toEqual([]);
+    expect(
+      readThreadPreviewState(
+        scopeThreadRef(environmentId, ThreadId.make(`idle-${totalInactive - 1}`)),
+      ).recentlySeenUrls,
+    ).toEqual([`http://localhost:4000/${totalInactive - 1}`]);
   });
 });

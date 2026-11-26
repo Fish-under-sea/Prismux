@@ -43,8 +43,35 @@ import {
   withVcsRefsPersistenceLock,
 } from "./vcsRefInvalidation.ts";
 
-// Share freshness across search and pagination keys, but keep it local to this registry.
-const serverRefsRevisionAtom = Atom.family((_key: string) => Atom.make(0).pipe(Atom.keepAlive));
+export const MAX_SERVER_REFS_REVISION_KEYS = 256;
+
+// Share freshness across search and pagination keys, kept local to this registry with LRU cap.
+const serverRefsRevisionByKeyAtom = Atom.make<ReadonlyMap<string, number>>(new Map()).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("environment-data:vcs:server-refs-revisions"),
+);
+
+function readServerRefsRevision(registry: AtomRegistry.AtomRegistry, key: string): number {
+  return registry.get(serverRefsRevisionByKeyAtom).get(key) ?? 0;
+}
+
+function recordServerRefsRevision(
+  registry: AtomRegistry.AtomRegistry,
+  key: string,
+  revision: number,
+): void {
+  registry.update(serverRefsRevisionByKeyAtom, (current) => {
+    const next = new Map(current);
+    next.delete(key);
+    next.set(key, revision);
+    while (next.size > MAX_SERVER_REFS_REVISION_KEYS) {
+      const oldestKey = next.keys().next().value;
+      if (oldestKey === undefined) break;
+      next.delete(oldestKey);
+    }
+    return next;
+  });
+}
 
 const OFFLINE_BRANCH_LIST_LIMIT = 100;
 const VCS_REFS_IDLE_TTL_MS = 30_000;
@@ -156,13 +183,11 @@ export const makeCachedVcsRefsChanges = Effect.fn("CachedVcsRefsState.makeChange
         )
       : Option.none<VcsListRefsResult>();
   const refresh = Effect.fn("CachedVcsRefsState.refresh")(function* () {
-    const revisionAtom = serverRefsRevisionAtom(
-      `${environmentId.length}:${environmentId}${input.cwd}`,
-    );
+    const revisionKey = `${environmentId.length}:${environmentId}${input.cwd}`;
     const bypassServerSnapshot =
       expectedRevision !== undefined &&
       registry !== undefined &&
-      expectedRevision > registry.get(revisionAtom);
+      expectedRevision > readServerRefsRevision(registry, revisionKey);
     const refs = yield* request(
       WS_METHODS.vcsListRefs,
       bypassServerSnapshot ? { ...input, refresh: true } : input,
@@ -189,7 +214,9 @@ export const makeCachedVcsRefsChanges = Effect.fn("CachedVcsRefsState.makeChange
       expectedRevision,
       persist: useCache,
     });
-    if (committed && bypassServerSnapshot) registry.set(revisionAtom, expectedRevision);
+    if (committed && bypassServerSnapshot) {
+      recordServerRefsRevision(registry, revisionKey, expectedRevision);
+    }
     return committed ? Option.some(refs) : Option.none<VcsListRefsResult>();
   });
 

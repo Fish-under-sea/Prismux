@@ -683,6 +683,11 @@ function recordPreviewTitles(
 export function startPreviewTitleRecording(): () => void {
   const followed = new Map<string, () => void>();
   const followNewThreads = (refs: ReadonlyMap<string, ScopedThreadRef>) => {
+    for (const [threadKey, stop] of followed) {
+      if (refs.has(threadKey)) continue;
+      stop();
+      followed.delete(threadKey);
+    }
     for (const [threadKey, threadRef] of refs) {
       if (followed.has(threadKey)) continue;
       const atom = previewStateAtom(threadKey);

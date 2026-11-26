@@ -38,6 +38,7 @@ import {
   createVcsActionManager,
   createVcsActionTransportId,
   EMPTY_VCS_ACTION_STATE,
+  MAX_VCS_ACTION_STATES,
   normalizeVcsActionProgressEvent,
   parseVcsActionTargetKey,
   VcsActionMissingTerminalEventError,
@@ -585,6 +586,81 @@ describe("vcsActionState", () => {
       expect(removed).toEqual([`${environmentId}:*`, `${environmentId}:*`, `${environmentId}:*`]);
     }),
   );
+
+  it("evicts derived vcsActionStateAtom nodes after unsubscribe and bounds idle error entries by LRU", async () => {
+    const runtime = Atom.runtime(Layer.empty) as unknown as Atom.AtomRuntime<
+      EnvironmentRegistry.EnvironmentRegistry | Persistence.EnvironmentCacheStore,
+      never
+    >;
+    const manager = createVcsActionManager(runtime);
+    const scheduledTasks = new Set<() => void>();
+    const registry = AtomRegistry.make({
+      scheduleTask: (task) => {
+        scheduledTasks.add(task);
+        return () => {
+          scheduledTasks.delete(task);
+        };
+      },
+    });
+    const drainTasks = () => {
+      while (scheduledTasks.size > 0) {
+        const pending = [...scheduledTasks];
+        scheduledTasks.clear();
+        for (const task of pending) task();
+      }
+    };
+    try {
+      const probeTarget = { environmentId, cwd: "/worktree-probe" };
+      const probeAtom = manager.stateAtom(probeTarget);
+      const unsubscribe = registry.subscribe(probeAtom, () => {});
+      expect(registry.getNodes().has(probeAtom)).toBe(true);
+      unsubscribe();
+      drainTasks();
+      expect(registry.getNodes().has(probeAtom)).toBe(false);
+
+      // Keep one running action active while overflowing > MAX_VCS_ACTION_STATES failed actions.
+      const runningTarget = { environmentId, cwd: "/worktree-running" };
+      let finishRunning!: () => void;
+      const runningPromise = manager.track(
+        registry,
+        runningTarget,
+        { operation: "pull", label: "Pulling" },
+        () =>
+          new Promise<AtomCommandResult<void, never>>((resolve) => {
+            finishRunning = () => resolve(AsyncResult.success(undefined));
+          }),
+      );
+
+      for (let i = 0; i < MAX_VCS_ACTION_STATES + 10; i += 1) {
+        await manager.track(
+          registry,
+          { environmentId, cwd: `/worktree-failed-${i}` },
+          { operation: "pull", label: "Pulling" },
+          async () => AsyncResult.failure(Cause.fail(new Error(`failed-${i}`))),
+        );
+      }
+
+      // Active running action is never evicted; oldest failed worktree is evicted; newest is retained.
+      expect(registry.get(manager.stateAtom(runningTarget)).isRunning).toBe(true);
+      expect(registry.get(manager.stateAtom({ environmentId, cwd: "/worktree-failed-0" }))).toEqual(
+        EMPTY_VCS_ACTION_STATE,
+      );
+      expect(
+        registry.get(
+          manager.stateAtom({
+            environmentId,
+            cwd: `/worktree-failed-${MAX_VCS_ACTION_STATES + 9}`,
+          }),
+        ).error,
+      ).toBe(`failed-${MAX_VCS_ACTION_STATES + 9}`);
+
+      finishRunning();
+      await runningPromise;
+      expect(registry.get(manager.stateAtom(runningTarget))).toEqual(EMPTY_VCS_ACTION_STATE);
+    } finally {
+      registry.dispose();
+    }
+  });
 });
 
 vi.mock("./session.ts", () => ({

@@ -199,12 +199,40 @@ const decodeVcsActionTargetKey = Schema.decodeUnknownSync(
   Schema.Tuple([EnvironmentId, Schema.String]),
 );
 
-const vcsActionStateAtom = Atom.family((key: string) => {
-  return Atom.make(EMPTY_VCS_ACTION_STATE).pipe(
-    Atom.keepAlive,
-    Atom.withLabel(`vcs-action:${key}`),
-  );
-});
+export const MAX_VCS_ACTION_STATES = 256;
+
+const vcsActionStatesByKeyAtom = Atom.make<ReadonlyMap<string, VcsActionState>>(new Map()).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("vcs-action:by-key"),
+);
+
+const vcsActionStateAtom = Atom.family((key: string) =>
+  Atom.writable(
+    (get) => get(vcsActionStatesByKeyAtom).get(key) ?? EMPTY_VCS_ACTION_STATE,
+    (ctx, nextState: VcsActionState) => {
+      const current = ctx.get(vcsActionStatesByKeyAtom);
+      if (nextState === EMPTY_VCS_ACTION_STATE) {
+        if (!current.has(key)) return;
+        const next = new Map(current);
+        next.delete(key);
+        ctx.set(vcsActionStatesByKeyAtom, next);
+        return;
+      }
+      if (current.get(key) === nextState) return;
+      const next = new Map(current);
+      next.delete(key);
+      next.set(key, nextState);
+      if (next.size > MAX_VCS_ACTION_STATES) {
+        for (const [candidateKey, candidateState] of next) {
+          if (next.size <= MAX_VCS_ACTION_STATES) break;
+          if (candidateKey === key || candidateState.isRunning) continue;
+          next.delete(candidateKey);
+        }
+      }
+      ctx.set(vcsActionStatesByKeyAtom, next);
+    },
+  ).pipe(Atom.withLabel(`vcs-action:${key}`)),
+);
 
 const EMPTY_VCS_ACTION_ATOM = Atom.make(EMPTY_VCS_ACTION_STATE).pipe(
   Atom.keepAlive,
@@ -493,6 +521,8 @@ export function createVcsActionManager<R, E>(
       ]);
     const existing = runStackedActionCommands.get(commandKey);
     if (existing !== undefined) {
+      runStackedActionCommands.delete(commandKey);
+      runStackedActionCommands.set(commandKey, existing);
       return existing;
     }
     const target = targetKey === null ? null : parseVcsActionTargetKey(targetKey);
@@ -591,6 +621,11 @@ export function createVcsActionManager<R, E>(
       }),
     });
     runStackedActionCommands.set(commandKey, command);
+    while (runStackedActionCommands.size > MAX_VCS_ACTION_STATES) {
+      const oldestKey = runStackedActionCommands.keys().next().value;
+      if (oldestKey === undefined) break;
+      runStackedActionCommands.delete(oldestKey);
+    }
     return command;
   };
 

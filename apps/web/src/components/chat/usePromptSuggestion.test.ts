@@ -1,4 +1,5 @@
 import {
+  EnvironmentId,
   MessageId,
   type OrchestrationV2Run,
   ProviderInstanceId,
@@ -6,9 +7,14 @@ import {
   ThreadId,
 } from "@prismux/core-contracts";
 import * as DateTime from "effect/DateTime";
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { offeredPromptSuggestion } from "./usePromptSuggestion";
+import {
+  __promptSuggestionTesting,
+  dismissPromptSuggestionKey,
+  MAX_DISMISSED_PROMPT_SUGGESTION_KEYS,
+  offeredPromptSuggestion,
+} from "./usePromptSuggestion";
 
 const now = DateTime.makeUnsafe("2026-06-20T00:00:00.000Z");
 const run = (
@@ -67,5 +73,31 @@ describe("offeredPromptSuggestion", () => {
     // Cached detail that predates the shell's cancelled run cannot vouch for what ran in between.
     const unseen = run(RunId.make("run-3"), 3, "cancelled", false);
     expect(offeredPromptSuggestion(suggestion, summary(unseen), [turn])).toBeNull();
+  });
+});
+
+describe("dismissPromptSuggestionKey bounded history", () => {
+  afterEach(() => {
+    __promptSuggestionTesting.resetDismissedKeysForTests();
+  });
+
+  it("caps dismissedKeys at 200 entries with LRU eviction", () => {
+    const envId = EnvironmentId.make("env-suggestion");
+    for (let i = 0; i < MAX_DISMISSED_PROMPT_SUGGESTION_KEYS + 20; i += 1) {
+      dismissPromptSuggestionKey(envId, RunId.make(`run-${i}`));
+    }
+
+    expect(__promptSuggestionTesting.getDismissedKeyCount()).toBe(
+      MAX_DISMISSED_PROMPT_SUGGESTION_KEYS,
+    );
+    expect(__promptSuggestionTesting.hasDismissedKey(envId, RunId.make("run-0"))).toBe(false);
+    expect(__promptSuggestionTesting.hasDismissedKey(envId, RunId.make("run-19"))).toBe(false);
+    expect(__promptSuggestionTesting.hasDismissedKey(envId, RunId.make("run-20"))).toBe(true);
+    expect(
+      __promptSuggestionTesting.hasDismissedKey(
+        envId,
+        RunId.make(`run-${MAX_DISMISSED_PROMPT_SUGGESTION_KEYS + 19}`),
+      ),
+    ).toBe(true);
   });
 });

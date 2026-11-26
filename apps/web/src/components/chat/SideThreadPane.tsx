@@ -1,4 +1,4 @@
-import { scopeThreadRef } from "@prismux/client-runtime/environment";
+import { scopedThreadKey, scopeThreadRef } from "@prismux/client-runtime/environment";
 import { sideThreadKindOf } from "@prismux/client-runtime/side-thread";
 import { formatSubagentDisplayTitle } from "@prismux/client-runtime/state/subagent-display";
 import {
@@ -22,6 +22,8 @@ import { useComposerDraftStore } from "../../composerDraftStore";
 import { ComposerHandleContext } from "../../composerHandleContext";
 import { useClientSettings } from "../../hooks/useSettings";
 import { releaseComposerDraftUploads } from "../../lib/composerDraftUploads";
+import { clearThreadTerminalFocus } from "../../lib/terminalFocus";
+import { clearThreadPreviewState } from "../../previewStateStore";
 import type { SideChatParentPanel } from "../../lib/sideChatPane";
 import { readLocalApi } from "../../localApi";
 import { hostRightPanel, type ThreadSurface, useRightPanelStore } from "../../rightPanelStore";
@@ -41,6 +43,8 @@ import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { BackgroundThreadContext } from "./backgroundThread";
 import { normalizeBtwDisplayTitle } from "./btwMode";
+import { clearDraftSendState } from "./draftSendState";
+import { disarmFreshSession } from "./freshSessionArms";
 
 export interface SideThreadBtwHeaderProps {
   readonly title: string;
@@ -273,8 +277,13 @@ export default function SideThreadPane(props: {
     });
     setDeleting(false);
     if (result._tag === "Success") {
+      const sideThreadKey = scopedThreadKey(threadRef);
       releaseComposerDraftUploads(threadRef);
       useComposerDraftStore.getState().clearDraftThread(threadRef);
+      clearThreadPreviewState(threadRef);
+      clearDraftSendState(sideThreadKey);
+      clearThreadTerminalFocus(threadRef);
+      disarmFreshSession(sideThreadKey);
       useRightPanelStore.getState().closeSurface(parentRef, surface.id);
     } else if (!isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);

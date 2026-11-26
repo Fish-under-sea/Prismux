@@ -1,8 +1,13 @@
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import {
   AGENT_AUX_POLL_INTERVAL_MS,
+  getAutoOpenedActivationKeyCountForTest,
+  hasAutoOpenedActivationKeyForTest,
   isAgentAuxThreadActivelyRunning,
+  MAX_AUTO_OPENED_ACTIVATION_KEYS,
+  recordAutoOpenedActivationKey,
+  resetAgentAuxAutoOpenMemoryForTest,
 } from "./useAgentAuxActivation";
 
 describe("useAgentAuxActivation polling gate", () => {
@@ -22,12 +27,9 @@ describe("useAgentAuxActivation polling gate", () => {
       ),
     ).toBe(false);
 
-    expect(
-      isAgentAuxThreadActivelyRunning(
-        { thread: { status: "running" } },
-        undefined,
-      ),
-    ).toBe(true);
+    expect(isAgentAuxThreadActivelyRunning({ thread: { status: "running" } }, undefined)).toBe(
+      true,
+    );
 
     expect(
       isAgentAuxThreadActivelyRunning(
@@ -40,10 +42,29 @@ describe("useAgentAuxActivation polling gate", () => {
     ).toBe(true);
 
     expect(
-      isAgentAuxThreadActivelyRunning(
-        { thread: { status: "idle" } },
-        [{ latestRun: { status: "in_progress" } } as never],
-      ),
+      isAgentAuxThreadActivelyRunning({ thread: { status: "idle" } }, [
+        { latestRun: { status: "in_progress" } } as never,
+      ]),
+    ).toBe(true);
+  });
+});
+
+describe("useAgentAuxActivation bounded auto-open memory", () => {
+  afterEach(() => {
+    resetAgentAuxAutoOpenMemoryForTest();
+  });
+
+  it("caps autoOpenedActivationKeys at 200 entries with LRU eviction", () => {
+    for (let i = 0; i < MAX_AUTO_OPENED_ACTIVATION_KEYS + 25; i += 1) {
+      recordAutoOpenedActivationKey(`thread-${i}:aux`);
+    }
+
+    expect(getAutoOpenedActivationKeyCountForTest()).toBe(MAX_AUTO_OPENED_ACTIVATION_KEYS);
+    expect(hasAutoOpenedActivationKeyForTest("thread-0:aux")).toBe(false);
+    expect(hasAutoOpenedActivationKeyForTest("thread-24:aux")).toBe(false);
+    expect(hasAutoOpenedActivationKeyForTest("thread-25:aux")).toBe(true);
+    expect(
+      hasAutoOpenedActivationKeyForTest(`thread-${MAX_AUTO_OPENED_ACTIVATION_KEYS + 24}:aux`),
     ).toBe(true);
   });
 });

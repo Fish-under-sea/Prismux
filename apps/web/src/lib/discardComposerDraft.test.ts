@@ -1,13 +1,29 @@
-import { EnvironmentId, ProjectId, ThreadId } from "@prismux/core-contracts";
-import { scopeProjectRef, scopeThreadRef } from "@prismux/client-runtime/environment";
+import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@prismux/core-contracts";
+import {
+  scopedThreadKey,
+  scopeProjectRef,
+  scopeThreadRef,
+} from "@prismux/client-runtime/environment";
+import { createModelSelection } from "@prismux/core-shared/model";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import {
+  __chatViewSendTesting,
+  draftFanoutSelectionsAtom,
+  draftSendState,
+} from "../components/chat/chatViewSend";
+import {
+  __freshSessionArmsTesting,
+  armFreshSession,
+  readFreshSessionArm,
+} from "../components/chat/freshSessionArms";
 import {
   type ComposerImageAttachment,
   DraftId,
   useComposerDraftStore,
 } from "../composerDraftStore";
 import { showThreadUndoNotice } from "../hooks/showThreadUndoNotice";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import { discardComposerDraft } from "./discardComposerDraft";
 
 vi.mock("./attachmentUploadQueue", () => ({ releaseDraftAttachments: vi.fn() }));
@@ -45,6 +61,8 @@ function imagePreview(name = "image.png") {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __chatViewSendTesting.resetForTests();
+  __freshSessionArmsTesting.resetForTests();
   useComposerDraftStore.setState({
     draftsByThreadKey: {},
     draftThreadsByThreadKey: {},
@@ -134,5 +152,29 @@ describe("discardComposerDraft", () => {
     const restored = useComposerDraftStore.getState().getComposerDraft(threadRef)!.images[0]!;
     expect(restored.previewUrl).toBe(preview.image.previewUrl);
     expect(await (await fetch(restored.previewUrl)).text()).toBe("image bytes");
+  });
+
+  it("clears draft send state, fanout selections, and fresh-session arm when discard commits", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId);
+    const session = store.getDraftSession(draftId)!;
+    const sessionRouteKey = scopedThreadKey(
+      scopeThreadRef(session.environmentId, session.threadId),
+    );
+    draftSendState(sessionRouteKey);
+    appAtomRegistry.set(draftFanoutSelectionsAtom(sessionRouteKey), [
+      createModelSelection(ProviderInstanceId.make("codex"), "gpt-5"),
+    ]);
+    armFreshSession(sessionRouteKey);
+
+    discardComposerDraft(draftId);
+    // Preserved until Undo window commits.
+    expect(__chatViewSendTesting.hasDraftSendState(sessionRouteKey)).toBe(true);
+    expect(readFreshSessionArm(sessionRouteKey)).toBeDefined();
+
+    undoNotice().commit?.();
+    expect(__chatViewSendTesting.hasDraftSendState(sessionRouteKey)).toBe(false);
+    expect(appAtomRegistry.get(draftFanoutSelectionsAtom(sessionRouteKey))).toBeNull();
+    expect(readFreshSessionArm(sessionRouteKey)).toBeUndefined();
   });
 });

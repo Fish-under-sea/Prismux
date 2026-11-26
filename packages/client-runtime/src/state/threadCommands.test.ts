@@ -1,5 +1,8 @@
+import { vi } from "vite-plus/test";
 import { describe, expect, it } from "@effect/vitest";
 import {
+  AuthOrchestrationOperateScope,
+  AuthProvidersManageScope,
   CommandId,
   RuntimeRequestId,
   EnvironmentId,
@@ -8,7 +11,9 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   ProjectId,
   ProviderInstanceId,
+  ProviderThreadId,
   ThreadId,
+  WS_METHODS,
   type OrchestrationV2Command,
   type OrchestrationV2ShellSnapshot,
 } from "@prismux/core-contracts";
@@ -24,7 +29,7 @@ import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { Atom, AtomRegistry } from "effect/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import {
@@ -123,6 +128,8 @@ const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* (optio
               yield* Queue.offer(requests, { command, reply });
               return yield* Deferred.await(reply);
             }),
+          [WS_METHODS.providerMcpSignInComplete]: () =>
+            Effect.succeed({ signedInAt: "2026-09-12T10:00:00.000Z" }),
         },
       } as unknown as RpcSession),
     ),
@@ -756,3 +763,117 @@ describe("remote thread lifecycle commands", () => {
     }),
   );
 });
+
+describe("MCP sign-in bounded state", () => {
+  it.effect(
+    "evicts mcpSignedInAtom nodes, bounds entries by 256-entry LRU, and cleans deleted threads",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        const noticeAt = Date.parse("2026-09-12T09:59:00.000Z");
+
+        const scheduledTasks = new Set<() => void>();
+        const probeRegistry = AtomRegistry.make({
+          scheduleTask: (task) => {
+            scheduledTasks.add(task);
+            return () => {
+              scheduledTasks.delete(task);
+            };
+          },
+        });
+        yield* Effect.addFinalizer(() => Effect.sync(() => probeRegistry.dispose()));
+
+        const probeAtom = h.commands.mcpSignedInAtom(ENVIRONMENT_ID, {
+          threadId: THREAD_ID,
+          server: "probe-server",
+          noticeAt,
+        });
+        const unsubscribe = probeRegistry.subscribe(probeAtom, () => {});
+        expect(probeRegistry.get(probeAtom)).toBe(false);
+        expect(probeRegistry.getNodes().has(probeAtom)).toBe(true);
+        unsubscribe();
+        for (const task of scheduledTasks) {
+          scheduledTasks.delete(task);
+          task();
+        }
+        expect(probeRegistry.getNodes().has(probeAtom)).toBe(false);
+
+        // Sign in across > 256 threads and verify LRU eviction without per-key keepAlive pinning.
+        const totalThreads = 266;
+        for (let i = 0; i < totalThreads; i += 1) {
+          const threadId = ThreadId.make(`mcp-thread-${i}`);
+          yield* h.commands.mcpSignInComplete.run(h.registry, {
+            environmentId: ENVIRONMENT_ID,
+            input: {
+              threadId,
+              providerThreadId: ProviderThreadId.make(`provider-${i}`),
+              server: "github",
+              callbackUrl: "http://localhost/callback",
+            },
+          });
+        }
+
+        // Oldest entry evicted; newest entry retained.
+        expect(
+          h.registry.get(
+            h.commands.mcpSignedInAtom(ENVIRONMENT_ID, {
+              threadId: ThreadId.make("mcp-thread-0"),
+              server: "github",
+              noticeAt,
+            }),
+          ),
+        ).toBe(false);
+        const newestThreadId = ThreadId.make(`mcp-thread-${totalThreads - 1}`);
+        expect(
+          h.registry.get(
+            h.commands.mcpSignedInAtom(ENVIRONMENT_ID, {
+              threadId: newestThreadId,
+              server: "github",
+              noticeAt,
+            }),
+          ),
+        ).toBe(true);
+
+        // Deleting the thread immediately purges its MCP sign-in timestamp.
+        const deleteFiber = yield* Effect.forkChild(
+          Effect.exit(
+            h.commands.delete.run(h.registry, {
+              environmentId: ENVIRONMENT_ID,
+              input: { threadId: newestThreadId },
+            }),
+          ),
+          { startImmediately: true },
+        );
+        const deleteReq = yield* Queue.take(h.requests);
+        yield* Deferred.succeed(deleteReq.reply, { sequence: 99 });
+        expect((yield* Fiber.join(deleteFiber))._tag).toBe("Success");
+        expect(
+          h.registry.get(
+            h.commands.mcpSignedInAtom(ENVIRONMENT_ID, {
+              threadId: newestThreadId,
+              server: "github",
+              noticeAt,
+            }),
+          ),
+        ).toBe(false);
+      }),
+  );
+});
+
+vi.mock("./session.ts", () => ({
+  createEnvironmentSessionAtoms: () => ({ sessionStateAtom: grantedSessions }),
+}));
+const grantedSessions = Atom.family((_id: EnvironmentId) =>
+  Atom.make(
+    AsyncResult.success({
+      authenticated: true,
+      auth: {
+        policy: "remote-reachable",
+        bootstrapMethods: [],
+        sessionMethods: [],
+        sessionCookieName: "test",
+      },
+      scopes: [AuthOrchestrationOperateScope, AuthProvidersManageScope],
+    }),
+  ),
+);

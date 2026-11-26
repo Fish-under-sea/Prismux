@@ -8,8 +8,10 @@ import { orchestrationEnvironment } from "../../state/orchestration";
 import { useEnvironmentQuery } from "../../state/query";
 import { announcedRun } from "@prismux/client-runtime/state/thread-activity-announcement";
 
+export const MAX_DISMISSED_PROMPT_SUGGESTION_KEYS = 200;
+
 // Dismissed suggestions, keyed by environment and run, shared by every mounted composer and kept
-// across remounts. Run ids derive from thread ids, which can repeat across environments.
+// across remounts (bounded LRU). Run ids derive from thread ids, which can repeat across environments.
 let dismissedKeys: ReadonlySet<string> = new Set();
 const listeners = new Set<() => void>();
 const subscribeDismissed = (listener: () => void) => {
@@ -18,6 +20,29 @@ const subscribeDismissed = (listener: () => void) => {
 };
 const readDismissed = () => dismissedKeys;
 const dismissKey = (environmentId: EnvironmentId, runId: RunId) => `${environmentId}\u0000${runId}`;
+
+export function dismissPromptSuggestionKey(environmentId: EnvironmentId, runId: RunId): void {
+  const key = dismissKey(environmentId, runId);
+  const next = new Set(dismissedKeys);
+  next.delete(key);
+  next.add(key);
+  while (next.size > MAX_DISMISSED_PROMPT_SUGGESTION_KEYS) {
+    const oldestKey = next.values().next().value;
+    if (oldestKey === undefined) break;
+    next.delete(oldestKey);
+  }
+  dismissedKeys = next;
+  for (const listener of listeners) listener();
+}
+
+export const __promptSuggestionTesting = {
+  getDismissedKeyCount: () => dismissedKeys.size,
+  hasDismissedKey: (environmentId: EnvironmentId, runId: RunId) =>
+    dismissedKeys.has(dismissKey(environmentId, runId)),
+  resetDismissedKeysForTests: () => {
+    dismissedKeys = new Set();
+  },
+};
 
 /**
  * The suggestion while the run that produced it is the thread's latest completed run. A message
@@ -85,8 +110,7 @@ export function usePromptSuggestion(
       offered && !dismissed.has(dismissKey(environmentId, offered.runId)) ? offered.text : null,
     dismiss: () => {
       if (offered === null) return;
-      dismissedKeys = new Set(dismissedKeys).add(dismissKey(environmentId, offered.runId));
-      for (const listener of listeners) listener();
+      dismissPromptSuggestionKey(environmentId, offered.runId);
     },
   };
 }

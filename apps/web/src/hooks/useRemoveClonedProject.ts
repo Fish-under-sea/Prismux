@@ -1,13 +1,17 @@
+import { scopedThreadKey, scopeThreadRef } from "@prismux/client-runtime/environment";
 import { thrownErrorMessage } from "@prismux/client-runtime/errors";
 import { useRouter } from "@tanstack/react-router";
 import { squashAtomCommandFailure } from "@prismux/client-runtime/state/runtime";
 import type { ScopedProjectRef } from "@prismux/core-contracts";
 import { msg } from "gt-react";
 
+import { clearDraftSendState } from "../components/chat/draftSendState";
+import { disarmFreshSession } from "../components/chat/freshSessionArms";
+import { clearProjectFileQueryDataForWorkspace } from "../components/files/projectFilesQueryState";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { releaseProjectDraftUploads } from "../lib/composerDraftUploads";
-import { waitForProjectRemoval } from "../state/entities";
+import { readProject, waitForProjectRemoval } from "../state/entities";
 import { projectEnvironment } from "../state/projects";
 import { useAtomCommand } from "../state/use-atom-command";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
@@ -19,6 +23,7 @@ export function useRemoveClonedProject() {
 
   return async (projectRef: ScopedProjectRef) => {
     const draftStore = useComposerDraftStore.getState();
+    const existingProject = readProject(projectRef);
     const result = await deleteProject({
       environmentId: projectRef.environmentId,
       // Leave deletion unforced so a thread created since the failed clone cannot be silently deleted.
@@ -44,9 +49,24 @@ export function useRemoveClonedProject() {
     const viewingThisProject =
       viewingDraft?.environmentId === projectRef.environmentId &&
       viewingDraft.projectId === projectRef.projectId;
+    if (existingProject) {
+      clearProjectFileQueryDataForWorkspace(
+        projectRef.environmentId,
+        existingProject.workspaceRoot,
+      );
+    }
     releaseProjectDraftUploads(projectRef);
     const projectDraft = draftStore.getDraftThreadByProjectRef(projectRef);
-    if (projectDraft) draftStore.clearDraftThread(projectDraft.draftId);
+    if (projectDraft) {
+      draftStore.clearDraftThread(projectDraft.draftId);
+      clearDraftSendState(projectDraft.draftId);
+      disarmFreshSession(projectDraft.draftId);
+      const draftRouteKey = scopedThreadKey(
+        scopeThreadRef(projectDraft.environmentId, projectDraft.threadId),
+      );
+      clearDraftSendState(draftRouteKey);
+      disarmFreshSession(draftRouteKey);
+    }
     draftStore.clearProjectDraftThreadId(projectRef);
     if (viewingThisProject) void router.navigate({ to: "/", replace: true });
     return true;
