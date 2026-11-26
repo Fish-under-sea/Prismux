@@ -7685,4 +7685,37 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       ]);
     }),
   );
+
+  it("bounds prLookupEpochByCwd with an LRU cap of 256 and monotonic non-colliding epochs", () => {
+    expect(GitManager.PR_LOOKUP_EPOCH_CAPACITY).toBe(256);
+
+    const tracker = GitManager.createPrLookupEpochTracker(3);
+    const e1 = tracker.bump("/repo/a");
+    const e2 = tracker.bump("/repo/b");
+    const e3 = tracker.bump("/repo/c");
+    expect(tracker.size).toBe(3);
+    expect(tracker.get("/repo/a")).toBe(e1);
+    expect(tracker.get("/repo/b")).toBe(e2);
+    expect(tracker.get("/repo/c")).toBe(e3);
+
+    // Re-bump /repo/a to refresh LRU recency so /repo/b becomes oldest.
+    const e1Refreshed = tracker.bump("/repo/a");
+    expect(e1Refreshed).toBeGreaterThan(e3);
+    tracker.bump("/repo/d");
+    expect(tracker.size).toBe(3);
+    expect(tracker.get("/repo/b")).toBe(0);
+    expect(tracker.get("/repo/a")).toBe(e1Refreshed);
+
+    // Re-bumping an evicted cwd must allocate a strictly newer monotonic epoch.
+    const e2AfterEvict = tracker.bump("/repo/b");
+    expect(e2AfterEvict).toBeGreaterThan(e1Refreshed);
+    expect(e2AfterEvict).not.toBe(e2);
+
+    // Default capacity enforces 256 upper bound across ephemeral worktrees.
+    const defaultTracker = GitManager.createPrLookupEpochTracker();
+    for (let i = 0; i < 400; i += 1) {
+      defaultTracker.bump(`/worktree/ephemeral-${i}`);
+    }
+    expect(defaultTracker.size).toBe(256);
+  });
 });

@@ -18,6 +18,7 @@ export type WindowsForegroundFocusTarget = {
 export type WindowsForegroundFocusThread = {
   readonly prepare: (target: WindowsForegroundFocusTarget) => Promise<boolean>;
   readonly focus: (target: WindowsForegroundFocusTarget) => Promise<boolean>;
+  readonly evict: (windowId: number) => void;
   readonly close: () => void;
 };
 
@@ -25,6 +26,11 @@ type FocusRequest = {
   readonly type: "prepare" | "focus";
   readonly requestId: number;
   readonly target: WindowsForegroundFocusTarget;
+};
+
+type EvictMessage = {
+  readonly type: "evict";
+  readonly windowId: number;
 };
 
 type FocusResult = {
@@ -36,6 +42,7 @@ type FocusResult = {
 const unavailableThread = (): WindowsForegroundFocusThread => ({
   prepare: async () => false,
   focus: async () => false,
+  evict: () => undefined,
   close: () => undefined,
 });
 
@@ -54,6 +61,7 @@ export function startWindowsForegroundFocusThread(
       readonly timeout: ReturnType<typeof setTimeout>;
     }
   >();
+  const pendingEvictions = new Set<number>();
 
   const finish = (requestId: number, focused: boolean) => {
     const request = pending.get(requestId);
@@ -69,6 +77,16 @@ export function startWindowsForegroundFocusThread(
       targetWorker.postMessage(request);
     } catch {
       finish(request.requestId, false);
+    }
+  };
+  const sendEvict = (windowId: number, targetWorker: NodeWorkerThreads.Worker) => {
+    if (!ready || closed || worker !== targetWorker) return;
+    try {
+      const message: EvictMessage = { type: "evict", windowId };
+      // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node workers do not accept a target origin.
+      targetWorker.postMessage(message);
+    } catch {
+      // Ignore postMessage failure while worker is shutting down.
     }
   };
   const start = (): boolean => {
@@ -87,6 +105,7 @@ export function startWindowsForegroundFocusThread(
       if (worker !== nextWorker) return;
       worker = undefined;
       ready = false;
+      pendingEvictions.clear();
       for (const requestId of pending.keys()) finish(requestId, false);
     };
     nextWorker.on("message", (rawMessage) => {
@@ -94,6 +113,12 @@ export function startWindowsForegroundFocusThread(
       if (rawMessage === "ready") {
         ready = true;
         for (const request of pending.values()) send(request.request, nextWorker);
+        if (pendingEvictions.size > 0) {
+          for (const windowId of pendingEvictions) {
+            sendEvict(windowId, nextWorker);
+          }
+          pendingEvictions.clear();
+        }
         return;
       }
       const message = rawMessage as FocusResult;
@@ -110,6 +135,7 @@ export function startWindowsForegroundFocusThread(
     if (!timedOutWorker || worker !== timedOutWorker) return;
     worker = undefined;
     ready = false;
+    pendingEvictions.clear();
     for (const requestId of pending.keys()) finish(requestId, false);
     void timedOutWorker.terminate();
     start();
@@ -135,12 +161,21 @@ export function startWindowsForegroundFocusThread(
   return {
     prepare: (target) => request("prepare", target),
     focus: (target) => request("focus", target),
+    evict: (windowId) => {
+      if (closed || !worker) return;
+      if (ready) {
+        sendEvict(windowId, worker);
+      } else {
+        pendingEvictions.add(windowId);
+      }
+    },
     close: () => {
       if (closed) return;
       closed = true;
       const activeWorker = worker;
       worker = undefined;
       ready = false;
+      pendingEvictions.clear();
       for (const requestId of pending.keys()) finish(requestId, false);
       if (activeWorker) void activeWorker.terminate();
     },

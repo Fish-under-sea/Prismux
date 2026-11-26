@@ -145,6 +145,27 @@ export const make = Effect.gen(function* () {
     return windowsForegroundFocus;
   };
   const captureRevealWindows = new Set<number>();
+  const focusCleanupBoundWindows = new WeakSet<Electron.BrowserWindow>();
+  const bindFocusWindowCloseCleanup = (window: Electron.BrowserWindow): void => {
+    if (platform !== "win32" || focusCleanupBoundWindows.has(window)) {
+      return;
+    }
+    if (typeof (window as { once?: unknown }).once !== "function") {
+      return;
+    }
+    let windowId: number;
+    try {
+      if (window.isDestroyed()) return;
+      windowId = window.id;
+    } catch {
+      return;
+    }
+    focusCleanupBoundWindows.add(window);
+    window.once("closed", () => {
+      captureRevealWindows.delete(windowId);
+      windowsForegroundFocus?.evict?.(windowId);
+    });
+  };
   yield* Effect.addFinalizer(() => Effect.sync(() => windowsForegroundFocus?.close()));
   const mainWindowRef = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
   const auxiliaryWindows = new WeakSet<Electron.BrowserWindow>();
@@ -248,6 +269,7 @@ export const make = Effect.gen(function* () {
           if (options.titleBarOverlay !== undefined && options.titleBarOverlay !== false) {
             titleBarOverlayWindows.add(window);
           }
+          bindFocusWindowCloseCleanup(window);
           return window;
         },
         catch: (cause) => new ElectronWindowCreateError({ options: diagnosticOptions, cause }),
@@ -275,6 +297,7 @@ export const make = Effect.gen(function* () {
         if (platform !== "win32" || window.isDestroyed()) {
           return false;
         }
+        bindFocusWindowCloseCleanup(window);
         captureRevealWindows.add(window.id);
         return ensureWindowsForegroundFocus()
           .prepare(windowsForegroundFocusTarget(window))

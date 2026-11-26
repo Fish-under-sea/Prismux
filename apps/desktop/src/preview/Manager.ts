@@ -127,10 +127,7 @@ export interface PreviewTabState {
   updatedAt: string;
 }
 
-export {
-  applyPreviewDeviceEmulation,
-  type PreviewCdpDebuggerLike,
-} from "./DesktopBrowserHost.ts";
+export { applyPreviewDeviceEmulation, type PreviewCdpDebuggerLike } from "./DesktopBrowserHost.ts";
 import { applyPreviewDeviceEmulation } from "./DesktopBrowserHost.ts";
 
 const ZOOM_LEVELS: ReadonlyArray<number> = [
@@ -621,7 +618,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     string,
     { readonly semaphore: Semaphore.Semaphore; users: number }
   >();
-  const tabLifecycleGenerations = new Map<string, number>();
+  const tabLifecycleGenerations = createTabLifecycleGenerationRegistry();
   // A guest can fail its first load before registerWebview installs its tab listeners.
   const guestLoadFailures = new Map<number, PreviewAutomationLoadError>();
 
@@ -926,9 +923,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     if (!wc || wc.isDestroyed()) return;
     // During mobile CDP emulation, keep guest zoom pinned to 1.0 so host CSS `transform: scale()`
     // is the sole visual scaling layer and never stacks with WebContents zoom.
-    const effectiveZoomFactor = tab.deviceEmulation?.enabled
-      ? DEFAULT_ZOOM_FACTOR
-      : tab.zoomFactor;
+    const effectiveZoomFactor = tab.deviceEmulation?.enabled ? DEFAULT_ZOOM_FACTOR : tab.zoomFactor;
     yield* attempt({ operation: "assertTabZoom", tabId, webContentsId: wc.id }, () =>
       wc.setZoomFactor(effectiveZoomFactor),
     ).pipe(Effect.ignore);
@@ -1930,7 +1925,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       },
     );
     if (result.created) {
-      tabLifecycleGenerations.set(tabId, (tabLifecycleGenerations.get(tabId) ?? 0) + 1);
+      tabLifecycleGenerations.allocate(tabId);
     }
     yield* emit(tabId, result.state);
     return result.state;
@@ -1944,7 +1939,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   });
 
   const closeTabUnlocked = Effect.fn("PreviewManager.closeTabUnlocked")(function* (tabId: string) {
-    if (!(yield* SynchronizedRef.get(tabsRef)).has(tabId)) return;
+    if (!(yield* SynchronizedRef.get(tabsRef)).has(tabId)) {
+      tabLifecycleGenerations.delete(tabId);
+      return;
+    }
     clearPendingRecording(tabId);
     annotationSendEnabled.delete(tabId);
     yield* Effect.all(
@@ -1968,6 +1966,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         }),
       ] as const;
     });
+    tabLifecycleGenerations.delete(tabId);
     if (Option.isNone(tab)) return;
     const closedTab = tab.value;
     if (closedTab.serverTab) {
@@ -4409,5 +4408,33 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     subscribeRecordingInputs: operations.subscribeRecordingInputs,
   });
 }).pipe(Effect.withSpan("PreviewManager.make"));
+
+export interface TabLifecycleGenerationRegistry {
+  allocate(tabId: string): number;
+  get(tabId: string): number | undefined;
+  delete(tabId: string): boolean;
+  readonly size: number;
+}
+
+export function createTabLifecycleGenerationRegistry(): TabLifecycleGenerationRegistry {
+  let nextGeneration = 0;
+  const generations = new Map<string, number>();
+  return {
+    allocate(tabId: string): number {
+      nextGeneration += 1;
+      generations.set(tabId, nextGeneration);
+      return nextGeneration;
+    },
+    get(tabId: string): number | undefined {
+      return generations.get(tabId);
+    },
+    delete(tabId: string): boolean {
+      return generations.delete(tabId);
+    },
+    get size(): number {
+      return generations.size;
+    },
+  };
+}
 
 export const layer = Layer.effect(PreviewManager, make);

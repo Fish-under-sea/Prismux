@@ -22,7 +22,11 @@ import {
 import { SyncVaultEngine } from "@prismux/sync-vault";
 import { AppearanceConfigStore } from "./appearance/AppearanceConfigStore.js";
 import { ChiefThreadManager } from "./chief/ChiefThreadManager.js";
-import { CoreRpcClient } from "./core/CoreRpcClient.js";
+import {
+  CoreRpcClient,
+  type CoreRpcHandshakeError,
+  isNonRetryableCoreHandshakeError
+} from "./core/CoreRpcClient.js";
 import {
   CoreServerSupervisor,
   sanitizeChildEnv
@@ -273,6 +277,7 @@ export class PrismuxDaemon {
   private activeStopPromise: Promise<void> | undefined;
   private coreConnectRetryTimer: NodeJS.Timeout | undefined;
   private coreConnectStopped = false;
+  private coreHandshakeWarningLogged = false;
   private coreStateUnsubscribe: (() => void) | undefined;
 
   constructor(options: DaemonStartOptions) {
@@ -693,6 +698,27 @@ export class PrismuxDaemon {
     }
   }
 
+  private handleNonRetryableCoreHandshakeError(error: CoreRpcHandshakeError): void {
+    this.coreConnectStopped = true;
+    if (this.coreConnectRetryTimer !== undefined) {
+      clearTimeout(this.coreConnectRetryTimer);
+      this.coreConnectRetryTimer = undefined;
+    }
+    if (this.readyInfo !== undefined) {
+      this.readyInfo = {
+        ...this.readyInfo,
+        t3Connected: false,
+        coreConnected: false
+      };
+    }
+    if (!this.coreHandshakeWarningLogged) {
+      this.coreHandshakeWarningLogged = true;
+      console.warn(
+        `[prismux-daemon] Stopping Core RPC reconnect loop after HTTP ${error.statusCode} handshake rejection: ${error.message}`
+      );
+    }
+  }
+
   private startCoreConnectLoop(slot: {
     workspacePath: string;
     activeProvider: ChiefProviderKind;
@@ -744,6 +770,7 @@ export class PrismuxDaemon {
           return;
         }
         attempt = 0;
+        this.coreHandshakeWarningLogged = false;
         if (this.readyInfo !== undefined) {
           this.readyInfo = {
             ...this.readyInfo,
@@ -752,7 +779,11 @@ export class PrismuxDaemon {
           };
         }
         await this.tryEnsureChiefThread(slot);
-      } catch {
+      } catch (error: unknown) {
+        if (isNonRetryableCoreHandshakeError(error)) {
+          this.handleNonRetryableCoreHandshakeError(error);
+          return;
+        }
         scheduleNext();
       }
     };
@@ -778,10 +809,13 @@ export class PrismuxDaemon {
       const pairing = this.pairingManager.createPairingCode(undefined, httpUrl);
 
       this.coreConnectStopped = false;
+      this.coreHandshakeWarningLogged = false;
       if (this.coreRpcClient !== undefined) {
         // Fast bounded probe: succeeds immediately if Core Server is already listening
         // (preserving deterministic readiness), or falls back to non-blocking background backoff.
         let initialTimer: NodeJS.Timeout | undefined;
+        let initialHandshakeError: CoreRpcHandshakeError | undefined;
+        let initialRaceSettled = false;
         const initialAttempt = this.coreRpcClient
           .connect()
           .then(async () => {
@@ -789,8 +823,14 @@ export class PrismuxDaemon {
               await this.tryEnsureChiefThread(slot);
             }
           })
-          .catch(() => {
-            // Handled below via background reconnect loop
+          .catch((error: unknown) => {
+            if (isNonRetryableCoreHandshakeError(error)) {
+              initialHandshakeError = error;
+              if (initialRaceSettled) {
+                this.handleNonRetryableCoreHandshakeError(error);
+              }
+            }
+            // Other errors are handled below via background reconnect loop.
           });
         try {
           await Promise.race([
@@ -800,12 +840,15 @@ export class PrismuxDaemon {
             })
           ]);
         } finally {
+          initialRaceSettled = true;
           if (initialTimer !== undefined) {
             clearTimeout(initialTimer);
           }
         }
 
-        if (!this.coreRpcClient.isConnected()) {
+        if (initialHandshakeError !== undefined) {
+          this.handleNonRetryableCoreHandshakeError(initialHandshakeError);
+        } else if (!this.coreRpcClient.isConnected()) {
           this.startCoreConnectLoop(slot);
         } else {
           this.coreStateUnsubscribe?.();

@@ -1,5 +1,6 @@
 import * as Cause from "effect/Cause";
 import * as Config from "effect/Config";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -61,6 +62,7 @@ import { m } from "../i18n/messages.ts";
 const DEFAULT_DESKTOP_BACKEND_PORT = 3773;
 const MAX_TCP_PORT = 65_535;
 const DESKTOP_BACKEND_PORT_PROBE_HOSTS = ["127.0.0.1", "0.0.0.0", "::"] as const;
+export const DAEMON_BEARER_TOKEN_TIMEOUT = Duration.seconds(15);
 
 const LinuxDesktopSessionConfig = Config.all({
   current: Config.String("XDG_CURRENT_DESKTOP").pipe(Config.option),
@@ -311,24 +313,37 @@ const startLocalBackend = Effect.gen(function* () {
   }
   yield* primaryBackend.start;
   yield* logBootstrapInfo("bootstrap backend start requested");
-  const primaryLaunchConfig = yield* primaryBackend.currentConfig;
-  const localT3Token = Option.isSome(primaryLaunchConfig)
-    ? primaryLaunchConfig.value.bootstrap?.desktopBootstrapToken
-    : undefined;
+  const localEnvironmentAuth = yield* DesktopLocalEnvironmentAuth.DesktopLocalEnvironmentAuth;
+  const daemonT3Url = PrismuxDaemonService.normalizeT3WebSocketUrl(backendConfig.httpBaseUrl.href);
+  const daemonT3HttpUrl = PrismuxDaemonService.normalizeT3HttpUrl(backendConfig.httpBaseUrl.href);
+  // Exchange the unsigned desktop bootstrap credential for a signed session access_token before
+  // starting the daemon (this also pre-warms the cached bearer token for the renderer).
   yield* Effect.forkScoped(
-    prismuxDaemon.start({
-      t3Url: PrismuxDaemonService.normalizeT3WebSocketUrl(backendConfig.httpBaseUrl.href),
-      t3HttpUrl: PrismuxDaemonService.normalizeT3HttpUrl(backendConfig.httpBaseUrl.href),
-      ...(localT3Token ? { t3Token: localT3Token } : {}),
+    Effect.gen(function* () {
+      const signedBearerToken = yield* localEnvironmentAuth.getBearerToken.pipe(
+        Effect.timeout(DAEMON_BEARER_TOKEN_TIMEOUT),
+        Effect.matchEffect({
+          onFailure: (error) =>
+            logBootstrapWarning(
+              "bootstrap failed to obtain signed bearer token for prismux daemon; starting daemon without t3Token",
+              {
+                error: error instanceof Error ? error.message : String(error),
+              },
+            ).pipe(Effect.as(undefined)),
+          onSuccess: (token) => {
+            const trimmed = token.trim();
+            return Effect.succeed(trimmed.length > 0 ? trimmed : undefined);
+          },
+        }),
+      );
+      yield* prismuxDaemon.start({
+        t3Url: daemonT3Url,
+        t3HttpUrl: daemonT3HttpUrl,
+        ...(signedBearerToken ? { t3Token: signedBearerToken } : {}),
+      });
     }),
   );
   yield* Effect.forkScoped(restartOnFeatureFlagChange(primaryBackend));
-  // The renderer asks for this token first; minting it at readiness saves a round trip.
-  yield* Effect.forkScoped(
-    (yield* DesktopLocalEnvironmentAuth.DesktopLocalEnvironmentAuth).getBearerToken.pipe(
-      Effect.ignore,
-    ),
-  );
   return true;
 }).pipe(Effect.withSpan("desktop.startLocalBackend"));
 

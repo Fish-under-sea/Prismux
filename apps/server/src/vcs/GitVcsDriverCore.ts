@@ -78,6 +78,40 @@ const isAliasOfUpstreamHead = (branch: string, upstreamBranch: string, upstreamR
   branch === upstreamBranch ||
   (branch.endsWith(`/${upstreamBranch}`) && upstreamRef.endsWith(`/${branch}`));
 const gitProcesses = Semaphore.makeUnsafe(8);
+
+export interface SharedConfigLockPool {
+  readonly withLock: <A, E>(key: string, effect: Effect.Effect<A, E>) => Effect.Effect<A, E>;
+  readonly size: number;
+}
+
+export function createSharedConfigLockPool(): SharedConfigLockPool {
+  const locks = new Map<string, { readonly semaphore: Semaphore.Semaphore; users: number }>();
+  return {
+    withLock: <A, E>(key: string, effect: Effect.Effect<A, E>): Effect.Effect<A, E> =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => {
+          let entry = locks.get(key);
+          if (entry === undefined) {
+            entry = { semaphore: Semaphore.makeUnsafe(1), users: 0 };
+            locks.set(key, entry);
+          }
+          entry.users += 1;
+          return entry;
+        }),
+        (entry) => entry.semaphore.withPermit(effect),
+        (entry) =>
+          Effect.sync(() => {
+            entry.users -= 1;
+            if (entry.users <= 0 && locks.get(key) === entry) {
+              locks.delete(key);
+            }
+          }),
+      ),
+    get size(): number {
+      return locks.size;
+    },
+  };
+}
 const backgroundGitProcesses = Semaphore.makeUnsafe(2);
 // The fetch before `git worktree add` downloads everything the remote gained since
 // the last fetch; on busy repositories that alone outlasts the 30s default.
@@ -1212,18 +1246,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     },
   );
 
-  const sharedConfigLocks = new Map<string, Semaphore.Semaphore>();
+  const sharedConfigLocks = createSharedConfigLockPool();
   const withSharedConfigLock = <A, E>(cwd: string, effect: Effect.Effect<A, E>) =>
     resolveRepositoryPaths(cwd).pipe(
       Effect.orElseSucceed(() => null),
       Effect.flatMap((repositoryPaths) => {
         if (repositoryPaths === null) return effect;
-        let lock = sharedConfigLocks.get(repositoryPaths.gitCommonDir);
-        if (lock === undefined) {
-          lock = Semaphore.makeUnsafe(1);
-          sharedConfigLocks.set(repositoryPaths.gitCommonDir, lock);
-        }
-        return lock.withPermit(effect);
+        return sharedConfigLocks.withLock(repositoryPaths.gitCommonDir, effect);
       }),
     );
 
@@ -5756,10 +5785,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     if (projectFile === null) return null;
     const file = parseT3ProjectFile(projectFile.stdout);
     if (file === null) {
-      yield* Effect.logWarning(`${projectFile.fileName} is invalid; checking out the full worktree`, {
-        cwd,
-        ref,
-      });
+      yield* Effect.logWarning(
+        `${projectFile.fileName} is invalid; checking out the full worktree`,
+        {
+          cwd,
+          ref,
+        },
+      );
       return null;
     }
     if (file.worktreeSparsePatternsPath === undefined) return null;

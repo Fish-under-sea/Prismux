@@ -3713,4 +3713,26 @@ describe("PreviewManager", () => {
       }),
     ),
   );
+
+  it("evicts closed tabIds from tabLifecycleGenerations while keeping generations monotonic across recreate", () => {
+    const registry = PreviewManager.createTabLifecycleGenerationRegistry();
+    const firstGen = registry.allocate("tab-a");
+    const secondTabGen = registry.allocate("tab-b");
+    expect(registry.size).toBe(2);
+    expect(registry.get("tab-a")).toBe(firstGen);
+    expect(registry.get("tab-b")).toBe(secondTabGen);
+
+    expect(registry.delete("tab-a")).toBe(true);
+    expect(registry.size).toBe(1);
+    expect(registry.get("tab-a")).toBeUndefined();
+
+    // Recreating the same tabId must allocate a strictly newer generation so stale registrations fail.
+    const recreatedGen = registry.allocate("tab-a");
+    expect(recreatedGen).toBeGreaterThan(firstGen);
+    expect(recreatedGen).not.toBe(firstGen);
+
+    expect(registry.delete("tab-a")).toBe(true);
+    expect(registry.delete("tab-b")).toBe(true);
+    expect(registry.size).toBe(0);
+  });
 });

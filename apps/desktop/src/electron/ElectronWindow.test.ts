@@ -1,3 +1,5 @@
+import * as NodeEvents from "node:events";
+
 import { assert, describe, it } from "@effect/vitest";
 import * as HostProcess from "@prismux/core-shared/HostProcess";
 import * as Cause from "effect/Cause";
@@ -19,6 +21,7 @@ const {
   startWindowsForegroundFocusThreadMock,
   windowsForegroundFocusMock,
   windowsForegroundPrepareMock,
+  windowsForegroundEvictMock,
   windowsForegroundCloseMock,
 } = vi.hoisted(() => ({
   activateWindowsForegroundMock: vi.fn(),
@@ -32,6 +35,7 @@ const {
   startWindowsForegroundFocusThreadMock: vi.fn(),
   windowsForegroundFocusMock: vi.fn(),
   windowsForegroundPrepareMock: vi.fn(),
+  windowsForegroundEvictMock: vi.fn(),
   windowsForegroundCloseMock: vi.fn(),
 }));
 
@@ -104,10 +108,12 @@ describe("ElectronWindow", () => {
     startWindowsForegroundFocusThreadMock.mockReset().mockReturnValue({
       prepare: windowsForegroundPrepareMock,
       focus: windowsForegroundFocusMock,
+      evict: windowsForegroundEvictMock,
       close: windowsForegroundCloseMock,
     });
     windowsForegroundFocusMock.mockReset().mockResolvedValue(false);
     windowsForegroundPrepareMock.mockReset().mockResolvedValue(false);
+    windowsForegroundEvictMock.mockReset();
     windowsForegroundCloseMock.mockReset();
   });
 
@@ -221,5 +227,17 @@ describe("ElectronWindow", () => {
       const current = yield* electronWindow.currentMainOrFirst;
       assert.isTrue(current._tag === "Some" && current.value === ordinary);
     }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("evicts cached Windows foreground focus element when a prepared window closes", () =>
+    Effect.gen(function* () {
+      const window = Object.assign(new NodeEvents.EventEmitter(), makeWindowsRevealWindow());
+      const electronWindow = yield* ElectronWindow.ElectronWindow;
+      yield* electronWindow.prepareReveal(window as unknown as Electron.BrowserWindow);
+      assert.lengthOf(windowsForegroundEvictMock.mock.calls, 0);
+
+      window.emit("closed");
+      assert.deepEqual(windowsForegroundEvictMock.mock.calls, [[41]]);
+    }).pipe(Effect.provide(layerTestFor("win32"))),
   );
 });

@@ -14,6 +14,7 @@ import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import { TestClock } from "effect/testing";
 import { vi } from "vite-plus/test";
 
 vi.mock("electron", () => ({}));
@@ -87,6 +88,14 @@ interface StubbedDesktop {
   readonly flushRendererHistory?: Effect.Effect<void>;
   readonly tokenRequested?: Deferred.Deferred<void>;
   readonly activationStarted?: Deferred.Deferred<void>;
+  readonly desktopBootstrapToken?: string;
+  readonly getBearerToken?: Effect.Effect<
+    string,
+    DesktopLocalEnvironmentAuth.DesktopLocalEnvironmentAuthError
+  >;
+  readonly onDaemonStart?: (
+    input?: PrismuxDaemonService.PrismuxDaemonStartInput,
+  ) => Effect.Effect<void>;
 }
 
 const runStubbedDesktop = (stub: StubbedDesktop) =>
@@ -180,7 +189,12 @@ const runStubbedDesktop = (stub: StubbedDesktop) =>
         Effect.provideService(DesktopBackendPool.DesktopBackendPool, {
           primary: Effect.succeed({
             start: stub.record("backend"),
-            currentConfig: Effect.succeedSome({ preflightFailure: Option.none() }),
+            currentConfig: Effect.succeedSome({
+              preflightFailure: Option.none(),
+              ...(stub.desktopBootstrapToken !== undefined
+                ? { bootstrap: { desktopBootstrapToken: stub.desktopBootstrapToken } }
+                : {}),
+            }),
           }),
           list: Effect.succeed(stub.backends ?? []),
         } as unknown as DesktopBackendPool.DesktopBackendPool["Service"]),
@@ -200,7 +214,7 @@ const runStubbedDesktop = (stub: StubbedDesktop) =>
           shutdown: stub.flushRendererHistory ?? Effect.void,
         } as DesktopRendererHistory.DesktopRendererHistory["Service"]),
         Effect.provideService(PrismuxDaemonService.PrismuxDaemonService, {
-          start: () => Effect.void,
+          start: (input) => (stub.onDaemonStart ? stub.onDaemonStart(input) : Effect.void),
           stop: Effect.void,
           getInfo: Effect.succeed({ baseUrl: "", token: "", ready: false }),
         }),
@@ -216,16 +230,18 @@ const runStubbedDesktop = (stub: StubbedDesktop) =>
           Layer.mock(DesktopConnectionCatalogStore.DesktopConnectionCatalogStore, {}),
           Layer.mock(DesktopIpc.DesktopIpc, {}),
           Layer.mock(DesktopLocalEnvironmentAuth.DesktopLocalEnvironmentAuth, {
-            getBearerToken: stub
-              .record("token")
-              .pipe(
-                Effect.andThen(
-                  stub.tokenRequested
-                    ? Deferred.succeed(stub.tokenRequested, undefined)
-                    : Effect.void,
+            getBearerToken:
+              stub.getBearerToken ??
+              stub
+                .record("token")
+                .pipe(
+                  Effect.andThen(
+                    stub.tokenRequested
+                      ? Deferred.succeed(stub.tokenRequested, undefined)
+                      : Effect.void,
+                  ),
+                  Effect.as("token"),
                 ),
-                Effect.as("token"),
-              ),
           }),
           Layer.mock(DesktopManagedPolicy.DesktopManagedPolicy, {}),
           Layer.succeed(DesktopPrimaryPaste.DesktopPrimaryPaste, { enabled: true }),
@@ -392,4 +408,83 @@ it.effect(
         "startup left the t3 <dir> control socket closed",
       );
     }).pipe(Effect.provide(Layer.mergeAll(DesktopShutdown.layer, NodeServices.layer))),
+);
+
+it.effect(
+  "passes the exchanged signed bearer token (never raw desktopBootstrapToken) to prismuxDaemon.start",
+  () =>
+    Effect.gen(function* () {
+      const windowStarted = yield* Deferred.make<void>();
+      const daemonStarted = yield* Deferred.make<
+        PrismuxDaemonService.PrismuxDaemonStartInput | undefined
+      >();
+      const app = yield* runStubbedDesktop({
+        localEnvironmentEnabled: true,
+        environment: {},
+        fileSystem: FileSystem.layerNoop({}),
+        record: () => Effect.void,
+        windowStarted,
+        registerLinuxUrlHandler: Effect.void,
+        desktopBootstrapToken: "raw-unsigned-desktop-bootstrap-token",
+        getBearerToken: Effect.succeed("signed-payload.signed-hmac"),
+        onDaemonStart: (input) => Deferred.succeed(daemonStarted, input).pipe(Effect.asVoid),
+      });
+
+      const startInput = yield* Deferred.await(daemonStarted);
+      yield* Deferred.await(windowStarted);
+      assert.equal(startInput?.t3Token, "signed-payload.signed-hmac");
+      assert.notEqual(startInput?.t3Token, "raw-unsigned-desktop-bootstrap-token");
+      assert.equal(startInput?.t3Url, "ws://127.0.0.1:3773/ws");
+      assert.equal(startInput?.t3HttpUrl, "http://127.0.0.1:3773");
+
+      yield* (yield* DesktopShutdown.DesktopShutdown).request;
+      yield* Fiber.join(app);
+    }).pipe(Effect.provide(DesktopShutdown.layer)),
+);
+
+it.effect.each(["failure", "timeout"] as const)(
+  "starts prismuxDaemon without t3Token when bearer exchange hits %s and never falls back to raw desktopBootstrapToken",
+  (scenario) =>
+    Effect.gen(function* () {
+      const windowStarted = yield* Deferred.make<void>();
+      const daemonStarted = yield* Deferred.make<
+        PrismuxDaemonService.PrismuxDaemonStartInput | undefined
+      >();
+      const tokenRequested = yield* Deferred.make<void>();
+      const app = yield* runStubbedDesktop({
+        localEnvironmentEnabled: true,
+        environment: {},
+        fileSystem: FileSystem.layerNoop({}),
+        record: () => Effect.void,
+        windowStarted,
+        registerLinuxUrlHandler: Effect.void,
+        desktopBootstrapToken: "raw-unsigned-desktop-bootstrap-token",
+        getBearerToken:
+          scenario === "failure"
+            ? Effect.fail(
+                new DesktopLocalEnvironmentAuth.DesktopLocalEnvironmentAuthSessionBootstrapError({
+                  cause: new Error("oauth exchange rejected"),
+                }),
+              )
+            : Deferred.succeed(tokenRequested, undefined).pipe(Effect.andThen(Effect.never)),
+        onDaemonStart: (input) => Deferred.succeed(daemonStarted, input).pipe(Effect.asVoid),
+      });
+
+      yield* Deferred.await(windowStarted);
+      if (scenario === "timeout") {
+        yield* Deferred.await(tokenRequested);
+        yield* TestClock.adjust(DesktopApp.DAEMON_BEARER_TOKEN_TIMEOUT);
+      }
+
+      const startInput = yield* Deferred.await(daemonStarted);
+      assert.isUndefined(
+        startInput?.t3Token,
+        `expected undefined t3Token on bearer ${scenario}, never raw bootstrap token`,
+      );
+      assert.equal(startInput?.t3Url, "ws://127.0.0.1:3773/ws");
+      assert.equal(startInput?.t3HttpUrl, "http://127.0.0.1:3773");
+
+      yield* (yield* DesktopShutdown.DesktopShutdown).request;
+      yield* Fiber.join(app);
+    }).pipe(Effect.provide(DesktopShutdown.layer)),
 );

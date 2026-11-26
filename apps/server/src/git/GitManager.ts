@@ -225,6 +225,7 @@ const PR_LOOKUP_NO_OPEN_PR_CACHE_TTL = Duration.minutes(5);
 const PR_LOOKUP_FAILURE_BASE_TTL = Duration.seconds(20);
 const PR_LOOKUP_FAILURE_MAX_TTL = Duration.minutes(15);
 const PR_LOOKUP_CACHE_CAPACITY = 2_048;
+export const PR_LOOKUP_EPOCH_CAPACITY = 256;
 const PR_LOOKUP_GIT_STATE_TTL = Duration.minutes(5);
 // Turn end looks up the PR ~0.5 s after local status; older reads are read again.
 const LOCAL_STATUS_GIT_READS_HANDOFF_TTL = Duration.seconds(5);
@@ -251,6 +252,39 @@ type GitActionProgressEmitter = (event: GitActionProgressPayload) => Effect.Effe
 
 function isNotGitRepositoryError(error: GitCommandError): boolean {
   return isNonRepositoryGitStderr(error.message);
+}
+
+export interface PrLookupEpochTracker {
+  get(cwd: string): number;
+  bump(cwd: string): number;
+  readonly size: number;
+}
+
+export function createPrLookupEpochTracker(
+  capacity: number = PR_LOOKUP_EPOCH_CAPACITY,
+): PrLookupEpochTracker {
+  const limit = Math.max(1, Math.floor(capacity));
+  let nextEpoch = 0;
+  const epochsByCwd = new Map<string, number>();
+  return {
+    get(cwd: string): number {
+      return epochsByCwd.get(cwd) ?? 0;
+    },
+    bump(cwd: string): number {
+      nextEpoch += 1;
+      epochsByCwd.delete(cwd);
+      while (epochsByCwd.size >= limit) {
+        const oldestKey = epochsByCwd.keys().next().value;
+        if (oldestKey === undefined) break;
+        epochsByCwd.delete(oldestKey);
+      }
+      epochsByCwd.set(cwd, nextEpoch);
+      return nextEpoch;
+    },
+    get size(): number {
+      return epochsByCwd.size;
+    },
+  };
 }
 
 interface RememberedPrLookupValue {
@@ -1328,12 +1362,12 @@ export const make = Effect.gen(function* () {
         ]),
       ),
     );
-  const prLookupEpochByCwd = new Map<string, number>();
-  const prLookupEpoch = (cwd: string) => prLookupEpochByCwd.get(cwd) ?? 0;
+  const prLookupEpochs = createPrLookupEpochTracker(PR_LOOKUP_EPOCH_CAPACITY);
+  const prLookupEpoch = (cwd: string) => prLookupEpochs.get(cwd);
   const bumpPrLookupEpoch = (cwd: string) =>
     normalizeStatusCacheKey(cwd).pipe(
       Effect.map((cacheKey) => {
-        prLookupEpochByCwd.set(cacheKey, prLookupEpoch(cacheKey) + 1);
+        prLookupEpochs.bump(cacheKey);
       }),
     );
   const isActivePrLookupGitReads = (
