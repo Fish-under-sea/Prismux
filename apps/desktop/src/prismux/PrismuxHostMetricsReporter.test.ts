@@ -1,13 +1,18 @@
 import { assert, describe, it } from "@effect/vitest";
 import type * as Electron from "electron";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 
 import { buildPrismuxDaemonChildEnv } from "./PrismuxDaemonService.ts";
 import {
   buildHostMetricsPayload,
+  HOST_METRICS_ACTIVE_POLL_INTERVAL,
+  HOST_METRICS_BACKGROUND_POLL_INTERVAL,
   postHostMetricsToDaemon,
+  resolveHostMetricsCadence,
+  shouldWakeHostMetricsReporter,
 } from "./PrismuxHostMetricsReporter.ts";
 
 describe("PrismuxHostMetricsReporter", () => {
@@ -91,63 +96,123 @@ describe("PrismuxHostMetricsReporter", () => {
     assert.equal(payload.t3Server?.hostedBy, "electron-in-process");
   });
 
-  it("posts payload with Bearer auth to /v1/resources/host-metrics and injects PRISMUX_T3_SERVER_PID into child env", async () => {
-    const captured: Array<{
-      url: string;
-      method: string;
-      auth: string | undefined;
-    }> = [];
-    const fakeClient = HttpClient.make((request) => {
-      captured.push({
-        url: request.url,
-        method: request.method,
-        auth: request.headers["authorization"],
-      });
-      return Effect.succeed(
-        HttpClientResponse.fromWeb(
-          request,
-          new Response(JSON.stringify({ ok: true }), { status: 200 }),
-        ),
-      );
-    });
+  it.effect(
+    "posts payload with Bearer auth to /v1/resources/host-metrics and injects PRISMUX_T3_SERVER_PID into child env",
+    () =>
+      Effect.gen(function* () {
+        const captured: Array<{
+          url: string;
+          method: string;
+          auth: string | undefined;
+        }> = [];
+        const fakeClient = HttpClient.make((request) => {
+          captured.push({
+            url: request.url,
+            method: request.method,
+            auth: request.headers["authorization"],
+          });
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(JSON.stringify({ ok: true }), { status: 200 }),
+            ),
+          );
+        });
 
-    const payload = buildHostMetricsPayload({
-      metrics: [],
-      mainPid: 4242,
-      collectedAt: 1_700_000_030_000,
-      cpuCores: 8,
-      t3BackendSnapshot: {
-        desiredRunning: true,
-        ready: true,
-        activePid: Option.some(9191),
-        restartAttempt: 0,
-        restartScheduled: false,
-      },
-    });
+        const payload = buildHostMetricsPayload({
+          metrics: [],
+          mainPid: 4242,
+          collectedAt: 1_700_000_030_000,
+          cpuCores: 8,
+          t3BackendSnapshot: {
+            desiredRunning: true,
+            ready: true,
+            activePid: Option.some(9191),
+            restartAttempt: 0,
+            restartScheduled: false,
+          },
+        });
 
-    const ok = await Effect.runPromise(
-      postHostMetricsToDaemon({
-        baseUrl: "http://127.0.0.1:19001",
-        token: "secret-daemon-token",
-        payload,
-        httpClient: fakeClient,
+        const ok = yield* postHostMetricsToDaemon({
+          baseUrl: "http://127.0.0.1:19001",
+          token: "secret-daemon-token",
+          payload,
+          httpClient: fakeClient,
+        });
+
+        assert.isTrue(ok);
+        assert.equal(captured.length, 1);
+        assert.equal(captured[0]?.method, "POST");
+        assert.equal(captured[0]?.url, "http://127.0.0.1:19001/v1/resources/host-metrics");
+        assert.equal(captured[0]?.auth, "Bearer secret-daemon-token");
+
+        const env = buildPrismuxDaemonChildEnv({
+          hostEnv: {},
+          catalogPath: "C:\\Prismux\\official.json",
+          mainPid: 4242,
+          t3ServerPid: 9191,
+          t3HttpUrl: "http://127.0.0.1:3773",
+        });
+        assert.equal(env.PRISMUX_MAIN_PID, "4242");
+        assert.equal(env.PRISMUX_T3_SERVER_PID, "9191");
       }),
-    );
+  );
 
-    assert.isTrue(ok);
-    assert.equal(captured.length, 1);
-    assert.equal(captured[0]?.method, "POST");
-    assert.equal(captured[0]?.url, "http://127.0.0.1:19001/v1/resources/host-metrics");
-    assert.equal(captured[0]?.auth, "Bearer secret-daemon-token");
-
-    const env = buildPrismuxDaemonChildEnv({
-      hostEnv: {},
-      catalogPath: "C:\\Prismux\\official.json",
-      mainPid: 4242,
-      t3ServerPid: 9191,
-      t3HttpUrl: "http://127.0.0.1:3773",
+  it("pauses host metrics when hidden/minimized/locked/suspended and relaxes background cadence to 10s", () => {
+    const active = resolveHostMetricsCadence({
+      windowVisible: true,
+      windowFocused: true,
+      systemLocked: false,
+      systemSuspended: false,
     });
-    assert.equal(env.PRISMUX_MAIN_PID, "4242");
-    assert.equal(env.PRISMUX_T3_SERVER_PID, "9191");
+    assert.equal(active.mode, "active");
+    if (active.mode === "active") {
+      assert.equal(Duration.toMillis(active.interval), Duration.toMillis(HOST_METRICS_ACTIVE_POLL_INTERVAL));
+      assert.equal(Duration.toMillis(active.interval), 2_000);
+    }
+
+    const background = resolveHostMetricsCadence({
+      windowVisible: true,
+      windowFocused: false,
+      systemLocked: false,
+      systemSuspended: false,
+    });
+    assert.equal(background.mode, "background");
+    if (background.mode === "background") {
+      assert.equal(
+        Duration.toMillis(background.interval),
+        Duration.toMillis(HOST_METRICS_BACKGROUND_POLL_INTERVAL),
+      );
+      assert.equal(Duration.toMillis(background.interval), 10_000);
+    }
+
+    const hidden = resolveHostMetricsCadence({
+      windowVisible: false,
+      windowFocused: false,
+      systemLocked: false,
+      systemSuspended: false,
+    });
+    const locked = resolveHostMetricsCadence({
+      windowVisible: true,
+      windowFocused: true,
+      systemLocked: true,
+      systemSuspended: false,
+    });
+    const suspended = resolveHostMetricsCadence({
+      windowVisible: true,
+      windowFocused: true,
+      systemLocked: false,
+      systemSuspended: true,
+    });
+    assert.equal(hidden.mode, "paused");
+    assert.equal(locked.mode, "paused");
+    assert.equal(suspended.mode, "paused");
+
+    assert.isTrue(shouldWakeHostMetricsReporter(hidden, active));
+    assert.isTrue(shouldWakeHostMetricsReporter(hidden, background));
+    assert.isTrue(shouldWakeHostMetricsReporter(background, active));
+    assert.isTrue(shouldWakeHostMetricsReporter(active, hidden));
+    assert.isFalse(shouldWakeHostMetricsReporter(active, background));
+    assert.isFalse(shouldWakeHostMetricsReporter(hidden, locked));
   });
 });

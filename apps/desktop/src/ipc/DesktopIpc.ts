@@ -7,6 +7,8 @@ import * as Scope from "effect/Scope";
 
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 
+export const GET_PRELOAD_BOOTSTRAP_SYNC_CHANNEL = "desktop:get-preload-bootstrap-sync";
+
 export interface DesktopIpcInvokeEvent {
   readonly sender: { readonly id: number };
   readonly senderFrame?: unknown;
@@ -23,7 +25,10 @@ export type DesktopIpcHandleListener = (
   raw: unknown,
 ) => unknown | Promise<unknown>;
 
-export type DesktopIpcSyncListener = (event: DesktopIpcSyncEvent) => void;
+export type DesktopIpcSyncListener = (
+  event: DesktopIpcSyncEvent,
+  ...args: readonly unknown[]
+) => void;
 
 export interface DesktopIpcMain {
   removeHandler(channel: string): void;
@@ -99,8 +104,42 @@ export class DesktopIpc extends Context.Service<
 export const make = (
   ipcMain: DesktopIpcMain,
   isTrustedSender: DesktopIpcSenderGuard,
-): DesktopIpc["Service"] =>
-  DesktopIpc.of({
+): DesktopIpc["Service"] => {
+  const registeredSyncHandlers = new Map<string, () => unknown>();
+  let batchSyncRegistered = false;
+
+  const batchSyncListener: DesktopIpcSyncListener = (event, rawChannels) => {
+    const trusted = Effect.runSync(
+      isTrustedSender(event).pipe(Effect.catchCause(() => Effect.succeed(false))),
+    );
+    if (!trusted) {
+      Effect.runSync(
+        Effect.logWarning("Rejected batched sync IPC from an untrusted sender.").pipe(
+          Effect.annotateLogs({ channel: GET_PRELOAD_BOOTSTRAP_SYNC_CHANNEL }),
+        ),
+      );
+      event.returnValue = undefined;
+      return;
+    }
+    const requestedChannels = Array.isArray(rawChannels)
+      ? rawChannels.filter((entry): entry is string => typeof entry === "string")
+      : [...registeredSyncHandlers.keys()];
+    const payload: Record<string, unknown> = {};
+    for (const channel of requestedChannels) {
+      const invoke = registeredSyncHandlers.get(channel);
+      if (invoke === undefined) {
+        continue;
+      }
+      try {
+        payload[channel] = invoke();
+      } catch {
+        payload[channel] = undefined;
+      }
+    }
+    event.returnValue = payload;
+  };
+
+  return DesktopIpc.of({
     handle: Effect.fn("desktop.ipc.registerInvoke")(function* <E, R>({
       channel,
       handler,
@@ -144,10 +183,23 @@ export const make = (
       yield* Effect.annotateCurrentSpan({ channel });
       const context = yield* Effect.context<R>();
       const runSync = Effect.runSyncWith(context);
+      const invokeHandler = (): unknown =>
+        runSync(
+          Effect.gen(function* () {
+            yield* Effect.annotateCurrentSpan({ channel });
+            return yield* handler();
+          }).pipe(Effect.annotateLogs({ channel }), Effect.withSpan("desktop.ipc.invokeSync")),
+        );
 
       yield* Effect.acquireRelease(
         Effect.try({
           try: () => {
+            registeredSyncHandlers.set(channel, invokeHandler);
+            if (!batchSyncRegistered) {
+              ipcMain.removeAllListeners(GET_PRELOAD_BOOTSTRAP_SYNC_CHANNEL);
+              ipcMain.on(GET_PRELOAD_BOOTSTRAP_SYNC_CHANNEL, batchSyncListener);
+              batchSyncRegistered = true;
+            }
             ipcMain.removeAllListeners(channel);
             ipcMain.on(channel, (event) => {
               event.returnValue = runSync(
@@ -171,13 +223,21 @@ export const make = (
         }),
         () =>
           Effect.try({
-            try: () => ipcMain.removeAllListeners(channel),
+            try: () => {
+              registeredSyncHandlers.delete(channel);
+              ipcMain.removeAllListeners(channel);
+              if (registeredSyncHandlers.size === 0 && batchSyncRegistered) {
+                ipcMain.removeAllListeners(GET_PRELOAD_BOOTSTRAP_SYNC_CHANNEL);
+                batchSyncRegistered = false;
+              }
+            },
             catch: (cause) =>
               new DesktopIpcUnregistrationError({ handlerKind: "sync", channel, cause }),
           }).pipe(Effect.orDie),
       );
     }),
   });
+};
 
 export const layer = (ipcMain: DesktopIpcMain) =>
   Layer.effect(

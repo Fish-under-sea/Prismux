@@ -125,6 +125,54 @@ describe("DesktopTelemetryPublisher", () => {
         assert.isDefined(closeFiber.pollUnsafe());
       }),
   );
+
+  it.effect(
+    "leaves lowPowerMode unknown and omits native-owned battery fields so server merges them",
+    () =>
+      Effect.gen(function* () {
+        const layerPower = Layer.succeed(
+          ElectronPowerMonitor.ElectronPowerMonitor,
+          ElectronPowerMonitor.ElectronPowerMonitor.of({
+            isOnBatteryPower: Effect.succeed(false),
+            getSystemIdleTime: Effect.succeed(5),
+            getSystemIdleState: () => Effect.succeed("active"),
+            getCurrentThermalState: Effect.succeed("unknown"),
+            onSimpleEvent: () => Effect.void,
+            onThermalStateChange: () => Effect.void,
+            onSpeedLimitChange: () => Effect.void,
+          }),
+        );
+        const layer = DesktopTelemetryPublisher.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              layerElectronApp([]),
+              layerPower,
+              layerHistory,
+              Layer.succeed(DesktopShellEnvironment.DesktopShellEnvironment, {
+                installIntoProcess: Effect.succeed(true),
+                awaitDiscovery: Effect.succeed(true),
+                awaitUserShellDiscovery: Effect.succeed(true),
+                discoveryFinished: Effect.succeed(true),
+                updates: Stream.empty,
+              }),
+            ),
+          ),
+        );
+
+        const snapshot = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+            const head = yield* Stream.runHead(publisher.changes);
+            const current = Option.isSome(head) ? head : yield* publisher.latest;
+            return Option.getOrThrow(current);
+          }).pipe(Effect.provide(layer)),
+        );
+
+        assert.equal(snapshot.power.lowPowerMode, "unknown");
+        assert.isUndefined(snapshot.power.batteryPercent);
+        assert.isUndefined(snapshot.power.isCharging);
+      }),
+  );
 });
 
 describe("DesktopRendererHistory", () => {

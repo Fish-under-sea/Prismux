@@ -34,6 +34,7 @@ import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 
 import * as Electron from "electron";
@@ -98,6 +99,7 @@ const isCaptureSetupRequiredError = Schema.is(CaptureSetupRequiredError);
 
 const MAX_CAPTURE_WIDTH = 2_560;
 const MAX_CAPTURE_HEIGHT = 1_600;
+export const ORPHAN_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 const SHORTCUT_COOLDOWN_NS = 200_000_000n;
 const WAYLAND_MODIFIER_PAIR_UNAVAILABLE_MESSAGE =
   "Modifier-pair shortcuts aren't available in this Wayland session. Choose another shortcut or use Take snapshot from the command palette.";
@@ -755,6 +757,52 @@ function probeGlobalShortcut(accelerator: string): DesktopSnapShotShortcutAvaila
   }
 }
 
+function isSnapShotArtifactFile(fileName: string): boolean {
+  return (
+    fileName.endsWith(".png") ||
+    fileName.endsWith(".json") ||
+    fileName.endsWith(".tmp.png") ||
+    fileName.endsWith(".json.tmp")
+  );
+}
+
+/**
+ * Sweeps orphaned snapshot capture artifacts (`*.png`, `*.json`, `*.tmp.png`, `*.json.tmp`)
+ * left behind in `<stateDir>/snap-shots` older than 24 hours.
+ */
+export const cleanupOrphanedSnapShots = Effect.fn("desktop.snapShot.cleanupOrphaned")(
+  function* (input: {
+    readonly captureDirectory: string;
+    readonly nowMs?: number;
+    readonly maxAgeMs?: number;
+  }) {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const nowMs = input.nowMs ?? (yield* Clock.currentTimeMillis);
+    const maxAgeMs = input.maxAgeMs ?? ORPHAN_SNAPSHOT_MAX_AGE_MS;
+    const entries = yield* fileSystem
+      .readDirectory(input.captureDirectory)
+      .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>));
+    if (entries.length === 0) return 0;
+
+    let removed = 0;
+    for (const name of entries) {
+      if (!isSnapShotArtifactFile(name)) continue;
+      const entryPath = path.join(input.captureDirectory, name);
+      const statOption = yield* fileSystem.stat(entryPath).pipe(Effect.option);
+      if (Option.isNone(statOption) || statOption.value.type !== "File") continue;
+      const mtimeMs = Option.getOrUndefined(statOption.value.mtime)?.getTime();
+      if (mtimeMs === undefined || nowMs - mtimeMs <= maxAgeMs) continue;
+      const deleted = yield* fileSystem.remove(entryPath, { force: true }).pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      );
+      if (deleted) removed += 1;
+    }
+    return removed;
+  },
+);
+
 export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const permissions = yield* MacPermissions.MacPermissions;
@@ -763,6 +811,7 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const random = yield* SecureRandom.SecureRandom;
+  const serviceScope = yield* Scope.Scope;
   const settingsRef = yield* Ref.make(DEFAULT_CLIENT_SETTINGS);
   const stateRef = yield* Ref.make<DesktopSnapShotState>({
     mode: captureMode(environment.platform),
@@ -1596,17 +1645,28 @@ export const make = Effect.gen(function* () {
   });
 
   return DesktopSnapShot.of({
-    initialize: configurationMutex.withPermits(1)(
-      clientSettings.get.pipe(
-        Effect.flatMap((stored) =>
-          applySettings(
-            Option.getOrElse(stored, () => DEFAULT_CLIENT_SETTINGS),
-            null,
+    initialize: configurationMutex
+      .withPermits(1)(
+        clientSettings.get.pipe(
+          Effect.flatMap((stored) =>
+            applySettings(
+              Option.getOrElse(stored, () => DEFAULT_CLIENT_SETTINGS),
+              null,
+            ),
+          ),
+          Effect.ignore,
+        ),
+      )
+      .pipe(
+        Effect.tap(() =>
+          cleanupOrphanedSnapShots({ captureDirectory }).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+            Effect.ignore,
+            Effect.forkIn(serviceScope),
           ),
         ),
-        Effect.ignore,
       ),
-    ),
     configure,
     requestPermissions,
     setup,

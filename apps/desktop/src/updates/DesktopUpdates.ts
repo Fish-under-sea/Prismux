@@ -11,6 +11,7 @@ import {
 } from "@prismux/core-contracts";
 import { errorTag } from "@prismux/core-shared/observability";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -19,6 +20,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
@@ -33,6 +35,7 @@ import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
+import * as DesktopUserData from "../app/DesktopUserData.ts";
 import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
@@ -63,7 +66,105 @@ const CHANNEL_CHANGE_RETRY_DELAY = Duration.seconds(1);
 const CHANNEL_CHANGE_RETRIES = 30;
 const AUTO_UPDATE_STARTUP_DELAY = "15 seconds";
 const AUTO_UPDATE_POLL_INTERVAL = "4 hours";
+const STARTUP_MAINTENANCE_DELAY = Duration.seconds(15);
 const UPDATE_CHECK_WAIT = Duration.seconds(90);
+export const PENDING_INSTALLER_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000;
+
+/**
+ * Extracts a semver version from electron-updater pending installer filenames such as
+ * `Prismux-0.2.2-rc.1-x64-setup.exe`, `Prismux Setup 0.2.2.exe`, or `prismux-0.2.3-nightly.20261125.1.AppImage`.
+ */
+export function extractInstallerVersion(fileName: string): string | null {
+  const match = fileName.match(
+    /(?:^|[^0-9A-Za-z])v?(\d+\.\d+\.\d+(?:-(?:rc|beta|alpha|nightly|pre|dev)(?:\.[0-9A-Za-z]+)*)?)(?=[^0-9A-Za-z]|$)/i,
+  );
+  return match?.[1] ? match[1].toLowerCase() : null;
+}
+
+export function resolvePendingUpdaterDir(input: {
+  readonly platform: NodeJS.Platform;
+  readonly homeDirectory: string;
+  readonly appDataDirectory: string;
+  readonly path: Path.Path;
+}): string {
+  if (input.platform === "win32") {
+    return input.path.resolve(input.appDataDirectory, "..", "Local", "prismux-updater", "pending");
+  }
+  if (input.platform === "darwin") {
+    return input.path.join(input.homeDirectory, "Library", "Caches", "prismux-updater", "pending");
+  }
+  return input.path.join(input.homeDirectory, ".cache", "prismux-updater", "pending");
+}
+
+const PendingUpdateInfoMetadata = Schema.fromJsonString(
+  Schema.Struct({
+    version: Schema.optional(Schema.String),
+    fileName: Schema.optional(Schema.String),
+  }),
+);
+const decodePendingUpdateInfoMetadata = Schema.decodeUnknownEffect(PendingUpdateInfoMetadata);
+
+/**
+ * Sweeps installed (`<= currentVersion`) or stale (`> 7 days`) installers from
+ * `%LOCALAPPDATA%\prismux-updater\pending` (and equivalent macOS/Linux pending dirs).
+ */
+export const cleanupStalePendingInstallers = Effect.fn("desktop.updates.cleanupStalePending")(
+  function* (input: {
+    readonly pendingDir: string;
+    readonly currentVersion: string;
+    readonly nowMs?: number;
+    readonly maxAgeMs?: number;
+  }) {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const nowMs = input.nowMs ?? (yield* Clock.currentTimeMillis);
+    const maxAgeMs = input.maxAgeMs ?? PENDING_INSTALLER_MAX_AGE_MS;
+    const currentVersion = input.currentVersion.trim().toLowerCase();
+    const entries = yield* fileSystem
+      .readDirectory(input.pendingDir)
+      .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>));
+    if (entries.length === 0) return 0;
+
+    let removed = 0;
+    for (const name of entries) {
+      const entryPath = path.join(input.pendingDir, name);
+      const statOption = yield* fileSystem.stat(entryPath).pipe(Effect.option);
+      if (Option.isNone(statOption)) continue;
+      const mtimeMs = Option.getOrUndefined(statOption.value.mtime)?.getTime();
+      const expired = mtimeMs !== undefined && nowMs - mtimeMs > maxAgeMs;
+
+      let alreadyInstalled = false;
+      const fileVersion = extractInstallerVersion(name);
+      if (fileVersion !== null) {
+        alreadyInstalled = compareSemverVersions(fileVersion, currentVersion) <= 0;
+      } else if (name.toLowerCase() === "update-info.json" && statOption.value.type === "File") {
+        const parsedOption = yield* fileSystem.readFileString(entryPath).pipe(
+          Effect.flatMap(decodePendingUpdateInfoMetadata),
+          Effect.option,
+        );
+        if (Option.isSome(parsedOption)) {
+          const parsed = parsedOption.value;
+          const infoVersion = parsed.version
+            ? parsed.version.trim().toLowerCase()
+            : parsed.fileName
+              ? extractInstallerVersion(parsed.fileName)
+              : null;
+          if (infoVersion && compareSemverVersions(infoVersion, currentVersion) <= 0) {
+            alreadyInstalled = true;
+          }
+        }
+      }
+
+      if (!expired && !alreadyInstalled) continue;
+      const deleted = yield* fileSystem.remove(entryPath, { recursive: true, force: true }).pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      );
+      if (deleted) removed += 1;
+    }
+    return removed;
+  },
+);
 
 type UpdateAction = "check" | "download" | "install" | "install-recovery" | "channel";
 
@@ -1315,6 +1416,34 @@ export const make = Effect.gen(function* () {
 
       const appUpdateYmlConfig = yield* readAppUpdateYml;
       yield* Ref.set(appUpdateYmlConfigRef, appUpdateYmlConfig);
+
+      // Post-ready async storage maintenance (runs after initial window paint; zero boot delay).
+      yield* Effect.sleep(STARTUP_MAINTENANCE_DELAY).pipe(
+        Effect.andThen(
+          cleanupStalePendingInstallers({
+            pendingDir: resolvePendingUpdaterDir(environment),
+            currentVersion: environment.appVersion,
+          }),
+        ),
+        Effect.andThen(
+          DesktopUserData.resolveUserDataPath(environment).pipe(
+            Effect.flatMap((userDataPath) =>
+              DesktopUserData.runUserDataMaintenance({
+                userDataPath,
+                compileCacheDir: DesktopUserData.resolveCompileCacheDir({
+                  platform: environment.platform,
+                  homeDirectory: environment.homeDirectory,
+                  joinPath: environment.path.join,
+                }),
+              }),
+            ),
+          ),
+        ),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, environment.path),
+        Effect.ignore,
+        Effect.forkScoped,
+      );
 
       const notAppliedVersion = yield* readNotAppliedInstallVersion;
       yield* Ref.set(notAppliedVersionRef, notAppliedVersion);

@@ -65,3 +65,52 @@ it.effect("answers only the main window's top frame", () =>
     });
   }),
 );
+
+it.effect("batches multiple sync channels via getPreloadBootstrapSync for trusted sender only", () =>
+  Effect.gen(function* () {
+    const mainFrame = {};
+    const sync = new Map<string, DesktopIpc.DesktopIpcSyncListener>();
+    const ipc = yield* DesktopIpc.DesktopIpc.pipe(
+      Effect.provide(
+        DesktopIpc.layer({
+          removeHandler: () => undefined,
+          handle: () => undefined,
+          removeAllListeners: (channel) => void sync.delete(channel),
+          on: (channel, listener) => void sync.set(channel, listener),
+        }).pipe(
+          Layer.provide(
+            Layer.mock(ElectronWindow.ElectronWindow, {
+              main: Effect.succeedSome({
+                webContents: { id: 1, mainFrame },
+              } as unknown as Electron.BrowserWindow),
+            }),
+          ),
+        ),
+      ),
+    );
+    yield* ipc.handleSync({ channel: "desktop:one", handler: () => Effect.succeed("alpha") });
+    yield* ipc.handleSync({ channel: "desktop:two", handler: () => Effect.succeed(42) });
+
+    const batchListener = sync.get(DesktopIpc.GET_PRELOAD_BOOTSTRAP_SYNC_CHANNEL);
+    assert.isDefined(batchListener);
+
+    const trustedEvent = {
+      sender: { id: 1 },
+      senderFrame: mainFrame,
+      returnValue: "unset" as unknown,
+    };
+    batchListener!(trustedEvent, ["desktop:one", "desktop:two", "desktop:missing"]);
+    assert.deepEqual(trustedEvent.returnValue, {
+      "desktop:one": "alpha",
+      "desktop:two": 42,
+    });
+
+    const untrustedEvent = {
+      sender: { id: 2 },
+      senderFrame: {},
+      returnValue: "unset" as unknown,
+    };
+    batchListener!(untrustedEvent, ["desktop:one"]);
+    assert.isUndefined(untrustedEvent.returnValue);
+  }),
+);
