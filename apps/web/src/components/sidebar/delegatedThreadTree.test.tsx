@@ -37,10 +37,14 @@ import { SidebarThreadRow, type SidebarProviderEntry } from "./SidebarThreadRow"
 import {
   collectDelegatedChildThreadRefs,
   groupDelegatedChildThreadsByParent,
+  hasDelegatedChildInLatestParentTurn,
   isDelegatedChildThreadActive,
   isPrismuxDelegatedChildThread,
+  isThreadActivelyRunning,
   reconcileDelegatedTreeExpansionMap,
+  resolveDelegatedTreeCollapseTiming,
   resolveDelegatedTreeExpanded,
+  shouldDelegatedTreeAutoExpand,
   toggleDelegatedTreeExpansion,
   type DelegatedTreeExpansionEntry,
 } from "./delegatedThreadTree.logic";
@@ -303,16 +307,29 @@ describe("delegatedThreadTree.logic", () => {
     expect(collectDelegatedChildThreadRefs(childBKey, map)).toEqual([]);
   });
 
-  it("detects running vs completed/failed delegated child thread activity accurately", () => {
+  it("detects running vs completed/unseen-completed/failed thread activity accurately", () => {
     const runningChild = makeShell({
       id: ThreadId.make("c-run"),
       latestRunId: RunId.make("run-1"),
       status: "running",
     });
+    const waitingParent = makeShell({
+      id: ThreadId.make("p-wait"),
+      latestRunId: RunId.make("run-p"),
+      status: "running",
+      blockedOnThreadWait: true,
+    });
     const completedChild = makeShell({
       id: ThreadId.make("c-done"),
       latestRunId: RunId.make("run-2"),
       status: "completed",
+    });
+    const unseenCompletedChild = makeShell({
+      id: ThreadId.make("c-unseen-done"),
+      latestRunId: RunId.make("run-2b"),
+      status: "completed",
+      updatedAt: DateTime.makeUnsafe("2026-11-26T10:10:00.000Z"),
+      lastVisitedAt: DateTime.makeUnsafe("2026-11-26T10:01:00.000Z"),
     });
     const failedChild = makeShell({
       id: ThreadId.make("c-fail"),
@@ -320,8 +337,202 @@ describe("delegatedThreadTree.logic", () => {
       status: "failed",
     });
     expect(isDelegatedChildThreadActive(runningChild)).toBe(true);
+    expect(isThreadActivelyRunning(waitingParent)).toBe(true);
     expect(isDelegatedChildThreadActive(completedChild)).toBe(false);
+    expect(isDelegatedChildThreadActive(unseenCompletedChild)).toBe(false);
     expect(isDelegatedChildThreadActive(failedChild)).toBe(false);
+  });
+
+  it("syncs level-2 delegated tree auto-collapse with parent final-answer completion and workStepsCollapseTiming", () => {
+    const parentId = ThreadId.make("parent-sync");
+    const parentKey = scopedThreadKey(scopeThreadRef(ENV_LOCAL, parentId));
+    const childId = ThreadId.make("child-sync");
+    const turn1UserAt = DateTime.makeUnsafe("2026-11-26T10:00:00.000Z");
+    const turn1ChildCreatedAt = DateTime.makeUnsafe("2026-11-26T10:00:05.000Z");
+    const turn1ChildDoneAt = DateTime.makeUnsafe("2026-11-26T10:00:12.000Z");
+    const turn1ParentDoneAt = DateTime.makeUnsafe("2026-11-26T10:00:20.000Z");
+    const turn2UserAt = DateTime.makeUnsafe("2026-11-26T10:02:00.000Z");
+
+    expect(
+      resolveDelegatedTreeCollapseTiming({
+        workStepsDisplay: "detailed",
+        workStepsCollapseTiming: "after-turn",
+      }),
+    ).toBe("after-turn");
+    expect(
+      resolveDelegatedTreeCollapseTiming({
+        workStepsDisplay: "standard",
+        workStepsCollapseTiming: "next-message",
+      }),
+    ).toBe("next-message");
+    expect(
+      resolveDelegatedTreeCollapseTiming({
+        workStepsDisplay: "expanded",
+        workStepsCollapseTiming: "after-turn",
+      }),
+    ).toBe("never");
+
+    const parentRunningTurn1 = makeShell({
+      id: parentId,
+      latestRunId: RunId.make("run-p1"),
+      status: "running",
+      latestUserMessageAt: turn1UserAt,
+      latestRunStartedAt: turn1UserAt,
+      lastVisitedAt: turn1UserAt,
+    });
+    const childRunningTurn1 = makeShell({
+      id: childId,
+      creationSource: "mcp",
+      latestRunId: RunId.make("run-c1"),
+      status: "running",
+      createdAt: turn1ChildCreatedAt,
+      updatedAt: turn1ChildCreatedAt,
+      lastVisitedAt: turn1UserAt,
+      lineage: {
+        rootThreadId: parentId,
+        parentThreadId: parentId,
+        relationshipToParent: "subagent",
+      },
+    });
+    const childUnseenCompletedTurn1 = makeShell({
+      id: childId,
+      creationSource: "mcp",
+      latestRunId: RunId.make("run-c1"),
+      status: "completed",
+      createdAt: turn1ChildCreatedAt,
+      updatedAt: turn1ChildDoneAt,
+      latestRunCompletedAt: turn1ChildDoneAt,
+      lastVisitedAt: turn1UserAt,
+      lineage: {
+        rootThreadId: parentId,
+        parentThreadId: parentId,
+        relationshipToParent: "subagent",
+      },
+    });
+    const parentCompletedTurn1 = makeShell({
+      id: parentId,
+      latestRunId: RunId.make("run-p1"),
+      status: "completed",
+      latestUserMessageAt: turn1UserAt,
+      latestRunStartedAt: turn1UserAt,
+      latestRunCompletedAt: turn1ParentDoneAt,
+      updatedAt: turn1ParentDoneAt,
+      lastVisitedAt: turn1UserAt,
+    });
+    const parentRunningTurn2WithoutChild = makeShell({
+      id: parentId,
+      latestRunId: RunId.make("run-p2"),
+      status: "running",
+      latestUserMessageAt: turn2UserAt,
+      latestRunStartedAt: turn2UserAt,
+      updatedAt: turn2UserAt,
+      lastVisitedAt: turn2UserAt,
+    });
+
+    // Under "after-turn":
+    // 1. Both running -> auto-expanded
+    let expansionMap: ReadonlyMap<string, DelegatedTreeExpansionEntry> = new Map();
+    const syncAndResolve = (
+      parent: ReturnType<typeof makeShell>,
+      children: readonly ReturnType<typeof makeShell>[],
+      collapseTiming: "after-turn" | "next-message" | "never",
+    ) => {
+      const shouldAutoExpand = shouldDelegatedTreeAutoExpand({
+        parent,
+        children,
+        collapseTiming,
+      });
+      expansionMap = reconcileDelegatedTreeExpansionMap(
+        expansionMap,
+        new Map([[parentKey, shouldAutoExpand]]),
+      );
+      return {
+        shouldAutoExpand,
+        expanded: resolveDelegatedTreeExpanded({
+          hasRunningChild: shouldAutoExpand,
+          entry: expansionMap.get(parentKey),
+        }),
+      };
+    };
+
+    expect(syncAndResolve(parentRunningTurn1, [childRunningTurn1], "after-turn")).toEqual({
+      shouldAutoExpand: true,
+      expanded: true,
+    });
+
+    // 2. Child finishes with unseen green-check ✓ while parent is STILL generating final answer -> STAYS EXPANDED!
+    expect(isDelegatedChildThreadActive(childUnseenCompletedTurn1)).toBe(false);
+    expect(syncAndResolve(parentRunningTurn1, [childUnseenCompletedTurn1], "after-turn")).toEqual({
+      shouldAutoExpand: true,
+      expanded: true,
+    });
+
+    // 3. Parent finishes final answer (also unseen green-check ✓) -> AUTO-COLLAPSES IMMEDIATELY!
+    expect(syncAndResolve(parentCompletedTurn1, [childUnseenCompletedTurn1], "after-turn")).toEqual(
+      {
+        shouldAutoExpand: false,
+        expanded: false,
+      },
+    );
+
+    // 4. User manually toggles `↳ 1` open & closed after completion -> works cleanly without reverting!
+    expansionMap = toggleDelegatedTreeExpansion(expansionMap, parentKey, false);
+    expect(
+      resolveDelegatedTreeExpanded({
+        hasRunningChild: false,
+        entry: expansionMap.get(parentKey),
+      }),
+    ).toBe(true);
+    expansionMap = toggleDelegatedTreeExpansion(expansionMap, parentKey, false);
+    expect(
+      resolveDelegatedTreeExpanded({
+        hasRunningChild: false,
+        entry: expansionMap.get(parentKey),
+      }),
+    ).toBe(false);
+
+    // 5. Follow-up Turn 2 without new delegation does NOT spuriously pop open Turn 1's finished child
+    expect(
+      hasDelegatedChildInLatestParentTurn(parentRunningTurn2WithoutChild, [
+        childUnseenCompletedTurn1,
+      ]),
+    ).toBe(false);
+    expect(
+      syncAndResolve(parentRunningTurn2WithoutChild, [childUnseenCompletedTurn1], "after-turn"),
+    ).toEqual({
+      shouldAutoExpand: false,
+      expanded: false,
+    });
+
+    // Under "next-message":
+    // Stays expanded right after Turn 1 completes, then auto-collapses when Turn 2 starts!
+    expansionMap = new Map();
+    expect(
+      syncAndResolve(parentCompletedTurn1, [childUnseenCompletedTurn1], "next-message"),
+    ).toEqual({
+      shouldAutoExpand: true,
+      expanded: true,
+    });
+    expect(
+      syncAndResolve(parentRunningTurn2WithoutChild, [childUnseenCompletedTurn1], "next-message"),
+    ).toEqual({
+      shouldAutoExpand: false,
+      expanded: false,
+    });
+
+    // Under "never" (`workStepsDisplay === "expanded"`): stays expanded unless manually collapsed
+    expansionMap = new Map();
+    expect(syncAndResolve(parentCompletedTurn1, [childUnseenCompletedTurn1], "never")).toEqual({
+      shouldAutoExpand: true,
+      expanded: true,
+    });
+    expansionMap = toggleDelegatedTreeExpansion(expansionMap, parentKey, true);
+    expect(
+      resolveDelegatedTreeExpanded({
+        hasRunningChild: true,
+        entry: expansionMap.get(parentKey),
+      }),
+    ).toBe(false);
   });
 });
 
