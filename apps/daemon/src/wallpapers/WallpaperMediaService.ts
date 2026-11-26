@@ -11,6 +11,7 @@ import {
   renderSteamScenePlayerHtml,
   type SteamScenePackageManifest
 } from "./SteamScenePackage.js";
+import { buildValidatedCorsHeaders } from "../server/CorsOrigin.js";
 
 const { execFile } = NodeChildProcess;
 const { createHash, randomUUID } = NodeCrypto;
@@ -2011,7 +2012,7 @@ export class WallpaperMediaService {
         "content-type": "text/html; charset=utf-8",
         "content-length": String(body.byteLength),
         "cache-control": "no-cache",
-        "access-control-allow-origin": "*",
+        ...buildValidatedCorsHeaders(req),
         "cross-origin-resource-policy": "cross-origin"
       });
       if (req.method?.toUpperCase() === "HEAD") {
@@ -2908,7 +2909,7 @@ window.addEventListener("load",()=>{
       "content-type": "text/html; charset=utf-8",
       "content-length": String(body.byteLength),
       "cache-control": "no-cache",
-      "access-control-allow-origin": "*",
+      ...buildValidatedCorsHeaders(req),
       "cross-origin-resource-policy": "cross-origin"
     });
     if (req.method?.toUpperCase() === "HEAD") {
@@ -3436,12 +3437,14 @@ window.addEventListener("load",()=>{
     const etag = `"${sliceStart.toString(16)}-${totalSize.toString(16)}-${Math.floor(stats.mtimeMs).toString(16)}"`;
     const parsedRange = parseByteRangeHeader(req.headers.range, totalSize);
 
+    const corsHeaders = buildValidatedCorsHeaders(req);
+
     if (!parsedRange.ok) {
       res.writeHead(416, {
         "accept-ranges": "bytes",
         "content-range": `bytes */${totalSize}`,
         "cache-control": cacheControl,
-        "access-control-allow-origin": "*",
+        ...corsHeaders,
         "cross-origin-resource-policy": "cross-origin"
       });
       res.end();
@@ -3452,7 +3455,7 @@ window.addEventListener("load",()=>{
       "accept-ranges": "bytes",
       "content-type": contentType,
       "cache-control": cacheControl,
-      "access-control-allow-origin": "*",
+      ...corsHeaders,
       "cross-origin-resource-policy": "cross-origin",
       etag
     };
@@ -3553,12 +3556,14 @@ window.addEventListener("load",()=>{
     const rangeHeader = req.headers.range;
     const parsedRange = parseByteRangeHeader(rangeHeader, totalSize);
 
+    const corsHeaders = buildValidatedCorsHeaders(req);
+
     if (!parsedRange.ok) {
       res.writeHead(416, {
         "accept-ranges": "bytes",
         "content-range": `bytes */${totalSize}`,
         "cache-control": cacheControl,
-        "access-control-allow-origin": "*",
+        ...corsHeaders,
         "cross-origin-resource-policy": "cross-origin"
       });
       res.end();
@@ -3569,7 +3574,7 @@ window.addEventListener("load",()=>{
       "accept-ranges": "bytes",
       "content-type": contentType,
       "cache-control": cacheControl,
-      "access-control-allow-origin": "*",
+      ...corsHeaders,
       "cross-origin-resource-policy": "cross-origin",
       etag
     };

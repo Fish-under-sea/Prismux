@@ -4,6 +4,7 @@ import {
   createReadStream,
   createWriteStream,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -56,6 +57,100 @@ const POLICY_FILENAME = "updater-policy.json";
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const SOFTWARE_SHA256SUMS_RE =
   /^prismux-(?!plugins?-)(?:.+?-)?sha256sums(?:\.txt)?$/i;
+const GITEE_SUBDOMAIN_RE = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.gitee\.com$/i;
+const WINDOWS_RESERVED_FILENAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
+const FORBIDDEN_FILENAME_CHARS_RE = /[:*?"<>|]/;
+const TRAILING_DOT_OR_SPACE_RE = /[. ]$/;
+const SENSITIVE_REDIRECT_HEADERS = new Set<string>([
+  "authorization",
+  "cookie",
+  "proxy-authorization"
+]);
+
+export const UPDATER_ALLOWED_EXACT_HOSTS: ReadonlySet<string> = new Set([
+  "api.github.com",
+  "github.com",
+  "objects.githubusercontent.com",
+  "release-assets.githubusercontent.com",
+  "github-releases.githubusercontent.com",
+  "gitee.com"
+]);
+
+function isLoopbackHostname(hostname: string): boolean {
+  const lower = hostname.trim().toLowerCase();
+  return lower === "127.0.0.1" || lower === "localhost" || lower === "[::1]" || lower === "::1";
+}
+
+function stripSensitiveRedirectHeaders(
+  headers: Record<string, string>
+): Record<string, string> {
+  const sanitized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (!SENSITIVE_REDIRECT_HEADERS.has(key.toLowerCase())) {
+      sanitized[key] = value;
+    }
+  }
+  return sanitized;
+}
+
+export interface UpdaterHttpSecurityOptions {
+  extraAllowedHosts?: ReadonlySet<string>;
+  allowInsecureLoopbackForTesting?: boolean;
+}
+
+export function isAllowedUpdaterHost(
+  hostname: string,
+  security: UpdaterHttpSecurityOptions = {}
+): boolean {
+  const host = hostname.trim().toLowerCase();
+  if (
+    UPDATER_ALLOWED_EXACT_HOSTS.has(host) ||
+    GITEE_SUBDOMAIN_RE.test(host) ||
+    security.extraAllowedHosts?.has(host) === true
+  ) {
+    return true;
+  }
+  return security.allowInsecureLoopbackForTesting === true && isLoopbackHostname(host);
+}
+
+export function validateUpdaterHttpUrl(
+  rawUrl: string,
+  security: UpdaterHttpSecurityOptions = {},
+  previousProtocol?: string
+): URL {
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(rawUrl);
+  } catch {
+    throw new Error(`Invalid updater URL: "${rawUrl}".`);
+  }
+
+  if (previousProtocol === "https:" && parsedUrl.protocol !== "https:") {
+    throw new Error(
+      `HTTPS-to-${parsedUrl.protocol} redirect downgrade is forbidden (${rawUrl}).`
+    );
+  }
+
+  const allowLoopback = security.allowInsecureLoopbackForTesting === true;
+  const host = parsedUrl.hostname.toLowerCase();
+  const isLoopback = isLoopbackHostname(host);
+
+  if (parsedUrl.protocol !== "https:") {
+    if (!(parsedUrl.protocol === "http:" && allowLoopback && isLoopback)) {
+      throw new Error(
+        `Insecure or unsupported updater URL protocol "${parsedUrl.protocol}" (HTTPS required): "${rawUrl}".`
+      );
+    }
+  }
+
+  if (!isAllowedUpdaterHost(host, security)) {
+    throw new Error(
+      `Blocked disallowed updater host "${host}" for URL "${rawUrl}".`
+    );
+  }
+
+  return parsedUrl;
+}
 
 /**
  * Selects the software-dedicated checksum manifest from a release's assets:
@@ -208,6 +303,11 @@ export interface AppUpdaterOptions {
   autoCheckIntervalMs?: number;
   /** Injectable timers for deterministic tests. */
   timers?: AppUpdaterTimerApi;
+  /**
+   * Test-only opt-in allowing `http://127.0.0.1` / `http://localhost` updater endpoints
+   * and loopback `customGhProxyPrefix`. Must NEVER be enabled in production.
+   */
+  allowInsecureLoopbackForTesting?: boolean;
 }
 
 export interface CheckForUpdatesOptions {
@@ -400,51 +500,81 @@ export function applyGhProxyPrefix(rawUrl: string, prefix: string): string {
   return `${trimmed}/${rawUrl}`;
 }
 
+function isSafeSevenZipExecutablePath(rawPath: string): boolean {
+  const trimmed = rawPath.trim();
+  if (trimmed.length === 0 || trimmed.includes("\0") || !isAbsolute(trimmed)) {
+    return false;
+  }
+  const lower = trimmed.toLowerCase();
+  if (lower.endsWith(".cmd") || lower.endsWith(".bat")) {
+    return false;
+  }
+  if (process.platform === "win32" && !lower.endsWith(".exe")) {
+    return false;
+  }
+  return true;
+}
+
 /**
- * Resolves the `7za.exe` / `7z.exe` binary for extracting Gitee split `.7z.001..N`
+ * Resolves the trusted `7za.exe` binary for extracting Gitee split `.7z.001..N`
  * installer archives.
  *
- * Priority order:
- * 1. Explicit `explicitPath` override
- * 2. `PRISMUX_7ZA_PATH` environment variable
- * 3. Bundled `process.resourcesPath/tools/7za.exe` (Electron packaged app)
- * 4. Adjacent `<execDir>/resources/tools/7za.exe` & `<execDir>/tools/7za.exe`
- * 5. Monorepo dev fallback `node_modules/7zip-bin/win/x64/7za.exe`
- * 6. Standard Windows 7-Zip install paths (`C:\Program Files\7-Zip\7z.exe`, etc.)
- * 7. PATH lookup (`7za.exe`, `7z.exe`, `7za`, `7z`)
+ * Strictly trusts ONLY:
+ * 1. An explicitly configured absolute path (`explicitPath` or `PRISMUX_7ZA_PATH`),
+ *    validated non-`.cmd`/non-`.bat` (and `.exe` on Windows).
+ * 2. Bundled `resources/tools/7za.exe` (Electron `process.resourcesPath`, adjacent to
+ *    `process.execPath`, or repo-bundled `resources/tools/7za.exe`).
+ *
+ * Never scans `PATH` and never falls back to `.cmd`/`.bat` shims.
  */
 export function resolve7zaBinary(explicitPath?: string): string | null {
-  const candidates: string[] = [];
-
-  if (explicitPath && explicitPath.trim().length > 0) {
-    candidates.push(resolve(explicitPath.trim()));
+  if (explicitPath !== undefined && explicitPath.trim().length > 0) {
+    const trimmed = explicitPath.trim();
+    if (!isSafeSevenZipExecutablePath(trimmed)) {
+      return null;
+    }
+    const resolvedExplicit = resolve(trimmed);
+    try {
+      if (existsSync(resolvedExplicit) && statSync(resolvedExplicit).isFile()) {
+        return resolvedExplicit;
+      }
+    } catch {
+      return null;
+    }
+    return null;
   }
 
   const envPath = process.env["PRISMUX_7ZA_PATH"]?.trim();
   if (envPath && envPath.length > 0) {
-    candidates.push(resolve(envPath));
+    if (!isSafeSevenZipExecutablePath(envPath)) {
+      return null;
+    }
+    const resolvedEnv = resolve(envPath);
+    try {
+      if (existsSync(resolvedEnv) && statSync(resolvedEnv).isFile()) {
+        return resolvedEnv;
+      }
+    } catch {
+      return null;
+    }
+    return null;
   }
 
+  const candidates: string[] = [];
   const procResourcesPath = (
     process as NodeJS.Process & { resourcesPath?: string }
   ).resourcesPath;
   const exeName = process.platform === "win32" ? "7za.exe" : "7za";
   if (typeof procResourcesPath === "string" && procResourcesPath.trim().length > 0) {
     candidates.push(join(procResourcesPath, "tools", exeName));
-    candidates.push(join(procResourcesPath, "tools", "7z.exe"));
   }
 
   const execDir = dirname(process.execPath);
   candidates.push(join(execDir, "resources", "tools", exeName));
-  candidates.push(join(execDir, "tools", exeName));
 
-  // Walk upward from current module to locate repo-bundled resources or 7zip-bin in dev.
   let cursor = dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 6; depth += 1) {
     candidates.push(join(cursor, "resources", "tools", exeName));
-    candidates.push(
-      join(cursor, "node_modules", "7zip-bin", "win", "x64", "7za.exe")
-    );
     const parent = dirname(cursor);
     if (parent === cursor) {
       break;
@@ -452,14 +582,10 @@ export function resolve7zaBinary(explicitPath?: string): string | null {
     cursor = parent;
   }
 
-  if (process.platform === "win32") {
-    candidates.push("C:\\Program Files\\7-Zip\\7za.exe");
-    candidates.push("C:\\Program Files\\7-Zip\\7z.exe");
-    candidates.push("C:\\Program Files (x86)\\7-Zip\\7za.exe");
-    candidates.push("C:\\Program Files (x86)\\7-Zip\\7z.exe");
-  }
-
   for (const candidate of candidates) {
+    if (!isSafeSevenZipExecutablePath(candidate)) {
+      continue;
+    }
     try {
       if (existsSync(candidate) && statSync(candidate).isFile()) {
         return candidate;
@@ -469,31 +595,126 @@ export function resolve7zaBinary(explicitPath?: string): string | null {
     }
   }
 
-  // Fallback: scan PATH entries synchronously (fast stat-only check, no shell spawn)
-  const pathEnv = process.env["PATH"] ?? process.env["Path"] ?? "";
-  const pathSep = process.platform === "win32" ? ";" : ":";
-  const binNames =
-    process.platform === "win32"
-      ? ["7za.exe", "7z.exe", "7za.cmd", "7z.cmd"]
-      : ["7za", "7z", "7zz"];
-  for (const dir of pathEnv.split(pathSep)) {
-    const trimmedDir = dir.trim();
-    if (!trimmedDir) {
-      continue;
-    }
-    for (const binName of binNames) {
-      const full = join(trimmedDir, binName);
-      try {
-        if (existsSync(full) && statSync(full).isFile()) {
-          return full;
-        }
-      } catch {
-        // ignore
-      }
-    }
+  return null;
+}
+
+/**
+ * Parses and strictly validates the output of `7za l -slt <archive>`.
+ * Ensures the archive contains ONLY a single flat `.exe` regular file with no `..`,
+ * no absolute paths, no subdirectories/multiple files, no symlinks/hardlinks/reparse points,
+ * and no Windows reserved names or NTFS ADS colons.
+ */
+export function parseAndValidate7zSltListing(stdout: string): { entryPath: string } {
+  const normalized = stdout.replace(/\r\n?/g, "\n");
+  const lines = normalized.split("\n");
+  const sepIdx = lines.findIndex((line) => line.trim() === "----------");
+  if (sepIdx === -1) {
+    throw new Error("7-Zip -slt listing output is missing the entry separator (----------).");
   }
 
-  return null;
+  const entries: Array<Map<string, string>> = [];
+  let current = new Map<string, string>();
+  const flushCurrent = () => {
+    if (current.size > 0) {
+      entries.push(current);
+      current = new Map<string, string>();
+    }
+  };
+
+  for (let i = sepIdx + 1; i < lines.length; i += 1) {
+    const line = lines[i]!;
+    if (line.trim().length === 0) {
+      flushCurrent();
+      continue;
+    }
+    const eqIdx = line.indexOf("=");
+    if (eqIdx <= 0) {
+      continue;
+    }
+    const key = line.slice(0, eqIdx).trim().toLowerCase();
+    const value = line.slice(eqIdx + 1).trim();
+    if (key === "path" && current.has("path")) {
+      flushCurrent();
+    }
+    current.set(key, value);
+  }
+  flushCurrent();
+
+  const pathEntries = entries.filter((entry) => entry.has("path"));
+  if (pathEntries.length !== 1) {
+    throw new Error(
+      `Split 7z archive must contain exactly 1 flat .exe entry, found ${pathEntries.length}.`
+    );
+  }
+
+  const entry = pathEntries[0]!;
+  const entryPath = entry.get("path") ?? "";
+  if (entryPath.length === 0) {
+    throw new Error("Split 7z archive entry has an empty Path.");
+  }
+
+  if (entry.get("folder") === "+") {
+    throw new Error(`Split 7z archive entry "${entryPath}" must not be a directory.`);
+  }
+  if (entry.get("encrypted") === "+") {
+    throw new Error(`Split 7z archive entry "${entryPath}" must not be encrypted.`);
+  }
+  if (
+    (entry.get("symbolic link") ?? "").length > 0 ||
+    (entry.get("hard link") ?? "").length > 0 ||
+    (entry.get("alternate streams") ?? "").length > 0
+  ) {
+    throw new Error(
+      `Split 7z archive entry "${entryPath}" contains forbidden symlink, hardlink, or alternate stream.`
+    );
+  }
+
+  const attrs = entry.get("attributes") ?? "";
+  const mode = entry.get("mode") ?? "";
+  const attrTokens = attrs.split(/\s+/).filter(Boolean);
+  for (const token of attrTokens) {
+    if (token.startsWith("-") || token.startsWith("d") || token.startsWith("l") || token.startsWith("b") || token.startsWith("c") || token.startsWith("p")) {
+      // POSIX mode token (e.g. -rwxr-xr-x, drwxr-xr-x, lrwxrwxrwx)
+      if (/^[dlbcp]/i.test(token)) {
+        throw new Error(
+          `Split 7z archive entry "${entryPath}" has forbidden POSIX file type attributes "${attrs}".`
+        );
+      }
+    } else if (/[DL]/i.test(token)) {
+      // Windows attribute flags: D = Directory, L = Reparse Point / Symlink
+      throw new Error(
+        `Split 7z archive entry "${entryPath}" has forbidden Windows attributes "${attrs}".`
+      );
+    }
+  }
+  if (mode.length > 0 && /^[dlbcp]/i.test(mode)) {
+    throw new Error(
+      `Split 7z archive entry "${entryPath}" has forbidden mode "${mode}".`
+    );
+  }
+
+  if (
+    entryPath.includes("/") ||
+    entryPath.includes("\\") ||
+    entryPath.includes("..") ||
+    entryPath.includes("\0") ||
+    isAbsolute(entryPath) ||
+    FORBIDDEN_FILENAME_CHARS_RE.test(entryPath) ||
+    TRAILING_DOT_OR_SPACE_RE.test(entryPath) ||
+    WINDOWS_RESERVED_FILENAME_RE.test(entryPath)
+  ) {
+    throw new Error(
+      `Split 7z archive entry path "${entryPath}" is unsafe (must be a single flat filename).`
+    );
+  }
+
+  if (!entryPath.toLowerCase().endsWith(".exe")) {
+    throw new Error(
+      `Split 7z archive entry "${entryPath}" must be a .exe installer file.`
+    );
+  }
+
+  return { entryPath };
 }
 
 function extractAssetName(asset: RawReleaseAsset, downloadUrl: string): string {
@@ -960,31 +1181,27 @@ export function parseGiteeWebReleasesHtml(
   return records;
 }
 
-function openHttpWithRedirects(
+export function openHttpWithRedirects(
   rawUrl: string,
   headers: Record<string, string>,
   timeoutMs: number,
   maxRedirects: number,
   method: "GET" | "HEAD" = "GET",
-  followRedirects = true
+  followRedirects = true,
+  security: UpdaterHttpSecurityOptions = {}
 ): Promise<HttpOpenedResponse> {
   const attemptOpen = (
     targetUrl: string,
-    redirectsLeft: number
+    currentHeaders: Record<string, string>,
+    redirectsLeft: number,
+    previousProtocol?: string
   ): Promise<HttpOpenedResponse> =>
     new Promise((resolvePromise, rejectPromise) => {
       let parsedUrl: URL;
       try {
-        parsedUrl = new URL(targetUrl);
-      } catch {
-        rejectPromise(new Error(`Invalid updater URL: "${targetUrl}".`));
-        return;
-      }
-
-      if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-        rejectPromise(
-          new Error(`Unsupported updater URL protocol: "${parsedUrl.protocol}".`)
-        );
+        parsedUrl = validateUpdaterHttpUrl(targetUrl, security, previousProtocol);
+      } catch (err) {
+        rejectPromise(err instanceof Error ? err : new Error(String(err)));
         return;
       }
 
@@ -998,7 +1215,7 @@ function openHttpWithRedirects(
             "user-agent": `Mozilla/5.0 (compatible; Prismux-Updater/${DEFAULT_APP_VERSION})`,
             "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
             connection: "close",
-            ...headers
+            ...currentHeaders
           }
         },
         (res) => {
@@ -1033,11 +1250,25 @@ function openHttpWithRedirects(
               return;
             }
             res.resume();
-            const nextUrl = new URL(location, parsedUrl).toString();
-            attemptOpen(nextUrl, redirectsLeft - 1).then(
-              resolvePromise,
-              rejectPromise
-            );
+            let nextParsed: URL;
+            try {
+              nextParsed = new URL(location, parsedUrl);
+            } catch {
+              rejectPromise(
+                new Error(`Invalid redirect Location "${location}" from ${parsedUrl.toString()}.`)
+              );
+              return;
+            }
+            const nextHeaders =
+              nextParsed.origin === parsedUrl.origin
+                ? currentHeaders
+                : stripSensitiveRedirectHeaders(currentHeaders);
+            attemptOpen(
+              nextParsed.toString(),
+              nextHeaders,
+              redirectsLeft - 1,
+              parsedUrl.protocol
+            ).then(resolvePromise, rejectPromise);
             return;
           }
 
@@ -1065,7 +1296,7 @@ function openHttpWithRedirects(
       req.end();
     });
 
-  return attemptOpen(rawUrl, maxRedirects);
+  return attemptOpen(rawUrl, headers, maxRedirects);
 }
 
 async function fetchText(
@@ -1073,13 +1304,17 @@ async function fetchText(
   headers: Record<string, string>,
   timeoutMs: number,
   maxRedirects: number,
-  maxBytes = 8 * 1024 * 1024
+  maxBytes = 8 * 1024 * 1024,
+  security: UpdaterHttpSecurityOptions = {}
 ): Promise<string> {
   const response = await openHttpWithRedirects(
     url,
     headers,
     timeoutMs,
-    maxRedirects
+    maxRedirects,
+    "GET",
+    true,
+    security
   );
   if (response.statusCode < 200 || response.statusCode >= 300) {
     response.stream.resume();
@@ -1283,6 +1518,7 @@ export class AppUpdater {
   private readonly autoCheckInitialDelayMs: number;
   private readonly autoCheckIntervalMs: number;
   private readonly timers: AppUpdaterTimerApi;
+  private readonly allowInsecureLoopbackForTesting: boolean;
 
   private policy: UpdatePolicyConfig;
   private checking = false;
@@ -1331,6 +1567,8 @@ export class AppUpdater {
       setInterval,
       clearInterval
     };
+    this.allowInsecureLoopbackForTesting =
+      options.allowInsecureLoopbackForTesting === true;
 
     this.endpoints = {
       githubOwner: options.endpoints?.githubOwner ?? UPDATE_ENDPOINTS.githubOwner,
@@ -1566,7 +1804,7 @@ export class AppUpdater {
       lastDownload: this.lastDownload,
       lastProbe: this.lastProbe,
       lastError: this.lastError,
-      autoCheckEnabled: this.policy.autoCheckEnabled !== false,
+      autoCheckEnabled: this.policy.autoCheckEnabled === true,
       nextAutoCheckAt: this.nextAutoCheckAt
     };
   }
@@ -1612,7 +1850,7 @@ export class AppUpdater {
   startAutoCheck(): void {
     this.autoCheckLifecycleEnabled = true;
     this.stopAutoCheck();
-    if (this.policy.autoCheckEnabled === false) {
+    if (this.policy.autoCheckEnabled !== true) {
       return;
     }
 
@@ -1696,7 +1934,7 @@ export class AppUpdater {
     this.policy = validated;
     this.savePersistedPolicy(validated);
 
-    if (validated.autoCheckEnabled === false) {
+    if (validated.autoCheckEnabled !== true) {
       this.stopAutoCheck();
     } else if (
       shouldResumeAutoCheck &&
@@ -2269,10 +2507,28 @@ export class AppUpdater {
       throw new Error("customGhProxyPrefix must be a string.");
     }
     const cleanPrefix = raw.customGhProxyPrefix.trim();
-    if (cleanPrefix.length > 0 && !/^https?:\/\//i.test(cleanPrefix)) {
-      throw new Error(
-        `customGhProxyPrefix must start with http:// or https://, got "${cleanPrefix}".`
-      );
+    if (cleanPrefix.length > 0) {
+      let parsedProxy: URL;
+      try {
+        parsedProxy = new URL(cleanPrefix);
+      } catch {
+        throw new Error(
+          `customGhProxyPrefix must be a valid https:// URL, got "${cleanPrefix}".`
+        );
+      }
+      const isLoopback = isLoopbackHostname(parsedProxy.hostname);
+      if (
+        parsedProxy.protocol !== "https:" &&
+        !(
+          this.allowInsecureLoopbackForTesting &&
+          parsedProxy.protocol === "http:" &&
+          isLoopback
+        )
+      ) {
+        throw new Error(
+          `customGhProxyPrefix must start with https://, got "${cleanPrefix}".`
+        );
+      }
     }
     if (
       raw.pluginRegistryOverride !== "auto" &&
@@ -2293,7 +2549,9 @@ export class AppUpdater {
       throw new Error("timeoutMs must be a finite number between 100 and 300000.");
     }
     const autoCheckEnabled =
-      raw.autoCheckEnabled === undefined ? true : Boolean(raw.autoCheckEnabled);
+      raw.autoCheckEnabled === undefined
+        ? Boolean(DEFAULT_UPDATE_POLICY.autoCheckEnabled)
+        : Boolean(raw.autoCheckEnabled);
 
     return {
       routePreference: raw.routePreference as NetworkRoutePreference,
@@ -2302,6 +2560,40 @@ export class AppUpdater {
       pluginRegistryOverride: raw.pluginRegistryOverride,
       timeoutMs: Math.round(raw.timeoutMs),
       autoCheckEnabled
+    };
+  }
+
+  private getHttpSecurityOptions(): UpdaterHttpSecurityOptions {
+    const extraAllowedHosts = new Set<string>();
+    const registerHost = (rawUrl: string | undefined): void => {
+      if (typeof rawUrl !== "string" || rawUrl.trim().length === 0) {
+        return;
+      }
+      try {
+        const parsed = new URL(rawUrl.trim());
+        const host = parsed.hostname.toLowerCase();
+        if (
+          parsed.protocol === "https:" ||
+          (this.allowInsecureLoopbackForTesting &&
+            parsed.protocol === "http:" &&
+            isLoopbackHostname(host))
+        ) {
+          extraAllowedHosts.add(host);
+        }
+      } catch {
+        // Invalid URLs are rejected when validating request URLs
+      }
+    };
+
+    registerHost(this.policy.customGhProxyPrefix);
+    registerHost(this.endpoints.githubApiBase);
+    registerHost(this.endpoints.githubWebBase);
+    registerHost(this.endpoints.giteeApiBase);
+    registerHost(this.endpoints.giteeWebBase);
+
+    return {
+      extraAllowedHosts,
+      allowInsecureLoopbackForTesting: this.allowInsecureLoopbackForTesting
     };
   }
 
@@ -2347,7 +2639,8 @@ export class AppUpdater {
         timeoutMs,
         this.maxRedirects,
         method,
-        followRedirects
+        followRedirects,
+        this.getHttpSecurityOptions()
       );
       response.stream.resume();
       const latencyMs = Math.max(0, Math.round(performance.now() - startedAt));
@@ -2396,7 +2689,9 @@ export class AppUpdater {
         releasesUrl,
         headers,
         this.policy.timeoutMs,
-        this.maxRedirects
+        this.maxRedirects,
+        8 * 1024 * 1024,
+        this.getHttpSecurityOptions()
       );
       parsedJson = JSON.parse(rawText) as unknown;
     } catch (error) {
@@ -2411,7 +2706,9 @@ export class AppUpdater {
           giteeWebUrl,
           { accept: "text/html,application/xhtml+xml,*/*;q=0.8" },
           this.policy.timeoutMs,
-          this.maxRedirects
+          this.maxRedirects,
+          8 * 1024 * 1024,
+          this.getHttpSecurityOptions()
         );
         parsedJson = parseGiteeWebReleasesHtml(
           html,
@@ -2537,7 +2834,9 @@ export class AppUpdater {
           best.htmlUrl,
           { accept: "text/html,application/xhtml+xml,*/*;q=0.8" },
           Math.min(this.policy.timeoutMs, 8_000),
-          this.maxRedirects
+          this.maxRedirects,
+          8 * 1024 * 1024,
+          this.getHttpSecurityOptions()
         );
         resolvedReleaseNotes = extractGiteeReleaseBodyFromHtml(tagHtml);
       } catch {
@@ -2591,7 +2890,8 @@ export class AppUpdater {
           {},
           this.policy.timeoutMs,
           this.maxRedirects,
-          256 * 1024
+          256 * 1024,
+          this.getHttpSecurityOptions()
         );
         const parsedDigest = parseSingleAssetSha256Text(companionText, assetName);
         if (isValidSha256Hex(parsedDigest)) {
@@ -2631,7 +2931,9 @@ export class AppUpdater {
           sumsSourceUrl,
           {},
           this.policy.timeoutMs,
-          this.maxRedirects
+          this.maxRedirects,
+          8 * 1024 * 1024,
+          this.getHttpSecurityOptions()
         );
         sumsMap = parseSha256SumsText(sumsText);
       } catch {
@@ -2723,12 +3025,23 @@ export class AppUpdater {
         continue;
       }
 
-      const parts: UpdateSplitArchivePart[] = group.entries.map((entry) => ({
-        name: entry.name,
-        url: entry.downloadUrl,
-        effectiveUrl: this.resolveSourceUrl(entry.downloadUrl, source),
-        ...(entry.sizeBytes !== null ? { size: entry.sizeBytes } : {})
-      }));
+      const parts: UpdateSplitArchivePart[] = [];
+      for (const entry of group.entries) {
+        const { sha256: partSha } = await this.resolveSha256ForAssetName(
+          entry.name,
+          release,
+          source,
+          sumsMap,
+          sumsSourceUrl
+        );
+        parts.push({
+          name: entry.name,
+          url: entry.downloadUrl,
+          effectiveUrl: this.resolveSourceUrl(entry.downloadUrl, source),
+          ...(entry.sizeBytes !== null ? { size: entry.sizeBytes } : {}),
+          sha256: partSha
+        });
+      }
 
       const allHaveSize = group.entries.every((e) => e.sizeBytes !== null);
       const totalBytes = allHaveSize
@@ -2873,7 +3186,10 @@ export class AppUpdater {
           params.url,
           headers,
           this.policy.timeoutMs,
-          this.maxRedirects
+          this.maxRedirects,
+          "GET",
+          true,
+          this.getHttpSecurityOptions()
         );
 
         if (response.statusCode === 416) {
@@ -3028,7 +3344,8 @@ export class AppUpdater {
         headTimeoutMs,
         this.maxRedirects,
         "HEAD",
-        true
+        true,
+        this.getHttpSecurityOptions()
       );
       response.stream.resume();
       if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -3191,10 +3508,16 @@ export class AppUpdater {
       );
     }
 
+    // Fail-closed: EVERY .7z.001..N volume MUST have a valid 64-char SHA-256 in SHA256SUMS
+    // BEFORE downloading or invoking 7za.exe.
+    const expectedPartShas: string[] = parts.map((part) =>
+      this.requireValidSha256(part.sha256, part.name)
+    );
+
     const sevenZipExe = this.resolve7zaPath();
     if (!sevenZipExe) {
       throw new Error(
-        "未找到 7za.exe / 7z.exe，无法重组 Gitee 分卷安装包。请安装 7-Zip 或设置环境变量 PRISMUX_7ZA_PATH。"
+        "未找到受信任的 7za.exe，无法重组 Gitee 分卷安装包。请使用内置 resources/tools/7za.exe 或设置绝对路径 PRISMUX_7ZA_PATH。"
       );
     }
 
@@ -3271,12 +3594,21 @@ export class AppUpdater {
         this.resolveSourceUrl(part.url, params.asset.source);
       const expectedPartSize = knownPartSizes[i] ?? null;
 
-      // Reuse already-completed split volume if exact size matches (supports cross-attempt resume).
+      // Reuse already-completed split volume ONLY if exact size and SHA-256 match.
+      let canReusePart = false;
       if (
         existsSync(finalPartPath) &&
         expectedPartSize !== null &&
         statSync(finalPartPath).size === expectedPartSize
       ) {
+        const cachedCheck = await computeFileSha256(finalPartPath);
+        if (cachedCheck.sha256 === expectedPartShas[i]) {
+          canReusePart = true;
+        } else {
+          rmSync(finalPartPath, { force: true });
+        }
+      }
+      if (canReusePart && expectedPartSize !== null) {
         completedPartsBytes += expectedPartSize;
         totalResumedBytes += expectedPartSize;
         downloadedPartPaths.push(finalPartPath);
@@ -3377,6 +3709,19 @@ export class AppUpdater {
       }
     }
 
+    // Pre-extract gate 1: verify SHA-256 of EVERY .7z.001..N volume BEFORE invoking 7za.exe.
+    for (let i = 0; i < downloadedPartPaths.length; i += 1) {
+      const volPath = downloadedPartPaths[i]!;
+      const expectedVolSha = expectedPartShas[i]!;
+      const safeVolName = sanitizeAssetFileName(parts[i]!.name);
+      const computedVol = await computeFileSha256(volPath);
+      if (computedVol.sha256 !== expectedVolSha) {
+        rmSync(workDir, { recursive: true, force: true });
+        rmSync(params.targetPath, { force: true });
+        throw new UpdateIntegrityError(safeVolName, expectedVolSha, computedVol.sha256);
+      }
+    }
+
     const firstVolumePath = downloadedPartPaths[0]!;
     const resolvedTotalBytes = totalArchiveBytes ?? completedPartsBytes;
     const reportExtractProgress = (percent: number, message: string) => {
@@ -3394,6 +3739,29 @@ export class AppUpdater {
         updatedAt: Date.now()
       });
     };
+
+    // Pre-extract gate 2: run `7za l -slt` to verify archive contains ONLY a single flat `.exe`
+    // (no `..`, no absolute paths, no subdirectories/multiple files, no symlinks).
+    let listedExeName: string;
+    try {
+      const { stdout: sltStdout } = await execFileAsync(
+        sevenZipExe,
+        ["l", "-slt", firstVolumePath],
+        {
+          timeout: DEFAULT_EXTRACT_TIMEOUT_MS,
+          windowsHide: true,
+          maxBuffer: 4 * 1024 * 1024
+        }
+      );
+      const listing = parseAndValidate7zSltListing(String(sltStdout ?? ""));
+      listedExeName = listing.entryPath;
+    } catch (error) {
+      rmSync(workDir, { recursive: true, force: true });
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `分卷 7z 归档安全预检失败（已自动清理残片）：${detail}`
+      );
+    }
 
     reportExtractProgress(
       DOWNLOAD_PROGRESS_MAX_PERCENT,
@@ -3439,11 +3807,22 @@ export class AppUpdater {
       this.timers.clearInterval(extractHeartbeat);
     }
 
-    const extractedExePath = findExtractedExeFile(extractDir, expectedExeName);
-    if (extractedExePath === null) {
+    const directListedPath = join(extractDir, listedExeName);
+    const extractedExePath =
+      existsSync(directListedPath) &&
+      !lstatSync(directListedPath).isSymbolicLink() &&
+      lstatSync(directListedPath).isFile() &&
+      isStrictlyInsideDir(directListedPath, extractDir)
+        ? directListedPath
+        : findExtractedExeFile(extractDir, expectedExeName);
+    if (
+      extractedExePath === null ||
+      lstatSync(extractedExePath).isSymbolicLink() ||
+      !isStrictlyInsideDir(extractedExePath, extractDir)
+    ) {
       rmSync(workDir, { recursive: true, force: true });
       throw new Error(
-        `分卷解压后未找到目标安装包 "${expectedExeName}"（已清理临时残片）。`
+        `分卷解压后未找到合法的目标安装包 "${expectedExeName}"（已清理临时残片）。`
       );
     }
 

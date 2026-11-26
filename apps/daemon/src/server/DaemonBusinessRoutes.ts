@@ -89,6 +89,66 @@ import {
 const SYNC_CREDENTIAL_BUCKET = "sync-vault" as const;
 const SYNC_INSTALL_META_FILENAME = ".prismux-install.json" as const;
 
+const TRUSTED_PLUGIN_REGISTRY_HOSTS = new Set<string>([
+  "registry.npmjs.org",
+  "registry.npmmirror.com",
+  "cdn.npmmirror.com",
+  "npm.pkg.github.com"
+]);
+
+function validateTrustedPluginRegistryUrl(
+  rawUrl: unknown,
+  fieldName: string
+): string | undefined {
+  if (rawUrl === undefined || rawUrl === null) {
+    return undefined;
+  }
+  if (typeof rawUrl !== "string") {
+    throw new BusinessRouteError(
+      400,
+      "INVALID_REGISTRY_URL",
+      `${fieldName} 必须是合法的 HTTPS 镜像源 URL 字符串。`
+    );
+  }
+  const trimmed = rawUrl.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new BusinessRouteError(
+      400,
+      "INVALID_REGISTRY_URL",
+      `${fieldName} 格式无效：${trimmed}`
+    );
+  }
+  if (parsed.protocol !== "https:") {
+    throw new BusinessRouteError(
+      400,
+      "INVALID_REGISTRY_URL",
+      `${fieldName} 仅允许使用 HTTPS 协议，禁止明文 HTTP 或其他协议：${trimmed}`
+    );
+  }
+  if (parsed.username !== "" || parsed.password !== "") {
+    throw new BusinessRouteError(
+      400,
+      "INVALID_REGISTRY_URL",
+      `${fieldName} 禁止在 URL 中内嵌凭据。`
+    );
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (!TRUSTED_PLUGIN_REGISTRY_HOSTS.has(host)) {
+    throw new BusinessRouteError(
+      400,
+      "INVALID_REGISTRY_URL",
+      `${fieldName} 主机 "${host}" 不在受信任的插件镜像白名单内（仅允许 registry.npmjs.org / registry.npmmirror.com / cdn.npmmirror.com / npm.pkg.github.com）。`
+    );
+  }
+  return trimmed;
+}
+
 export class BusinessRouteError extends Error {
   readonly statusCode: number;
   readonly code: string;
@@ -419,7 +479,9 @@ function findOfficialArchiveInSearchDirs(
     entry.version
   );
   const expectedSha = entry.sha256?.trim().toLowerCase() ?? "";
-  const hasExpectedSha = /^[0-9a-f]{64}$/.test(expectedSha);
+  if (!/^[0-9a-f]{64}$/.test(expectedSha)) {
+    return null;
+  }
 
   const candidateDirs: string[] = [];
   for (const dir of extraDirs) {
@@ -445,11 +507,9 @@ function findOfficialArchiveInSearchDirs(
         if (bytes.byteLength === 0) {
           continue;
         }
-        if (hasExpectedSha) {
-          const actualSha = createHash("sha256").update(bytes).digest("hex");
-          if (actualSha !== expectedSha) {
-            continue;
-          }
+        const actualSha = createHash("sha256").update(bytes).digest("hex");
+        if (actualSha !== expectedSha) {
+          continue;
         }
         return { bytes, filePath: candidate };
       } catch {
@@ -2245,13 +2305,24 @@ export class DaemonBusinessService {
       );
     }
 
+    if (
+      rawBody["archivePath"] !== undefined &&
+      rawBody["archivePath"] !== null &&
+      (typeof rawBody["archivePath"] !== "string" ||
+        rawBody["archivePath"].trim().length > 0)
+    ) {
+      throw new BusinessRouteError(
+        400,
+        "ARCHIVE_PATH_FORBIDDEN",
+        "安全策略禁止通过宿主机任意路径 archivePath 安装插件，请仅使用 archiveBase64 提交归档内容。"
+      );
+    }
+
     const confirmedAudit = rawBody["confirmedAudit"] === true;
     const rawSource = rawBody["source"];
     const hasArchiveInput =
-      (typeof rawBody["archiveBase64"] === "string" &&
-        rawBody["archiveBase64"].trim().length > 0) ||
-      (typeof rawBody["archivePath"] === "string" &&
-        rawBody["archivePath"].trim().length > 0);
+      typeof rawBody["archiveBase64"] === "string" &&
+      rawBody["archiveBase64"].trim().length > 0;
     const requestedSource: "official" | "npm" | "local-archive" =
       rawSource === "official" ||
       rawSource === "npm" ||
@@ -2291,27 +2362,13 @@ export class DaemonBusinessService {
           rawBody["archiveBase64"].trim().length > 0
         ) {
           archiveBytes = Buffer.from(rawBody["archiveBase64"].trim(), "base64");
-        } else if (
-          typeof rawBody["archivePath"] === "string" &&
-          rawBody["archivePath"].trim().length > 0
-        ) {
-          const resolvedArchive = resolve(rawBody["archivePath"].trim());
-          if (!existsSync(resolvedArchive)) {
-            throw new BusinessRouteError(
-              404,
-              "ARCHIVE_NOT_FOUND",
-              `本地插件归档不存在：${resolvedArchive}`
-            );
-          }
-          archiveBytes = readFileSync(resolvedArchive);
-          fileName = basename(resolvedArchive);
         }
 
         if (!archiveBytes || archiveBytes.byteLength === 0) {
           throw new BusinessRouteError(
             400,
             "ARCHIVE_REQUIRED",
-            "导入本地插件需要提供非空的 .wb-plugin 或 .tgz 归档内容。"
+            "导入本地插件需要提供非空的 archiveBase64（.wb-plugin 或 .tgz 归档内容）。"
           );
         }
 
@@ -2391,28 +2448,6 @@ export class DaemonBusinessService {
               confirmedAudit,
               hostVersion: this.ctx.hostVersion,
               sourceUsed: "inline-base64"
-            }
-          );
-        } else if (
-          typeof rawBody["archivePath"] === "string" &&
-          rawBody["archivePath"].trim().length > 0
-        ) {
-          const resolvedArchive = resolve(rawBody["archivePath"].trim());
-          if (!existsSync(resolvedArchive)) {
-            throw new BusinessRouteError(
-              404,
-              "ARCHIVE_NOT_FOUND",
-              `指定的插件归档不存在：${resolvedArchive}`
-            );
-          }
-          const archiveBytes = readFileSync(resolvedArchive);
-          details = await this.ctx.pluginInstaller.installOfficialEntry(
-            entry,
-            archiveBytes,
-            {
-              confirmedAudit,
-              hostVersion: this.ctx.hostVersion,
-              sourceUsed: `local-file:${resolvedArchive}`
             }
           );
         } else {
@@ -2550,15 +2585,24 @@ export class DaemonBusinessService {
           );
         }
 
+        const validatedRegistryUrl = validateTrustedPluginRegistryUrl(
+          rawBody["registryUrl"],
+          "registryUrl"
+        );
+        const validatedFallbackRegistryUrl = validateTrustedPluginRegistryUrl(
+          rawBody["fallbackRegistryUrl"],
+          "fallbackRegistryUrl"
+        );
+
         details = await this.ctx.pluginInstaller.installFromNpm({
           packageNameOrTarball,
-          ...(typeof rawBody["registryUrl"] === "string"
-            ? { registryUrl: rawBody["registryUrl"].trim() }
+          ...(validatedRegistryUrl !== undefined
+            ? { registryUrl: validatedRegistryUrl }
             : this.ctx.officialPluginSources?.npmRegistryUrl
               ? { registryUrl: this.ctx.officialPluginSources.npmRegistryUrl }
               : {}),
-          ...(typeof rawBody["fallbackRegistryUrl"] === "string"
-            ? { fallbackRegistryUrl: rawBody["fallbackRegistryUrl"].trim() }
+          ...(validatedFallbackRegistryUrl !== undefined
+            ? { fallbackRegistryUrl: validatedFallbackRegistryUrl }
             : this.ctx.officialPluginSources?.npmMirrorRegistryUrl
               ? {
                   fallbackRegistryUrl:
