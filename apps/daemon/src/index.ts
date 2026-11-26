@@ -6,18 +6,15 @@ import {
   CordisPluginHost,
   CordisStreamingInstaller,
   EncryptedPluginCredentialStore,
-  type CordisPluginModule
+  type CordisPluginModule,
 } from "@prismux/cordis-kernel";
-import {
-  ObsidianVaultImporterImpl,
-  SqliteMemoryStore
-} from "@prismux/memory-core";
+import { ObsidianVaultImporterImpl, SqliteMemoryStore } from "@prismux/memory-core";
 import {
   BRAND,
   DEFAULT_APP_VERSION,
   type ChiefProviderKind,
   type InstalledPluginRecord,
-  type PrismuxPluginModule
+  type PrismuxPluginModule,
 } from "@prismux/protocol";
 import { SyncVaultEngine } from "@prismux/sync-vault";
 import { AppearanceConfigStore } from "./appearance/AppearanceConfigStore.js";
@@ -25,12 +22,9 @@ import { ChiefThreadManager } from "./chief/ChiefThreadManager.js";
 import {
   CoreRpcClient,
   type CoreRpcHandshakeError,
-  isNonRetryableCoreHandshakeError
+  isNonRetryableCoreHandshakeError,
 } from "./core/CoreRpcClient.js";
-import {
-  CoreServerSupervisor,
-  sanitizeChildEnv
-} from "./core/CoreServerSupervisor.js";
+import { CoreServerSupervisor, sanitizeChildEnv } from "./core/CoreServerSupervisor.js";
 import { ArtifactResultBackdoor } from "./dispatch/ArtifactResultBackdoor.js";
 import { DesktopIpcDispatchHub } from "./dispatch/DesktopIpcDispatchHub.js";
 import { TaskDispatchRouter } from "./dispatch/TaskDispatchRouter.js";
@@ -53,12 +47,15 @@ import { ResourceMonitorService } from "./system/ResourceMonitorService.js";
 import { ServiceDiagnosticsService } from "./system/ServiceDiagnosticsService.js";
 import {
   StorageQuotaService,
-  type StorageQuotaServiceOptions
+  type StorageQuotaServiceOptions,
 } from "./system/StorageQuotaService.js";
 import { SystemFontService } from "./system/SystemFontService.js";
 import { AppUpdater } from "./updater/AppUpdater.js";
 import { WallpaperMediaService } from "./wallpapers/WallpaperMediaService.js";
-import { OvernightFactory } from "./workflows/OvernightFactory.js";
+import {
+  OvernightFactory,
+  createDefaultOvernightCodingExecutor,
+} from "./workflows/OvernightFactory.js";
 
 export * from "./appearance/AppearanceConfigStore.js";
 export * from "./core/CoreServerSupervisor.js";
@@ -137,20 +134,15 @@ export function resolveDaemonPackageVersion(): string {
  * Kept for backward compatibility; delegates to `sanitizeChildEnv`.
  */
 export function sanitizeProviderEnv(
-  env: Record<string, string | undefined>
+  env: Record<string, string | undefined>,
 ): Record<string, string> {
   return sanitizeChildEnv(env);
 }
 
-function loadOrGeneratePluginMasterKey(
-  dataDir: string,
-  explicitKey?: string | Uint8Array
-): Buffer {
+function loadOrGeneratePluginMasterKey(dataDir: string, explicitKey?: string | Uint8Array): Buffer {
   if (explicitKey !== undefined) {
     const keyBuf =
-      typeof explicitKey === "string"
-        ? Buffer.from(explicitKey, "utf8")
-        : Buffer.from(explicitKey);
+      typeof explicitKey === "string" ? Buffer.from(explicitKey, "utf8") : Buffer.from(explicitKey);
     if (keyBuf.byteLength === 0) {
       throw new Error("pluginMasterKey must not be empty.");
     }
@@ -198,10 +190,7 @@ export interface DaemonStartOptions {
   officialCatalogPath?: string;
   officialPluginSources?: OfficialPluginSourceConfig;
   steamRootsDiscoverer?: () => Promise<string[]>;
-  storageQuotaOptions?: Omit<
-    StorageQuotaServiceOptions,
-    "dataDir" | "memoryStore" | "appUpdater"
-  >;
+  storageQuotaOptions?: Omit<StorageQuotaServiceOptions, "dataDir" | "memoryStore" | "appUpdater">;
   disableAutoUpdateCheck?: boolean;
   onShutdownRequested?: (reason?: string) => void | Promise<void>;
 }
@@ -267,10 +256,7 @@ export class PrismuxDaemon {
   readonly rpcServer: DaemonRpcServer;
 
   private readonly pluginMasterKey: Buffer;
-  private readonly pluginModules = new Map<
-    string,
-    PrismuxPluginModule | CordisPluginModule
-  >();
+  private readonly pluginModules = new Map<string, PrismuxPluginModule | CordisPluginModule>();
   private running = false;
   private readyInfo: DaemonReadyInfo | undefined;
   private activeStartPromise: Promise<DaemonReadyInfo> | undefined;
@@ -301,7 +287,7 @@ export class PrismuxDaemon {
       this.coreSupervisor = new CoreServerSupervisor({
         command: resolvedCoreCommand,
         args: resolvedCoreArgs,
-        healthUrl: resolvedCoreHealthUrl
+        healthUrl: resolvedCoreHealthUrl,
       });
     }
     this.t3Supervisor = this.coreSupervisor;
@@ -309,73 +295,60 @@ export class PrismuxDaemon {
     if (resolvedCoreUrl !== undefined && resolvedCoreUrl.trim().length > 0) {
       this.coreRpcClient = new CoreRpcClient({
         url: resolvedCoreUrl,
-        token: resolvedCoreToken
+        token: resolvedCoreToken,
       });
     }
     this.t3RpcClient = this.coreRpcClient;
 
     this.providerProbeService = new PrismuxProviderProbeService({
-      coreRpcClient: this.coreRpcClient
+      coreRpcClient: this.coreRpcClient,
     });
 
     this.subscriptionWaiverStore = new SubscriptionWaiverStore({
-      dataDir: options.dataDir
+      dataDir: options.dataDir,
     });
     this.antigravityPolicyStore = this.subscriptionWaiverStore;
     this.subscriptionOrchestrationGuard = new SubscriptionOrchestrationGuard(
       this.subscriptionWaiverStore,
-      { probeService: this.providerProbeService }
+      { probeService: this.providerProbeService },
     );
     this.antigravityPolicyGuard = this.subscriptionOrchestrationGuard;
     this.taskDispatchRouter = new TaskDispatchRouter();
     this.artifactBackdoor = new ArtifactResultBackdoor({
-      policyGuard: this.subscriptionOrchestrationGuard
+      policyGuard: this.subscriptionOrchestrationGuard,
     });
     this.dispatchHub = new DesktopIpcDispatchHub({
       dataDir: options.dataDir,
       router: this.taskDispatchRouter,
       policyGuard: this.subscriptionOrchestrationGuard,
-      artifactBackdoor: this.artifactBackdoor
-    });
-    this.overnightFactory = new OvernightFactory({
-      policyGuard: this.subscriptionOrchestrationGuard,
-      dispatchRouter: this.taskDispatchRouter,
       artifactBackdoor: this.artifactBackdoor,
-      dispatchHub: this.dispatchHub
     });
 
     // Official plugins (qq, fishdock-hook) are NEVER preinstalled by default.
     this.pluginHost = new CordisPluginHost("daemon");
-    this.pluginMasterKey = loadOrGeneratePluginMasterKey(
-      options.dataDir,
-      options.pluginMasterKey
-    );
+    this.pluginMasterKey = loadOrGeneratePluginMasterKey(options.dataDir, options.pluginMasterKey);
     this.pluginCredentialStore = new EncryptedPluginCredentialStore({
       dataDir: options.dataDir,
-      masterKey: this.pluginMasterKey
+      masterKey: this.pluginMasterKey,
     });
-    const resolvedHostVersion =
-      options.hostVersion ?? resolveDaemonPackageVersion();
+    const resolvedHostVersion = options.hostVersion ?? resolveDaemonPackageVersion();
     this.pluginInstaller = new CordisStreamingInstaller({
       pluginsDir: join(options.dataDir, "plugins"),
-      hostVersion: resolvedHostVersion
+      hostVersion: resolvedHostVersion,
     });
     this.appUpdater = new AppUpdater({
       currentVersion: resolvedHostVersion,
       dataDir: options.dataDir,
-      portableMode: Boolean(options.portableRoot)
+      portableMode: Boolean(options.portableRoot),
     });
 
     this.memoryStore = new SqliteMemoryStore({
       dbPath: join(options.dataDir, "data", "memory.db"),
       machineId: this.machineId,
       embeddingDimensions: 768,
-      enableWal: true
+      enableWal: true,
     });
-    this.obsidianImporter = new ObsidianVaultImporterImpl(
-      this.memoryStore,
-      this.machineId
-    );
+    this.obsidianImporter = new ObsidianVaultImporterImpl(this.memoryStore, this.machineId);
     this.handoffEngine = new HandoffEngine({
       onPersistHandoffNote: async (note) => {
         if (this.running) {
@@ -385,10 +358,21 @@ export class PrismuxDaemon {
             title: `Handoff: ${note.summary.goal}`,
             content: note.continuationPrompt,
             sourceRef: `thread:${note.newThreadId}`,
-            machineId: this.machineId
+            machineId: this.machineId,
           });
         }
-      }
+      },
+    });
+    this.overnightFactory = new OvernightFactory({
+      memoryStore: this.memoryStore,
+      handoffEngine: this.handoffEngine,
+      hookBus: this.hookBus,
+      sandbox: this.sandbox,
+      policyGuard: this.subscriptionOrchestrationGuard,
+      dispatchRouter: this.taskDispatchRouter,
+      artifactBackdoor: this.artifactBackdoor,
+      dispatchHub: this.dispatchHub,
+      codingExecutor: createDefaultOvernightCodingExecutor(),
     });
     const syncCredHandle = this.pluginCredentialStore.openForPlugin("sync-vault");
     this.syncVault = new SyncVaultEngine({
@@ -404,25 +388,25 @@ export class PrismuxDaemon {
         ? {
             portable: {
               executableDir: options.portableRoot,
-              defaultDataDir: options.dataDir
-            }
+              defaultDataDir: options.dataDir,
+            },
           }
-        : {})
+        : {}),
     });
 
     this.chiefManager = new ChiefThreadManager({
       dataDir: options.dataDir,
       defaultProvider: options.defaultChiefProvider,
       defaultModel: options.defaultChiefModel,
-      rpcClient: this.coreRpcClient
+      rpcClient: this.coreRpcClient,
     });
 
     this.pairingManager = new PairingManager({
-      initialAuthToken: options.authToken
+      initialAuthToken: options.authToken,
     });
 
     this.appearanceStore = new AppearanceConfigStore({
-      dataDir: options.dataDir
+      dataDir: options.dataDir,
     });
     const initialAppearance = this.appearanceStore.get().config;
     this.wallpaperService = new WallpaperMediaService({
@@ -432,13 +416,13 @@ export class PrismuxDaemon {
       advancedEngineEnabled: initialAppearance.wallpaper.advancedEngineEnabled,
       ...(options.steamRootsDiscoverer !== undefined
         ? { steamRootsDiscoverer: options.steamRootsDiscoverer }
-        : {})
+        : {}),
     });
     this.fontService = new SystemFontService();
     const daemonStartedAt = Date.now();
     this.portScannerService = new PortScannerService({
       ptyPool: this.ptyPool,
-      t3Supervisor: this.coreSupervisor
+      t3Supervisor: this.coreSupervisor,
     });
     this.resourceMonitorService = new ResourceMonitorService({
       ptyPool: this.ptyPool,
@@ -446,13 +430,13 @@ export class PrismuxDaemon {
       t3RpcClient: this.coreRpcClient,
       ...(resolvedCoreHealthUrl !== undefined || resolvedCoreUrl !== undefined
         ? { t3ServerUrl: resolvedCoreHealthUrl ?? resolvedCoreUrl }
-        : {})
+        : {}),
     });
     this.storageQuotaService = new StorageQuotaService({
       ...options.storageQuotaOptions,
       dataDir: options.dataDir,
       memoryStore: this.memoryStore,
-      appUpdater: this.appUpdater
+      appUpdater: this.appUpdater,
     });
     this.diagnosticsService = new ServiceDiagnosticsService({
       dataDir: options.dataDir,
@@ -473,14 +457,14 @@ export class PrismuxDaemon {
       wallpaperService: this.wallpaperService,
       overnightFactory: this.overnightFactory,
       hookBus: this.hookBus,
-      sandbox: this.sandbox
+      sandbox: this.sandbox,
     });
     this.cliUpdateService = new CliUpdateService({
       appUpdater: this.appUpdater,
-      onAfterUpdate: () => this.diagnosticsService.clearCache()
+      onAfterUpdate: () => this.diagnosticsService.clearCache(),
     });
     this.quotaService = new OfficialQuotaService({
-      providerProbeService: this.providerProbeService
+      providerProbeService: this.providerProbeService,
     });
     this.businessService = new DaemonBusinessService({
       dataDir: options.dataDir,
@@ -503,7 +487,7 @@ export class PrismuxDaemon {
       resourceMonitorService: this.resourceMonitorService,
       onMountPlugin: (record, mod) => this.mountPluginModule(record, mod),
       onTogglePlugin: (pluginId, enabled) => this.togglePlugin(pluginId, enabled),
-      onUninstallPlugin: (pluginId) => this.uninstallPlugin(pluginId)
+      onUninstallPlugin: (pluginId) => this.uninstallPlugin(pluginId),
     });
     this.businessService.restorePersistedSyncConfig();
     this.overnightRouteService = new OvernightRouteService({
@@ -513,7 +497,8 @@ export class PrismuxDaemon {
       memoryStore: this.memoryStore,
       policyGuard: this.subscriptionOrchestrationGuard,
       dispatchHub: this.dispatchHub,
-      onConfigChanged: () => this.diagnosticsService.clearCache()
+      chiefManager: this.chiefManager,
+      onConfigChanged: () => this.diagnosticsService.clearCache(),
     });
 
     this.rpcServer = new DaemonRpcServer({
@@ -549,7 +534,7 @@ export class PrismuxDaemon {
       subscriptionWaiverStore: this.subscriptionWaiverStore,
       dispatchHub: this.dispatchHub,
       startedAt: daemonStartedAt,
-      onRequestShutdown: options.onShutdownRequested
+      onRequestShutdown: options.onShutdownRequested,
     });
   }
 
@@ -567,7 +552,7 @@ export class PrismuxDaemon {
 
   async mountPluginModule(
     record: InstalledPluginRecord,
-    module: PrismuxPluginModule | CordisPluginModule
+    module: PrismuxPluginModule | CordisPluginModule,
   ): Promise<void> {
     const pluginId = record.manifest.id;
     this.pluginModules.set(pluginId, module);
@@ -578,7 +563,7 @@ export class PrismuxDaemon {
 
   async togglePlugin(
     pluginId: string,
-    enabled: boolean
+    enabled: boolean,
   ): Promise<{ pluginId: string; enabled: boolean }> {
     const record = this.pluginHost.getRecord(pluginId);
     if (record === undefined) {
@@ -594,16 +579,12 @@ export class PrismuxDaemon {
     const module = this.pluginModules.get(pluginId);
     if (module === undefined) {
       throw new Error(
-        `Cannot enable plugin "${pluginId}": module definition is not loaded in memory.`
+        `Cannot enable plugin "${pluginId}": module definition is not loaded in memory.`,
       );
     }
 
     const credentials = this.pluginCredentialStore.openForPlugin(pluginId);
-    await this.pluginHost.mountPlugin(
-      { ...record, enabled: true },
-      module,
-      credentials
-    );
+    await this.pluginHost.mountPlugin({ ...record, enabled: true }, module, credentials);
     this.diagnosticsService.clearCache();
     return { pluginId, enabled: true };
   }
@@ -691,7 +672,7 @@ export class PrismuxDaemon {
       await this.coreRpcClient.ensureChiefThread(
         slot.workspacePath,
         slot.activeProvider,
-        slot.model
+        slot.model,
       );
     } catch {
       // Transient chief sync failure will retry on next reconnect
@@ -708,13 +689,13 @@ export class PrismuxDaemon {
       this.readyInfo = {
         ...this.readyInfo,
         t3Connected: false,
-        coreConnected: false
+        coreConnected: false,
       };
     }
     if (!this.coreHandshakeWarningLogged) {
       this.coreHandshakeWarningLogged = true;
       console.warn(
-        `[prismux-daemon] Stopping Core RPC reconnect loop after HTTP ${error.statusCode} handshake rejection: ${error.message}`
+        `[prismux-daemon] Stopping Core RPC reconnect loop after HTTP ${error.statusCode} handshake rejection: ${error.message}`,
       );
     }
   }
@@ -736,7 +717,7 @@ export class PrismuxDaemon {
         this.readyInfo = {
           ...this.readyInfo,
           t3Connected: connected,
-          coreConnected: connected
+          coreConnected: connected,
         };
       }
       if (connected && !this.coreConnectStopped) {
@@ -751,8 +732,7 @@ export class PrismuxDaemon {
       if (this.coreConnectStopped || client.isConnected()) {
         return;
       }
-      const delayMs =
-        backoffDelays[Math.min(attempt, backoffDelays.length - 1)] ?? 5_000;
+      const delayMs = backoffDelays[Math.min(attempt, backoffDelays.length - 1)] ?? 5_000;
       attempt += 1;
       this.coreConnectRetryTimer = setTimeout(() => {
         this.coreConnectRetryTimer = undefined;
@@ -775,7 +755,7 @@ export class PrismuxDaemon {
           this.readyInfo = {
             ...this.readyInfo,
             t3Connected: true,
-            coreConnected: true
+            coreConnected: true,
           };
         }
         await this.tryEnsureChiefThread(slot);
@@ -837,7 +817,7 @@ export class PrismuxDaemon {
             initialAttempt,
             new Promise<void>((resolveWait) => {
               initialTimer = setTimeout(resolveWait, 350);
-            })
+            }),
           ]);
         } finally {
           initialRaceSettled = true;
@@ -857,7 +837,7 @@ export class PrismuxDaemon {
               this.readyInfo = {
                 ...this.readyInfo,
                 t3Connected: connected,
-                coreConnected: connected
+                coreConnected: connected,
               };
             }
             if (connected && !this.coreConnectStopped) {
@@ -879,7 +859,7 @@ export class PrismuxDaemon {
         coreConnected: connected,
         headless: this.options.headless,
         dataDir: this.options.dataDir,
-        chiefThreadId: slot.threadId
+        chiefThreadId: slot.threadId,
       };
 
       this.readyInfo = info;
