@@ -46,11 +46,14 @@ import {
   ArchiveIcon,
   ArrowRightLeftIcon,
   CheckIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
   CircleAlertIcon,
   CircleCheckIcon,
   CircleDashedIcon,
   CircleDotDashedIcon,
   ClockIcon,
+  CornerDownRightIcon,
   FolderGit2Icon,
   GitBranchIcon,
   MessageCircleQuestionIcon,
@@ -156,6 +159,7 @@ import {
   resolveSidebarModelShortName,
   type SidebarThreadSplitDragPayload,
 } from "./sidebarWorkspaceGrouping";
+import { DelegatedSubthreadTree } from "./DelegatedSubthreadTree";
 
 // The fields thread rows show. Provider status pushes refresh `checkedAt`,
 // status and auth on every provider; leaving those out keeps each
@@ -801,6 +805,12 @@ export type SidebarThreadRowProps = {
   onUnpin: (threadRef: ScopedThreadRef) => void;
   onAcknowledgeWoke: (threadRef: ScopedThreadRef, visitedAt: string) => void;
   onFileDropThreads?: ((threadRef: ScopedThreadRef, files: File[]) => void) | undefined;
+  delegatedChildren?: readonly SidebarThreadSummary[] | undefined;
+  delegatedTreeExpanded?: boolean | undefined;
+  delegatedTreeHasRunning?: boolean | undefined;
+  activeDelegatedChildKey?: string | null | undefined;
+  localLastVisitedAtById?: Readonly<Record<string, string | undefined>> | undefined;
+  onToggleDelegatedTree?: ((parentKey: string, hasRunning: boolean) => void) | undefined;
 };
 
 // Mounted only while renaming, so each rename starts uncommitted.
@@ -1587,6 +1597,78 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     </button>
   ) : null;
 
+  const delegatedChildren = props.delegatedChildren;
+  const delegatedCount = delegatedChildren?.length ?? 0;
+  const delegatedExpanded = Boolean(props.delegatedTreeExpanded);
+  const delegatedHasRunning = Boolean(props.delegatedTreeHasRunning);
+  const delegatedTreeBadge =
+    delegatedCount > 0 ? (
+      <button
+        type="button"
+        data-testid="sidebar-delegated-tree-toggle"
+        data-delegated-expanded={delegatedExpanded ? "true" : "false"}
+        data-delegated-running={delegatedHasRunning ? "1" : "0"}
+        aria-expanded={delegatedExpanded}
+        aria-label={
+          delegatedExpanded
+            ? gt(
+                "{count, plural, one {Collapse {count} delegated agent} other {Collapse {count} delegated agents}}",
+                { count: delegatedCount },
+              )
+            : gt(
+                "{count, plural, one {Expand {count} delegated agent} other {Expand {count} delegated agents}}",
+                { count: delegatedCount },
+              )
+        }
+        onPointerDown={(event) => event.stopPropagation()}
+        onKeyDown={stopActivationKeyPropagation}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          props.onToggleDelegatedTree?.(threadKey, delegatedHasRunning);
+        }}
+        className={cn(
+          "inline-flex h-4 shrink-0 cursor-pointer items-center gap-0.5 rounded px-1 font-mono text-3xs leading-none font-medium tabular-nums outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
+          delegatedHasRunning
+            ? "bg-info/15 text-info-foreground ring-1 ring-inset ring-info/35 hover:bg-info/24"
+            : "bg-sidebar-foreground/[0.07] text-sidebar-muted-foreground hover:bg-sidebar-foreground/[0.14] hover:text-sidebar-foreground",
+        )}
+      >
+        <CornerDownRightIcon aria-hidden className="size-2.5 shrink-0 opacity-80" />
+        <span>{delegatedCount}</span>
+        {delegatedExpanded ? (
+          <ChevronDownIcon aria-hidden className="size-2.5 shrink-0 opacity-75" />
+        ) : (
+          <ChevronRightIcon aria-hidden className="size-2.5 shrink-0 opacity-75" />
+        )}
+      </button>
+    ) : null;
+
+  const delegatedTreeNode =
+    delegatedChildren !== undefined && delegatedChildren.length > 0 && delegatedExpanded ? (
+      <DelegatedSubthreadTree
+        parentKey={threadKey}
+        childThreads={delegatedChildren}
+        activeThreadKey={props.activeDelegatedChildKey ?? null}
+        inWorkspaceCard={props.inWorkspaceCard}
+        indentClassName={
+          variant === "folder" || variant === "folder-multiline"
+            ? "ps-9 pr-1"
+            : variant === "card"
+              ? "pl-3 pr-1 pt-0.5"
+              : undefined
+        }
+        providerEntryByInstanceId={props.providerEntryByInstanceId}
+        localLastVisitedAtById={props.localLastVisitedAtById}
+        canOperateEnvironment={canOperateThread}
+        onSelectChild={onThreadClick}
+        onActivateChild={onThreadActivate}
+        onContextMenuChild={onContextMenu}
+        onArchiveChild={onArchive}
+        onDeleteChild={onDelete}
+      />
+    ) : null;
+
   const diff = latestRunDiff(thread);
   // Only the trailing icons would remain, so the row moves them to the title line instead.
   const metaLineEmpty =
@@ -1654,7 +1736,8 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
         {...sortableRootProps}
         {...(fileDropHandlers ?? {})}
         className={cn(
-          "list-none [content-visibility:auto] [contain-intrinsic-size:auto_25px]",
+          "list-none",
+          delegatedTreeNode === null && "[content-visibility:auto] [contain-intrinsic-size:auto_25px]",
           sortable?.isDragging && "relative z-20",
         )}
       >
@@ -1747,6 +1830,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                 ) : null}
               </span>
             )}
+            {delegatedTreeBadge}
             {pinIndicator}
             {isRegeneratingTitle ? (
               <span role="status" className="sr-only">
@@ -1858,6 +1942,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
           </TooltipTrigger>
           {detailsTooltip}
         </Tooltip>
+        {delegatedTreeNode}
       </li>
     );
   }
@@ -1871,8 +1956,9 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
         {...sortableRootProps}
         {...(fileDropHandlers ?? {})}
         className={cn(
-          "list-none [content-visibility:auto] [contain-intrinsic-size:auto_--spacing(9)]",
-          metaLine !== null && multiline && "[contain-intrinsic-size:auto_--spacing(13.5)]",
+          "list-none",
+          delegatedTreeNode === null && "[content-visibility:auto] [contain-intrinsic-size:auto_--spacing(9)]",
+          delegatedTreeNode === null && metaLine !== null && multiline && "[contain-intrinsic-size:auto_--spacing(13.5)]",
           sortable?.isDragging && "relative z-20",
         )}
       >
@@ -1926,6 +2012,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               )}
               {draftIndicator}
               {title}
+              {delegatedTreeBadge}
               {multiline ? titleLineIcons : null}
               {pinIndicator}
               {multiline ? null : portMicroBadge}
@@ -2078,6 +2165,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
           </TooltipTrigger>
           {detailsTooltip}
         </Tooltip>
+        {delegatedTreeNode}
       </li>
     );
   }
@@ -2090,8 +2178,9 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
       // The hints are the rendered heights inside py-1. Revealing the open thread measures rows
       // that have not rendered yet, so a hint off by a pixel lands it a pixel short per row above.
       className={cn(
-        "list-none py-1 [content-visibility:auto] [contain-intrinsic-size:auto_82px]",
-        metaLineEmpty && "[contain-intrinsic-size:auto_64px]",
+        "list-none py-1",
+        delegatedTreeNode === null && "[content-visibility:auto] [contain-intrinsic-size:auto_82px]",
+        delegatedTreeNode === null && metaLineEmpty && "[contain-intrinsic-size:auto_64px]",
         sortable?.isDragging && "relative z-20",
       )}
     >
@@ -2291,6 +2380,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
             </div>
             <div className="mt-1 flex min-w-0 items-center gap-1.5">
               {title}
+              {delegatedTreeBadge}
               {isRegeneratingTitle ? (
                 <span role="status" className="sr-only">
                   <T>Regenerating title</T>
@@ -2303,6 +2393,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
         </TooltipTrigger>
         {detailsTooltip}
       </Tooltip>
+      {delegatedTreeNode}
     </li>
   );
 });

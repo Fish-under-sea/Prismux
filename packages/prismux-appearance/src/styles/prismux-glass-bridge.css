@@ -2498,7 +2498,7 @@ html[data-pmx-glass='1'][data-theme-id] [data-pmx-composer-layout='agy'] {
 }
 
 /* Suppress duplicate T3 ComposerSurface pseudo layers both inside AND wrapping AGY dual-layer shell */
-html[data-pmx-glass='1'] [data-pmx-composer-layout='agy']::before,
+html[data-pmx-glass='1'] [data-pmx-composer-layout='agy']:not([data-pmx-composer-active='1'])::before,
 html[data-pmx-glass='1'] [data-pmx-composer-layout='agy']::after,
 html[data-pmx-glass='1'] [data-pmx-composer-layout='agy'] [data-slot='composer-host']::before,
 html[data-pmx-glass='1'] [data-slot='composer-shell']:has([data-pmx-composer-layout='agy'])::before,
@@ -2953,6 +2953,88 @@ html[data-pmx-glass='1'] [data-pmx-sidebar-peek='1'] [data-sidebar-card='1'][dat
   animation: pmx-agent-logo-breathe 2.2s ease-in-out infinite;
 }
 
+/* Active composer outer-ring open-gap flowing RGB light-arc (Light, Dark, and all 6 Liquid Glass modes):
+ * ~60% glowing comet arc with bright leading head + smooth fading tail, leaving a crisp ~40% open
+ * transparent gap between head and tail (0deg..135deg) so it never forms a closed 360° wrap. */
+[data-pmx-composer-layout='agy'][data-pmx-composer-active='1'] {
+  position: relative;
+  box-shadow:
+    0 10px 28px -12px rgba(15, 23, 42, 0.14),
+    0 0 18px -4px rgba(56, 189, 248, 0.24),
+    0 0 12px -4px rgba(192, 132, 252, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.92);
+}
+
+html.dark [data-pmx-composer-layout='agy'][data-pmx-composer-active='1'],
+html[data-pmx-theme='dark'] [data-pmx-composer-layout='agy'][data-pmx-composer-active='1'] {
+  box-shadow:
+    0 16px 38px -16px rgba(0, 0, 0, 0.56),
+    0 0 22px -4px rgba(56, 189, 248, 0.28),
+    0 0 14px -4px rgba(192, 132, 252, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+html[data-pmx-glass='1'] [data-pmx-composer-layout='agy'][data-pmx-composer-active='1'],
+html[data-pmx-glass='1'][data-theme-id] [data-pmx-composer-layout='agy'][data-pmx-composer-active='1'] {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, calc(0.24 * var(--pmx-fresnel-strength, 1))),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2),
+    0 18px 44px -18px rgba(0, 0, 0, 0.44),
+    0 0 22px -4px rgba(56, 189, 248, 0.3),
+    0 0 14px -4px rgba(192, 132, 252, 0.24) !important;
+}
+
+[data-pmx-composer-layout='agy'][data-pmx-composer-active='1']::before,
+html[data-pmx-glass='1'] [data-pmx-composer-layout='agy'][data-pmx-composer-active='1']::before,
+html[data-pmx-glass='1'][data-theme-id] [data-pmx-composer-layout='agy'][data-pmx-composer-active='1']::before {
+  content: '' !important;
+  display: block !important;
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1.5px;
+  pointer-events: none;
+  z-index: 20;
+  background: conic-gradient(
+    from var(--pmx-rgb-border-angle),
+    transparent 0deg,
+    transparent 135deg,
+    rgba(255, 59, 127, 0.18) 155deg,
+    #ff3b7f 185deg,
+    #ff9f1c 220deg,
+    #34d399 258deg,
+    #38bdf8 295deg,
+    #818cf8 328deg,
+    #c084fc 348deg,
+    #ffffff 356deg,
+    transparent 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  animation: pmx-rgb-border-spin 3.2s linear infinite;
+}
+
+/* Sidebar level-2 delegated agent file-tree SVG RGB branch energy conduction */
+@keyframes pmx-tree-rgb-flow {
+  from {
+    stroke-dashoffset: 36;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+[data-pmx-tree-rgb-beam='1'] {
+  stroke-dasharray: 20 16;
+  animation: pmx-tree-rgb-flow 1.25s linear infinite;
+}
+
 /* AGY flat large-radius user message capsule bubbles: distinct solid & Light/Dark Liquid Glass */
 html:not(.dark):not([data-pmx-glass='1'])
   [data-user-message-bubble][data-user-message-bubble-surface='1'],
@@ -3286,6 +3368,20 @@ html:not(.dark)[data-pmx-glass='1'][data-theme-id]
     animation: none !important;
   }
 
+  [data-pmx-composer-layout='agy'][data-pmx-composer-active='1']::before,
+  html[data-pmx-glass='1'] [data-pmx-composer-layout='agy'][data-pmx-composer-active='1']::before,
+  html[data-pmx-glass='1'][data-theme-id] [data-pmx-composer-layout='agy'][data-pmx-composer-active='1']::before {
+    --pmx-rgb-border-angle: 225deg;
+    animation: none !important;
+    opacity: 0.78;
+  }
+
+  [data-pmx-tree-rgb-beam='1'] {
+    animation: none !important;
+    stroke-dasharray: none !important;
+    opacity: 0.85;
+  }
+
   [data-agent-logo-breathing='1'] {
     animation: none !important;
     opacity: 1;
@@ -3458,6 +3554,20 @@ html[data-pmx-glass='1'][data-pmx-glass-base]:not([data-pmx-glass-base='pure']):
     inset 0 1px 0 var(--pmx-glass-base-rim, rgba(255, 255, 255, 0.22)),
     0 0 24px -8px var(--pmx-glass-base-glow, transparent),
     0 18px 44px -18px rgba(0, 0, 0, 0.42) !important;
+}
+
+html[data-pmx-glass='1'][data-pmx-glass-base]:not([data-pmx-glass-base='pure']):not(
+    [data-pmx-gpu='0']
+  ):not([data-prismux-gpu='0']):not([data-pmx-reduced-transparency='1']):not(
+    [data-pmx-zone-composer-mode='solid']
+  )
+  [data-pmx-composer-layout='agy'][data-pmx-composer-active='1'] {
+  box-shadow:
+    inset 0 1px 0 var(--pmx-glass-base-rim, rgba(255, 255, 255, 0.24)),
+    0 0 24px -8px var(--pmx-glass-base-glow, transparent),
+    0 0 22px -4px rgba(56, 189, 248, 0.3),
+    0 0 14px -4px rgba(192, 132, 252, 0.24),
+    0 18px 44px -18px rgba(0, 0, 0, 0.44) !important;
 }
 
 html[data-pmx-glass='1'][data-pmx-glass-base]:not([data-pmx-glass-base='pure']):not(
@@ -4718,12 +4828,14 @@ html[data-pmx-glass='1']:is(
   }
 
   [data-sidebar-card='1'][data-sidebar-agent-active='1'],
-  [data-sidebar-row][data-sidebar-agent-active='1'] {
+  [data-sidebar-row][data-sidebar-agent-active='1'],
+  [data-pmx-composer-layout='agy'][data-pmx-composer-active='1'] {
     border-color: Highlight !important;
   }
 
   [data-sidebar-card='1'][data-sidebar-agent-active='1']::before,
   [data-sidebar-row][data-sidebar-agent-active='1']::before,
+  [data-pmx-composer-layout='agy'][data-pmx-composer-active='1']::before,
   [data-user-message-bubble][data-user-message-bubble-surface='1']::before,
   [data-pmx-glass-zone='userBubble']::before,
   html[data-pmx-glass='1'] body::before,
@@ -4751,5 +4863,10 @@ html[data-pmx-glass='1']:is(
 
   [data-pmx-chat-width-handle]::after {
     background: Highlight !important;
+  }
+
+  [data-pmx-tree-rgb-beam='1'],
+  [data-pmx-tree-rgb-base='1'] {
+    stroke: Highlight !important;
   }
 }

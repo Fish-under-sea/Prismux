@@ -3955,3 +3955,66 @@ describe('RC.3 Liquid Glass Theme Substrates (`GlassThemeBase` 6-substrate syste
     assert.ok(cardsCss.includes('.pmx-theme-base-swatch'));
   });
 });
+
+describe('Composer outer-ring open-gap flowing RGB light-arc & sidebar tree RGB branch conduction', () => {
+  it('defines open-gap (~40% transparent gap) RGB conic-gradient on [data-pmx-composer-layout="agy"][data-pmx-composer-active="1"] with Light/Dark/6-Glass, reduced-motion, and forced-colors support', () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const bridgeCss = fs.readFileSync(
+      path.resolve(here, '../styles/prismux-glass-bridge.css'),
+      'utf8',
+    );
+
+    // 1. Glass pseudo-layer suppression must exempt active composer ::before so RGB light-arc renders in Liquid Glass.
+    assert.match(
+      bridgeCss,
+      /html\[data-pmx-glass='1'\]\s+\[data-pmx-composer-layout='agy'\]:not\(\[data-pmx-composer-active='1'\]\)::before/,
+    );
+
+    // 2. Open-gap RGB comet arc stops (~40% transparent 0deg..135deg gap + ~60% glowing comet arc ending at white head -> transparent 360deg).
+    assert.match(
+      bridgeCss,
+      /\[data-pmx-composer-layout='agy'\]\[data-pmx-composer-active='1'\]::before[\s\S]*?content:\s*''\s*!important;[\s\S]*?display:\s*block\s*!important;[\s\S]*?border-radius:\s*inherit;[\s\S]*?padding:\s*1\.5px;[\s\S]*?pointer-events:\s*none;[\s\S]*?conic-gradient\(\s*from var\(--pmx-rgb-border-angle\),\s*transparent 0deg,\s*transparent 135deg,\s*rgba\(255,\s*59,\s*127,\s*0\.18\) 155deg,\s*#ff3b7f 185deg,\s*#ff9f1c 220deg,\s*#34d399 258deg,\s*#38bdf8 295deg,\s*#818cf8 328deg,\s*#c084fc 348deg,\s*#ffffff 356deg,\s*transparent 360deg\s*\)[\s\S]*?mask-composite:\s*exclude;[\s\S]*?animation:\s*pmx-rgb-border-spin 3\.2s linear infinite;/,
+    );
+
+    // 3. Ambient outer glow rules for Light, Dark, Liquid Glass, and all 5 patterned substrates.
+    assert.match(
+      bridgeCss,
+      /html\.dark \[data-pmx-composer-layout='agy'\]\[data-pmx-composer-active='1'\]/,
+    );
+    assert.match(
+      bridgeCss,
+      /html\[data-pmx-glass='1'\] \[data-pmx-composer-layout='agy'\]\[data-pmx-composer-active='1'\]/,
+    );
+    assert.match(
+      bridgeCss,
+      /\[data-pmx-glass-base\]:not\(\[data-pmx-glass-base='pure'\]\)[\s\S]*?\[data-pmx-composer-layout='agy'\]\[data-pmx-composer-active='1'\]/,
+    );
+
+    // 4. Sidebar level-2 delegated tree RGB branch beam keyframes + selector.
+    assert.match(bridgeCss, /@keyframes pmx-tree-rgb-flow\b/);
+    assert.match(
+      bridgeCss,
+      /\[data-pmx-tree-rgb-beam='1'\]\s*\{[^}]*stroke-dasharray:[^}]*animation:\s*pmx-tree-rgb-flow/s,
+    );
+
+    // 5. Reduced-motion calm fallback stops both composer spin and tree beam flow.
+    assert.match(
+      bridgeCss,
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\[data-pmx-composer-layout='agy'\]\[data-pmx-composer-active='1'\]::before[\s\S]*?animation:\s*none\s*!important;[\s\S]*?\[data-pmx-tree-rgb-beam='1'\][\s\S]*?animation:\s*none\s*!important;/,
+    );
+
+    // 6. Forced-colors fallback uses Highlight and hides ::before gradient.
+    const forcedColorsSection = bridgeCss.slice(bridgeCss.indexOf('@media (forced-colors: active)'));
+    assert.ok(forcedColorsSection.includes("[data-pmx-composer-layout='agy'][data-pmx-composer-active='1']"));
+    assert.ok(forcedColorsSection.includes("[data-pmx-composer-layout='agy'][data-pmx-composer-active='1']::before"));
+    assert.ok(forcedColorsSection.includes("[data-pmx-tree-rgb-beam='1']"));
+
+    // 7. Braces remain balanced and zero prefers-color-scheme leaks.
+    const noComments = bridgeCss.replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.equal(noComments.includes('prefers-color-scheme'), false);
+    assert.equal(
+      (noComments.match(/\{/g) ?? []).length,
+      (noComments.match(/\}/g) ?? []).length,
+    );
+  });
+});

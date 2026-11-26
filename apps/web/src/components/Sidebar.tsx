@@ -12,7 +12,7 @@ import { discardComposerDraft } from "../lib/discardComposerDraft";
 import { requestCustomSnooze } from "./CustomSnoozeDialog";
 import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
-import { Atom } from "effect/reactivity";
+import { type AsyncResult, Atom } from "effect/reactivity";
 import * as Schema from "effect/Schema";
 import {
   DndContext,
@@ -299,6 +299,15 @@ import {
   type SidebarProviderEntry,
   type SidebarSweepAction,
 } from "./sidebar/SidebarThreadRow";
+import {
+  collectDelegatedChildThreadRefs,
+  groupDelegatedChildThreadsByParent,
+  isDelegatedChildThreadActive,
+  reconcileDelegatedTreeExpansionMap,
+  resolveDelegatedTreeExpanded,
+  toggleDelegatedTreeExpansion,
+  type DelegatedTreeExpansionEntry,
+} from "./sidebar/delegatedThreadTree.logic";
 import {
   draftTerminalLabel,
   SidebarDraftBlock,
@@ -1171,6 +1180,43 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     orcaPrefs,
     localLastVisitedAtById,
   );
+  const delegatedChildrenByParent = groupDelegatedChildThreadsByParent(listedThreads);
+  const delegatedChildByKey = (() => {
+    const map = new Map<string, EnvironmentThreadShell>();
+    for (const children of delegatedChildrenByParent.values()) {
+      for (const child of children) {
+        map.set(threadShellKey(child), child);
+      }
+    }
+    return map;
+  })();
+  const delegatedRunningByParent = (() => {
+    const map = new Map<string, boolean>();
+    for (const [parentKey, children] of delegatedChildrenByParent) {
+      map.set(
+        parentKey,
+        children.some((child) =>
+          isDelegatedChildThreadActive(child, localLastVisitedAtById[threadShellKey(child)]),
+        ),
+      );
+    }
+    return map;
+  })();
+  const [delegatedExpansionByParent, setDelegatedExpansionByParent] = useState<
+    ReadonlyMap<string, DelegatedTreeExpansionEntry>
+  >(() => new Map());
+  const reconciledDelegatedExpansion = reconcileDelegatedTreeExpansionMap(
+    delegatedExpansionByParent,
+    delegatedRunningByParent,
+  );
+  if (reconciledDelegatedExpansion !== delegatedExpansionByParent) {
+    setDelegatedExpansionByParent(reconciledDelegatedExpansion);
+  }
+  const handleToggleDelegatedTree = useStableCallback((parentKey: string, hasRunning: boolean) => {
+    setDelegatedExpansionByParent((current) =>
+      toggleDelegatedTreeExpansion(current, parentKey, hasRunning),
+    );
+  });
   const routeRowThreadKey =
     routeThreadRef === null
       ? null
@@ -1372,6 +1418,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const orderedThreadKeysRef = useRef(orderedThreadKeys);
   // Read changing maps/sets through refs so streamed events preserve row callbacks.
   const threadByKeyRef = useRef(threadByKey);
+  const delegatedChildrenByParentRef = useRef(delegatedChildrenByParent);
+  const delegatedChildByKeyRef = useRef(delegatedChildByKey);
   const settledThreadKeysRef = useRef(settledThreadKeys);
   const snoozedThreadKeysRef = useRef(snoozedThreadKeys);
 
@@ -1564,6 +1612,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       } else {
         stayOnRouteThread(threadKey);
       }
+      const delegatedChildRefs = collectDelegatedChildThreadRefs(
+        threadKey,
+        delegatedChildrenByParentRef.current,
+      );
+      for (const childRef of delegatedChildRefs) {
+        const child =
+          delegatedChildByKeyRef.current.get(scopedThreadKey(childRef)) ??
+          readThreadShell(childRef);
+        if (!child || child.settledOverride === "settled") continue;
+        await settleThread(childRef);
+      }
     })();
   };
   // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- registers this sidebar's settle handler in the module-level settleAndAdvance registry
@@ -1588,6 +1647,20 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             description: thrownErrorMessage(error, m) ?? gt("An error occurred."),
           }),
         );
+        return;
+      }
+      if (result._tag === "Success") {
+        const delegatedChildRefs = collectDelegatedChildThreadRefs(
+          scopedThreadKey(threadRef),
+          delegatedChildrenByParentRef.current,
+        );
+        for (const childRef of delegatedChildRefs) {
+          const child =
+            delegatedChildByKeyRef.current.get(scopedThreadKey(childRef)) ??
+            readThreadShell(childRef);
+          if (!child || child.settledOverride !== "settled") continue;
+          await unsettleThread(childRef);
+        }
       }
     })();
   };
@@ -1722,6 +1795,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     projectGroupsRef.current = projectGroups;
     orderedThreadKeysRef.current = orderedThreadKeys;
     threadByKeyRef.current = threadByKey;
+    delegatedChildrenByParentRef.current = delegatedChildrenByParent;
+    delegatedChildByKeyRef.current = delegatedChildByKey;
     settledThreadKeysRef.current = settledThreadKeys;
     snoozedThreadKeysRef.current = snoozedThreadKeys;
     sectionByThreadKeyRef.current = sectionByThreadKey;
@@ -2429,24 +2504,46 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         );
         if (confirmed._tag === "Failure" || !confirmed.value) return;
       }
+      const cascadeEntries: Array<{ readonly threadKey: string; readonly ref: ScopedThreadRef }> =
+        [];
+      const seenDeleteKeys = new Set<string>();
+      for (const threadKey of threadKeys) {
+        for (const childRef of collectDelegatedChildThreadRefs(
+          threadKey,
+          delegatedChildrenByParentRef.current,
+        )) {
+          const childKey = scopedThreadKey(childRef);
+          if (seenDeleteKeys.has(childKey)) continue;
+          seenDeleteKeys.add(childKey);
+          cascadeEntries.push({ threadKey: childKey, ref: childRef });
+        }
+      }
+      for (const threadKey of threadKeys) {
+        if (seenDeleteKeys.has(threadKey)) continue;
+        const thread = threadByKeyRef.current.get(threadKey);
+        if (!thread) continue;
+        seenDeleteKeys.add(threadKey);
+        cascadeEntries.push({
+          threadKey,
+          ref: scopeThreadRef(thread.environmentId, thread.id),
+        });
+      }
       if (
         !checkThreadOperations(
-          threadKeys.flatMap((threadKey) => {
-            const thread = threadByKeyRef.current.get(threadKey);
+          cascadeEntries.flatMap(({ threadKey }) => {
+            const thread =
+              threadByKeyRef.current.get(threadKey) ?? delegatedChildByKeyRef.current.get(threadKey);
             return thread ? [thread] : [];
           }),
         )
       )
         return;
       const { deletedThreadKeys, firstFailure } = await deleteSelectedThreadEntries({
-        entries: threadKeys.map((threadKey) => ({ threadKey })),
-        delete: async ({ threadKey }, deletedThreadKeys) => {
-          const thread = threadByKeyRef.current.get(threadKey);
-          if (!thread) return null;
-          return deleteThread(scopeThreadRef(thread.environmentId, thread.id), {
+        entries: cascadeEntries,
+        delete: async ({ ref }, deletedThreadKeys) =>
+          deleteThread(ref, {
             deletedThreadKeys,
-          });
-        },
+          }),
       });
       if (firstFailure !== null) {
         const firstError = squashAtomCommandFailure(firstFailure);
@@ -2519,64 +2616,117 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     },
   );
 
-  const attemptArchive = useStableCallback((threadRef: ScopedThreadRef) => {
-    void (async () => {
-      const api = readLocalApi();
-      const threadKey = scopedThreadKey(threadRef);
-      const thread =
-        threadByKeyRef.current.get(threadKey) ??
-        searchableThreads.find((candidate) => threadShellKey(candidate) === threadKey);
-      if (!thread) return;
-      if (!checkThreadOperations([thread])) return;
-      if (!threadRuntimeCanArchive(thread.runtime)) return;
-      if (confirmThreadArchive && api) {
-        const confirmed = await settlePromise(() =>
-          api.dialogs.confirm(gt('Archive thread "{title}"?', { title: thread.title })),
-        );
-        if (confirmed._tag === "Failure" || !confirmed.value) return;
+  const findSidebarThreadByKey = (threadKey: string): EnvironmentThreadShell | undefined =>
+    threadByKeyRef.current.get(threadKey) ??
+    delegatedChildByKeyRef.current.get(threadKey) ??
+    searchableThreads.find((candidate) => threadShellKey(candidate) === threadKey);
+
+  const performArchiveThread = useStableCallback(async (threadRef: ScopedThreadRef) => {
+    const api = readLocalApi();
+    const threadKey = scopedThreadKey(threadRef);
+    const thread = findSidebarThreadByKey(threadKey);
+    if (!thread) return;
+    if (!threadRuntimeCanArchive(thread.runtime)) return;
+    const delegatedChildRefs = collectDelegatedChildThreadRefs(
+      threadKey,
+      delegatedChildrenByParentRef.current,
+    );
+    const archivableChildEntries = delegatedChildRefs.flatMap((childRef) => {
+      const child =
+        delegatedChildByKeyRef.current.get(scopedThreadKey(childRef)) ?? readThreadShell(childRef);
+      return child && threadRuntimeCanArchive(child.runtime) ? [{ ref: childRef, thread: child }] : [];
+    });
+    if (!checkThreadOperations([thread, ...archivableChildEntries.map((entry) => entry.thread)])) {
+      return;
+    }
+    if (confirmThreadArchive && api) {
+      const confirmLines = [
+        gt('Archive thread "{title}"?', { title: thread.title }),
+        ...(archivableChildEntries.length > 0
+          ? [
+              gt(
+                "{count, plural, one {Also archives {count} delegated subagent thread.} other {Also archives {count} delegated subagent threads.}}",
+                { count: archivableChildEntries.length },
+              ),
+            ]
+          : []),
+      ];
+      const confirmed = await settlePromise(() => api.dialogs.confirm(confirmLines.join("\n")));
+      if (confirmed._tag === "Failure" || !confirmed.value) return;
+    }
+    let firstChildFailure: AsyncResult.Failure<unknown, unknown> | null = null;
+    for (const childEntry of archivableChildEntries) {
+      const childResult = await archiveThread(childEntry.ref);
+      if (childResult._tag === "Failure") {
+        if (isAtomCommandInterrupted(childResult)) return;
+        firstChildFailure ??= childResult;
       }
-      let didArchive = false;
-      const result = await archiveThread(threadRef, {
-        onArchived: () => {
-          didArchive = true;
-        },
-      });
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: didArchive
-              ? gt("Thread archived, but navigation failed")
-              : gt("Failed to archive thread"),
-            description: thrownErrorMessage(error, m) ?? gt("An error occurred."),
-          }),
-        );
-      }
-    })();
+    }
+    let didArchive = false;
+    const result = await archiveThread(threadRef, {
+      onArchived: () => {
+        didArchive = true;
+      },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: didArchive
+            ? gt("Thread archived, but navigation failed")
+            : gt("Failed to archive thread"),
+          description: thrownErrorMessage(error, m) ?? gt("An error occurred."),
+        }),
+      );
+      return;
+    }
+    if (firstChildFailure !== null) {
+      const error = squashAtomCommandFailure(firstChildFailure);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: gt("Failed to archive delegated subagent thread"),
+          description: thrownErrorMessage(error, m) ?? gt("An error occurred."),
+        }),
+      );
+    }
   });
 
-  const attemptDelete = useStableCallback((threadRef: ScopedThreadRef) => {
-    void (async () => {
-      const api = readLocalApi();
-      const threadKey = scopedThreadKey(threadRef);
-      const thread =
-        threadByKeyRef.current.get(threadKey) ??
-        searchableThreads.find((candidate) => threadShellKey(candidate) === threadKey);
-      if (!thread) return;
-      if (!checkThreadOperations([thread])) return;
-      if (confirmThreadDelete && api) {
-        const confirmed = await settlePromise(() =>
-          api.dialogs.confirm(
-            [
-              gt('Delete thread "{title}"?', { title: thread.title }),
-              gt("This permanently clears conversation history for this thread."),
-            ].join("\n"),
-            { variant: "destructive" },
-          ),
-        );
-        if (confirmed._tag === "Failure" || !confirmed.value) return;
-      }
+  const performDeleteThread = useStableCallback(async (threadRef: ScopedThreadRef) => {
+    const api = readLocalApi();
+    const threadKey = scopedThreadKey(threadRef);
+    const thread = findSidebarThreadByKey(threadKey);
+    if (!thread) return;
+    const delegatedChildRefs = collectDelegatedChildThreadRefs(
+      threadKey,
+      delegatedChildrenByParentRef.current,
+    );
+    const delegatedChildThreads = delegatedChildRefs.flatMap((childRef) => {
+      const child =
+        delegatedChildByKeyRef.current.get(scopedThreadKey(childRef)) ?? readThreadShell(childRef);
+      return child ? [child] : [];
+    });
+    if (!checkThreadOperations([thread, ...delegatedChildThreads])) return;
+    if (confirmThreadDelete && api) {
+      const confirmLines = [
+        gt('Delete thread "{title}"?', { title: thread.title }),
+        gt("This permanently clears conversation history for this thread."),
+        ...(delegatedChildRefs.length > 0
+          ? [
+              gt(
+                "{count, plural, one {Also permanently deletes {count} delegated subagent thread.} other {Also permanently deletes {count} delegated subagent threads.}}",
+                { count: delegatedChildRefs.length },
+              ),
+            ]
+          : []),
+      ];
+      const confirmed = await settlePromise(() =>
+        api.dialogs.confirm(confirmLines.join("\n"), { variant: "destructive" }),
+      );
+      if (confirmed._tag === "Failure" || !confirmed.value) return;
+    }
+    if (delegatedChildRefs.length === 0) {
       const result = await deleteThread(threadRef);
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
@@ -2588,7 +2738,38 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           }),
         );
       }
-    })();
+      return;
+    }
+    // Delete delegated children before the parent so worktree orphan checks prompt once on the parent.
+    const cascadeEntries = [
+      ...delegatedChildRefs.map((ref) => ({ threadKey: scopedThreadKey(ref), ref })),
+      { threadKey, ref: threadRef },
+    ];
+    const { firstFailure } = await deleteSelectedThreadEntries({
+      entries: cascadeEntries,
+      delete: async ({ ref }, deletedThreadKeys) =>
+        deleteThread(ref, {
+          deletedThreadKeys,
+        }),
+    });
+    if (firstFailure !== null) {
+      const error = squashAtomCommandFailure(firstFailure);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: gt("Failed to delete thread"),
+          description: thrownErrorMessage(error, m) ?? gt("An error occurred."),
+        }),
+      );
+    }
+  });
+
+  const attemptArchive = useStableCallback((threadRef: ScopedThreadRef) => {
+    void performArchiveThread(threadRef);
+  });
+
+  const attemptDelete = useStableCallback((threadRef: ScopedThreadRef) => {
+    void performDeleteThread(threadRef);
   });
 
   const handleThreadContextMenu = useStableCallback(
@@ -2612,10 +2793,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           await handleMultiSelectContextMenu(position, source);
           return;
         }
-        // Search results also reach threads in collapsed shelves, which are not rendered rows.
-        const thread =
-          threadByKeyRef.current.get(threadKey) ??
-          searchableThreads.find((candidate) => threadShellKey(candidate) === threadKey);
+        // Search results also reach threads in collapsed shelves, and level-2 delegated children.
+        const thread = findSidebarThreadByKey(threadKey);
         if (!thread) return;
         const threadWorkspacePath =
           thread.worktreePath ??
@@ -2836,58 +3015,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             copyThreadIdToClipboard(thread.id, { threadId: thread.id });
             return;
           case "archive": {
-            if (confirmThreadArchive) {
-              const confirmed = await settlePromise(() =>
-                api.dialogs.confirm(gt('Archive thread "{title}"?', { title: thread.title })),
-              );
-              if (confirmed._tag === "Failure" || !confirmed.value) return;
-            }
-            let didArchive = false;
-            const result = await archiveThread(threadRef, {
-              onArchived: () => {
-                didArchive = true;
-              },
-            });
-            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-              const error = squashAtomCommandFailure(result);
-              toastManager.add(
-                stackedThreadToast({
-                  type: "error",
-                  title: didArchive
-                    ? gt("Thread archived, but navigation failed")
-                    : gt("Failed to archive thread"),
-                  description: thrownErrorMessage(error, m) ?? gt("An error occurred."),
-                }),
-              );
-              return;
-            }
+            await performArchiveThread(threadRef);
             return;
           }
           case "delete": {
-            if (confirmThreadDelete) {
-              const confirmed = await settlePromise(() =>
-                api.dialogs.confirm(
-                  [
-                    gt('Delete thread "{title}"?', { title: thread.title }),
-                    gt("This permanently clears conversation history for this thread."),
-                  ].join("\n"),
-                  { variant: "destructive" },
-                ),
-              );
-              if (confirmed._tag === "Failure" || !confirmed.value) return;
-            }
-            const result = await deleteThread(threadRef);
-            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-              const error = squashAtomCommandFailure(result);
-              toastManager.add(
-                stackedThreadToast({
-                  type: "error",
-                  title: gt("Failed to delete thread"),
-                  description: thrownErrorMessage(error, m) ?? gt("An error occurred."),
-                }),
-              );
-              return;
-            }
+            await performDeleteThread(threadRef);
             return;
           }
           default:
@@ -3575,12 +3707,20 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       const listRoot = threadListRef.current ?? sidebarContentRef.current;
       if (!listRoot) return;
       const rows = listRoot.querySelectorAll<HTMLElement>("[data-sidebar-row]");
+      let fallbackRow: HTMLElement | null = null;
       for (const row of rows) {
-        if (row.dataset.sidebarRow === routeRowThreadKey) {
+        if (routeThreadKey !== null && row.dataset.sidebarRow === routeThreadKey) {
           row.scrollIntoView({ block: "center", behavior: "smooth" });
           row.focus({ preventScroll: true });
-          break;
+          return;
         }
+        if (row.dataset.sidebarRow === routeRowThreadKey) {
+          fallbackRow = row;
+        }
+      }
+      if (fallbackRow) {
+        fallbackRow.scrollIntoView({ block: "center", behavior: "smooth" });
+        fallbackRow.focus({ preventScroll: true });
       }
     });
   });
@@ -3910,6 +4050,21 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             : isCard
                               ? "card"
                               : "slim";
+                        const delegatedChildren = delegatedChildrenByParent.get(threadKey);
+                        const delegatedTreeHasRunning =
+                          delegatedRunningByParent.get(threadKey) ?? false;
+                        const delegatedTreeExpanded =
+                          delegatedChildren !== undefined && delegatedChildren.length > 0
+                            ? resolveDelegatedTreeExpanded({
+                                hasRunningChild: delegatedTreeHasRunning,
+                                entry: reconciledDelegatedExpansion.get(threadKey),
+                              })
+                            : false;
+                        const isChildRouteActive =
+                          delegatedTreeExpanded &&
+                          delegatedChildren !== undefined &&
+                          routeThreadKey !== null &&
+                          delegatedChildren.some((child) => threadShellKey(child) === routeThreadKey);
                         return (
                           <SortableThreadRow
                             key={threadKey}
@@ -3964,11 +4119,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 : null
                             }
                             wokeAt={threadWokeAt(thread, { now: snoozeNow })}
-                            isActive={routeRowThreadKey === threadKey}
+                            isActive={routeRowThreadKey === threadKey && !isChildRouteActive}
                             revealRef={
                               routeRowThreadKey === threadKey ? revealActiveRow : undefined
                             }
                             isRouteThread={routeThreadKey === threadKey}
+                            delegatedChildren={delegatedChildren}
+                            delegatedTreeExpanded={delegatedTreeExpanded}
+                            delegatedTreeHasRunning={delegatedTreeHasRunning}
+                            activeDelegatedChildKey={routeThreadKey}
+                            localLastVisitedAtById={localLastVisitedAtById}
+                            onToggleDelegatedTree={handleToggleDelegatedTree}
                             readOpensPullRequestsInRightPanel={readOpensPullRequestsInRightPanel}
                             jumpLabel={
                               showJumpHints ? (jumpLabelByKey.get(threadKey) ?? null) : null
