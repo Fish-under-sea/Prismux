@@ -21,9 +21,15 @@ import {
   clearPublishedComposerContextWindows,
   COMPOSER_INLINE_TELEMETRY_MIN_WIDTH_PX,
   ComposerLiveTelemetryStripView,
+  computeContextVialTicks,
+  deletePublishedComposerContextWindow,
   formatCompactTelemetryTokens,
+  formatContextBreakdownTokens,
   formatTelemetryPopoverTps,
   formatTelemetryStripTps,
+  getPublishedComposerContextWindow,
+  getPublishedComposerContextWindowCount,
+  MAX_PUBLISHED_CONTEXT_WINDOWS,
   publishComposerContextWindow,
   resolveComposerTelemetryDisplay,
   resolveContextBarTone,
@@ -37,16 +43,21 @@ import {
 import { getSessionTelemetryCopy } from "./sessionTelemetry.copy";
 import {
   allocateRoundedPercentages,
+  apportionTokensLargestRemainder,
   clearSessionTelemetryDetails,
   computeDonutSegments,
+  deriveSessionContextBreakdown,
   deriveSessionTelemetryDetail,
   extractTurnUsageDetail,
   formatCompactPopoverTokens,
   formatIntegerTokens,
+  getPublishedSessionDetailCount,
+  getSessionTelemetryDetail,
+  MAX_PUBLISHED_SESSION_DETAILS,
   mergeTimeIntervals,
   publishSessionTelemetryDetail,
-  getSessionTelemetryDetail,
   resolveGlobalTodayAndMonthTokens,
+  retainSessionTelemetryDetailOwner,
   type SessionProjectionLike,
 } from "./sessionTelemetry.logic";
 import {
@@ -63,7 +74,8 @@ function makeProviderTurn(
     id: "turn-1" as OrchestrationV2ProviderTurn["id"],
     status: "completed",
     startedAt: "2026-11-23T12:00:00.000Z" as unknown as OrchestrationV2ProviderTurn["startedAt"],
-    completedAt: "2026-11-23T12:00:10.000Z" as unknown as OrchestrationV2ProviderTurn["completedAt"],
+    completedAt:
+      "2026-11-23T12:00:10.000Z" as unknown as OrchestrationV2ProviderTurn["completedAt"],
     ...overrides,
   } as OrchestrationV2ProviderTurn;
 }
@@ -94,9 +106,7 @@ function makeToolItem(
   } as unknown as OrchestrationV2TurnItem;
 }
 
-function makeSubagent(
-  overrides: Partial<OrchestrationV2Subagent>,
-): OrchestrationV2Subagent {
+function makeSubagent(overrides: Partial<OrchestrationV2Subagent>): OrchestrationV2Subagent {
   return {
     id: "sub-1",
     threadId: "thread-main",
@@ -309,30 +319,35 @@ describe("Session telemetry aggregation, strict active-thread isolation & 3 inde
     expect(statsHtml).toContain("0轮 0步 · 0 次采样");
     expect(statsHtml).toContain("0 / 0 tok");
 
-    // Popover 2 empty session + global reference bottom
+    // Popover 2 empty session (strictly session-scoped — no Today/Month or View Usage footer)
     const tokensHtml = renderToStaticMarkup(
       createElement(SessionTokenUsagePopoverContent, {
         display,
         copy: zhCopy,
-        onOpenUsage: () => undefined,
       }),
     );
     expect(tokensHtml).toContain("Token 用量");
+    expect(tokensHtml).toContain("缓存命中");
+    expect(tokensHtml).toContain("未缓存输入");
+    expect(tokensHtml).toContain("缓存读取");
+    expect(tokensHtml).toContain("输出");
     expect(tokensHtml).toContain("当前会话暂无模型采样");
     expect(tokensHtml).toContain("0 个模型");
-    expect(tokensHtml).toContain("今日用量");
-    expect(tokensHtml).toContain("397.6M");
-    expect(tokensHtml).toContain("本月用量");
-    expect(tokensHtml).toContain("3.3B");
-    expect(tokensHtml).toContain("查看用量统计");
+    expect(tokensHtml).not.toContain("今日用量");
+    expect(tokensHtml).not.toContain("本月用量");
+    expect(tokensHtml).not.toContain("查看用量统计");
+    expect(tokensHtml).not.toContain("data-telemetry-global-usage");
+    expect(tokensHtml).not.toContain("data-telemetry-open-usage");
 
-    // Popover 3 empty state
+    // Popover 3 empty state (liquid vial + breakdown panel)
     const contextHtml = renderToStaticMarkup(
       createElement(SessionContextWindowPopoverContent, { display, copy: zhCopy }),
     );
-    expect(contextHtml).toContain("上下文窗口");
-    expect(contextHtml).toContain("0% 已用（剩余 100%）");
-    expect(contextHtml).toContain("0 / — tok");
+    expect(contextHtml).toContain('aria-label="上下文窗口"');
+    expect(contextHtml).toContain("上下文拆解");
+    expect(contextHtml).toContain('data-context-vial="true"');
+    expect(contextHtml).toContain("0 / —");
+    expect(contextHtml).toContain("等待会话上下文数据…");
     expect(contextHtml).toContain("Gemini 4 Neon (XHigh)");
     expect(contextHtml).toContain("MODEL_PLACEHOLDER_M535");
     expect(contextHtml).not.toContain("当前会话采样了多个模型");
@@ -343,7 +358,8 @@ describe("Session telemetry aggregation, strict active-thread isolation & 3 inde
       id: "turn-s1" as OrchestrationV2ProviderTurn["id"],
       model: "claude-sonnet-4-6",
       startedAt: "2026-11-23T12:00:00.000Z" as unknown as OrchestrationV2ProviderTurn["startedAt"],
-      completedAt: "2026-11-23T12:00:20.000Z" as unknown as OrchestrationV2ProviderTurn["completedAt"],
+      completedAt:
+        "2026-11-23T12:00:20.000Z" as unknown as OrchestrationV2ProviderTurn["completedAt"],
       turnTokenUsage: {
         usageScope: "main_agent",
         hasSubagents: false,
@@ -362,8 +378,18 @@ describe("Session telemetry aggregation, strict active-thread isolation & 3 inde
       runs: [makeRun("run-1", 1)],
       providerTurns: [turn1],
       turnItems: [
-        makeToolItem("tool-1", "command_execution", "2026-11-23T12:00:05.000Z", "2026-11-23T12:00:11.000Z"),
-        makeToolItem("tool-2", "file_change", "2026-11-23T12:00:08.000Z", "2026-11-23T12:00:13.000Z"),
+        makeToolItem(
+          "tool-1",
+          "command_execution",
+          "2026-11-23T12:00:05.000Z",
+          "2026-11-23T12:00:11.000Z",
+        ),
+        makeToolItem(
+          "tool-2",
+          "file_change",
+          "2026-11-23T12:00:08.000Z",
+          "2026-11-23T12:00:13.000Z",
+        ),
       ],
       messages: [],
       subagents: [],
@@ -437,10 +463,15 @@ describe("Session telemetry aggregation, strict active-thread isolation & 3 inde
     const contextHtml = renderToStaticMarkup(
       createElement(SessionContextWindowPopoverContent, { display, copy: zhCopy }),
     );
-    expect(contextHtml).toContain("26% 已用（剩余 74%）");
-    expect(contextHtml).toContain("132.4K / 512K tok");
+    expect(contextHtml).toContain("上下文拆解");
+    expect(contextHtml).toContain("25.9%");
+    expect(contextHtml).toContain("132.4k / 512.0k");
+    expect(contextHtml).toContain("128k");
+    expect(contextHtml).toContain("256k");
+    expect(contextHtml).toContain("384k");
+    expect(contextHtml).toContain("剩余空间");
     expect(contextHtml).toContain('data-context-bar-tone="normal"');
-    expect(contextHtml).toContain("bg-[#22c55e]");
+    expect(contextHtml).toContain('data-context-vial-tone="normal"');
     expect(contextHtml).toContain("Claude Sonnet 4.6");
     expect(contextHtml).toContain("claude-sonnet-4-6");
     expect(contextHtml).not.toContain("当前会话采样了多个模型");
@@ -451,7 +482,8 @@ describe("Session telemetry aggregation, strict active-thread isolation & 3 inde
       id: "turn-m1" as OrchestrationV2ProviderTurn["id"],
       model: "MODEL_PLACEHOLDER_M535",
       startedAt: "2026-11-23T10:00:00.000Z" as unknown as OrchestrationV2ProviderTurn["startedAt"],
-      completedAt: "2026-11-23T10:00:10.000Z" as unknown as OrchestrationV2ProviderTurn["completedAt"],
+      completedAt:
+        "2026-11-23T10:00:10.000Z" as unknown as OrchestrationV2ProviderTurn["completedAt"],
       turnTokenUsage: {
         usageScope: "main_agent",
         hasSubagents: true,
@@ -469,7 +501,8 @@ describe("Session telemetry aggregation, strict active-thread isolation & 3 inde
       id: "turn-m2" as OrchestrationV2ProviderTurn["id"],
       model: "MODEL_PLACEHOLDER_M536",
       startedAt: "2026-11-23T10:05:00.000Z" as unknown as OrchestrationV2ProviderTurn["startedAt"],
-      completedAt: "2026-11-23T10:05:05.000Z" as unknown as OrchestrationV2ProviderTurn["completedAt"],
+      completedAt:
+        "2026-11-23T10:05:05.000Z" as unknown as OrchestrationV2ProviderTurn["completedAt"],
       turnTokenUsage: {
         usageScope: "main_agent",
         hasSubagents: false,
@@ -571,6 +604,9 @@ describe("Session telemetry aggregation, strict active-thread isolation & 3 inde
     expect(tokensHtml).toContain("78% (189.9M)");
     expect(tokensHtml).toContain("Gemini 4 Hydrogen (XHigh)");
     expect(tokensHtml).toContain("22% (53.8M)");
+    expect(tokensHtml).not.toContain("今日用量");
+    expect(tokensHtml).not.toContain("本月用量");
+    expect(tokensHtml).not.toContain("查看用量统计");
 
     const contextHtml = renderToStaticMarkup(
       createElement(SessionContextWindowPopoverContent, { display, copy: zhCopy }),
@@ -602,22 +638,43 @@ describe("Session telemetry aggregation, strict active-thread isolation & 3 inde
     expect(resolveContextRingTone(-5)).toBe("unknown");
     expect(resolveContextRingTone(Number.NaN)).toBe("unknown");
     expect(resolveContextRingTone(0)).toBe("normal");
-    expect(resolveContextRingTone(59.9)).toBe("normal");
-    expect(resolveContextRingTone(60)).toBe("warning");
-    expect(resolveContextRingTone(94.9)).toBe("warning");
-    expect(resolveContextRingTone(95)).toBe("compact");
+    expect(resolveContextRingTone(49.9)).toBe("normal");
+    expect(resolveContextRingTone(50)).toBe("warning");
+    expect(resolveContextRingTone(62.1)).toBe("warning");
+    expect(resolveContextRingTone(79.9)).toBe("warning");
+    expect(resolveContextRingTone(80)).toBe("compact");
     expect(resolveContextRingTone(100)).toBe("compact");
     expect(resolveContextRingTone(100.1)).toBe("overflow");
 
     expect(resolveContextBarTone(null)).toBe("unknown");
     expect(resolveContextBarTone(26)).toBe("normal");
+    expect(resolveContextBarTone(49.9)).toBe("normal");
+    expect(resolveContextBarTone(50)).toBe("warning");
     expect(resolveContextBarTone(75)).toBe("warning");
+    expect(resolveContextBarTone(80)).toBe("critical");
     expect(resolveContextBarTone(92)).toBe("critical");
     expect(resolveContextBarTone(112)).toBe("critical");
 
-    expect(
-      deriveContextOccupancyPercent({ usedTokens: 224_000, maxTokens: 200_000 }),
-    ).toBeCloseTo(112, 5);
+    expect(computeContextVialTicks(512_000).map((t) => t.label)).toEqual(["128k", "256k", "384k"]);
+    expect(computeContextVialTicks(524_288).map((t) => t.label)).toEqual(["128k", "256k", "384k"]);
+    expect(computeContextVialTicks(1_000_000).map((t) => t.label)).toEqual([
+      "250k",
+      "500k",
+      "750k",
+    ]);
+    expect(computeContextVialTicks(200_000).map((t) => t.label)).toEqual(["50k", "100k", "150k"]);
+    expect(computeContextVialTicks(null).map((t) => t.label)).toEqual(["25%", "50%", "75%"]);
+
+    expect(formatContextBreakdownTokens(139)).toBe("139");
+    expect(formatContextBreakdownTokens(3_750)).toBe("3.75k");
+    expect(formatContextBreakdownTokens(318_100)).toBe("318.1k");
+    expect(formatContextBreakdownTokens(512_000)).toBe("512.0k");
+    expect(formatContextBreakdownTokens(1_000_000)).toBe("1.0M");
+
+    expect(deriveContextOccupancyPercent({ usedTokens: 224_000, maxTokens: 200_000 })).toBeCloseTo(
+      112,
+      5,
+    );
 
     expect(formatCompactTelemetryTokens(0)).toBe("0");
     expect(formatCompactTelemetryTokens(12_400)).toBe("12.4k");
@@ -750,10 +807,12 @@ describe("Session telemetry aggregation, strict active-thread isolation & 3 inde
     expect(zhHtml).toContain("缓存命中 96.1%");
     expect(zhHtml).toContain("上下文 21%");
 
-    // Overflow (>100%) renders red overflow tone on ring and critical bar tone in Popover 3.
+    // Overflow (>100%) renders red/rose overflow tone on ring and critical liquid vial in Popover 3.
     const overflowDisplay = {
       ...activeDisplay,
       contextPercent: 112,
+      contextUsedTokens: 224_000,
+      contextMaxTokens: 200_000,
       contextTone: "overflow" as const,
       contextBarTone: "critical" as const,
     };
@@ -763,9 +822,10 @@ describe("Session telemetry aggregation, strict active-thread isolation & 3 inde
         copy: getSessionTelemetryCopy("zh"),
       }),
     );
-    expect(overflowContextHtml).toContain("112% 已用（剩余 0%）");
+    expect(overflowContextHtml).toContain("112.0%");
     expect(overflowContextHtml).toContain('data-context-bar-tone="critical"');
-    expect(overflowContextHtml).toContain("bg-red-500");
+    expect(overflowContextHtml).toContain('data-context-vial-tone="critical"');
+    expect(overflowContextHtml).toContain("text-rose-700");
 
     // External bridge helpers work cleanly.
     publishComposerContextWindow("thread-agy", {
@@ -855,7 +915,8 @@ describe("Session telemetry aggregation, strict active-thread isolation & 3 inde
       id: "turn-dsh-1" as OrchestrationV2ProviderTurn["id"],
       model: '["magpie","group/deepseek"]',
       startedAt: "2026-11-25T10:00:00.000Z" as unknown as OrchestrationV2ProviderTurn["startedAt"],
-      completedAt: "2026-11-25T10:00:08.738Z" as unknown as OrchestrationV2ProviderTurn["completedAt"],
+      completedAt:
+        "2026-11-25T10:00:08.738Z" as unknown as OrchestrationV2ProviderTurn["completedAt"],
       turnTokenUsage: {
         usageScope: "main_agent",
         hasSubagents: false,
@@ -931,16 +992,20 @@ describe("Session telemetry aggregation, strict active-thread isolation & 3 inde
     expect(projDerived.latestTps).toBeCloseTo(expectedTps, 4);
     expect(projDerived.latestCacheHitRate).toBeCloseTo(51_200 / 51_557, 5);
 
-    const display = resolveComposerTelemetryDisplay(null, {
-      usedTokens: 51_746,
-      maxTokens: 128_000,
-    } as ContextWindowSnapshot, {
-      threadId: "thread-dsh",
-      detail,
-      providerStatuses: dshProviders,
-      selectedProvider: "dsh",
-      selectedModelId: '["magpie","group/deepseek"]',
-    });
+    const display = resolveComposerTelemetryDisplay(
+      null,
+      {
+        usedTokens: 51_746,
+        maxTokens: 128_000,
+      } as ContextWindowSnapshot,
+      {
+        threadId: "thread-dsh",
+        detail,
+        providerStatuses: dshProviders,
+        selectedProvider: "dsh",
+        selectedModelId: '["magpie","group/deepseek"]',
+      },
+    );
 
     const zhCopy = getSessionTelemetryCopy("zh");
     const stripHtml = renderToStaticMarkup(
@@ -979,7 +1044,8 @@ describe("Session telemetry aggregation, strict active-thread isolation & 3 inde
     const liveOnlyTurn = makeProviderTurn({
       id: "turn-live-cache" as OrchestrationV2ProviderTurn["id"],
       startedAt: "2026-11-25T10:00:00.000Z" as unknown as OrchestrationV2ProviderTurn["startedAt"],
-      completedAt: "2026-11-25T10:00:08.430Z" as unknown as OrchestrationV2ProviderTurn["completedAt"],
+      completedAt:
+        "2026-11-25T10:00:08.430Z" as unknown as OrchestrationV2ProviderTurn["completedAt"],
       turnTokenUsage: undefined,
       tokenUsage: {
         usedTokens: 10_200,
@@ -1018,8 +1084,10 @@ describe("Session telemetry aggregation, strict active-thread isolation & 3 inde
         providerTurns: [
           makeProviderTurn({
             id: "turn-clamp" as OrchestrationV2ProviderTurn["id"],
-            startedAt: "2026-11-25T10:00:00.000Z" as unknown as OrchestrationV2ProviderTurn["startedAt"],
-            completedAt: "2026-11-25T10:00:08.430Z" as unknown as OrchestrationV2ProviderTurn["completedAt"],
+            startedAt:
+              "2026-11-25T10:00:00.000Z" as unknown as OrchestrationV2ProviderTurn["startedAt"],
+            completedAt:
+              "2026-11-25T10:00:08.430Z" as unknown as OrchestrationV2ProviderTurn["completedAt"],
             turnTokenUsage: {
               usageScope: "main_agent",
               hasSubagents: false,
@@ -1099,5 +1167,327 @@ describe("Session telemetry aggregation, strict active-thread isolation & 3 inde
         provider: "claudeAgent",
       }),
     ).toBe("claude");
+  });
+
+  it("honestly decomposes context breakdown for fine-grained provider categories, active post-compaction transcripts, and minimal totals without purple bg or fabricated numbers", () => {
+    initializeGT({ defaultLocale: "zh", locales: ["en", "zh"] });
+    const zhCopy = getSessionTelemetryCopy("zh");
+
+    // 1. Provider-reported fine-grained categories preserve exact usedTokens sum via largest-remainder rounding.
+    const providerBreakdown = deriveSessionContextBreakdown({
+      activeContextWindow: {
+        usedTokens: 318_100,
+        maxTokens: 512_000,
+      } as ContextWindowSnapshot,
+      compactionCountOverride: 2,
+      providerCategories: [
+        { key: "system-prompt", label: "System Prompt", tokens: 3_750 },
+        { key: "mcp", label: "Mcp Tools", tokens: 139 },
+        { key: "subagents", label: "Subagents", tokens: 2_830 },
+        { key: "skills", label: "Skills", tokens: 3_010 },
+        { key: "plugins", label: "Plugins", tokens: 1_600 },
+        { key: "rules", label: "Rules", tokens: 9_170 },
+        { key: "tools", label: "Tools", tokens: 10_400 },
+        { key: "messages", label: "Chat Messages", tokens: 287_201 },
+      ],
+    });
+    expect(providerBreakdown.source).toBe("provider-categories");
+    expect(providerBreakdown.compactionCount).toBe(2);
+    const activeProviderSum = providerBreakdown.categories
+      .filter((c) => c.group !== "free")
+      .reduce((acc, c) => acc + c.tokens, 0);
+    expect(activeProviderSum).toBe(318_100);
+    const freeRow = providerBreakdown.categories.find((c) => c.key === "free");
+    expect(freeRow?.tokens).toBe(193_900);
+    expect(freeRow?.percent).toBeCloseTo(37.9, 1);
+
+    // 2. Real transcript decomposition counts only post-compaction items + real compaction count.
+    const transcriptBreakdown = deriveSessionContextBreakdown({
+      serverProjection: {
+        runs: [makeRun("run-1", 1), makeRun("run-2", 2)],
+        providerTurns: [],
+        turnItems: [
+          {
+            id: "old-msg",
+            runId: "run-1",
+            type: "user_message",
+            messageId: "m-old",
+            text: "This pre-compaction message was discarded after compaction.",
+            attachments: [],
+          } as unknown as OrchestrationV2TurnItem,
+          {
+            id: "compact-1",
+            runId: "run-1",
+            type: "compaction",
+            status: "completed",
+            driver: "claudeAgent",
+            summary: "Compacted session summary covering auth fixes.",
+            beforeTokenCount: 280_000,
+            afterTokenCount: 40_000,
+          } as unknown as OrchestrationV2TurnItem,
+          {
+            id: "cmd-1",
+            runId: "run-2",
+            type: "command_execution",
+            status: "completed",
+            input: "pnpm test",
+            output: "All 56 unit tests passed in 1.2s.".repeat(30),
+          } as unknown as OrchestrationV2TurnItem,
+          {
+            id: "reason-1",
+            runId: "run-2",
+            type: "reasoning",
+            text: "Checking edge cases in token apportionment.".repeat(20),
+          } as unknown as OrchestrationV2TurnItem,
+          {
+            id: "msg-2",
+            runId: "run-2",
+            type: "assistant_message",
+            messageId: "m-2",
+            text: "已完成上下文拆解模块和内存泄漏修复。".repeat(25),
+          } as unknown as OrchestrationV2TurnItem,
+        ],
+        messages: [],
+        subagents: [],
+        nodes: [],
+      },
+      activeContextWindow: {
+        usedTokens: 64_000,
+        maxTokens: 200_000,
+      } as ContextWindowSnapshot,
+    });
+    expect(transcriptBreakdown.source).toBe("transcript-estimate");
+    expect(transcriptBreakdown.compactionCount).toBe(1);
+    const activeTranscriptSum = transcriptBreakdown.categories
+      .filter((c) => c.group !== "free")
+      .reduce((acc, c) => acc + c.tokens, 0);
+    expect(activeTranscriptSum).toBe(64_000);
+    expect(transcriptBreakdown.categories.some((c) => c.key === "system")).toBe(true);
+    expect(transcriptBreakdown.categories.some((c) => c.key === "tools")).toBe(true);
+    expect(transcriptBreakdown.categories.some((c) => c.key === "reasoning")).toBe(true);
+    expect(transcriptBreakdown.categories.some((c) => c.key === "messages")).toBe(true);
+    expect(transcriptBreakdown.categories.some((c) => c.key === "free")).toBe(true);
+    // MUST NEVER fabricate unreported fine-grained categories like MCP or Skills!
+    expect(transcriptBreakdown.categories.some((c) => c.key === "mcp")).toBe(false);
+    expect(transcriptBreakdown.categories.some((c) => c.key === "skills")).toBe(false);
+    expect(
+      transcriptBreakdown.summary.systemTokens +
+        transcriptBreakdown.summary.conversationTokens +
+        transcriptBreakdown.summary.toolTokens,
+    ).toBe(64_000);
+
+    // 3. Bare total-only fallback honestly renders only "已用上下文" + "剩余空间".
+    const bareBreakdown = deriveSessionContextBreakdown({
+      activeContextWindow: {
+        usedTokens: 44_100,
+        maxTokens: 1_000_000,
+      } as ContextWindowSnapshot,
+    });
+    expect(bareBreakdown.source).toBe("total-only");
+    expect(bareBreakdown.categories.map((c) => c.key)).toEqual(["used", "free"]);
+
+    // 4. Largest-remainder apportionment invariant
+    const apportioned = apportionTokensLargestRemainder([1, 1, 1], 100);
+    expect(apportioned.reduce((a, b) => a + b, 0)).toBe(100);
+
+    // 5. Render popover at 62.1% warning state and assert ZERO purple plugin background!
+    const warningDisplay = resolveComposerTelemetryDisplay(
+      null,
+      { usedTokens: 318_100, maxTokens: 512_000 } as ContextWindowSnapshot,
+      {
+        threadId: "thread-vial-warn",
+        detail: {
+          ...deriveSessionTelemetryDetail({
+            threadId: "thread-vial-warn",
+            serverProjection: null,
+            activeContextWindow: {
+              usedTokens: 318_100,
+              maxTokens: 512_000,
+            } as ContextWindowSnapshot,
+            contextBreakdownCategories: [
+              { key: "system-prompt", label: "System Prompt", tokens: 3_750 },
+              { key: "tools", label: "Tools", tokens: 10_400 },
+              { key: "messages", label: "Chat Messages", tokens: 303_950 },
+            ],
+          }),
+          compactionCount: 2,
+          contextBreakdown: providerBreakdown,
+        },
+        selectedModelId: "MODEL_PLACEHOLDER_M535",
+        providerStatuses: TEST_PROVIDERS,
+      },
+    );
+    const vialHtml = renderToStaticMarkup(
+      createElement(SessionContextWindowPopoverContent, { display: warningDisplay, copy: zhCopy }),
+    );
+    expect(vialHtml).toContain("62.1%");
+    expect(vialHtml).toContain("318.1k / 512.0k");
+    expect(vialHtml).toContain("已压缩 2 次");
+    expect(vialHtml).toContain("128k");
+    expect(vialHtml).toContain("256k");
+    expect(vialHtml).toContain("384k");
+    expect(vialHtml).toContain("系统提示");
+    expect(vialHtml).toContain("剩余空间");
+    expect(vialHtml).toContain('data-context-vial-tone="warning"');
+    expect(vialHtml).not.toContain("#1a1625");
+    expect(vialHtml).not.toContain("#261e3e");
+    expect(vialHtml).not.toContain("196, 172, 255");
+
+    // 6. Color-coded inline status pill (Fig 5): BOTH ring stroke & text shift color by occupancy tier!
+    const renderPill = (pct: number | null) =>
+      renderToStaticMarkup(
+        createElement(
+          GTProvider,
+          { locale: "zh", translations: {} },
+          createElement(ComposerLiveTelemetryStripView, {
+            display: {
+              ...warningDisplay,
+              contextPercent: pct,
+              contextTone: resolveContextRingTone(pct),
+              contextBarTone: resolveContextBarTone(pct),
+            },
+            onOpenUsage: () => undefined,
+          }),
+        ),
+      );
+
+    const normalPill = renderPill(24);
+    expect(normalPill).toContain('data-context-pill-tone="normal"');
+    expect(normalPill).toContain("text-emerald-700");
+    expect(normalPill).toContain("stroke-emerald-600");
+
+    const warnPill = renderPill(62.1);
+    expect(warnPill).toContain('data-context-pill-tone="warning"');
+    expect(warnPill).toContain("text-amber-700");
+    expect(warnPill).toContain("stroke-amber-500");
+
+    const criticalPill = renderPill(86);
+    expect(criticalPill).toContain('data-context-pill-tone="compact"');
+    expect(criticalPill).toContain("text-rose-700");
+    expect(criticalPill).toContain("stroke-rose-600");
+  });
+
+  it("enforces 50-entry LRU caps and owner/unmount cleanup on publishedSessionDetails (L10) and publishedContextWindows (L11)", () => {
+    // L10: publishedSessionDetails LRU cap = 50
+    for (let i = 0; i < MAX_PUBLISHED_SESSION_DETAILS + 15; i += 1) {
+      const id = `lru-detail-${i}`;
+      publishSessionTelemetryDetail(
+        id,
+        deriveSessionTelemetryDetail({
+          threadId: id,
+          serverProjection: null,
+          activeContextWindow: null,
+        }),
+      );
+    }
+    expect(getPublishedSessionDetailCount()).toBe(MAX_PUBLISHED_SESSION_DETAILS);
+    expect(getSessionTelemetryDetail("lru-detail-0")).toBeNull();
+    expect(getSessionTelemetryDetail("lru-detail-14")).toBeNull();
+    expect(getSessionTelemetryDetail("lru-detail-15")).not.toBeNull();
+    expect(
+      getSessionTelemetryDetail(`lru-detail-${MAX_PUBLISHED_SESSION_DETAILS + 14}`),
+    ).not.toBeNull();
+
+    // Owner ref-count keeps detail alive until final owner releases
+    const releaseA = retainSessionTelemetryDetailOwner("lru-detail-64");
+    const releaseB = retainSessionTelemetryDetailOwner("lru-detail-64");
+    releaseA();
+    expect(getSessionTelemetryDetail("lru-detail-64")).not.toBeNull();
+    releaseB();
+    expect(getSessionTelemetryDetail("lru-detail-64")).toBeNull();
+
+    // L11: publishedContextWindows LRU cap = 50 + delete on null/helper
+    for (let i = 0; i < MAX_PUBLISHED_CONTEXT_WINDOWS + 12; i += 1) {
+      publishComposerContextWindow(`lru-ctx-${i}`, {
+        usedTokens: 1000 + i,
+        maxTokens: 100_000,
+        remainingTokens: 99_000 - i,
+        usedPercentage: 1,
+        remainingPercentage: 99,
+        updatedAt: "2026-11-26T00:00:00.000Z",
+      } as ContextWindowSnapshot);
+    }
+    expect(getPublishedComposerContextWindowCount()).toBe(MAX_PUBLISHED_CONTEXT_WINDOWS);
+    expect(getPublishedComposerContextWindow("lru-ctx-0")).toBeNull();
+    expect(getPublishedComposerContextWindow("lru-ctx-11")).toBeNull();
+    expect(getPublishedComposerContextWindow("lru-ctx-12")?.usedTokens).toBe(1012);
+
+    // Passing null or delete helper deletes the entry immediately
+    deletePublishedComposerContextWindow("lru-ctx-12");
+    expect(getPublishedComposerContextWindow("lru-ctx-12")).toBeNull();
+    expect(getPublishedComposerContextWindowCount()).toBe(MAX_PUBLISHED_CONTEXT_WINDOWS - 1);
+  });
+
+  it("guards micro-burst decodeMs in deriveSessionTelemetryFromProjection and deriveSessionTelemetryDetail timedGenMsSum", () => {
+    const burstRow2 = makeProviderTurn({
+      id: "turn-dsh-burst-row2" as OrchestrationV2ProviderTurn["id"],
+      model: "group/deepseek",
+      startedAt: "2026-11-26T10:00:00.000Z" as unknown as OrchestrationV2ProviderTurn["startedAt"],
+      completedAt:
+        "2026-11-26T10:00:06.660Z" as unknown as OrchestrationV2ProviderTurn["completedAt"],
+      turnTokenUsage: {
+        usageScope: "main_agent",
+        hasSubagents: false,
+        usageStatus: "complete",
+        inputTokens: 1_200,
+        cachedInputTokens: 20_000,
+        cacheCreationTokens: 0,
+        outputTokens: 128,
+        ttftMs: 6_660,
+        decodeMs: 1,
+        modelDurationMs: 6_660,
+      },
+    });
+    const burstRow1 = makeProviderTurn({
+      id: "turn-dsh-burst-row1" as OrchestrationV2ProviderTurn["id"],
+      model: "group/deepseek",
+      startedAt: "2026-11-26T10:01:00.000Z" as unknown as OrchestrationV2ProviderTurn["startedAt"],
+      completedAt:
+        "2026-11-26T10:01:07.370Z" as unknown as OrchestrationV2ProviderTurn["completedAt"],
+      turnTokenUsage: {
+        usageScope: "main_agent",
+        hasSubagents: false,
+        usageStatus: "complete",
+        inputTokens: 1_400,
+        cachedInputTokens: 22_000,
+        cacheCreationTokens: 0,
+        outputTokens: 242,
+        ttftMs: 3_540,
+        decodeMs: 1,
+        modelDurationMs: 7_370,
+      },
+    });
+
+    // Single-turn Row 2: 128 tok / 6.66s (~19.22 tok/s), never 128000 tok/s
+    const projRow2 = deriveSessionTelemetryFromProjection({
+      serverProjection: { providerTurns: [burstRow2], messages: [] },
+      activeContextWindow: null,
+    });
+    expect(projRow2.latestTps).toBeCloseTo(128 / 6.66, 4);
+
+    // Multi-turn projection & detail: Row 1 falls back to post-TTFT 3.83s (~63.19 tok/s),
+    // and timedGenMsSum uses 6660 + 3830 = 10490ms -> sessionTps ~35.27 tok/s.
+    const projBoth = deriveSessionTelemetryFromProjection({
+      serverProjection: { providerTurns: [burstRow2, burstRow1], messages: [] },
+      activeContextWindow: null,
+    });
+    expect(projBoth.latestTps).toBeCloseTo(242 / 3.83, 4);
+
+    const detail = deriveSessionTelemetryDetail({
+      threadId: "thread-dsh-burst",
+      serverProjection: {
+        runs: [makeRun("run-b1", 1), makeRun("run-b2", 2)],
+        providerTurns: [burstRow2, burstRow1],
+        turnItems: [],
+        messages: [],
+        subagents: [],
+        nodes: [],
+      },
+      activeContextWindow: null,
+      activeProvider: "dsh",
+      activeModel: "group/deepseek",
+    });
+    expect(detail.latestRequestTps).toBeCloseTo(242 / 3.83, 4);
+    expect(detail.sessionTps).toBeCloseTo((128 + 242) / ((6_660 + 3_830) / 1_000), 4);
   });
 });

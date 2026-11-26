@@ -132,38 +132,41 @@ describe("usageCallTelemetryStore", () => {
       status: "completed",
     });
 
-    const merged = mergeUsageCallLogs([liveLog], [
-      // Near-duplicate of liveLog from backend transcript (backend uses "claude" while live used "claudeAgent")
-      {
-        id: "backend-dup-1",
-        timestamp: new Date(101_500).toISOString(),
-        provider: "claude",
-        model: "claude-sonnet-4-6",
-        ttftMs: null,
-        durationMs: 2400,
-        tps: null,
-        inputTokens: 500,
-        cachedInputTokens: 1500,
-        cacheCreationTokens: 0,
-        outputTokens: 100,
-        cacheHitRate: 0.75,
-      },
-      // Distinct historical backend call
-      {
-        id: "backend-hist-2",
-        timestamp: 90_000,
-        provider: "codex",
-        model: "gpt-5.4-codex",
-        ttftMs: 620,
-        durationMs: 3620,
-        tps: 60,
-        inputTokens: 800,
-        cachedInputTokens: 1200,
-        cacheCreationTokens: 0,
-        outputTokens: 180,
-        cacheHitRate: 0.6,
-      },
-    ]);
+    const merged = mergeUsageCallLogs(
+      [liveLog],
+      [
+        // Near-duplicate of liveLog from backend transcript (backend uses "claude" while live used "claudeAgent")
+        {
+          id: "backend-dup-1",
+          timestamp: new Date(101_500).toISOString(),
+          provider: "claude",
+          model: "claude-sonnet-4-6",
+          ttftMs: null,
+          durationMs: 2400,
+          tps: null,
+          inputTokens: 500,
+          cachedInputTokens: 1500,
+          cacheCreationTokens: 0,
+          outputTokens: 100,
+          cacheHitRate: 0.75,
+        },
+        // Distinct historical backend call
+        {
+          id: "backend-hist-2",
+          timestamp: 90_000,
+          provider: "codex",
+          model: "gpt-5.4-codex",
+          ttftMs: 620,
+          durationMs: 3620,
+          tps: 60,
+          inputTokens: 800,
+          cachedInputTokens: 1200,
+          cacheCreationTokens: 0,
+          outputTokens: 180,
+          cacheHitRate: 0.6,
+        },
+      ],
+    );
 
     expect(merged.length).toBe(2);
     expect(merged[0]?.id).toBe("turn:101");
@@ -292,19 +295,22 @@ describe("usageCallTelemetryStore", () => {
       cachedInputTokens: 900,
       outputTokens: 50,
     });
-    const merged = mergeUsageCallLogs([liveWithoutDur], [
-      {
-        id: "turn:merge-clamp",
-        timestamp: 300_000,
-        provider: "dsh",
-        model: "group/deepseek",
-        ttftMs: null,
-        durationMs: 8_430,
-        inputTokens: 100,
-        cachedInputTokens: 900,
-        outputTokens: 50,
-      },
-    ]);
+    const merged = mergeUsageCallLogs(
+      [liveWithoutDur],
+      [
+        {
+          id: "turn:merge-clamp",
+          timestamp: 300_000,
+          provider: "dsh",
+          model: "group/deepseek",
+          ttftMs: null,
+          durationMs: 8_430,
+          inputTokens: 100,
+          cachedInputTokens: 900,
+          outputTokens: 50,
+        },
+      ],
+    );
     expect(merged[0]?.ttftMs).toBe(8_430);
     expect(merged[0]?.durationMs).toBe(8_430);
 
@@ -608,6 +614,186 @@ describe("usageCallTelemetryStore", () => {
       expect(pagedHtml.match(/aria-expanded="false"/g)).toHaveLength(CALL_LOGS_PAGE_SIZE);
     } finally {
       vi.useRealTimers();
+      Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        value: previousStorage,
+      });
+    }
+  });
+
+  it("memoizes mergeUsageCallLogs by (localLogs, backendLogs) reference identity without retaining stale arrays", () => {
+    const liveLog = recordModelCallTelemetry({
+      id: "turn:memo-1",
+      timestamp: 700_000,
+      provider: "claudeAgent",
+      model: "claude-sonnet-4-6",
+      inputTokens: 1_000,
+      cachedInputTokens: 2_000,
+      outputTokens: 250,
+      status: "completed",
+    });
+    const localLogs = [liveLog] as const;
+    const backendLogs = [
+      {
+        id: "backend-memo-1",
+        timestamp: 690_000,
+        provider: "codex",
+        model: "gpt-5.4-codex",
+        inputTokens: 400,
+        cachedInputTokens: 600,
+        outputTokens: 100,
+      },
+    ] as const;
+
+    const first = mergeUsageCallLogs(localLogs, backendLogs);
+    const second = mergeUsageCallLogs(localLogs, backendLogs);
+    expect(second).toBe(first);
+
+    // Also memoizes null / undefined / empty backendLogs cleanly.
+    const emptyA = mergeUsageCallLogs(localLogs, undefined);
+    const emptyB = mergeUsageCallLogs(localLogs, null);
+    const emptyC = mergeUsageCallLogs(localLogs, []);
+    expect(emptyB).toBe(emptyA);
+    expect(emptyC).toBe(emptyA);
+
+    // Changing either array reference recomputes cleanly.
+    const nextBackend = [...backendLogs];
+    const third = mergeUsageCallLogs(localLogs, nextBackend);
+    expect(third).not.toBe(first);
+    expect(third).toEqual(first);
+  });
+
+  it("guards micro-burst decodeMs across all TPS entrypoints and self-heals persisted >2000 tok/s spikes", () => {
+    // 1. User screenshot Row 2: 128 tok, TTFT 6.66s, duration 6.66s, decodeMs 1ms -> ~19.22 tok/s (never 128000)
+    expect(computeOutputTps(128, 6_660, 6_660, 1)).toBeCloseTo(128 / 6.66, 4);
+
+    // 2. User screenshot Row 1: 242 tok, TTFT 3.54s, duration 7.37s, decodeMs 1ms -> ~63.19 tok/s (242 / 3.83s)
+    expect(computeOutputTps(242, 7_370, 3_540, 1)).toBeCloseTo(242 / 3.83, 4);
+
+    // 3. decodeMs > 1.1x durationMs or implying > 2000 tok/s falls back to guarded post-TTFT/wall window
+    expect(computeOutputTps(300, 5_000, 1_000, 100)).toBeCloseTo(300 / 4, 4);
+    expect(computeOutputTps(100, 2_000, 500, 5_000)).toBeCloseTo(100 / 1.5, 4);
+
+    // 4. recordModelCallTelemetry & normalizeBackendUsageCallLog guard decodeMs and sanitize explicit > 2000 tps
+    const liveRow = recordModelCallTelemetry({
+      id: "turn:dsh-burst-row2",
+      provider: "dsh",
+      model: "group/deepseek",
+      ttftMs: 6_660,
+      durationMs: 6_660,
+      decodeMs: 1,
+      inputTokens: 1_200,
+      outputTokens: 128,
+    });
+    expect(liveRow.tps).toBeCloseTo(128 / 6.66, 4);
+
+    const explicitBadLive = recordModelCallTelemetry({
+      id: "turn:dsh-bad-explicit-tps",
+      provider: "dsh",
+      model: "group/deepseek",
+      ttftMs: 3_540,
+      durationMs: 7_370,
+      decodeMs: 1,
+      tps: 128_000,
+      inputTokens: 1_200,
+      outputTokens: 242,
+    });
+    expect(explicitBadLive.tps).toBeCloseTo(242 / 3.83, 4);
+
+    const backendHealed = normalizeBackendUsageCallLog({
+      id: "backend-dsh-burst",
+      timestamp: 800_000,
+      provider: "dsh",
+      model: "group/deepseek",
+      ttft_ms: 6_660,
+      duration_ms: 6_660,
+      decode_ms: 1,
+      tps: 128_000,
+      inputTokens: 1_000,
+      outputTokens: 128,
+    });
+    expect(backendHealed.tps).toBeCloseTo(128 / 6.66, 4);
+
+    const backendNoTimingBadTps = normalizeBackendUsageCallLog({
+      id: "backend-dsh-no-timing-bad-tps",
+      timestamp: 801_000,
+      provider: "dsh",
+      model: "group/deepseek",
+      tps: 128_000,
+      inputTokens: 1_000,
+      outputTokens: 128,
+    });
+    expect(backendNoTimingBadTps.tps).toBeNull();
+
+    // 5. updateSessionLiveTelemetry rejects > 2000 tok/s spikes
+    updateSessionLiveTelemetry("thread-dsh-spike", {
+      provider: "dsh",
+      model: "group/deepseek",
+      tps: 128_000,
+      outputTokens: 128,
+    });
+    expect(getSessionLiveTelemetry("thread-dsh-spike")?.tps).toBeNull();
+
+    // 6. Persisted localStorage hydration self-heals stale 128000 tok/s rows
+    const previousStorage = globalThis.localStorage;
+    const backing = new Map<string, string>();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (key: string) => backing.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          backing.set(key, value);
+        },
+        removeItem: (key: string) => {
+          backing.delete(key);
+        },
+      },
+    });
+    try {
+      backing.set(
+        USAGE_CALL_TELEMETRY_STORAGE_KEY,
+        JSON.stringify([
+          {
+            id: "persisted-dsh-128000",
+            timestamp: 900_000,
+            provider: "dsh",
+            model: "group/deepseek",
+            ttftMs: 6_660,
+            durationMs: 6_660,
+            tps: 128_000,
+            inputTokens: 1_000,
+            cachedInputTokens: 9_000,
+            cacheCreationTokens: 0,
+            outputTokens: 128,
+            totalTokens: 10_128,
+            cacheHitRate: 0.9,
+            status: "completed",
+            source: "live",
+          },
+          {
+            id: "persisted-dsh-no-dur",
+            timestamp: 899_000,
+            provider: "dsh",
+            model: "group/deepseek",
+            ttftMs: null,
+            durationMs: null,
+            tps: 128_000,
+            inputTokens: 500,
+            cachedInputTokens: 0,
+            cacheCreationTokens: 0,
+            outputTokens: 128,
+            totalTokens: 628,
+            cacheHitRate: 0,
+            status: "completed",
+            source: "live",
+          },
+        ]),
+      );
+      const healed = reloadUsageCallLogsFromStorage();
+      expect(healed).toHaveLength(2);
+      expect(healed[0]?.tps).toBeCloseTo(128 / 6.66, 4);
+      expect(healed[1]?.tps).toBeNull();
+    } finally {
       Object.defineProperty(globalThis, "localStorage", {
         configurable: true,
         value: previousStorage,

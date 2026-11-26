@@ -1,9 +1,6 @@
 import type { ContextWindowSnapshot } from "@prismux/client-runtime/state/context-window";
 import type { ThreadStructure } from "@prismux/client-runtime/state/models";
-import type {
-  OrchestrationV2ProviderTurn,
-  ServerProvider,
-} from "@prismux/core-contracts";
+import type { OrchestrationV2ProviderTurn, ServerProvider } from "@prismux/core-contracts";
 import type { MergedUsage } from "@prismux/core-shared/usageMerge";
 import * as DateTime from "effect/DateTime";
 import { useSyncExternalStore } from "react";
@@ -13,6 +10,7 @@ import {
   computeCacheHitRate,
   computeOutputTps,
   formatUsageModelDisplayName,
+  resolveEffectiveDecodeDurationMs,
   unwrapUsageModelSlug,
   type SessionLiveTelemetrySnapshot,
   type UsageCallLogRecord,
@@ -22,6 +20,88 @@ export type TelemetryPopoverId = "stats" | "tokens" | "context";
 export type ContextRingTone = "unknown" | "normal" | "warning" | "compact" | "overflow";
 export type ContextBarTone = "unknown" | "normal" | "warning" | "critical";
 export type TelemetryMetricScope = "session" | "none";
+export type ContextBreakdownGroup = "system" | "conversation" | "tools" | "free";
+export type ContextBreakdownSource =
+  | "provider-categories"
+  | "transcript-estimate"
+  | "usage-split"
+  | "total-only"
+  | "empty";
+
+export interface ContextBreakdownCategoryInput {
+  readonly key?: string | undefined;
+  readonly label: string;
+  readonly tokens: number;
+  readonly group?: ContextBreakdownGroup | undefined;
+  readonly color?: string | undefined;
+  readonly estimated?: boolean | undefined;
+}
+
+export interface ContextBreakdownCategory {
+  readonly key: string;
+  readonly label: string;
+  readonly tokens: number;
+  /** Percentage of `contextMaxTokens` (0..100), or null when limit is unknown. */
+  readonly percent: number | null;
+  readonly group: ContextBreakdownGroup;
+  readonly color: string;
+  readonly estimated: boolean;
+}
+
+export interface ContextBreakdownSummary {
+  readonly systemTokens: number;
+  readonly conversationTokens: number;
+  readonly toolTokens: number;
+}
+
+export interface ContextVialTick {
+  readonly fraction: number;
+  readonly label: string;
+}
+
+export interface SessionContextBreakdown {
+  readonly usedTokens: number | null;
+  readonly maxTokens: number | null;
+  readonly remainingTokens: number | null;
+  readonly usedPercent: number | null;
+  readonly remainingPercent: number | null;
+  readonly compactionCount: number;
+  readonly source: ContextBreakdownSource;
+  readonly summary: ContextBreakdownSummary;
+  readonly categories: readonly ContextBreakdownCategory[];
+}
+
+export const CONTEXT_BREAKDOWN_COLORS: Readonly<Record<string, string>> = {
+  system: "#a855f7",
+  "system-prompt": "#a855f7",
+  mcp: "#8b5cf6",
+  subagents: "#38bdf8",
+  skills: "#06b6d4",
+  plugins: "#10b981",
+  rules: "#ec4899",
+  tools: "#f59e0b",
+  reasoning: "#38bdf8",
+  messages: "#f97316",
+  cached_context: "#6366f1",
+  uncached_input: "#f97316",
+  output: "#10b981",
+  memory: "#2dd4bf",
+  used: "#f59e0b",
+};
+
+const CONTEXT_BREAKDOWN_FALLBACK_PALETTE = [
+  "#a855f7",
+  "#8b5cf6",
+  "#38bdf8",
+  "#06b6d4",
+  "#10b981",
+  "#ec4899",
+  "#f59e0b",
+  "#f97316",
+  "#6366f1",
+] as const;
+
+export const MAX_PUBLISHED_SESSION_DETAILS = 50;
 
 export const MODEL_DISTRIBUTION_COLORS = [
   "#7ea18a",
@@ -105,6 +185,8 @@ export interface SessionTelemetryDetailSnapshot {
   readonly distinctSampledModels: readonly string[];
   readonly latestSampledModelId: string | null;
   readonly latestSampledModelDisplayName: string | null;
+  readonly compactionCount: number;
+  readonly contextBreakdown: SessionContextBreakdown;
   readonly updatedAt: number;
 }
 
@@ -147,11 +229,13 @@ export interface ResolvedTelemetryDisplay {
   readonly globalTodayTokens: number;
   readonly globalMonthTokens: number;
 
-  // Popover 3: Context window (图 8)
+  // Popover 3: Context window (Liquid vial + breakdown)
   readonly sampledModelDisplayName: string | null;
   readonly primaryEntrypointId: string | null;
   readonly distinctSampledModelCount: number;
   readonly hasMultipleSampledModels: boolean;
+  readonly compactionCount: number;
+  readonly contextBreakdown: SessionContextBreakdown;
 }
 
 export type SessionProjectionLike = Partial<
@@ -179,6 +263,7 @@ export interface DeriveSessionTelemetryDetailInput {
   readonly turnTimingsById?: ReadonlyMap<string, TurnObservedTiming> | undefined;
   readonly activeLiveTps?: number | null | undefined;
   readonly activeLiveTtftMs?: number | null | undefined;
+  readonly contextBreakdownCategories?: readonly ContextBreakdownCategoryInput[] | undefined;
   readonly now?: number | undefined;
 }
 
@@ -206,9 +291,7 @@ export interface SessionTelemetryDisplayInput {
 }
 
 export function nonNegInt(value: number | null | undefined): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.round(value)
-    : 0;
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
 }
 
 export function parseTelemetryTimestampMs(value: unknown): number | null {
@@ -253,10 +336,84 @@ export function formatCompactPopoverTokens(tokens: number | null | undefined): s
   return `${(tokens / 1_000_000_000).toFixed(1).replace(/\.0$/, "")}B`;
 }
 
-/** Context occupancy bands: <60% normal, 60-94.9% warning, 95-100% compact, >100% overflow. */
-export function resolveContextRingTone(
-  contextPercent: number | null | undefined,
-): ContextRingTone {
+/**
+ * Formats token counts for the liquid vial readout and breakdown list:
+ * e.g. `139`, `3.75k`, `10.4k`, `318.1k`, `512.0k`, `1.0M`.
+ */
+export function formatContextBreakdownTokens(tokens: number | null | undefined): string {
+  if (typeof tokens !== "number" || !Number.isFinite(tokens) || tokens <= 0) {
+    return "0";
+  }
+  if (tokens >= 1_000_000) {
+    const m = tokens / 1_000_000;
+    return `${m >= 10 ? m.toFixed(1) : m.toFixed(2).replace(/0$/, "")}M`;
+  }
+  if (tokens >= 10_000) {
+    return `${(tokens / 1_000).toFixed(1)}k`;
+  }
+  if (tokens >= 1_000) {
+    return `${(tokens / 1_000).toFixed(2)}k`;
+  }
+  return String(Math.round(tokens));
+}
+
+/**
+ * Computes graduated 25% / 50% / 75% tick labels for the vertical liquid-tube gauge.
+ * Recognizes standard binary/decimal context window capacities (512k, 1M, 256k, 200k, 128k).
+ */
+export function computeContextVialTicks(
+  maxTokens: number | null | undefined,
+): readonly ContextVialTick[] {
+  const fractions = [0.25, 0.5, 0.75] as const;
+  if (typeof maxTokens !== "number" || !Number.isFinite(maxTokens) || maxTokens <= 0) {
+    return fractions.map((fraction) => ({
+      fraction,
+      label: `${Math.round(fraction * 100)}%`,
+    }));
+  }
+  if (maxTokens === 524_288 || maxTokens === 512_000) {
+    return [
+      { fraction: 0.25, label: "128k" },
+      { fraction: 0.5, label: "256k" },
+      { fraction: 0.75, label: "384k" },
+    ];
+  }
+  if (maxTokens === 1_048_576 || maxTokens === 1_000_000) {
+    return [
+      { fraction: 0.25, label: "250k" },
+      { fraction: 0.5, label: "500k" },
+      { fraction: 0.75, label: "750k" },
+    ];
+  }
+  if (maxTokens === 262_144 || maxTokens === 256_000) {
+    return [
+      { fraction: 0.25, label: "64k" },
+      { fraction: 0.5, label: "128k" },
+      { fraction: 0.75, label: "192k" },
+    ];
+  }
+  if (maxTokens === 131_072 || maxTokens === 128_000) {
+    return [
+      { fraction: 0.25, label: "32k" },
+      { fraction: 0.5, label: "64k" },
+      { fraction: 0.75, label: "96k" },
+    ];
+  }
+  return fractions.map((fraction) => {
+    const val = maxTokens * fraction;
+    if (val >= 1_000_000) {
+      const m = val / 1_000_000;
+      return { fraction, label: `${m.toFixed(1).replace(/\.0$/, "")}M` };
+    }
+    if (val >= 1_000) {
+      return { fraction, label: `${Math.round(val / 1_000)}k` };
+    }
+    return { fraction, label: String(Math.round(val)) };
+  });
+}
+
+/** Occupancy tiers for the inline pill: <50% normal, 50-79% warning, 80-100% compact, >100% overflow. */
+export function resolveContextRingTone(contextPercent: number | null | undefined): ContextRingTone {
   if (
     typeof contextPercent !== "number" ||
     !Number.isFinite(contextPercent) ||
@@ -265,20 +422,18 @@ export function resolveContextRingTone(
     return "unknown";
   }
   if (contextPercent > 100) return "overflow";
-  if (contextPercent >= 95) return "compact";
-  if (contextPercent >= 60) return "warning";
+  if (contextPercent >= 80) return "compact";
+  if (contextPercent >= 50) return "warning";
   return "normal";
 }
 
 /**
- * Classifies the Popover 3 progress bar color:
- * - `< 60%`  → emerald green (`normal`)
- * - `60–89%` → amber (`warning`)
- * - `>= 90%` → red (`critical`)
+ * Classifies the Popover 3 liquid tube & bar occupancy tier:
+ * - `< 50%`     → healthy emerald/green (`normal`)
+ * - `50%–79.9%` → warning amber/gold (`warning`)
+ * - `>= 80%`    → critical rose/red (`critical`)
  */
-export function resolveContextBarTone(
-  contextPercent: number | null | undefined,
-): ContextBarTone {
+export function resolveContextBarTone(contextPercent: number | null | undefined): ContextBarTone {
   if (
     typeof contextPercent !== "number" ||
     !Number.isFinite(contextPercent) ||
@@ -286,8 +441,8 @@ export function resolveContextBarTone(
   ) {
     return "unknown";
   }
-  if (contextPercent >= 90) return "critical";
-  if (contextPercent >= 60) return "warning";
+  if (contextPercent >= 80) return "critical";
+  if (contextPercent >= 50) return "warning";
   return "normal";
 }
 
@@ -317,10 +472,7 @@ export function mergeTimeIntervals(
   intervals: readonly (readonly [number, number])[],
 ): readonly (readonly [number, number])[] {
   const valid = intervals
-    .filter(
-      ([start, end]) =>
-        Number.isFinite(start) && Number.isFinite(end) && end > start,
-    )
+    .filter(([start, end]) => Number.isFinite(start) && Number.isFinite(end) && end > start)
     .toSorted((a, b) => a[0] - b[0] || a[1] - b[1]);
   if (valid.length === 0) return [];
   const merged: Array<[number, number]> = [[valid[0]![0], valid[0]![1]]];
@@ -336,9 +488,7 @@ export function mergeTimeIntervals(
   return merged;
 }
 
-export function sumIntervalMs(
-  intervals: readonly (readonly [number, number])[],
-): number {
+export function sumIntervalMs(intervals: readonly (readonly [number, number])[]): number {
   let sum = 0;
   for (const [start, end] of intervals) {
     if (end > start) sum += end - start;
@@ -462,7 +612,10 @@ function posFiniteNullable(value: number | null | undefined): number | null {
 }
 
 export function extractTurnUsageDetail(
-  turn: Pick<OrchestrationV2ProviderTurn, "turnTokenUsage" | "tokenUsage" | "model"> | null | undefined,
+  turn:
+    | Pick<OrchestrationV2ProviderTurn, "turnTokenUsage" | "tokenUsage" | "model">
+    | null
+    | undefined,
 ): ExtractedTurnUsageDetail {
   if (!turn) {
     return {
@@ -586,6 +739,644 @@ export function extractTurnUsageDetail(
     ttftMs,
     decodeMs,
     modelDurationMs,
+  };
+}
+
+/** CJK-aware text token estimator used solely for apportioning measured window totals across real transcript buckets. */
+export function estimateContextTextTokens(text: string | null | undefined): number {
+  if (!text) return 0;
+  let cjk = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    if (
+      (code >= 0x4e00 && code <= 0x9fff) ||
+      (code >= 0x3400 && code <= 0x4dbf) ||
+      (code >= 0x3000 && code <= 0x303f) ||
+      (code >= 0xff00 && code <= 0xffef)
+    ) {
+      cjk += 1;
+    }
+  }
+  const other = text.length - cjk;
+  return Math.ceil(cjk * 1.15 + other / 3.8);
+}
+
+function estimateUnknownPayloadTokens(value: unknown, maxChars = 24_000): number {
+  if (typeof value === "string") {
+    return estimateContextTextTokens(value.length > maxChars ? value.slice(0, maxChars) : value);
+  }
+  if (value === null || value === undefined) return 0;
+  try {
+    const serialized = JSON.stringify(value);
+    if (!serialized) return 0;
+    return estimateContextTextTokens(
+      serialized.length > maxChars ? serialized.slice(0, maxChars) : serialized,
+    );
+  } catch {
+    return 0;
+  }
+}
+
+function normalizeBreakdownCategoryKey(
+  rawKey: string | undefined,
+  label: string,
+  index: number,
+): string {
+  const src = (rawKey || label || "").trim().toLowerCase();
+  if (!src) return `category-${index}`;
+  if (src === "free" || src.includes("remain") || src.includes("剩余")) return "free";
+  if (src === "system-prompt" || src.includes("system prompt")) return "system-prompt";
+  if (src.includes("system")) return "system";
+  if (src.includes("mcp")) return "mcp";
+  if (src.includes("subagent")) return "subagents";
+  if (src === "skills" || src.includes("skill")) return "skills";
+  if (src.includes("plugin")) return "plugins";
+  if (src.includes("rule")) return "rules";
+  if (src === "tools" || src.includes("tool")) return "tools";
+  if (src.includes("think") || src.includes("reason")) return "reasoning";
+  if (src.includes("message") || src.includes("chat")) return "messages";
+  if (src.includes("memory") || src.includes("artifact")) return "memory";
+  return src.replace(/[^a-z0-9_-]+/g, "-").replace(/^-|-$/g, "") || `category-${index}`;
+}
+
+function classifyBreakdownGroup(key: string, label: string): ContextBreakdownGroup {
+  if (key === "free") return "free";
+  const normalized = `${key} ${label}`.toLowerCase();
+  if (/system|skill|rule|plugin|prompt|cached_context|memory/.test(normalized)) {
+    return "system";
+  }
+  if (/tool|mcp|function/.test(normalized)) {
+    return "tools";
+  }
+  return "conversation";
+}
+
+function resolveBreakdownColor(key: string, index: number, explicit?: string): string {
+  if (explicit && explicit.trim()) return explicit.trim();
+  if (key === "free") return "var(--pmx-context-free-swatch, rgba(148, 163, 184, 0.35))";
+  return (
+    CONTEXT_BREAKDOWN_COLORS[key] ??
+    CONTEXT_BREAKDOWN_FALLBACK_PALETTE[index % CONTEXT_BREAKDOWN_FALLBACK_PALETTE.length]!
+  );
+}
+
+/**
+ * Apportions `targetTotal` integers across `weights` via largest-remainder rounding
+ * so the returned array sums to `targetTotal` exactly (zero drift, zero fabricated tokens).
+ */
+export function apportionTokensLargestRemainder(
+  weights: readonly number[],
+  targetTotal: number,
+): readonly number[] {
+  const safeTarget = Math.max(0, Math.round(targetTotal));
+  if (weights.length === 0) return [];
+  if (safeTarget === 0) return weights.map(() => 0);
+  const weightSum = weights.reduce((acc, w) => acc + Math.max(0, w), 0);
+  if (weightSum <= 0) return weights.map(() => 0);
+
+  const exact = weights.map((w) => (Math.max(0, w) / weightSum) * safeTarget);
+  const floors = exact.map((v) => Math.floor(v));
+  let remainder = safeTarget - floors.reduce((acc, f) => acc + f, 0);
+  const order = exact
+    .map((v, index) => ({ index, frac: v - floors[index]! }))
+    .toSorted((a, b) => b.frac - a.frac || a.index - b.index);
+  for (let i = 0; i < order.length && remainder > 0; i += 1) {
+    floors[order[i]!.index]! += 1;
+    remainder -= 1;
+  }
+  return floors;
+}
+
+function extractProviderContextCategories(
+  contextWindow: ContextWindowSnapshot | null | undefined,
+  explicit?: readonly ContextBreakdownCategoryInput[] | undefined,
+): readonly ContextBreakdownCategoryInput[] {
+  if (Array.isArray(explicit) && explicit.length > 0) {
+    return explicit;
+  }
+  if (!contextWindow || typeof contextWindow !== "object") return [];
+  const raw = contextWindow as unknown as {
+    readonly categories?: unknown;
+    readonly breakdown?: unknown;
+  };
+  const candidate = Array.isArray(raw.categories)
+    ? raw.categories
+    : Array.isArray(raw.breakdown)
+      ? raw.breakdown
+      : null;
+  if (!candidate) return [];
+  const parsed: ContextBreakdownCategoryInput[] = [];
+  for (const item of candidate) {
+    if (!item || typeof item !== "object") continue;
+    const rec = item as Record<string, unknown>;
+    const tokens = typeof rec.tokens === "number" && Number.isFinite(rec.tokens) ? rec.tokens : 0;
+    const label =
+      typeof rec.label === "string" ? rec.label : typeof rec.key === "string" ? rec.key : "";
+    if (!label || tokens <= 0) continue;
+    parsed.push({
+      key: typeof rec.key === "string" ? rec.key : undefined,
+      label,
+      tokens,
+      group:
+        rec.group === "system" ||
+        rec.group === "conversation" ||
+        rec.group === "tools" ||
+        rec.group === "free"
+          ? rec.group
+          : undefined,
+      color: typeof rec.color === "string" ? rec.color : undefined,
+      estimated: typeof rec.estimated === "boolean" ? rec.estimated : undefined,
+    });
+  }
+  return parsed;
+}
+
+function summarizeContextCategories(
+  categories: readonly ContextBreakdownCategory[],
+): ContextBreakdownSummary {
+  let systemTokens = 0;
+  let conversationTokens = 0;
+  let toolTokens = 0;
+  for (const category of categories) {
+    if (category.group === "system") systemTokens += category.tokens;
+    else if (category.group === "tools") toolTokens += category.tokens;
+    else if (category.group === "conversation") conversationTokens += category.tokens;
+  }
+  return { systemTokens, conversationTokens, toolTokens };
+}
+
+/**
+ * Derives an honest context breakdown from provider categories, active post-compaction
+ * transcript items, or measured token splits without fabricating unreported categories.
+ */
+export function deriveSessionContextBreakdown(input: {
+  readonly serverProjection?: SessionProjectionLike | null | undefined;
+  readonly activeContextWindow?: ContextWindowSnapshot | null | undefined;
+  readonly providerCategories?: readonly ContextBreakdownCategoryInput[] | undefined;
+  readonly compactionCountOverride?: number | undefined;
+}): SessionContextBreakdown {
+  const { serverProjection = null, activeContextWindow = null, providerCategories } = input;
+
+  const runs = serverProjection?.runs ?? [];
+  const rolledBackRunIds = new Set(
+    runs.filter((run) => run.status === "rolled_back").map((run) => run.id),
+  );
+  const rawTurnItems =
+    serverProjection?.turnItems && serverProjection.turnItems.length > 0
+      ? serverProjection.turnItems
+      : (serverProjection?.visibleTurnItems ?? []).map((entry) => entry.item);
+
+  // 1. Count real compactions (completed compaction turn items + sharp turn-over-turn drops).
+  let explicitCompactions = 0;
+  let lastCompletedCompactionIdx = -1;
+  for (let i = 0; i < rawTurnItems.length; i += 1) {
+    const item = rawTurnItems[i]!;
+    if (item.runId !== null && rolledBackRunIds.has(item.runId)) continue;
+    if (item.type === "compaction" && item.status === "completed") {
+      explicitCompactions += 1;
+      lastCompletedCompactionIdx = i;
+    }
+  }
+
+  let detectedDrops = 0;
+  let prevTurnUsed = 0;
+  for (const turn of serverProjection?.providerTurns ?? []) {
+    const used =
+      nonNegInt(turn.tokenUsage?.usedTokens) || nonNegInt(turn.turnTokenUsage?.inputTokens);
+    if (used <= 0) continue;
+    if (prevTurnUsed > 0 && used < prevTurnUsed * 0.72 && prevTurnUsed - used > 30_000) {
+      detectedDrops += 1;
+    }
+    prevTurnUsed = used;
+  }
+
+  const compactionCount =
+    typeof input.compactionCountOverride === "number" &&
+    Number.isFinite(input.compactionCountOverride)
+      ? Math.max(0, Math.round(input.compactionCountOverride))
+      : Math.max(explicitCompactions, detectedDrops);
+
+  // 2. Authoritative window totals
+  const usedTokens =
+    typeof activeContextWindow?.usedTokens === "number" &&
+    Number.isFinite(activeContextWindow.usedTokens) &&
+    activeContextWindow.usedTokens >= 0
+      ? Math.round(activeContextWindow.usedTokens)
+      : null;
+  const maxTokens =
+    typeof activeContextWindow?.maxTokens === "number" &&
+    Number.isFinite(activeContextWindow.maxTokens) &&
+    activeContextWindow.maxTokens > 0
+      ? Math.round(activeContextWindow.maxTokens)
+      : null;
+  const remainingTokens =
+    usedTokens !== null && maxTokens !== null
+      ? Math.max(0, maxTokens - usedTokens)
+      : maxTokens !== null
+        ? maxTokens
+        : null;
+  const usedPercent =
+    usedTokens !== null && maxTokens !== null && maxTokens > 0
+      ? (usedTokens / maxTokens) * 100
+      : null;
+  const remainingPercent =
+    usedPercent !== null ? Math.max(0, 100 - usedPercent) : maxTokens !== null ? 100 : null;
+
+  const pctOfMax = (tokens: number): number | null =>
+    maxTokens !== null && maxTokens > 0 ? Number(((tokens / maxTokens) * 100).toFixed(1)) : null;
+
+  const withRemainingRow = (
+    activeRows: ContextBreakdownCategory[],
+  ): readonly ContextBreakdownCategory[] => {
+    if (remainingTokens === null) return activeRows;
+    return [
+      ...activeRows,
+      {
+        key: "free",
+        label: "free",
+        tokens: remainingTokens,
+        percent: pctOfMax(remainingTokens),
+        group: "free",
+        color: resolveBreakdownColor("free", activeRows.length),
+        estimated: false,
+      },
+    ];
+  };
+
+  // Path 1: Fine-grained provider-reported categories
+  const reportedCategories = extractProviderContextCategories(
+    activeContextWindow,
+    providerCategories,
+  )
+    .map((cat, idx) => {
+      const key = normalizeBreakdownCategoryKey(cat.key, cat.label, idx);
+      return {
+        ...cat,
+        key,
+        group: cat.group ?? classifyBreakdownGroup(key, cat.label),
+      };
+    })
+    .filter((cat) => cat.key !== "free" && Number.isFinite(cat.tokens) && cat.tokens > 0);
+
+  if (reportedCategories.length > 0) {
+    const targetUsed =
+      usedTokens !== null && usedTokens > 0
+        ? usedTokens
+        : Math.round(reportedCategories.reduce((acc, c) => acc + c.tokens, 0));
+    const apportioned = apportionTokensLargestRemainder(
+      reportedCategories.map((c) => c.tokens),
+      targetUsed,
+    );
+    const activeRows: ContextBreakdownCategory[] = reportedCategories.map((cat, idx) => {
+      const tokens = apportioned[idx] ?? 0;
+      return {
+        key: cat.key,
+        label: cat.label,
+        tokens,
+        percent: pctOfMax(tokens),
+        group: cat.group,
+        color: resolveBreakdownColor(cat.key, idx, cat.color),
+        estimated: cat.estimated === true,
+      };
+    });
+    const categories = withRemainingRow(activeRows);
+    return {
+      usedTokens: usedTokens ?? targetUsed,
+      maxTokens,
+      remainingTokens,
+      usedPercent,
+      remainingPercent,
+      compactionCount,
+      source: "provider-categories",
+      summary: summarizeContextCategories(activeRows),
+      categories,
+    };
+  }
+
+  // Path 5: Empty / no measured used tokens yet
+  if (usedTokens === null || usedTokens <= 0) {
+    const categories = maxTokens !== null ? withRemainingRow([]) : [];
+    return {
+      usedTokens,
+      maxTokens,
+      remainingTokens,
+      usedPercent,
+      remainingPercent,
+      compactionCount,
+      source: "empty",
+      summary: { systemTokens: 0, conversationTokens: 0, toolTokens: 0 },
+      categories,
+    };
+  }
+
+  // Path 2: Honest decomposition from real active post-compaction transcript items
+  const activeItems =
+    lastCompletedCompactionIdx >= 0 ? rawTurnItems.slice(lastCompletedCompactionIdx) : rawTurnItems;
+  let conversationEst = 0;
+  let reasoningEst = 0;
+  let toolsEst = 0;
+  let systemNoticeEst = 0;
+  const seenMessageIds = new Set<string>();
+
+  for (const item of activeItems) {
+    if (item.runId !== null && rolledBackRunIds.has(item.runId)) continue;
+    const raw = item as unknown as Record<string, unknown>;
+    switch (item.type) {
+      case "user_message": {
+        if (typeof raw.messageId === "string") seenMessageIds.add(raw.messageId);
+        if (typeof raw.text === "string") conversationEst += estimateContextTextTokens(raw.text);
+        if (Array.isArray(raw.attachments) && raw.attachments.length > 0) {
+          conversationEst += raw.attachments.length * 40;
+        }
+        break;
+      }
+      case "assistant_message": {
+        if (typeof raw.messageId === "string") seenMessageIds.add(raw.messageId);
+        if (typeof raw.text === "string") conversationEst += estimateContextTextTokens(raw.text);
+        break;
+      }
+      case "proposed_plan": {
+        if (typeof raw.markdown === "string")
+          conversationEst += estimateContextTextTokens(raw.markdown);
+        break;
+      }
+      case "todo_list": {
+        if (typeof raw.explanation === "string")
+          conversationEst += estimateContextTextTokens(raw.explanation);
+        if (Array.isArray(raw.steps))
+          conversationEst += estimateUnknownPayloadTokens(raw.steps, 4_000);
+        break;
+      }
+      case "compaction": {
+        if (typeof raw.summary === "string")
+          conversationEst += estimateContextTextTokens(raw.summary);
+        break;
+      }
+      case "handoff": {
+        if (typeof raw.summary === "string")
+          systemNoticeEst += estimateContextTextTokens(raw.summary);
+        break;
+      }
+      case "system_notice": {
+        if (typeof raw.message === "string")
+          systemNoticeEst += estimateContextTextTokens(raw.message);
+        break;
+      }
+      case "notification": {
+        if (typeof raw.summary === "string")
+          systemNoticeEst += estimateContextTextTokens(raw.summary);
+        if (typeof raw.detail === "string")
+          systemNoticeEst += estimateContextTextTokens(raw.detail);
+        break;
+      }
+      case "reasoning": {
+        if (typeof raw.text === "string") reasoningEst += estimateContextTextTokens(raw.text);
+        break;
+      }
+      case "command_execution": {
+        if (typeof raw.input === "string") toolsEst += estimateContextTextTokens(raw.input);
+        if (typeof raw.output === "string") toolsEst += estimateContextTextTokens(raw.output);
+        break;
+      }
+      case "file_change": {
+        if (typeof raw.fileName === "string") toolsEst += estimateContextTextTokens(raw.fileName);
+        if (typeof raw.diffStr === "string") toolsEst += estimateContextTextTokens(raw.diffStr);
+        else {
+          if (typeof raw.oldStr === "string") toolsEst += estimateContextTextTokens(raw.oldStr);
+          if (typeof raw.newStr === "string") toolsEst += estimateContextTextTokens(raw.newStr);
+        }
+        break;
+      }
+      case "file_search": {
+        if (typeof raw.pattern === "string") toolsEst += estimateContextTextTokens(raw.pattern);
+        if (raw.results !== undefined)
+          toolsEst += estimateUnknownPayloadTokens(raw.results, 12_000);
+        break;
+      }
+      case "web_search": {
+        if (raw.patterns !== undefined)
+          toolsEst += estimateUnknownPayloadTokens(raw.patterns, 4_000);
+        if (raw.results !== undefined)
+          toolsEst += estimateUnknownPayloadTokens(raw.results, 12_000);
+        break;
+      }
+      case "dynamic_tool": {
+        if (typeof raw.toolName === "string") toolsEst += estimateContextTextTokens(raw.toolName);
+        if (raw.input !== undefined) toolsEst += estimateUnknownPayloadTokens(raw.input, 8_000);
+        if (raw.output !== undefined) toolsEst += estimateUnknownPayloadTokens(raw.output, 16_000);
+        break;
+      }
+      case "subagent": {
+        if (typeof raw.prompt === "string") toolsEst += estimateContextTextTokens(raw.prompt);
+        if (typeof raw.result === "string") toolsEst += estimateContextTextTokens(raw.result);
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  // Include projection.messages not already counted via turnItems (only when uncompacted so we don't recount compacted msgs).
+  if (lastCompletedCompactionIdx < 0) {
+    for (const msg of serverProjection?.messages ?? []) {
+      if (msg.id && seenMessageIds.has(msg.id)) continue;
+      if (typeof msg.text === "string" && msg.text.length > 0) {
+        conversationEst += estimateContextTextTokens(msg.text);
+      }
+    }
+  }
+
+  const transcriptTotal = conversationEst + reasoningEst + toolsEst + systemNoticeEst;
+  if (transcriptTotal > 0) {
+    const rawBuckets: Array<{
+      readonly key: string;
+      readonly label: string;
+      readonly group: ContextBreakdownGroup;
+      readonly weight: number;
+    }> = [];
+
+    if (transcriptTotal < usedTokens) {
+      const systemOverhead = systemNoticeEst + (usedTokens - transcriptTotal);
+      if (systemOverhead > 0) {
+        rawBuckets.push({
+          key: "system",
+          label: "system",
+          group: "system",
+          weight: systemOverhead,
+        });
+      }
+      if (toolsEst > 0) {
+        rawBuckets.push({ key: "tools", label: "tools", group: "tools", weight: toolsEst });
+      }
+      if (reasoningEst > 0) {
+        rawBuckets.push({
+          key: "reasoning",
+          label: "reasoning",
+          group: "conversation",
+          weight: reasoningEst,
+        });
+      }
+      if (conversationEst > 0) {
+        rawBuckets.push({
+          key: "messages",
+          label: "messages",
+          group: "conversation",
+          weight: conversationEst,
+        });
+      }
+    } else {
+      if (systemNoticeEst > 0) {
+        rawBuckets.push({
+          key: "system",
+          label: "system",
+          group: "system",
+          weight: systemNoticeEst,
+        });
+      }
+      if (toolsEst > 0) {
+        rawBuckets.push({ key: "tools", label: "tools", group: "tools", weight: toolsEst });
+      }
+      if (reasoningEst > 0) {
+        rawBuckets.push({
+          key: "reasoning",
+          label: "reasoning",
+          group: "conversation",
+          weight: reasoningEst,
+        });
+      }
+      if (conversationEst > 0) {
+        rawBuckets.push({
+          key: "messages",
+          label: "messages",
+          group: "conversation",
+          weight: conversationEst,
+        });
+      }
+    }
+
+    const apportioned = apportionTokensLargestRemainder(
+      rawBuckets.map((b) => b.weight),
+      usedTokens,
+    );
+    const activeRows: ContextBreakdownCategory[] = rawBuckets
+      .map((bucket, idx) => ({
+        key: bucket.key,
+        label: bucket.label,
+        tokens: apportioned[idx] ?? 0,
+        percent: pctOfMax(apportioned[idx] ?? 0),
+        group: bucket.group,
+        color: resolveBreakdownColor(bucket.key, idx),
+        estimated: true,
+      }))
+      .filter((row) => row.tokens > 0);
+
+    const categories = withRemainingRow(activeRows);
+    return {
+      usedTokens,
+      maxTokens,
+      remainingTokens,
+      usedPercent,
+      remainingPercent,
+      compactionCount,
+      source: "transcript-estimate",
+      summary: summarizeContextCategories(activeRows),
+      categories,
+    };
+  }
+
+  // Path 3: Honest provider-reported input / cached / output token split when no transcript items exist
+  const cachedInput = nonNegInt(
+    activeContextWindow?.lastCachedInputTokens ?? activeContextWindow?.cachedInputTokens,
+  );
+  const rawInput = nonNegInt(
+    activeContextWindow?.lastInputTokens ?? activeContextWindow?.inputTokens,
+  );
+  const uncachedInput = Math.max(0, rawInput - cachedInput);
+  const outputTokens = nonNegInt(
+    activeContextWindow?.lastOutputTokens ?? activeContextWindow?.outputTokens,
+  );
+  const usageBuckets: Array<{
+    readonly key: string;
+    readonly label: string;
+    readonly group: ContextBreakdownGroup;
+    readonly weight: number;
+  }> = [];
+  if (cachedInput > 0) {
+    usageBuckets.push({
+      key: "cached_context",
+      label: "cached_context",
+      group: "system",
+      weight: cachedInput,
+    });
+  }
+  if (uncachedInput > 0) {
+    usageBuckets.push({
+      key: "uncached_input",
+      label: "uncached_input",
+      group: "conversation",
+      weight: uncachedInput,
+    });
+  }
+  if (outputTokens > 0) {
+    usageBuckets.push({
+      key: "output",
+      label: "output",
+      group: "conversation",
+      weight: outputTokens,
+    });
+  }
+
+  if (usageBuckets.length >= 2) {
+    const apportioned = apportionTokensLargestRemainder(
+      usageBuckets.map((b) => b.weight),
+      usedTokens,
+    );
+    const activeRows: ContextBreakdownCategory[] = usageBuckets
+      .map((bucket, idx) => ({
+        key: bucket.key,
+        label: bucket.label,
+        tokens: apportioned[idx] ?? 0,
+        percent: pctOfMax(apportioned[idx] ?? 0),
+        group: bucket.group,
+        color: resolveBreakdownColor(bucket.key, idx),
+        estimated: false,
+      }))
+      .filter((row) => row.tokens > 0);
+    const categories = withRemainingRow(activeRows);
+    return {
+      usedTokens,
+      maxTokens,
+      remainingTokens,
+      usedPercent,
+      remainingPercent,
+      compactionCount,
+      source: "usage-split",
+      summary: summarizeContextCategories(activeRows),
+      categories,
+    };
+  }
+
+  // Path 4: Bare usedTokens only (no transcript items and no input/cached/output split)
+  const usedRow: ContextBreakdownCategory = {
+    key: "used",
+    label: "used",
+    tokens: usedTokens,
+    percent: pctOfMax(usedTokens),
+    group: "conversation",
+    color: resolveBreakdownColor("used", 0),
+    estimated: false,
+  };
+  const activeRows = [usedRow];
+  return {
+    usedTokens,
+    maxTokens,
+    remainingTokens,
+    usedPercent,
+    remainingPercent,
+    compactionCount,
+    source: "total-only",
+    summary: summarizeContextCategories(activeRows),
+    categories: withRemainingRow(activeRows),
   };
 }
 
@@ -730,8 +1521,7 @@ export function deriveSessionTelemetryDetail(
   }
 
   const mergedToolIntervals = mergeTimeIntervals(toolIntervals);
-  const rawToolDurationMs =
-    sumIntervalMs(mergedToolIntervals) + workflowExtraDurationMs;
+  const rawToolDurationMs = sumIntervalMs(mergedToolIntervals) + workflowExtraDurationMs;
   const toolCallDurationMs = rawToolDurationMs > 0 ? rawToolDurationMs : null;
 
   // 3. Per-turn tokens, timings, TTFT, TPS, multi-model distribution, and native subagent usage
@@ -771,8 +1561,7 @@ export function deriveSessionTelemetryDetail(
   for (const turn of turns) {
     const extracted = extractTurnUsageDetail(turn);
     const observed = turnTimingsById?.get(turn.id);
-    const startedMs =
-      parseTelemetryTimestampMs(turn.startedAt) ?? observed?.turnStartedAt ?? null;
+    const startedMs = parseTelemetryTimestampMs(turn.startedAt) ?? observed?.turnStartedAt ?? null;
     const completedMs = parseTelemetryTimestampMs(turn.completedAt);
     const wallDurationMs =
       startedMs !== null && completedMs !== null && completedMs >= startedMs
@@ -792,10 +1581,7 @@ export function deriveSessionTelemetryDetail(
         : (wallDurationMs ?? extracted.modelDurationMs);
     // Prefer authoritative server-reported TTFT over noisy client WS receive timestamps,
     // and enforce physical invariant `ttftMs <= durationMs`.
-    const ttftMs = clampTtftToDuration(
-      extracted.ttftMs ?? observedTtftMs,
-      clampedDurationBound,
-    );
+    const ttftMs = clampTtftToDuration(extracted.ttftMs ?? observedTtftMs, clampedDurationBound);
 
     if (startedMs !== null && completedMs !== null && completedMs > startedMs) {
       turnIntervals.push([startedMs, completedMs]);
@@ -830,8 +1616,7 @@ export function deriveSessionTelemetryDetail(
       totalReasoning += extracted.reasoningTokens;
       sessionTotalTokens += extracted.totalTokens;
 
-      const primaryModelRaw =
-        extracted.reportedModels[0] ?? activeModel?.trim() ?? null;
+      const primaryModelRaw = extracted.reportedModels[0] ?? activeModel?.trim() ?? null;
       const primaryModel = primaryModelRaw ? unwrapUsageModelSlug(primaryModelRaw) : null;
       if (primaryModel && primaryModel !== "unknown") {
         tokensByModel.set(
@@ -851,31 +1636,21 @@ export function deriveSessionTelemetryDetail(
       }
     }
 
-    if (
-      turn.status !== "running" &&
-      turn.status !== "pending" &&
-      extracted.outputTokens > 0
-    ) {
-      if (extracted.decodeMs !== null && extracted.decodeMs > 0) {
-        const turnTps = extracted.outputTokens / (extracted.decodeMs / 1_000);
+    if (turn.status !== "running" && turn.status !== "pending" && extracted.outputTokens > 0) {
+      const effectiveGenMs = resolveEffectiveDecodeDurationMs(
+        extracted.outputTokens,
+        durationMs,
+        ttftMs,
+        extracted.decodeMs,
+      );
+      if (effectiveGenMs !== null) {
+        const turnTps = extracted.outputTokens / (effectiveGenMs / 1_000);
         if (Number.isFinite(turnTps) && turnTps > 0) {
           latestRequestTps = turnTps;
           tpsSum += turnTps;
           tpsSampleCount += 1;
           timedOutputSum += extracted.outputTokens;
-          timedGenMsSum += extracted.decodeMs;
-        }
-      } else if (durationMs !== null && durationMs > 0) {
-        const turnTps = computeOutputTps(extracted.outputTokens, durationMs, ttftMs);
-        if (turnTps !== null) {
-          latestRequestTps = turnTps;
-          tpsSum += turnTps;
-          tpsSampleCount += 1;
-          const genMs = ttftMs !== null && durationMs > ttftMs ? durationMs - ttftMs : durationMs;
-          if (genMs > 0) {
-            timedOutputSum += extracted.outputTokens;
-            timedGenMsSum += genMs;
-          }
+          timedGenMsSum += effectiveGenMs;
         }
       }
     }
@@ -896,8 +1671,7 @@ export function deriveSessionTelemetryDetail(
     const reasoning = Math.min(
       output,
       nonNegInt(
-        activeContextWindow.lastReasoningOutputTokens ??
-          activeContextWindow.reasoningOutputTokens,
+        activeContextWindow.lastReasoningOutputTokens ?? activeContextWindow.reasoningOutputTokens,
       ),
     );
     const fallbackTotal = Math.max(
@@ -939,7 +1713,8 @@ export function deriveSessionTelemetryDetail(
   if (totalTurnWallMs > 0) {
     const toolOverlapInsideTurns = overlapDurationMs(mergedTurnIntervals, mergedToolIntervals);
     const netModelMs = totalTurnWallMs - toolOverlapInsideTurns;
-    modelCallDurationMs = (netModelMs > 0 ? netModelMs : totalTurnWallMs) + turnExtraModelDurationMs;
+    modelCallDurationMs =
+      (netModelMs > 0 ? netModelMs : totalTurnWallMs) + turnExtraModelDurationMs;
   } else if (turnExtraModelDurationMs > 0) {
     modelCallDurationMs = Math.round(turnExtraModelDurationMs);
   } else if (activeContextWindow?.durationMs && activeContextWindow.durationMs > 0) {
@@ -962,8 +1737,7 @@ export function deriveSessionTelemetryDetail(
     ttftSampleCount = 1;
   }
 
-  const effectiveSubagentCount =
-    subagentCount > 0 ? subagentCount : turnsWithSubagents;
+  const effectiveSubagentCount = subagentCount > 0 ? subagentCount : turnsWithSubagents;
   const subagentTotalTokens =
     Math.max(otherUsageTotal, nativeWorkflowTokens) + appOwnedSubagentTokens;
 
@@ -984,20 +1758,18 @@ export function deriveSessionTelemetryDetail(
   const avgTtftMs = ttftSampleCount > 0 ? ttftSum / ttftSampleCount : null;
   const textOutputTokens = Math.max(0, totalOutput - totalReasoning);
   const effectiveUncachedInput = totalUncached + totalCacheCreate;
-  const cacheHitRate = computeCacheHitRate(
-    totalUncached,
-    totalCached,
-    totalCacheCreate,
-  );
-  const modelDistribution = buildModelDistribution(
-    tokensByModel,
-    providerStatuses,
-    activeProvider,
-  );
+  const cacheHitRate = computeCacheHitRate(totalUncached, totalCached, totalCacheCreate);
+  const modelDistribution = buildModelDistribution(tokensByModel, providerStatuses, activeProvider);
 
   const latestSampledModelDisplayName = latestSampledModelId
     ? resolveModelDisplayName(latestSampledModelId, providerStatuses, activeProvider)
     : null;
+
+  const contextBreakdown = deriveSessionContextBreakdown({
+    serverProjection,
+    activeContextWindow,
+    providerCategories: input.contextBreakdownCategories,
+  });
 
   return {
     threadId,
@@ -1026,6 +1798,8 @@ export function deriveSessionTelemetryDetail(
     distinctSampledModels,
     latestSampledModelId,
     latestSampledModelDisplayName,
+    compactionCount: contextBreakdown.compactionCount,
+    contextBreakdown,
     updatedAt: now,
   };
 }
@@ -1039,10 +1813,7 @@ function localDayKeyFromMs(timestampMs: number): string {
 }
 
 export function resolveGlobalTodayAndMonthTokens(input: {
-  readonly mergedUsage?:
-    | Pick<MergedUsage, "totalTokens" | "daily">
-    | null
-    | undefined;
+  readonly mergedUsage?: Pick<MergedUsage, "totalTokens" | "daily"> | null | undefined;
   readonly todayDay?: string | null | undefined;
   readonly callLogs?: readonly UsageCallLogRecord[] | undefined;
 }): { readonly todayTokens: number; readonly monthTokens: number } {
@@ -1110,10 +1881,7 @@ export function resolveSessionTelemetryDisplay(
   const threadId = input.threadId ?? detail?.threadId ?? live?.threadId ?? null;
 
   // Strictly thread-scoped call logs (never pull other threads into active session!)
-  const threadLogs =
-    threadId !== null
-      ? callLogs.filter((log) => log.threadId === threadId)
-      : [];
+  const threadLogs = threadId !== null ? callLogs.filter((log) => log.threadId === threadId) : [];
 
   // Aggregate thread-scoped logs in chronological/recency order
   let logTotalTokens = 0;
@@ -1205,7 +1973,8 @@ export function resolveSessionTelemetryDisplay(
   const contextPercent = live?.contextPercent ?? derivedContextPercent;
 
   // Choose authoritative current-session token source (detail > threadLogs > live > contextWindow)
-  const useDetailTokens = (detail?.sessionTotalTokens ?? 0) >= logTotalTokens && (detail?.sessionTotalTokens ?? 0) > 0;
+  const useDetailTokens =
+    (detail?.sessionTotalTokens ?? 0) >= logTotalTokens && (detail?.sessionTotalTokens ?? 0) > 0;
   const contextWindowFallbackTotal = contextWindow
     ? Math.max(nonNegInt(contextWindow.totalProcessedTokens), nonNegInt(contextWindow.usedTokens))
     : 0;
@@ -1249,9 +2018,7 @@ export function resolveSessionTelemetryDisplay(
     const output = nonNegInt(contextWindow.lastOutputTokens ?? contextWindow.outputTokens);
     const reasoning = Math.min(
       output,
-      nonNegInt(
-        contextWindow.lastReasoningOutputTokens ?? contextWindow.reasoningOutputTokens,
-      ),
+      nonNegInt(contextWindow.lastReasoningOutputTokens ?? contextWindow.reasoningOutputTokens),
     );
     uncachedInputTokens = uncached;
     cachedInputTokens = cached;
@@ -1291,11 +2058,7 @@ export function resolveSessionTelemetryDisplay(
     sessionTotalTokens > 0 && (detail?.samples ?? 0) === 0 && threadLogs.length === 0 ? 1 : 0,
   );
   const rounds =
-    detail && detail.rounds > 0
-      ? detail.rounds
-      : samples > 0
-        ? Math.max(1, threadLogs.length)
-        : 0;
+    detail && detail.rounds > 0 ? detail.rounds : samples > 0 ? Math.max(1, threadLogs.length) : 0;
   const steps = detail && detail.steps > 0 ? detail.steps : samples;
   const modelCallDurationMs =
     detail?.modelCallDurationMs ?? (logDurationSum > 0 ? logDurationSum : null);
@@ -1303,10 +2066,7 @@ export function resolveSessionTelemetryDisplay(
 
   // Subagents & aggregated task tokens
   const subagentCount = detail?.subagentCount ?? 0;
-  const subagentTotalTokens = Math.max(
-    detail?.subagentTotalTokens ?? 0,
-    childThreadSubagentTokens,
-  );
+  const subagentTotalTokens = Math.max(detail?.subagentTotalTokens ?? 0, childThreadSubagentTokens);
   const aggregatedTaskTotalTokens = sessionTotalTokens + subagentTotalTokens;
 
   // Multi-model distribution (strictly current session)
@@ -1342,8 +2102,9 @@ export function resolveSessionTelemetryDisplay(
     detail?.latestSampledModelId ??
     logLatestModelId ??
     (live?.model && live.model !== "unknown" ? unwrapUsageModelSlug(live.model) : null);
-  const cleanedSelectedModelId =
-    selectedModelId?.trim() ? unwrapUsageModelSlug(selectedModelId.trim()) : null;
+  const cleanedSelectedModelId = selectedModelId?.trim()
+    ? unwrapUsageModelSlug(selectedModelId.trim())
+    : null;
   const primaryEntrypointId = sampledRawModelId ?? cleanedSelectedModelId;
   const sampledModelDisplayName =
     detail?.latestSampledModelDisplayName ??
@@ -1362,6 +2123,17 @@ export function resolveSessionTelemetryDisplay(
       todayDay,
       callLogs,
     });
+
+  const detailBreakdownMatchesWindow =
+    detail?.contextBreakdown !== undefined &&
+    detail.contextBreakdown.usedTokens === contextUsedTokens &&
+    detail.contextBreakdown.maxTokens === contextMaxTokens;
+  const contextBreakdown = detailBreakdownMatchesWindow
+    ? detail.contextBreakdown
+    : deriveSessionContextBreakdown({
+        activeContextWindow: contextWindow,
+        compactionCountOverride: detail?.compactionCount,
+      });
 
   return {
     tps: triggerTps,
@@ -1402,18 +2174,40 @@ export function resolveSessionTelemetryDisplay(
     primaryEntrypointId,
     distinctSampledModelCount: distinctSampledModelSet.size,
     hasMultipleSampledModels: distinctSampledModelSet.size >= 2,
+    compactionCount: contextBreakdown.compactionCount,
+    contextBreakdown,
   };
 }
 
 // ── Per-thread detail external store (bridges ChatView -> inline ChatComposer strip) ──
 
 const publishedSessionDetails = new Map<string, SessionTelemetryDetailSnapshot>();
+const sessionDetailOwners = new Map<string, number>();
 const sessionDetailListeners = new Set<() => void>();
 
 function notifySessionDetailListeners(): void {
   for (const listener of sessionDetailListeners) {
     listener();
   }
+}
+
+export function retainSessionTelemetryDetailOwner(threadId: string | null | undefined): () => void {
+  if (!threadId) return () => {};
+  sessionDetailOwners.set(threadId, (sessionDetailOwners.get(threadId) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const nextCount = (sessionDetailOwners.get(threadId) ?? 1) - 1;
+    if (nextCount > 0) {
+      sessionDetailOwners.set(threadId, nextCount);
+      return;
+    }
+    sessionDetailOwners.delete(threadId);
+    if (publishedSessionDetails.delete(threadId)) {
+      notifySessionDetailListeners();
+    }
+  };
 }
 
 export function publishSessionTelemetryDetail(
@@ -1427,8 +2221,25 @@ export function publishSessionTelemetryDetail(
     notifySessionDetailListeners();
     return;
   }
+  // Refresh LRU order (delete + re-insert moves entry to MRU tail) and enforce 50-entry cap (L10).
+  if (publishedSessionDetails.has(threadId)) {
+    publishedSessionDetails.delete(threadId);
+  }
   publishedSessionDetails.set(threadId, detail);
+  while (publishedSessionDetails.size > MAX_PUBLISHED_SESSION_DETAILS) {
+    const oldestKey = publishedSessionDetails.keys().next().value;
+    if (oldestKey === undefined) break;
+    publishedSessionDetails.delete(oldestKey);
+  }
   notifySessionDetailListeners();
+}
+
+export function deleteSessionTelemetryDetail(threadId: string | null | undefined): void {
+  publishSessionTelemetryDetail(threadId, null);
+}
+
+export function getPublishedSessionDetailCount(): number {
+  return publishedSessionDetails.size;
 }
 
 export function getSessionTelemetryDetail(
@@ -1439,6 +2250,7 @@ export function getSessionTelemetryDetail(
 }
 
 export function clearSessionTelemetryDetails(): void {
+  sessionDetailOwners.clear();
   if (publishedSessionDetails.size === 0) return;
   publishedSessionDetails.clear();
   notifySessionDetailListeners();

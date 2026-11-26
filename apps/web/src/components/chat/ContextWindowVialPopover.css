@@ -1,0 +1,113 @@
+/* Prismux Context Window Liquid Test-Tube & Breakdown Popover (0-token pure host visual layer) */
+
+[data-telemetry-popover="context"] {
+  width: 480px;
+  max-width: calc(100vw - 1.5rem);
+  --pmx-vial-glass-rim: rgba(255, 255, 255, 0.84);
+  --pmx-vial-glass-core-a: rgba(226, 232, 240, 0.48);
+  --pmx-vial-glass-core-b: rgba(203, 213, 225, 0.56);
+  --pmx-vial-glass-stroke: rgba(15, 23, 42, 0.2);
+  --pmx-vial-glass-lip: rgba(255, 255, 255, 0.92);
+  --pmx-vial-glass-specular-a: rgba(255, 255, 255, 0.68);
+  --pmx-vial-glass-specular-b: rgba(255, 255, 255, 0.18);
+  --pmx-vial-tick-stroke: rgba(15, 23, 42, 0.28);
+  --pmx-vial-tick-text: rgba(15, 23, 42, 0.72);
+  --pmx-vial-tick-halo: rgba(255, 255, 255, 0.62);
+  --pmx-vial-glow-opacity: 0.22;
+  --pmx-vial-stratum-fill: rgba(255, 255, 255, 0.3);
+  --pmx-vial-stratum-stroke: rgba(255, 255, 255, 0.85);
+  --pmx-context-free-swatch: rgba(15, 23, 42, 0.22);
+}
+
+:is(html.dark, .dark, html[data-pmx-theme="dark"], [data-pmx-theme="dark"])
+  [data-telemetry-popover="context"] {
+  --pmx-vial-glass-rim: rgba(255, 255, 255, 0.14);
+  --pmx-vial-glass-core-a: rgba(18, 20, 26, 0.62);
+  --pmx-vial-glass-core-b: rgba(12, 14, 19, 0.74);
+  --pmx-vial-glass-stroke: rgba(255, 255, 255, 0.22);
+  --pmx-vial-glass-lip: rgba(255, 255, 255, 0.42);
+  --pmx-vial-glass-specular-a: rgba(255, 255, 255, 0.22);
+  --pmx-vial-glass-specular-b: rgba(255, 255, 255, 0.05);
+  --pmx-vial-tick-stroke: rgba(255, 255, 255, 0.28);
+  --pmx-vial-tick-text: rgba(255, 255, 255, 0.78);
+  --pmx-vial-tick-halo: rgba(10, 12, 16, 0.65);
+  --pmx-vial-glow-opacity: 0.38;
+  --pmx-vial-stratum-fill: rgba(255, 255, 255, 0.28);
+  --pmx-vial-stratum-stroke: rgba(255, 255, 255, 0.85);
+  --pmx-context-free-swatch: rgba(255, 255, 255, 0.24);
+}
+
+[data-context-vial-grid="true"] {
+  display: grid;
+  grid-template-columns: 128px minmax(0, 1fr);
+  gap: 12px;
+}
+
+@media (max-width: 440px) {
+  [data-context-vial-grid="true"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+[data-context-vial="true"] {
+  width: 104px;
+  height: 196px;
+}
+
+[data-context-breakdown-rows="true"] {
+  max-height: 272px;
+}
+
+@keyframes pmx-vial-bubble-rise {
+  0% {
+    transform: translate3d(0, 10px, 0) scale(0.85);
+    opacity: 0;
+  }
+  20% {
+    opacity: 0.72;
+  }
+  80% {
+    opacity: 0.58;
+  }
+  100% {
+    transform: translate3d(2px, -24px, 0) scale(1.05);
+    opacity: 0;
+  }
+}
+
+@keyframes pmx-vial-meniscus-drift {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(-4px);
+  }
+}
+
+[data-context-vial-bubble="true"] {
+  animation: pmx-vial-bubble-rise var(--pmx-bubble-dur, 4.8s) ease-in-out
+    var(--pmx-bubble-delay, 0s) infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+[data-context-vial-wave="back"] {
+  animation: pmx-vial-meniscus-drift 5.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-context-vial-bubble="true"],
+  [data-context-vial-wave="back"] {
+    animation: none !important;
+  }
+}
+
+@media (forced-colors: active) {
+  [data-telemetry-popover="context"] {
+    --pmx-vial-glass-stroke: CanvasText;
+    --pmx-vial-tick-stroke: CanvasText;
+    --pmx-vial-tick-text: CanvasText;
+    --pmx-vial-tick-halo: Canvas;
+  }
+}

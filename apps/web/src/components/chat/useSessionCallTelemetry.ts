@@ -21,10 +21,24 @@ import {
   deriveSessionTelemetryDetail,
   extractTurnUsageDetail,
   publishSessionTelemetryDetail,
+  retainSessionTelemetryDetailOwner,
   type SessionProjectionLike,
 } from "./sessionTelemetry.logic";
 
 const MIN_STREAMING_TPS_ELAPSED_MS = 200;
+export const MAX_TRACKED_TURNS_PER_THREAD = 200;
+
+function setBoundedMapEntry<K, V>(map: Map<K, V>, key: K, value: V, maxEntries: number): void {
+  if (map.has(key)) {
+    map.delete(key);
+  }
+  map.set(key, value);
+  while (map.size > maxEntries) {
+    const oldestKey = map.keys().next().value;
+    if (oldestKey === undefined) break;
+    map.delete(oldestKey);
+  }
+}
 
 export interface ExtractedTurnTokens {
   readonly uncachedInputTokens: number;
@@ -136,9 +150,7 @@ export function extractProviderTurnTokenCounts(
   };
 }
 
-function mapTurnStatusToCallStatus(
-  status: OrchestrationV2ProviderTurn["status"],
-): UsageCallStatus {
+function mapTurnStatusToCallStatus(status: OrchestrationV2ProviderTurn["status"]): UsageCallStatus {
   switch (status) {
     case "running":
     case "pending":
@@ -173,8 +185,10 @@ export function deriveContextOccupancyPercent(
 }
 
 function countStreamingOutputChars(
-  serverProjection: Pick<ThreadStructure, "messages"> &
-    Partial<Pick<ThreadStructure, "turnItems" | "visibleTurnItems">> | null,
+  serverProjection:
+    | (Pick<ThreadStructure, "messages"> &
+        Partial<Pick<ThreadStructure, "turnItems" | "visibleTurnItems">>)
+    | null,
 ): number {
   if (!serverProjection) return 0;
   let total = 0;
@@ -324,29 +338,29 @@ export function deriveSessionTelemetryFromProjection(input: {
       totalCached += counts.cachedInputTokens;
       totalCacheCreate += counts.cacheCreationTokens;
     }
-    if (
-      turn.status !== "running" &&
-      turn.status !== "pending" &&
-      counts.outputTokens > 0
-    ) {
+    if (turn.status !== "running" && turn.status !== "pending" && counts.outputTokens > 0) {
       const extracted = extractTurnUsageDetail(turn);
-      if (extracted.decodeMs !== null && extracted.decodeMs > 0) {
-        const exactTps = counts.outputTokens / (extracted.decodeMs / 1_000);
-        if (Number.isFinite(exactTps) && exactTps > 0) {
-          latestTps = exactTps;
-        }
-      } else {
-        const startedMs = parseTelemetryTimestampMs(turn.startedAt);
-        const completedMs = parseTelemetryTimestampMs(turn.completedAt);
-        const durationMs =
-          startedMs !== null && completedMs !== null && completedMs > startedMs
-            ? completedMs - startedMs
-            : readExplicitTurnDurationMs(turn);
-        const clampedTtftMs = clampTtftToDuration(extracted.ttftMs, durationMs);
-        const computed = computeOutputTps(counts.outputTokens, durationMs, clampedTtftMs);
-        if (computed !== null) {
-          latestTps = computed;
-        }
+      const startedMs = parseTelemetryTimestampMs(turn.startedAt);
+      const completedMs = parseTelemetryTimestampMs(turn.completedAt);
+      const wallDurationMs =
+        startedMs !== null && completedMs !== null && completedMs > startedMs
+          ? completedMs - startedMs
+          : null;
+      const durationMs =
+        (extracted.modelDurationMs !== null && extracted.modelDurationMs > 0
+          ? extracted.modelDurationMs
+          : null) ??
+        wallDurationMs ??
+        readExplicitTurnDurationMs(turn);
+      const clampedTtftMs = clampTtftToDuration(extracted.ttftMs, durationMs);
+      const computed = computeOutputTps(
+        counts.outputTokens,
+        durationMs,
+        clampedTtftMs,
+        extracted.decodeMs,
+      );
+      if (computed !== null) {
+        latestTps = computed;
       }
     }
   }
@@ -358,9 +372,13 @@ export function deriveSessionTelemetryFromProjection(input: {
     const cached = nonNegInt(
       activeContextWindow.lastCachedInputTokens ?? activeContextWindow.cachedInputTokens,
     );
-    const rawInput = nonNegInt(activeContextWindow.lastInputTokens ?? activeContextWindow.inputTokens);
+    const rawInput = nonNegInt(
+      activeContextWindow.lastInputTokens ?? activeContextWindow.inputTokens,
+    );
     const uncached = Math.max(0, rawInput - cached);
-    const output = nonNegInt(activeContextWindow.lastOutputTokens ?? activeContextWindow.outputTokens);
+    const output = nonNegInt(
+      activeContextWindow.lastOutputTokens ?? activeContextWindow.outputTokens,
+    );
     const total = Math.max(nonNegInt(activeContextWindow.usedTokens), uncached + cached + output);
     if (total > 0) {
       latestTokens = {
@@ -452,11 +470,34 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
   const lastLivePatchFingerprintRef = useRef<string | null>(null);
   const lastDetailFingerprintRef = useRef<string | null>(null);
 
+  // Release per-thread published telemetry detail when this thread view switches or unmounts (L10)
+  // and clear per-thread turn timing/fingerprint maps on unmount (L12).
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- lifecycle ownership cleanup for module-level publishedSessionDetails LRU store
+  useEffect(() => {
+    const releaseOwner = retainSessionTelemetryDetailOwner(threadId);
+    return () => {
+      releaseOwner();
+    };
+  }, [threadId]);
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- clears per-thread tracking Maps on unmount to avoid retaining turn history
+  useEffect(() => {
+    const timingsMap = turnTimingsByIdRef.current;
+    const fingerprintsMap = recordedTurnFingerprintsRef.current;
+    return () => {
+      timingsMap.clear();
+      fingerprintsMap.clear();
+      activeTrackerRef.current = null;
+    };
+  }, []);
+
   // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- syncs external localStorage call-telemetry store and per-turn timing refs with live server projection
   useEffect(() => {
     if (lastObservedThreadIdRef.current !== threadId) {
       lastObservedThreadIdRef.current = threadId;
       activeTrackerRef.current = null;
+      turnTimingsByIdRef.current.clear();
+      recordedTurnFingerprintsRef.current.clear();
       lastLivePatchFingerprintRef.current = null;
       lastDetailFingerprintRef.current = null;
     }
@@ -498,7 +539,11 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
     // preserves measured TTFT & duration for turns in this session.
     const persistedByTurnId = new Map<
       string,
-      { readonly timestamp: number; readonly ttftMs: number | null; readonly durationMs: number | null }
+      {
+        readonly timestamp: number;
+        readonly ttftMs: number | null;
+        readonly durationMs: number | null;
+      }
     >();
     for (const log of getRecordedUsageCallLogs()) {
       if (log.threadId !== threadId || !log.turnId) continue;
@@ -512,8 +557,7 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
     }
 
     // 1. Track real turn start & exact first-token arrival while streaming.
-    const activeTurnKey =
-      derived.activeTurnId ?? (isWorking ? `active:${threadId}` : null);
+    const activeTurnKey = derived.activeTurnId ?? (isWorking ? `active:${threadId}` : null);
 
     if (activeTurnKey !== null) {
       const currentTracker = activeTrackerRef.current;
@@ -531,24 +575,33 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
         };
         activeTrackerRef.current = nextTracker;
         if (derived.activeTurnId) {
-          turnTimingsByIdRef.current.set(derived.activeTurnId, {
-            turnStartedAt,
-            firstTokenAt: null,
-          });
+          setBoundedMapEntry(
+            turnTimingsByIdRef.current,
+            derived.activeTurnId,
+            {
+              turnStartedAt,
+              firstTokenAt: null,
+            },
+            MAX_TRACKED_TURNS_PER_THREAD,
+          );
         }
       } else {
-        const receivedNewText =
-          derived.assistantCharCount > currentTracker.baselineAssistantChars;
+        const receivedNewText = derived.assistantCharCount > currentTracker.baselineAssistantChars;
         const receivedNewOutputTokens =
           derived.latestTokens.outputTokens > currentTracker.baselineOutputTokens &&
           derived.latestTokens.outputTokens > 0;
         if (currentTracker.firstTokenAt === null && (receivedNewText || receivedNewOutputTokens)) {
           currentTracker.firstTokenAt = Math.max(currentTracker.turnStartedAt, now);
           if (derived.activeTurnId) {
-            turnTimingsByIdRef.current.set(derived.activeTurnId, {
-              turnStartedAt: currentTracker.turnStartedAt,
-              firstTokenAt: currentTracker.firstTokenAt,
-            });
+            setBoundedMapEntry(
+              turnTimingsByIdRef.current,
+              derived.activeTurnId,
+              {
+                turnStartedAt: currentTracker.turnStartedAt,
+                firstTokenAt: currentTracker.firstTokenAt,
+              },
+              MAX_TRACKED_TURNS_PER_THREAD,
+            );
           }
         }
       }
@@ -570,7 +623,9 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
         (activeTrackerRef.current?.key === turn.id ? now : null);
       const observedFirstTokenAt =
         observedTiming?.firstTokenAt ??
-        (startedMs !== null && persistedTiming?.ttftMs !== null && persistedTiming?.ttftMs !== undefined
+        (startedMs !== null &&
+        persistedTiming?.ttftMs !== null &&
+        persistedTiming?.ttftMs !== undefined
           ? startedMs + persistedTiming.ttftMs
           : null);
       const isLatestTurn = derived.latestTurn?.id === turn.id;
@@ -603,10 +658,15 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
         startedMs !== null && ttftMs !== null ? startedMs + ttftMs : observedFirstTokenAt;
 
       if (startedMs !== null && firstTokenAt !== null && !observedTiming?.firstTokenAt) {
-        turnTimingsByIdRef.current.set(turn.id, {
-          turnStartedAt: startedMs,
-          firstTokenAt,
-        });
+        setBoundedMapEntry(
+          turnTimingsByIdRef.current,
+          turn.id,
+          {
+            turnStartedAt: startedMs,
+            firstTokenAt,
+          },
+          MAX_TRACKED_TURNS_PER_THREAD,
+        );
       }
 
       // Only record turns that carry real tokens or real observed timing (zero fabricated records).
@@ -632,14 +692,7 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
         rawTurnModel && rawTurnModel !== "unknown"
           ? formatUsageModelDisplayName(rawTurnModel, providerStatuses, turnProvider)
           : "unknown";
-      const exactDecodeTps =
-        counts.outputTokens > 0 && counts.decodeMs !== null && counts.decodeMs > 0
-          ? counts.outputTokens / (counts.decodeMs / 1_000)
-          : null;
-      const turnTps =
-        exactDecodeTps !== null && Number.isFinite(exactDecodeTps) && exactDecodeTps > 0
-          ? exactDecodeTps
-          : computeOutputTps(counts.outputTokens, durationMs, ttftMs);
+      const turnTps = computeOutputTps(counts.outputTokens, durationMs, ttftMs, counts.decodeMs);
 
       const fingerprint = [
         turn.status,
@@ -657,7 +710,12 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
       if (recordedTurnFingerprintsRef.current.get(turn.id) === fingerprint) {
         continue;
       }
-      recordedTurnFingerprintsRef.current.set(turn.id, fingerprint);
+      setBoundedMapEntry(
+        recordedTurnFingerprintsRef.current,
+        turn.id,
+        fingerprint,
+        MAX_TRACKED_TURNS_PER_THREAD,
+      );
 
       recordModelCallTelemetry({
         id: `turn:${turn.id}`,
@@ -730,24 +788,17 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
             : null))
         : latestCompletedTtftMs;
     const streamingElapsedMs = tracker ? Math.max(0, now - tracker.turnStartedAt) : null;
-    const exactStreamingDecodeTps =
-      tracker !== null &&
-      derived.latestTokens.outputTokens > 0 &&
-      latestTurnExtracted.decodeMs !== null &&
-      latestTurnExtracted.decodeMs > 0
-        ? derived.latestTokens.outputTokens / (latestTurnExtracted.decodeMs / 1_000)
-        : null;
     const streamingTps =
-      exactStreamingDecodeTps !== null &&
-      Number.isFinite(exactStreamingDecodeTps) &&
-      exactStreamingDecodeTps > 0
-        ? exactStreamingDecodeTps
-        : tracker &&
-            derived.latestTokens.outputTokens > 0 &&
-            streamingElapsedMs !== null &&
-            streamingElapsedMs >= MIN_STREAMING_TPS_ELAPSED_MS
-          ? computeOutputTps(derived.latestTokens.outputTokens, streamingElapsedMs, liveTtftMs)
-          : null;
+      tracker !== null && derived.latestTokens.outputTokens > 0
+        ? computeOutputTps(
+            derived.latestTokens.outputTokens,
+            streamingElapsedMs !== null && streamingElapsedMs >= MIN_STREAMING_TPS_ELAPSED_MS
+              ? streamingElapsedMs
+              : null,
+            liveTtftMs,
+            latestTurnExtracted.decodeMs,
+          )
+        : null;
     let latestCompletedTps = derived.latestTps;
     if (
       streamingTps === null &&
@@ -756,19 +807,13 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
       derived.latestTurn.status !== "pending" &&
       derived.latestTokens.outputTokens > 0
     ) {
-      if (latestTurnExtracted.decodeMs !== null && latestTurnExtracted.decodeMs > 0) {
-        const exactTps = derived.latestTokens.outputTokens / (latestTurnExtracted.decodeMs / 1_000);
-        if (Number.isFinite(exactTps) && exactTps > 0) {
-          latestCompletedTps = exactTps;
-        }
-      } else if (latestCompletedTtftMs !== null) {
-        latestCompletedTps =
-          computeOutputTps(
-            derived.latestTokens.outputTokens,
-            latestTurnDurationMs,
-            latestCompletedTtftMs,
-          ) ?? derived.latestTps;
-      }
+      latestCompletedTps =
+        computeOutputTps(
+          derived.latestTokens.outputTokens,
+          latestTurnDurationMs,
+          latestCompletedTtftMs,
+          latestTurnExtracted.decodeMs,
+        ) ?? derived.latestTps;
     }
     const effectiveTps = streamingTps ?? latestCompletedTps;
 
@@ -806,6 +851,11 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
       detailSnapshot.modelDistribution.map((m) => `${m.modelId}:${m.totalTokens}`).join(","),
       detailSnapshot.latestSampledModelId ?? "",
       detailSnapshot.latestSampledModelDisplayName ?? "",
+      detailSnapshot.compactionCount,
+      detailSnapshot.contextBreakdown.source,
+      detailSnapshot.contextBreakdown.usedTokens ?? "",
+      detailSnapshot.contextBreakdown.maxTokens ?? "",
+      detailSnapshot.contextBreakdown.categories.map((c) => `${c.key}:${c.tokens}`).join(","),
     ].join("|");
     if (lastDetailFingerprintRef.current !== detailFingerprint) {
       lastDetailFingerprintRef.current = detailFingerprint;

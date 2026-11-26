@@ -220,10 +220,7 @@ import {
   ComposerRestingImagePreviews,
 } from "./ComposerAttachmentStrip";
 import { CollapsedComposerStopAction, ComposerPrimaryActions } from "./ComposerPrimaryActions";
-import {
-  ComposerFooterModeControls,
-  ComposerFooterPrimaryActions,
-} from "./ComposerFooterControls";
+import { ComposerFooterModeControls, ComposerFooterPrimaryActions } from "./ComposerFooterControls";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
 import { buildPullRequestReferenceContext } from "../pullRequest/pullRequestDetail.logic";
@@ -3725,6 +3722,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           ref={composerMainSurfaceRef}
           data-inline-resting-controls="true"
           data-pmx-composer-layout="agy"
+          data-pmx-composer-active={
+            ((phase === "running" || phase === "connecting") && !draftRunsLocally) || isSendBusy
+              ? "1"
+              : "0"
+          }
           className={cn("rounded-[20px] p-1", composerProviderState.composerFrameClassName)}
         >
           {!isComposerCollapsedMobile ? (
@@ -4082,7 +4084,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       dictationTakesFooter && "flex-1",
                     )}
                   >
-                    {!dictationTakesFooter && !isComposerTelemetryWrapped ? (
+                    {!dictationTakesFooter && !isComposerTelemetryWrapped && !hiddenThread ? (
                       <ComposerLiveTelemetryStrip
                         placement="inline"
                         threadId={activeThreadId ?? routeThreadRef.threadId}
@@ -4200,7 +4202,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     </div>
                   </div>
                 </div>
-                {!dictationTakesFooter && isComposerTelemetryWrapped ? (
+                {!dictationTakesFooter && isComposerTelemetryWrapped && !hiddenThread ? (
                   <div
                     data-composer-telemetry-wrap-row="true"
                     className="flex min-w-0 w-full items-center justify-end overflow-x-clip border-t border-border/25 pt-1"

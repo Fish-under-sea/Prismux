@@ -1,20 +1,27 @@
 import type { ContextWindowSnapshot } from "@prismux/client-runtime/state/context-window";
-import type {
-  OrchestrationV2ProviderTurn,
-  OrchestrationV2Run,
-  OrchestrationV2Subagent,
-  ServerProvider,
+import {
+  UsageDay,
+  type OrchestrationV2ProviderTurn,
+  type OrchestrationV2Run,
+  type OrchestrationV2Subagent,
+  type ServerProvider,
 } from "@prismux/core-contracts";
 import { GTProvider, initializeGT } from "gt-react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
 import { render } from "../../../test/render";
+import { useUsage } from "../../state/usage";
 import {
   ComposerLiveTelemetryStripView,
   resolveComposerTelemetryDisplay,
 } from "./ComposerLiveTelemetryStrip";
-import { deriveSessionTelemetryDetail } from "./sessionTelemetry.logic";
+import {
+  clearSessionTelemetryDetails,
+  deriveSessionTelemetryDetail,
+  getSessionTelemetryDetail,
+} from "./sessionTelemetry.logic";
+import { useSessionCallTelemetry } from "./useSessionCallTelemetry";
 
 const PROVIDERS: readonly ServerProvider[] = [
   {
@@ -131,24 +138,16 @@ function buildActiveMultiModelDisplay() {
 }
 
 describe("ComposerLiveTelemetryStrip 3 independent popovers (browser)", () => {
-  it("opens 3 independent portal popovers with mutual exclusion, Escape & click-outside dismiss, and usage navigation", async () => {
+  it("opens 3 independent portal popovers with mutual exclusion, Escape & click-outside dismiss, and clean session-only Token popover", async () => {
     initializeGT({ defaultLocale: "zh", locales: ["en", "zh"] });
-    const onOpenUsage = vi.fn();
     const display = buildActiveMultiModelDisplay();
 
     // Mount inside an overflow-hidden bottom bar to verify Portal prevents clipping & keeps within viewport.
     await using screen = await render(
       <GTProvider locale="zh" translations={{}}>
-        <div
-          data-testid="outside-area"
-          className="flex h-screen w-screen flex-col justify-end p-4"
-        >
+        <div data-testid="outside-area" className="flex h-screen w-screen flex-col justify-end p-4">
           <div className="flex w-full justify-end overflow-hidden rounded-lg border p-2">
-            <ComposerLiveTelemetryStripView
-              display={display}
-              compact
-              onOpenUsage={onOpenUsage}
-            />
+            <ComposerLiveTelemetryStripView display={display} compact />
           </div>
         </div>
       </GTProvider>,
@@ -187,36 +186,54 @@ describe("ComposerLiveTelemetryStrip 3 independent popovers (browser)", () => {
     await expect
       .poll(() => document.querySelector('[data-telemetry-popover="tokens"]'))
       .toBeTruthy();
-    await expect
-      .poll(() => document.querySelector('[data-telemetry-popover="stats"]'))
-      .toBeNull();
+    await expect.poll(() => document.querySelector('[data-telemetry-popover="stats"]')).toBeNull();
 
     const tokensPopup = document.querySelector<HTMLElement>('[data-telemetry-popover="tokens"]')!;
     expect(tokensPopup.textContent).toContain("Token 用量");
+    expect(tokensPopup.textContent).toContain("缓存命中");
     expect(tokensPopup.textContent).toContain("多模型分布");
     expect(tokensPopup.textContent).toContain("Gemini 4 Neon (XHigh)");
-    expect(tokensPopup.textContent).toContain("今日用量");
-    expect(tokensPopup.textContent).toContain("397.6M");
-    expect(tokensPopup.textContent).toContain("本月用量");
-    expect(tokensPopup.textContent).toContain("3.3B");
     expect(tokensPopup.querySelector('[data-telemetry-model-donut="true"]')).toBeTruthy();
+    expect(tokensPopup.textContent).not.toContain("今日用量");
+    expect(tokensPopup.textContent).not.toContain("本月用量");
+    expect(tokensPopup.textContent).not.toContain("查看用量统计");
+    expect(tokensPopup.querySelector('[data-telemetry-global-usage="true"]')).toBeNull();
+    expect(tokensPopup.querySelector('[data-telemetry-open-usage="true"]')).toBeNull();
 
     // 3. Click Trigger 3 while Popover 2 is open → mutually excludes Popover 2 & opens Popover 3
     await userEvent.click(contextTrigger!);
     await expect
       .poll(() => document.querySelector('[data-telemetry-popover="context"]'))
       .toBeTruthy();
-    await expect
-      .poll(() => document.querySelector('[data-telemetry-popover="tokens"]'))
-      .toBeNull();
+    await expect.poll(() => document.querySelector('[data-telemetry-popover="tokens"]')).toBeNull();
 
-    const contextPopup = document.querySelector<HTMLElement>(
-      '[data-telemetry-popover="context"]',
-    )!;
-    expect(contextPopup.textContent).toContain("上下文窗口");
-    expect(contextPopup.textContent).toContain("26% 已用（剩余 74%）");
-    expect(contextPopup.textContent).toContain("132.4K / 512K tok");
+    const contextPopup = document.querySelector<HTMLElement>('[data-telemetry-popover="context"]')!;
+    expect(contextPopup.getAttribute("aria-label")).toBe("上下文窗口");
+    expect(contextPopup.querySelector('[data-context-vial="true"]')).toBeTruthy();
+    expect(contextPopup.querySelector('[data-context-stacked-bar="true"]')).toBeTruthy();
+    expect(contextPopup.textContent).toContain("上下文拆解");
+    expect(contextPopup.textContent).toContain("25.9%");
+    expect(contextPopup.textContent).toContain("132.4k / 512.0k");
+    expect(contextPopup.textContent).toContain("128k");
+    expect(contextPopup.textContent).toContain("256k");
+    expect(contextPopup.textContent).toContain("384k");
+    expect(contextPopup.textContent).toContain("剩余空间");
     expect(contextPopup.textContent).toContain("当前会话采样了多个模型");
+
+    // Hover a breakdown row and verify interactive highlight propagates to bar slice & liquid vial stratum
+    const usedRow = contextPopup.querySelector<HTMLElement>('[data-context-category-row="used"]');
+    expect(usedRow).toBeTruthy();
+    await userEvent.hover(usedRow!);
+    await expect
+      .poll(() => contextPopup.querySelector('[data-context-vial-stratum="used"]'))
+      .toBeTruthy();
+    await expect
+      .poll(() =>
+        contextPopup
+          .querySelector('[data-context-bar-slice="used"]')
+          ?.getAttribute("data-highlighted"),
+      )
+      .toBe("true");
 
     // 4. Press Escape → closes Popover 3
     await userEvent.keyboard("{Escape}");
@@ -230,21 +247,85 @@ describe("ComposerLiveTelemetryStrip 3 independent popovers (browser)", () => {
       .poll(() => document.querySelector('[data-telemetry-popover="tokens"]'))
       .toBeTruthy();
     await userEvent.click(screen.getByTestId("outside-area"), { position: { x: 10, y: 10 } });
-    await expect
-      .poll(() => document.querySelector('[data-telemetry-popover="tokens"]'))
-      .toBeNull();
+    await expect.poll(() => document.querySelector('[data-telemetry-popover="tokens"]')).toBeNull();
+  });
 
-    // 6. Re-open Popover 2 and click "查看用量统计" → calls onOpenUsage & closes Popover 2
-    await userEvent.click(tokensTrigger!);
+  it("never triggers a render loop in useUsage when given a fresh equivalent window object each render (Defect 2.4)", async () => {
+    const onRender = vi.fn();
+    function FreshWindowProbe({
+      tick,
+      onCommitRender,
+    }: {
+      readonly tick: number;
+      readonly onCommitRender: () => void;
+    }) {
+      onCommitRender();
+      // Intentionally pass a brand-new UsageSummaryInput object literal on every render!
+      const usage = useUsage({
+        sinceDay: UsageDay.make("2026-11-01"),
+        untilDay: UsageDay.make("2026-11-30"),
+        timeZone: "UTC",
+        resolution: "day",
+      });
+      return (
+        <div data-testid="usage-probe" data-tick={tick}>
+          {usage.environments.length}
+        </div>
+      );
+    }
+
+    await using screen = await render(<FreshWindowProbe tick={1} onCommitRender={onRender} />);
+    expect(screen.getByTestId("usage-probe")).toBeTruthy();
+    const initialRenders = onRender.mock.calls.length;
+    expect(initialRenders).toBeLessThan(8);
+
+    await screen.rerender(<FreshWindowProbe tick={2} onCommitRender={onRender} />);
+    expect(onRender.mock.calls.length - initialRenders).toBeLessThan(4);
+  });
+
+  it("clears per-thread telemetry refs and releases publishedSessionDetails on thread switch and unmount (L10 + L12)", async () => {
+    clearSessionTelemetryDetails();
+    function TelemetryHarness({ threadId }: { readonly threadId: string }) {
+      useSessionCallTelemetry({
+        threadId,
+        provider: "claudeAgent",
+        model: "claude-sonnet-4-6",
+        serverProjection: {
+          runs: [
+            {
+              id: `run-${threadId}`,
+              ordinal: 1,
+              status: "completed",
+            } as unknown as OrchestrationV2Run,
+          ],
+          providerTurns: [],
+          turnItems: [],
+          messages: [],
+          subagents: [],
+          nodes: [],
+        },
+        activeContextWindow: {
+          usedTokens: 42_000,
+          maxTokens: 200_000,
+        } as ContextWindowSnapshot,
+        isWorking: false,
+        activeWorkStartedAt: null,
+      });
+      return <div data-testid="telemetry-harness">{threadId}</div>;
+    }
+
+    const screen = await render(<TelemetryHarness threadId="thread-clean-1" />);
     await expect
-      .poll(() => document.querySelector('[data-telemetry-open-usage="true"]'))
-      .toBeTruthy();
-    await userEvent.click(
-      document.querySelector<HTMLButtonElement>('[data-telemetry-open-usage="true"]')!,
-    );
-    expect(onOpenUsage).toHaveBeenCalledTimes(1);
+      .poll(() => getSessionTelemetryDetail("thread-clean-1")?.threadId ?? null)
+      .toBe("thread-clean-1");
+
+    await screen.rerender(<TelemetryHarness threadId="thread-clean-2" />);
     await expect
-      .poll(() => document.querySelector('[data-telemetry-popover="tokens"]'))
-      .toBeNull();
+      .poll(() => getSessionTelemetryDetail("thread-clean-2")?.threadId ?? null)
+      .toBe("thread-clean-2");
+    expect(getSessionTelemetryDetail("thread-clean-1")).toBeNull();
+
+    await screen.unmount();
+    expect(getSessionTelemetryDetail("thread-clean-2")).toBeNull();
   });
 });
