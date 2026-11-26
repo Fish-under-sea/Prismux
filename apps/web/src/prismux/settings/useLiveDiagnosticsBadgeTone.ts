@@ -1,144 +1,164 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useAtomValue } from "@effect/atom-react";
+import { useEffect, useRef, useState } from "react";
 
-import type { PrismuxDaemonClient } from "../daemonClient";
 import type { DiagnosticsBadgeTone } from "../../components/sidebar/prismuxSidebarQuickNav.logic";
+import { useStableCallback } from "../../hooks/useStableCallback";
+import {
+  brandProviderInstanceEntries,
+  deriveProviderInstanceEntries,
+} from "../../providerInstances";
+import { environmentPresentations } from "../../state/presentation";
+import type { PrismuxDaemonClient } from "../daemonClient";
+import { resolveServerProviderUsageKind } from "../statusBar/statusBarUsage";
 import {
   createDiagnosticsRefreshController,
-  DIAGNOSTICS_AUTO_REFRESH_COOLDOWN_MS,
   getLatestNormalizedDiagnosticsReport,
-  isDiagnosticsAutoRefreshSettingsPath,
   isDiagnosticsViewPathname,
   publishDiagnosticsReport,
   resolveNormalizedDiagnosticsBadgeTone,
   subscribeDiagnosticsRefreshRequest,
   subscribeDiagnosticsReport,
+  type DiagnosticsRefreshController,
+  type DiagnosticsRefreshReason,
 } from "./prismuxDiagnostics.logic";
 
+/** Minimum cooldown (5 minutes) for passive non-forced visibility refreshes. */
+export const DIAGNOSTICS_BADGE_PASSIVE_COOLDOWN_MS = 5 * 60_000;
+
+export function shouldForceRefreshForBadgeReason(reason: DiagnosticsRefreshReason): boolean {
+  return reason === "manual" || reason === "plugin-mutated";
+}
+
+export function collectConfiguredDiagnosticsProviderIds(
+  presentations: ReadonlyMap<
+    string,
+    {
+      readonly serverConfig: {
+        readonly providers?: ReadonlyArray<
+          Parameters<typeof deriveProviderInstanceEntries>[0][number]
+        >;
+        readonly settings?: Parameters<typeof brandProviderInstanceEntries>[1];
+      } | null;
+    }
+  >,
+): readonly string[] {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const presentation of presentations.values()) {
+    const config = presentation.serverConfig;
+    const providers = config?.providers;
+    if (!Array.isArray(providers) || providers.length === 0) continue;
+    const derived = deriveProviderInstanceEntries(providers);
+    const entries = config?.settings
+      ? brandProviderInstanceEntries(derived, config.settings)
+      : derived;
+    for (const provider of providers) {
+      if (!provider.enabled) continue;
+      const kind = resolveServerProviderUsageKind(provider, entries).trim().toLowerCase();
+      if (!kind || seen.has(kind)) continue;
+      seen.add(kind);
+      ids.push(kind);
+    }
+  }
+  ids.sort();
+  return ids;
+}
+
 /**
- * Keeps the sidebar diagnostics dot synced with normalized reports (so uninstalled optional
- * AI Provider CLIs never trigger a false-positive amber dot) and handles 3s debounced refreshes.
+ * Syncs the sidebar diagnostics badge using cached daemon reads scoped to configured providers.
+ * Forced refreshes only run on explicit user/plugin triggers; passive visibility uses a 5m cooldown.
  */
 export function useLiveDiagnosticsBadgeTone(
   daemon: PrismuxDaemonClient | null,
   daemonReady: boolean,
   pathname: string,
+  configuredProvidersOverride?: readonly string[],
 ): DiagnosticsBadgeTone {
+  const presentations = useAtomValue(environmentPresentations.presentationsWithProvidersAtom);
+  const configuredProviders =
+    configuredProvidersOverride !== undefined
+      ? configuredProvidersOverride
+      : collectConfiguredDiagnosticsProviderIds(presentations);
+
   const [tone, setTone] = useState<DiagnosticsBadgeTone>(() =>
     resolveNormalizedDiagnosticsBadgeTone(getLatestNormalizedDiagnosticsReport()),
   );
-  const pathnameRef = useRef(pathname);
-  pathnameRef.current = pathname;
-  const prevPathnameRef = useRef(pathname);
   const inFlightRef = useRef(false);
+  const controllerRef = useRef<DiagnosticsRefreshController | null>(null);
 
-  const runFetch = useCallback(
-    async (force: boolean) => {
-      if (!daemon || !daemonReady || inFlightRef.current) return;
-      inFlightRef.current = true;
-      try {
-        const response = force
-          ? await daemon.refreshDiagnosticsServices()
-          : await daemon.fetchDiagnosticsServices(false);
-        const report = publishDiagnosticsReport(response);
-        setTone(resolveNormalizedDiagnosticsBadgeTone(report));
-      } catch {
-        // Leave existing tone intact if Daemon diagnostics is temporarily unreachable.
-      } finally {
-        inFlightRef.current = false;
-      }
-    },
-    [daemon, daemonReady],
-  );
-
-  const controllerRef = useRef(
-    createDiagnosticsRefreshController(
-      () => {
-        void runFetch(true);
-      },
-      { cooldownMs: DIAGNOSTICS_AUTO_REFRESH_COOLDOWN_MS },
-    ),
-  );
-
-  // Recreate controller callback binding whenever runFetch changes while preserving cooldown timestamp.
-  useEffect(() => {
-    const prevTimestamp = controllerRef.current.getLastTriggeredAt();
-    const next = createDiagnosticsRefreshController(
-      () => {
-        void runFetch(true);
-      },
-      { cooldownMs: DIAGNOSTICS_AUTO_REFRESH_COOLDOWN_MS },
-    );
-    if (Number.isFinite(prevTimestamp)) {
-      next.markRefreshed(prevTimestamp);
+  const runFetch = useStableCallback(async (force: boolean) => {
+    if (!daemon || !daemonReady || inFlightRef.current) return;
+    inFlightRef.current = true;
+    const queryOptions = configuredProviders.length > 0 ? { providers: configuredProviders } : {};
+    try {
+      const response = force
+        ? await daemon.refreshDiagnosticsServices(queryOptions)
+        : await daemon.fetchDiagnosticsServices({ force: false, ...queryOptions });
+      const report = publishDiagnosticsReport(response);
+      setTone(resolveNormalizedDiagnosticsBadgeTone(report));
+    } catch {
+      // Leave existing tone intact if Daemon diagnostics is temporarily unreachable.
+    } finally {
+      inFlightRef.current = false;
     }
-    controllerRef.current = next;
-  }, [runFetch]);
+  });
 
-  // 1. Live sync whenever any diagnostics view publishes a fresh report.
+  const handleRefreshRequest = useStableCallback((reason: DiagnosticsRefreshReason) => {
+    if (isDiagnosticsViewPathname(pathname)) return;
+    const controller = controllerRef.current;
+    if (!controller) return;
+    const isExplicit = shouldForceRefreshForBadgeReason(reason);
+    controller.trigger(reason, { bypassCooldown: isExplicit });
+  });
+
+  const handleVisibilityReturn = useStableCallback(() => {
+    if (typeof document === "undefined" || document.visibilityState !== "visible") return;
+    if (isDiagnosticsViewPathname(pathname)) return;
+    controllerRef.current?.trigger("visibility");
+  });
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- subscribes to shared diagnostics report pub/sub outside React
   useEffect(() => {
+    controllerRef.current = createDiagnosticsRefreshController(
+      (reason) => {
+        void runFetch(shouldForceRefreshForBadgeReason(reason));
+      },
+      { cooldownMs: DIAGNOSTICS_BADGE_PASSIVE_COOLDOWN_MS },
+    );
     return subscribeDiagnosticsReport(({ report }) => {
       setTone(resolveNormalizedDiagnosticsBadgeTone(report));
-      controllerRef.current.markRefreshed();
+      controllerRef.current?.markRefreshed();
     });
-  }, []);
+  }, [runFetch]);
 
-  // 2. Initial non-blocking probe when Daemon becomes ready (if not already populated).
-  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- loads read-only daemon badge summary when daemon becomes ready
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- fetches initial read-only cached daemon badge summary when daemon connects
   useEffect(() => {
     if (!daemon || !daemonReady) return;
     const existing = getLatestNormalizedDiagnosticsReport();
     if (existing) {
-      setTone(resolveNormalizedDiagnosticsBadgeTone(existing));
+      controllerRef.current?.markRefreshed();
       return;
     }
+    controllerRef.current?.markRefreshed();
     void runFetch(false);
   }, [daemon, daemonReady, runFetch]);
 
-  // 3. Subscribe to explicit hot-reload broadcasts (e.g. plugin install/uninstall/toggle).
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- subscribes to explicit diagnostics refresh broadcasts from outside this hook
   useEffect(() => {
     if (!daemon || !daemonReady) return;
-    return subscribeDiagnosticsRefreshRequest((reason) => {
-      // When already on the diagnostics view, PrismuxDiagnosticsSection handles the refresh
-      // and publishes the result back to this hook via subscribeDiagnosticsReport.
-      if (isDiagnosticsViewPathname(pathnameRef.current)) return;
-      controllerRef.current.trigger(reason, { bypassCooldown: true });
-    });
-  }, [daemon, daemonReady]);
+    return subscribeDiagnosticsRefreshRequest(handleRefreshRequest);
+  }, [daemon, daemonReady, handleRefreshRequest]);
 
-  // 4. Auto hot-reload when returning to the Prismux window (debounced 3s).
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- registers document visibilitychange listener for 5m passive cache re-read
   useEffect(() => {
     if (!daemon || !daemonReady) return;
-    if (typeof window === "undefined" || typeof document === "undefined") return;
+    if (typeof document === "undefined") return;
 
-    const handleFocus = () => {
-      if (isDiagnosticsViewPathname(pathnameRef.current)) return;
-      controllerRef.current.trigger("focus");
-    };
-    const handleVisibilityChange = () => {
-      if (document.visibilityState !== "visible") return;
-      if (isDiagnosticsViewPathname(pathnameRef.current)) return;
-      controllerRef.current.trigger("visibility");
-    };
-
-    window.addEventListener("focus", handleFocus);
-    document.addEventListener("visibilitychange", handleVisibilityChange);
+    document.addEventListener("visibilitychange", handleVisibilityReturn);
     return () => {
-      window.removeEventListener("focus", handleFocus);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      document.removeEventListener("visibilitychange", handleVisibilityReturn);
     };
-  }, [daemon, daemonReady]);
-
-  // 5. Auto hot-reload when leaving Provider / Plugin / Memory / Sync / Updates / Wallpaper settings.
-  useEffect(() => {
-    const prev = prevPathnameRef.current;
-    prevPathnameRef.current = pathname;
-    if (!daemon || !daemonReady) return;
-    if (prev === pathname) return;
-    if (isDiagnosticsViewPathname(pathname)) return;
-    if (isDiagnosticsAutoRefreshSettingsPath(prev)) {
-      controllerRef.current.trigger("settings-left", { bypassCooldown: true });
-    }
-  }, [daemon, daemonReady, pathname]);
+  }, [daemon, daemonReady, handleVisibilityReturn]);
 
   return tone;
 }

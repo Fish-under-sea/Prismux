@@ -5,6 +5,7 @@ import {
   ArrowDownIcon,
   ArrowUpIcon,
   ChevronDownIcon,
+  ChevronLeftIcon,
   ChevronRightIcon,
 } from "lucide-react";
 import { Fragment, useState } from "react";
@@ -30,6 +31,8 @@ import {
 
 // oxlint-disable-next-line prismux/no-em-dash-copy -- tabular empty-cell placeholder for missing call log values
 const EMPTY_CELL_DASH = "—";
+
+export const CALL_LOGS_PAGE_SIZE = 50;
 
 export type CallLogsSortField = "timestamp" | "ttftMs" | "tps" | "cacheHitRate";
 export type CallLogsSortDirection = "asc" | "desc";
@@ -76,6 +79,8 @@ export const USAGE_CALL_LOG_MESSAGES = {
     "No model call logs in this window yet. Real TTFT, speed (TPS), and cache hit rate will be recorded locally during chat turns.",
   ),
   resetFilters: msg("Reset filters"),
+  previousPage: msg("Previous page"),
+  nextPage: msg("Next page"),
 } as const;
 
 export interface FilterAndSortCallLogsOptions {
@@ -208,22 +213,27 @@ export function UsageCallLogsSection({
   const [sortField, setSortField] = useState<CallLogsSortField>("timestamp");
   const [sortDirection, setSortDirection] = useState<CallLogsSortDirection>("desc");
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [page, setPage] = useState<number>(1);
 
-  const availableProviderSet = new Set<string>();
-  for (const log of logs) availableProviderSet.add(log.provider);
-  const availableProviders = orderProviders(Array.from(availableProviderSet).toSorted());
+  const availableProviders = (() => {
+    const set = new Set<string>();
+    for (const log of logs) set.add(log.provider);
+    return orderProviders(Array.from(set).toSorted());
+  })();
 
-  const availableModelSet = new Set<string>();
-  for (const log of logs) {
-    if (providerFilter !== "all" && log.provider !== providerFilter) continue;
-    const displayModel = formatUsageModelDisplayName(
-      log.model,
-      configuredEntries,
-      log.provider,
-    );
-    if (displayModel) availableModelSet.add(displayModel);
-  }
-  const availableModels = Array.from(availableModelSet).toSorted();
+  const availableModels = (() => {
+    const set = new Set<string>();
+    for (const log of logs) {
+      if (providerFilter !== "all" && log.provider !== providerFilter) continue;
+      const displayModel = formatUsageModelDisplayName(
+        log.model,
+        configuredEntries,
+        log.provider,
+      );
+      if (displayModel) set.add(displayModel);
+    }
+    return Array.from(set).toSorted();
+  })();
 
   const visibleLogs = filterAndSortCallLogs(logs, {
     provider: providerFilter,
@@ -232,6 +242,10 @@ export function UsageCallLogsSection({
     sortField,
     sortDirection,
   });
+  const totalPages = Math.max(1, Math.ceil(visibleLogs.length / CALL_LOGS_PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pageStartIndex = (currentPage - 1) * CALL_LOGS_PAGE_SIZE;
+  const pagedLogs = visibleLogs.slice(pageStartIndex, pageStartIndex + CALL_LOGS_PAGE_SIZE);
   const fallbackAcpLabel = m(USAGE_CALL_LOG_MESSAGES.acpAgent);
 
   const hasActiveFilter = providerFilter !== "all" || modelFilter !== "all";
@@ -273,6 +287,7 @@ export function UsageCallLogsSection({
             onChange={(event) => {
               setProviderFilter(event.target.value);
               setModelFilter("all");
+              setPage(1);
             }}
             className="h-7 rounded-md border border-border bg-background/80 px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           >
@@ -287,7 +302,10 @@ export function UsageCallLogsSection({
           <select
             aria-label={m(USAGE_CALL_LOG_MESSAGES.filterAllModels)}
             value={modelFilter}
-            onChange={(event) => setModelFilter(event.target.value)}
+            onChange={(event) => {
+              setModelFilter(event.target.value);
+              setPage(1);
+            }}
             className="h-7 max-w-52 rounded-md border border-border bg-background/80 px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           >
             <option value="all">{m(USAGE_CALL_LOG_MESSAGES.filterAllModels)}</option>
@@ -305,6 +323,7 @@ export function UsageCallLogsSection({
               onClick={() => {
                 setProviderFilter("all");
                 setModelFilter("all");
+                setPage(1);
               }}
             >
               {m(USAGE_CALL_LOG_MESSAGES.resetFilters)}
@@ -382,7 +401,7 @@ export function UsageCallLogsSection({
                 </td>
               </tr>
             ) : (
-              visibleLogs.map((log) => {
+              pagedLogs.map((log) => {
                 const isExpanded = expandedId === log.id;
                 const providerInfo = resolveUsageProviderDisplay(
                   log.provider,
@@ -566,6 +585,43 @@ export function UsageCallLogsSection({
           </tbody>
         </table>
       </div>
+
+      {totalPages > 1 ? (
+        <div
+          data-testid="usage-call-logs-pagination"
+          className="flex items-center justify-between gap-2 text-xs text-muted-foreground tabular-nums"
+        >
+          <span>
+            {pageStartIndex + 1}–{Math.min(pageStartIndex + pagedLogs.length, visibleLogs.length)}{" "}
+            / {visibleLogs.length}
+          </span>
+          <div className="flex items-center gap-1.5">
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="outline"
+              disabled={currentPage <= 1}
+              aria-label={m(USAGE_CALL_LOG_MESSAGES.previousPage)}
+              onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+            >
+              <ChevronLeftIcon className="size-3.5" aria-hidden />
+            </Button>
+            <span className="min-w-12 text-center font-mono text-foreground">
+              {currentPage} / {totalPages}
+            </span>
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="outline"
+              disabled={currentPage >= totalPages}
+              aria-label={m(USAGE_CALL_LOG_MESSAGES.nextPage)}
+              onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
+            >
+              <ChevronRightIcon className="size-3.5" aria-hidden />
+            </Button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

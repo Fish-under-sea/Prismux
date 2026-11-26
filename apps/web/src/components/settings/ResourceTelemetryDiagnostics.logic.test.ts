@@ -4,8 +4,14 @@ import type { ResourceTelemetryProcess } from "@prismux/core-contracts";
 import * as DateTime from "effect/DateTime";
 
 import {
+  extractHostHardwareInfo,
+  extractHostPowerExtended,
+  formatCoreTopology,
   formatCpuTime,
+  formatHostPowerSourceLabel,
+  formatHostUptime,
   formatSamplingStatus,
+  formatThermalSensorDisplay,
   localizeNativeStatusBadge,
   localizeSourceStatus,
   localizeThermalState,
@@ -125,6 +131,102 @@ describe("resource telemetry localization and speed-limit display", () => {
       resolveCpuSpeedLimitDisplay({ speedLimitPercent: 45, thermalState: "critical" }),
     ).toEqual({
       value: "45%",
+      tone: "danger",
+    });
+  });
+});
+
+describe("host hardware, power, and thermal sensor helpers", () => {
+  it("defensively reads snapshot.host and falls back to daemon system resources", () => {
+    const withNativeHost = extractHostHardwareInfo(
+      {
+        host: {
+          osName: "Windows",
+          osVersion: "11",
+          arch: "x64",
+          cpuBrand: "AMD Ryzen 9 7950X",
+          physicalCores: 16,
+          logicalCores: 32,
+          totalMemoryBytes: 64 * 1024 ** 3,
+          usedMemoryBytes: 24 * 1024 ** 3,
+          uptimeSeconds: 90_000,
+          temperatureCelsius: 58.4,
+        },
+      } as never,
+      null,
+    );
+    expect(withNativeHost.osName).toBe("Windows");
+    expect(withNativeHost.osVersion).toBe("11");
+    expect(withNativeHost.physicalCores).toBe(16);
+    expect(withNativeHost.logicalCores).toBe(32);
+    expect(withNativeHost.temperatureCelsius).toBe(58.4);
+
+    const withDaemonFallback = extractHostHardwareInfo(null, {
+      platform: "win32",
+      uptimeSec: 7_260,
+      host: {
+        cpuCores: 12,
+        totalMemoryBytes: 32 * 1024 ** 3,
+        memoryBytes: 12 * 1024 ** 3,
+      },
+    });
+    expect(withDaemonFallback.osName).toBe("Windows");
+    expect(withDaemonFallback.logicalCores).toBe(12);
+    expect(withDaemonFallback.totalMemoryBytes).toBe(32 * 1024 ** 3);
+    expect(withDaemonFallback.usedMemoryBytes).toBe(12 * 1024 ** 3);
+    expect(withDaemonFallback.uptimeSeconds).toBe(7_260);
+  });
+
+  it("formats core topology, uptime, battery/AC state, and calm thermal fallback", () => {
+    expect(formatCoreTopology(16, 32)).toBe("16C / 32T");
+    expect(formatCoreTopology(null, 8)).toBe("8 logical cores");
+    expect(formatHostUptime(45)).toBe("<1m");
+    expect(formatHostUptime(3_660)).toBe("1h 1m");
+    expect(formatHostUptime(93_600)).toBe("1d 2h");
+
+    const extended = extractHostPowerExtended({
+      source: "node-windows",
+      idle: "false",
+      idleSeconds: 0,
+      locked: "false",
+      suspended: false,
+      onBattery: "false",
+      lowPowerMode: "false",
+      thermalState: "unknown",
+      stale: false,
+      updatedAt: DateTime.makeUnsafe(0),
+      batteryPercent: 84.6,
+      isCharging: "true",
+    } as never);
+    expect(extended).toEqual({ batteryPercent: 85, isCharging: "true" });
+    expect(
+      formatHostPowerSourceLabel(
+        {
+          source: "node-windows",
+          idle: "false",
+          idleSeconds: 0,
+          locked: "false",
+          suspended: false,
+          onBattery: "false",
+          lowPowerMode: "false",
+          thermalState: "unknown",
+          stale: false,
+          updatedAt: DateTime.makeUnsafe(0),
+        },
+        extended,
+      ),
+    ).toBe("Charging · 85%");
+
+    expect(formatThermalSensorDisplay("unknown", null)).toEqual({
+      label: "Normal (OS sensors not exposed)",
+      tone: "default",
+    });
+    expect(formatThermalSensorDisplay("nominal", 52.3)).toEqual({
+      label: "52.3 °C · Nominal",
+      tone: "default",
+    });
+    expect(formatThermalSensorDisplay("critical", 94.1)).toEqual({
+      label: "94.1 °C · Critical",
       tone: "danger",
     });
   });

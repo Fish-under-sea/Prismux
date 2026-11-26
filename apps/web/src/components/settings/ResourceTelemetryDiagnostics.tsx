@@ -5,19 +5,22 @@ import { RefreshIcon } from "~/components/ui/refresh-icon";
 import {
   ActivityIcon,
   AlertTriangleIcon,
+  BatteryChargingIcon,
   BatteryIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
   CpuIcon,
   DatabaseIcon,
+  FolderOpenIcon,
   GaugeIcon,
   HardDriveIcon,
   MemoryStickIcon,
-  ChevronDownIcon,
-  ChevronRightIcon,
+  MonitorIcon,
+  PlugIcon,
 } from "lucide-react";
 import type {
   BackgroundBooleanState,
   EnvironmentId,
-  ResourceAttributionEntry,
   ResourceTelemetryAggregate,
   ResourceTelemetryHistoryBucket,
   ResourceTelemetryIoSemantics,
@@ -31,7 +34,7 @@ import type {
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { RegistryContext } from "@effect/atom-react";
-import { useContext, useRef, useState, type ReactNode } from "react";
+import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -46,6 +49,11 @@ import {
 import { cn } from "../../lib/utils";
 import { formatBytes } from "../../lib/formatBytes";
 import { ensureLocalApi } from "../../localApi";
+import {
+  prismuxDaemonClient,
+  type DaemonStorageInventoryResponse,
+} from "../../prismux/daemonClient";
+import { useOptionalPrismuxTelemetry } from "../../prismux/PrismuxTelemetryContext";
 import { serverEnvironment } from "../../state/server";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -56,18 +64,27 @@ import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
 import {
+  extractHostHardwareInfo,
+  extractHostPowerExtended,
+  formatCoreTopology,
   formatCpuTime,
+  formatHostPowerSourceLabel,
+  formatHostUptime,
   formatSamplingStatus,
+  formatThermalSensorDisplay,
   localizeNativeStatusBadge,
   localizeSourceStatus,
-  localizeThermalState,
   processIdentityKey,
-  resolveCpuSpeedLimitDisplay,
   resourceHistoryBarHeight,
   resourceHistoryCpuScaleMax,
   shouldShowResourceMonitorRetry,
   visibleResourceTelemetryProcesses,
 } from "./ResourceTelemetryDiagnostics.logic";
+import { StorageTreemapSection } from "./StorageTreemapSection";
+import {
+  DEFAULT_STORAGE_WARNING_THRESHOLD_BYTES,
+  resolveStorageFootprintTone,
+} from "./StorageTreemapSection.logic";
 import { SettingsSection } from "./settingsLayout";
 
 const HISTORY_WINDOWS = [
@@ -76,6 +93,8 @@ const HISTORY_WINDOWS = [
   { label: "30m", windowMs: 30 * 60_000, bucketMs: 60_000 },
   { label: "1h", windowMs: 60 * 60_000, bucketMs: 2 * 60_000 },
 ] as const;
+
+type ProcessSectionTab = "processes" | "timeline";
 
 function formatRate(value: number): string {
   return `${formatBytes(value)}/s`;
@@ -125,7 +144,7 @@ function categoryLabel(
 function categoryDotClass(category: ResourceTelemetryProcessCategory): string {
   if (category === "resource-monitor") return "bg-warning";
   if (category.startsWith("electron-")) return "bg-info";
-  if (category === "server") return "bg-violet-500";
+  if (category === "server") return "bg-primary";
   return "bg-success";
 }
 
@@ -181,7 +200,7 @@ function SourceStatusBadge({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-3xs font-semibold tracking-wider",
+        "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-3xs font-semibold tracking-wider",
         tone === "neutral" && "border-border/70 bg-muted/45 text-muted-foreground",
         tone === "default" && "border-success/25 bg-success/10 text-success-foreground",
         tone === "warning" && "border-warning/30 bg-warning/10 text-warning-foreground",
@@ -239,15 +258,17 @@ function IconStat({
   value,
   detail,
   tone = "default",
+  onClick,
 }: {
   icon: ReactNode;
   label: string;
   value: string;
   detail?: string | undefined;
   tone?: "default" | "warning" | "danger";
+  onClick?: (() => void) | undefined;
 }) {
-  return (
-    <div className="group min-w-0 px-4 py-4 sm:px-5">
+  const body = (
+    <>
       <div className="flex items-center gap-2 text-3xs font-semibold uppercase tracking-widest text-muted-foreground/70">
         <span className="text-muted-foreground/55 transition-colors group-hover:text-foreground/65">
           {icon}
@@ -264,10 +285,24 @@ function IconStat({
         {value}
       </div>
       {detail ? (
-        <div className="mt-1.5 truncate text-3xs text-muted-foreground/60">{detail}</div>
+        <div className="mt-1.5 truncate text-3xs text-muted-foreground/70">{detail}</div>
       ) : null}
-    </div>
+    </>
   );
+
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="group min-w-0 cursor-pointer px-4 py-4 text-left transition-colors hover:bg-muted/20 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring motion-reduce:transition-none sm:px-5"
+      >
+        {body}
+      </button>
+    );
+  }
+
+  return <div className="group min-w-0 px-4 py-4 sm:px-5">{body}</div>;
 }
 
 function AggregateCard({
@@ -322,10 +357,10 @@ function HealthSource({ label, health }: { label: string; health: ResourceTeleme
     health.status === "unavailable" &&
     Option.exists(health.lastError, (error) => error.includes("'web' mode"));
   return (
-    <div className="flex items-start justify-between gap-4 border-t border-border/50 py-3 first:border-t-0">
+    <div className="flex min-h-18 items-start justify-between gap-4 border-t border-border/50 py-3 first:border-t-0">
       <div className="min-w-0">
         <div className="text-sm font-medium text-foreground">{label}</div>
-        <div className="mt-1 text-2xs leading-relaxed text-muted-foreground/65">
+        <div className="mt-1 text-2xs leading-relaxed text-muted-foreground/75">
           {expectedInBrowser
             ? gt("Available when this page runs inside the desktop app.")
             : Option.match(health.lastError, {
@@ -361,10 +396,10 @@ function DetailRow({
 }) {
   return (
     <div className="flex items-center justify-between gap-4 border-t border-border/50 py-2.5 first:border-t-0">
-      <span className="text-2xs text-muted-foreground/75">{label}</span>
+      <span className="text-2xs text-muted-foreground/80">{label}</span>
       <span
         className={cn(
-          "min-w-0 truncate text-right font-mono text-2xs tabular-nums text-foreground/85",
+          "min-w-0 truncate text-right font-mono text-2xs tabular-nums text-foreground/90",
           valueClassName,
         )}
       >
@@ -412,7 +447,7 @@ function ResourceHistoryChart({
 
   return (
     <div className="border-t border-border/60 px-4 py-4 sm:px-5">
-      <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-3xs text-muted-foreground/65">
+      <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-3xs text-muted-foreground/75">
         <span className="inline-flex items-center gap-1.5">
           <span className="h-1.5 w-3 rounded-full bg-foreground/70" /> <T>CPU average</T>
         </span>
@@ -423,7 +458,7 @@ function ResourceHistoryChart({
           <span className="h-1.5 w-3 rounded-full bg-warning/80" /> <T>I/O writes</T>
         </span>
       </div>
-      <div className="flex h-32 items-end gap-1 overflow-hidden rounded-lg border border-border/40 bg-muted/8 px-2 pt-3 pb-2">
+      <div className="flex h-32 items-end gap-1 overflow-hidden rounded-lg border border-border/40 bg-muted/10 px-2 pt-3 pb-2">
         {buckets.map((bucket) => {
           const cpuHeight = resourceHistoryBarHeight({
             value: bucket.avgCpuPercent,
@@ -606,7 +641,7 @@ function ProcessTable({
             <col className="w-[6%]" />
             <col className="w-[4%]" />
           </colgroup>
-          <thead className="sticky top-0 z-10 border-b border-border/60 bg-card text-3xs uppercase tracking-widest text-muted-foreground/65">
+          <thead className="sticky top-0 z-10 border-b border-border/60 bg-card text-3xs uppercase tracking-widest text-muted-foreground/70">
             <tr>
               <th className="px-4 py-2 font-semibold sm:pl-5">
                 <T>Process</T>
@@ -735,7 +770,7 @@ function HistoryProcessTable({
             <col className="w-[7%]" />
             <col className="w-[5%]" />
           </colgroup>
-          <thead className="sticky top-0 z-10 border-b border-border/60 bg-card text-3xs uppercase tracking-widest text-muted-foreground/65">
+          <thead className="sticky top-0 z-10 border-b border-border/60 bg-card text-3xs uppercase tracking-widest text-muted-foreground/70">
             <tr>
               <th className="px-4 py-2 font-semibold sm:pl-5">
                 <T>Process</T>
@@ -823,92 +858,42 @@ function HistoryProcessTable({
   );
 }
 
-function AttributionTable({ entries }: { entries: ReadonlyArray<ResourceAttributionEntry> }) {
-  return (
-    <div className="overflow-x-auto border-t border-border/60">
-      <table className="w-full min-w-[720px] table-fixed text-left text-xs">
-        <colgroup>
-          <col className="w-[22%]" />
-          <col className="w-[28%]" />
-          <col className="w-[14%]" />
-          <col className="w-[14%]" />
-          <col className="w-[10%]" />
-          <col className="w-[12%]" />
-        </colgroup>
-        <thead className="border-b border-border/60 text-3xs uppercase tracking-widest text-muted-foreground/65">
-          <tr>
-            <th className="px-4 py-2 font-semibold sm:pl-5">
-              <T>Component</T>
-            </th>
-            <th className="px-3 py-2 font-semibold">
-              <T>Operation</T>
-            </th>
-            <th className="px-3 py-2 text-right font-semibold">
-              <T>Logical Read</T>
-            </th>
-            <th className="px-3 py-2 text-right font-semibold">
-              <T>Logical Write</T>
-            </th>
-            <th className="px-3 py-2 text-right font-semibold">
-              <T>Count</T>
-            </th>
-            <th className="px-3 py-2 text-right font-semibold sm:pr-5">
-              <T>Time</T>
-            </th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border/50">
-          {entries.length === 0 ? (
-            <tr>
-              <td colSpan={6} className="px-4 py-5 text-xs text-muted-foreground sm:px-5">
-                <T>No instrumented application I/O has been recorded yet.</T>
-              </td>
-            </tr>
-          ) : null}
-          {entries.map((entry) => (
-            <tr key={`${entry.component}:${entry.operation}`} className="hover:bg-muted/20">
-              <td className="truncate px-4 py-2 font-medium text-foreground sm:pl-5">
-                {entry.component}
-              </td>
-              <td className="truncate px-3 py-2 text-muted-foreground">{entry.operation}</td>
-              <td className="px-3 py-2 text-right font-mono tabular-nums text-info-foreground">
-                {formatBytes(entry.logicalReadBytes)}
-              </td>
-              <td className="px-3 py-2 text-right font-mono tabular-nums text-warning-foreground">
-                {formatBytes(entry.logicalWriteBytes)}
-              </td>
-              <td className="px-3 py-2 text-right font-mono tabular-nums">{entry.count}</td>
-              <td className="px-3 py-2 text-right font-mono tabular-nums text-muted-foreground sm:pr-5">
-                {(entry.durationMs / 1_000).toFixed(2).replace(/\.0+$/, "")}s
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+export interface LogsDirectoryActionProps {
+  readonly disabled: boolean;
+  readonly isOpening: boolean;
+  readonly error: string | null;
+  readonly onOpen: () => void;
 }
 
 export function ResourceTelemetryDiagnostics({
   environmentId,
+  logsDirectoryAction,
 }: {
   environmentId: EnvironmentId | null;
+  logsDirectoryAction?: LogsDirectoryActionProps | undefined;
 }) {
-  // Pending signals and retries belong to one environment, so a switch starts fresh.
   return (
-    <ResourceTelemetryDiagnosticsBody key={environmentId ?? ""} environmentId={environmentId} />
+    <ResourceTelemetryDiagnosticsBody
+      key={environmentId ?? ""}
+      environmentId={environmentId}
+      logsDirectoryAction={logsDirectoryAction}
+    />
   );
 }
 
 function ResourceTelemetryDiagnosticsBody({
   environmentId,
+  logsDirectoryAction,
 }: {
   environmentId: EnvironmentId | null;
+  logsDirectoryAction?: LogsDirectoryActionProps | undefined;
 }) {
   const messages = useMessages();
   const gt = useGT();
   const registry = useContext(RegistryContext);
+  const daemonTelemetry = useOptionalPrismuxTelemetry();
   const [windowMs, setWindowMs] = useState(15 * 60_000);
+  const [processViewTab, setProcessViewTab] = useState<ProcessSectionTab>("processes");
   const selectedWindow =
     HISTORY_WINDOWS.find((option) => option.windowMs === windowMs) ?? HISTORY_WINDOWS[1];
   const canMaintainEnvironment = useEnvironmentScope(environmentId, AuthEnvironmentMaintainScope);
@@ -927,6 +912,57 @@ function ResourceTelemetryDiagnosticsBody({
   const [signalingKeys, setSignalingKeys] = useState<ReadonlySet<string>>(() => new Set());
   const signalingKeysRef = useRef<ReadonlySet<string>>(new Set());
   const [isRetrying, setIsRetrying] = useState(false);
+
+  const [storageInventory, setStorageInventory] = useState<DaemonStorageInventoryResponse | null>(
+    null,
+  );
+  const [storageLoading, setStorageLoading] = useState(true);
+  const [storageError, setStorageError] = useState<string | null>(null);
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- loads cached daemon storage inventory once on mount for overview stat and treemap
+  useEffect(() => {
+    let cancelled = false;
+    void prismuxDaemonClient
+      .getStorageInventory(false)
+      .then((data) => {
+        if (cancelled) return;
+        setStorageInventory(data);
+        setStorageError(null);
+      })
+      .catch((cause: unknown) => {
+        if (cancelled) return;
+        setStorageError(
+          cause instanceof Error ? cause.message : gt("Unable to scan local storage."),
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setStorageLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [gt]);
+
+  const refreshStorage = async (forceRefresh = true) => {
+    setStorageLoading(true);
+    try {
+      const data = await prismuxDaemonClient.getStorageInventory(forceRefresh);
+      setStorageInventory(data);
+      setStorageError(null);
+    } catch (cause: unknown) {
+      setStorageError(
+        cause instanceof Error ? cause.message : gt("Unable to scan local storage."),
+      );
+    } finally {
+      setStorageLoading(false);
+    }
+  };
+
+  const handleRefreshAll = () => {
+    telemetry.refresh();
+    void refreshStorage(true);
+  };
+
   const snapshot = telemetry.data;
   const allPrismux = snapshot?.groups.allT3;
 
@@ -1028,8 +1064,6 @@ function ResourceTelemetryDiagnosticsBody({
     setIsRetrying(true);
     void retryTelemetry()
       .then(() => {
-        // The user can pick another window while the retry runs; refreshing every window
-        // re-reads the one on screen and only invalidates the rest.
         for (const option of HISTORY_WINDOWS) {
           registry.refresh(
             serverEnvironment.resourceTelemetryHistory({
@@ -1054,35 +1088,71 @@ function ResourceTelemetryDiagnosticsBody({
       });
   };
 
-  const speedLimit = snapshot ? Option.getOrNull(snapshot.speedLimitPercent) : null;
-  const speedLimitDisplay = snapshot
-    ? resolveCpuSpeedLimitDisplay(
-        {
-          speedLimitPercent: speedLimit,
-          thermalState: snapshot.power.thermalState,
-        },
-        messages,
-      )
-    : null;
-  const thermalStateText = snapshot
-    ? localizeThermalState(snapshot.power.thermalState, messages)
-    : null;
   const collectorNeedsRetry = shouldShowResourceMonitorRetry({
     nativeStatus: snapshot?.health.native.status ?? null,
     error: telemetry.error,
   });
-  const hasHostPowerSignal =
-    snapshot !== null &&
-    (snapshot.power.onBattery !== "unknown" ||
-      snapshot.power.lowPowerMode !== "unknown" ||
-      snapshot.power.idle !== "unknown" ||
-      snapshot.power.locked !== "unknown" ||
-      snapshot.power.thermalState !== "unknown");
+
+  const hostHardware = extractHostHardwareInfo(snapshot, daemonTelemetry?.systemResources ?? null);
+  const powerExtended = extractHostPowerExtended(snapshot?.power ?? null);
+  const thermalDisplay = formatThermalSensorDisplay(
+    snapshot?.power.thermalState ?? "unknown",
+    hostHardware.temperatureCelsius,
+    messages,
+  );
+  const coreTopology = formatCoreTopology(
+    hostHardware.physicalCores,
+    hostHardware.logicalCores,
+    messages,
+  );
+  const uptimeLabel = formatHostUptime(hostHardware.uptimeSeconds, messages);
+  const osSummary = [
+    hostHardware.osName && hostHardware.osVersion
+      ? `${hostHardware.osName} ${hostHardware.osVersion}`
+      : hostHardware.osName,
+    hostHardware.arch,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const cpuHardwareDetail = [hostHardware.cpuBrand, coreTopology, uptimeLabel ? gt("Up {time}", { time: uptimeLabel }) : null]
+    .filter(Boolean)
+    .join(" · ");
+
+  const ramTotal = hostHardware.totalMemoryBytes;
+  const ramUsed = hostHardware.usedMemoryBytes;
+  const ramUsedPercent =
+    ramTotal && ramTotal > 0 && ramUsed !== null
+      ? Math.max(0, Math.min(100, Math.round((ramUsed / ramTotal) * 100)))
+      : null;
+
+  const powerSourceDisplay = formatHostPowerSourceLabel(
+    snapshot?.power ?? null,
+    powerExtended,
+    messages,
+  );
+
+  const storageReclaimableBytes = storageInventory
+    ? storageInventory.reclaimableDisposableBytes + storageInventory.reclaimableManagedBytes
+    : 0;
+  const storageWarningThreshold =
+    storageInventory?.warningThresholdBytes ?? DEFAULT_STORAGE_WARNING_THRESHOLD_BYTES;
+  const storageStatTone = storageInventory
+    ? resolveStorageFootprintTone(storageInventory.totalBytes, storageWarningThreshold)
+    : "default";
+
+  const scrollToStorageTreemap = () => {
+    if (typeof document === "undefined") return;
+    const element = document.getElementById("storage-treemap");
+    if (!element) return;
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    element.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+  };
 
   return (
     <>
+      {/* Section 1: Live footprint overview */}
       <SettingsSection
-        title={gt("Resource monitor")}
+        title={gt("Live footprint overview")}
         icon={<ActivityIcon className="size-4 text-muted-foreground" />}
         headerAction={
           <div className="flex items-center gap-2">
@@ -1096,17 +1166,37 @@ function ResourceTelemetryDiagnosticsBody({
               />
             ) : null}
             <LastSampleLabel sampledAt={snapshot?.readAt ?? null} />
+            {logsDirectoryAction ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      size="icon-micro"
+                      variant="ghost"
+                      disabled={logsDirectoryAction.disabled || logsDirectoryAction.isOpening}
+                      onClick={logsDirectoryAction.onOpen}
+                      aria-label={gt("Open logs folder")}
+                    >
+                      <FolderOpenIcon className="size-3.5" />
+                    </Button>
+                  }
+                />
+                <TooltipPopup side="top">
+                  <T>Open logs folder</T>
+                </TooltipPopup>
+              </Tooltip>
+            ) : null}
             <Tooltip>
               <TooltipTrigger
                 render={
                   <Button
                     size="icon-micro"
                     variant="ghost"
-                    disabled={telemetry.isPending}
-                    onClick={telemetry.refresh}
+                    disabled={telemetry.isPending || storageLoading}
+                    onClick={handleRefreshAll}
                     aria-label={gt("Refresh resource telemetry")}
                   >
-                    <RefreshIcon size="xs" refreshing={telemetry.isPending} />
+                    <RefreshIcon size="xs" refreshing={telemetry.isPending || storageLoading} />
                   </Button>
                 }
               />
@@ -1120,17 +1210,17 @@ function ResourceTelemetryDiagnosticsBody({
         <div className="overflow-hidden rounded-[inherit]">
           <div className="flex flex-col gap-3 border-b border-border/60 bg-linear-to-r from-muted/45 via-muted/20 to-transparent px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
             <div>
-              <div className="text-3xs font-semibold uppercase tracking-widest text-muted-foreground/70">
+              <div className="text-3xs font-semibold uppercase tracking-widest text-muted-foreground/75">
                 <T>Prismux system footprint</T>
               </div>
-              <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground">
+              <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
                 <T>
-                  Live native counters for the server, providers, terminals, desktop processes, and
-                  the monitor itself.
+                  Live native counters for the server, providers, terminals, desktop shell, monitor
+                  overhead, and local disk usage.
                 </T>
               </p>
             </div>
-            <div className="flex items-center gap-2 text-3xs text-muted-foreground/65">
+            <div className="flex items-center gap-2 text-3xs text-muted-foreground/75">
               <span
                 className={cn(
                   "size-1.5 rounded-full",
@@ -1144,6 +1234,7 @@ function ResourceTelemetryDiagnosticsBody({
                 : gt("Sampling every ...")}
             </div>
           </div>
+
           <div className="grid grid-cols-2 divide-x divide-y divide-border/55 md:grid-cols-3">
             <IconStat
               icon={<CpuIcon className="size-3.5" />}
@@ -1210,25 +1301,46 @@ function ResourceTelemetryDiagnosticsBody({
               }
             />
             <IconStat
-              icon={<GaugeIcon className="size-3.5" />}
-              label={gt("CPU speed limit")}
-              value={speedLimitDisplay ? speedLimitDisplay.value : "..."}
-              detail={
-                thermalStateText
-                  ? gt("{thermalState} thermal state", {
-                      thermalState: thermalStateText,
-                    })
-                  : undefined
+              icon={<FolderOpenIcon className="size-3.5" />}
+              label={gt("Local storage footprint")}
+              value={
+                storageInventory
+                  ? formatBytes(storageInventory.totalBytes)
+                  : storageLoading
+                    ? "..."
+                    : "-"
               }
-              tone={speedLimitDisplay?.tone ?? "default"}
+              detail={
+                storageInventory
+                  ? storageReclaimableBytes > 0
+                    ? gt("{bytes} reclaimable", { bytes: formatBytes(storageReclaimableBytes) })
+                    : gt("Within storage quota")
+                  : storageError
+                    ? gt("Scan unavailable")
+                    : undefined
+              }
+              tone={storageStatTone}
+              onClick={scrollToStorageTreemap}
             />
           </div>
-          {telemetry.error ? (
-            <div className="flex items-start gap-2 border-t border-destructive/20 bg-destructive/5 px-4 py-3 text-xs text-destructive sm:px-5">
-              <AlertTriangleIcon className="size-3.5 h-lh shrink-0" />
-              <span>{telemetry.error}</span>
+
+          {telemetry.error || logsDirectoryAction?.error ? (
+            <div className="space-y-1.5 border-t border-destructive/20 bg-destructive/5 px-4 py-3 text-xs text-destructive sm:px-5">
+              {telemetry.error ? (
+                <div className="flex items-start gap-2">
+                  <AlertTriangleIcon className="size-3.5 h-lh shrink-0" />
+                  <span>{telemetry.error}</span>
+                </div>
+              ) : null}
+              {logsDirectoryAction?.error ? (
+                <div className="flex items-start gap-2">
+                  <AlertTriangleIcon className="size-3.5 h-lh shrink-0" />
+                  <span>{logsDirectoryAction.error}</span>
+                </div>
+              ) : null}
             </div>
           ) : null}
+
           {snapshot ? (
             <div className="grid border-t border-border/60 bg-muted/10 md:grid-cols-3">
               <AggregateCard
@@ -1251,6 +1363,7 @@ function ResourceTelemetryDiagnosticsBody({
         </div>
       </SettingsSection>
 
+      {/* Section 2: Symmetric 2-column Host & collection */}
       <SettingsSection
         title={gt("Host & collection")}
         icon={<GaugeIcon className="size-4 text-muted-foreground" />}
@@ -1264,85 +1377,131 @@ function ResourceTelemetryDiagnosticsBody({
         }
       >
         <div className="grid overflow-hidden rounded-[inherit] md:grid-cols-2 md:divide-x md:divide-border/60">
+          {/* Left column: Host state (2 summary cards + 5 aligned DetailRows) */}
           <div className="px-4 py-4 sm:px-5">
-            <div className="mb-3 flex items-center gap-2 text-3xs font-semibold uppercase tracking-widest text-muted-foreground/70">
+            <div className="mb-3 flex items-center gap-2 text-3xs font-semibold uppercase tracking-widest text-muted-foreground/75">
               <span className="flex size-6 items-center justify-center rounded-md bg-muted/60">
-                <BatteryIcon className="size-3.5" />
+                <MonitorIcon className="size-3.5" />
               </span>
               <T>Host state</T>
             </div>
-            {hasHostPowerSignal && snapshot ? (
-              <>
-                <DetailRow
-                  label={gt("Power source")}
-                  value={booleanStateLabel(
-                    snapshot.power.onBattery,
-                    { true: gt("Battery"), false: gt("External power") },
-                    messages,
-                  )}
-                />
-                <DetailRow
-                  label={gt("Low power mode")}
-                  value={booleanStateLabel(
-                    snapshot.power.lowPowerMode,
-                    { true: gt("Enabled"), false: gt("Disabled") },
-                    messages,
-                  )}
-                />
-                <DetailRow
-                  label={gt("Idle")}
-                  value={`${booleanStateLabel(
-                    snapshot.power.idle,
-                    {
-                      true: gt("Idle", { $context: "host power state" }),
-                      false: gt("Active", { $context: "host power state" }),
-                    },
-                    messages,
-                  )}${
-                    snapshot.power.idleSeconds === null
-                      ? ""
-                      : ` · ${Math.round(snapshot.power.idleSeconds)}s`
-                  }`}
-                />
-                <DetailRow
-                  label={gt("Session")}
-                  value={
-                    snapshot.power.suspended
-                      ? gt("Suspended")
-                      : booleanStateLabel(
-                          snapshot.power.locked,
-                          { true: gt("Locked"), false: gt("Unlocked") },
-                          messages,
-                        )
-                  }
-                />
-                <DetailRow
-                  label={gt("Thermal")}
-                  value={thermalStateText ?? localizeThermalState(snapshot.power.thermalState, messages)}
-                  valueClassName={
-                    snapshot.power.thermalState === "serious" ||
-                    snapshot.power.thermalState === "critical"
-                      ? "text-destructive"
-                      : undefined
-                  }
-                />
-              </>
-            ) : (
-              <div className="rounded-xl border border-dashed border-border/70 bg-muted/20 px-4 py-5">
+
+            {/* Summary card 1: Host hardware */}
+            <div className="flex min-h-18 items-start justify-between gap-4 border-t border-border/50 py-3 first:border-t-0">
+              <div className="min-w-0">
                 <div className="text-sm font-medium text-foreground">
-                  <T>Desktop host signals not connected</T>
+                  <T>Host hardware</T>
                 </div>
-                <p className="mt-1.5 max-w-sm text-2xs leading-relaxed text-muted-foreground/70">
-                  <T>
-                    Power, idle, lock, and thermal state are supplied by the desktop host. Process
-                    telemetry remains fully active in this browser session.
-                  </T>
-                </p>
+                <div className="mt-1 truncate text-2xs leading-relaxed text-muted-foreground/80">
+                  {cpuHardwareDetail || gt("Hardware telemetry waiting for first native sample.")}
+                </div>
               </div>
-            )}
+              <span className="inline-flex shrink-0 items-center rounded-full border border-border/70 bg-muted/45 px-2.5 py-1 font-mono text-3xs font-semibold tabular-nums text-foreground/85">
+                {osSummary || gt("Local host")}
+              </span>
+            </div>
+
+            {/* Summary card 2: Physical memory & power */}
+            <div className="flex min-h-18 flex-col justify-center gap-2 border-t border-border/50 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-medium text-foreground">
+                  <T>Physical memory & power</T>
+                </span>
+                <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border/70 bg-muted/45 px-2.5 py-0.5 font-mono text-3xs font-semibold tabular-nums text-foreground/85">
+                  {powerExtended.isCharging === "true" ? (
+                    <BatteryChargingIcon className="size-3 text-success-foreground" aria-hidden />
+                  ) : snapshot?.power.onBattery === "true" ? (
+                    <BatteryIcon className="size-3 text-warning-foreground" aria-hidden />
+                  ) : (
+                    <PlugIcon className="size-3 text-muted-foreground" aria-hidden />
+                  )}
+                  <span>{powerSourceDisplay}</span>
+                </span>
+              </div>
+              <div className="space-y-1">
+                <div className="flex items-center justify-between gap-2 font-mono text-3xs tabular-nums text-muted-foreground">
+                  <span>
+                    {ramTotal !== null && ramUsed !== null
+                      ? `${formatBytes(ramUsed)} / ${formatBytes(ramTotal)}`
+                      : gt("System RAM awaiting host telemetry")}
+                  </span>
+                  <span>{ramUsedPercent !== null ? `${ramUsedPercent}%` : "-"}</span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted/70">
+                  <div
+                    className={cn(
+                      "h-full rounded-full transition-all motion-reduce:transition-none",
+                      ramUsedPercent !== null && ramUsedPercent >= 90
+                        ? "bg-destructive"
+                        : ramUsedPercent !== null && ramUsedPercent >= 78
+                          ? "bg-warning"
+                          : "bg-info/80",
+                    )}
+                    style={{ width: `${ramUsedPercent ?? 0}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* 5 aligned DetailRows matching right column 1:1 */}
+            <DetailRow label={gt("Power source")} value={powerSourceDisplay} />
+            <DetailRow
+              label={gt("Low power mode")}
+              value={booleanStateLabel(
+                snapshot?.power.lowPowerMode ?? "unknown",
+                { true: gt("Enabled"), false: gt("Disabled") },
+                messages,
+              )}
+            />
+            <DetailRow
+              label={gt("Idle")}
+              value={
+                snapshot
+                  ? `${booleanStateLabel(
+                      snapshot.power.idle,
+                      {
+                        true: gt("Idle", { $context: "host power state" }),
+                        false: gt("Active", { $context: "host power state" }),
+                      },
+                      messages,
+                    )}${
+                      snapshot.power.idleSeconds === null
+                        ? ""
+                        : ` · ${Math.round(snapshot.power.idleSeconds)}s`
+                    }`
+                  : gt("Unknown")
+              }
+            />
+            <DetailRow
+              label={gt("Session")}
+              value={
+                snapshot
+                  ? snapshot.power.suspended
+                    ? gt("Suspended")
+                    : booleanStateLabel(
+                        snapshot.power.locked,
+                        { true: gt("Locked"), false: gt("Unlocked") },
+                        messages,
+                      )
+                  : gt("Unknown")
+              }
+            />
+            <DetailRow
+              label={gt("Thermal & sensors")}
+              value={thermalDisplay.label}
+              valueClassName={
+                thermalDisplay.tone === "danger"
+                  ? "text-destructive"
+                  : thermalDisplay.tone === "warning"
+                    ? "text-warning-foreground"
+                    : undefined
+              }
+            />
           </div>
+
+          {/* Right column: Collection health (2 HealthSources + 5 aligned DetailRows) */}
           <div className="border-t border-border/60 px-4 py-4 md:border-t-0 sm:px-5">
-            <div className="mb-3 flex items-center gap-2 text-3xs font-semibold uppercase tracking-widest text-muted-foreground/70">
+            <div className="mb-3 flex items-center gap-2 text-3xs font-semibold uppercase tracking-widest text-muted-foreground/75">
               <span className="flex size-6 items-center justify-center rounded-md bg-muted/60">
                 <GaugeIcon className="size-3.5" />
               </span>
@@ -1400,77 +1559,86 @@ function ResourceTelemetryDiagnosticsBody({
         </div>
       </SettingsSection>
 
-      <SettingsSection
-        title={gt("Resource timeline")}
-        icon={<HardDriveIcon className="size-4 text-muted-foreground" />}
-        headerAction={
-          <div className="flex items-center gap-2">
-            <HistoryWindowSelector selectedWindowMs={windowMs} onSelect={setWindowMs} />
-            <Button
-              size="icon-micro"
-              variant="ghost"
-              disabled={history.isPending}
-              onClick={history.refresh}
-              aria-label={gt("Refresh resource history")}
-            >
-              <RefreshIcon size="xs" refreshing={history.isPending} />
-            </Button>
-          </div>
-        }
-      >
-        <div className="overflow-hidden rounded-[inherit]">
-          {history.error ? (
-            <div className="flex items-start gap-2 border-b border-destructive/20 bg-destructive/5 px-4 py-3 text-xs text-destructive sm:px-5">
-              <AlertTriangleIcon className="size-3.5 h-lh shrink-0" />
-              <span>{history.error}</span>
-            </div>
-          ) : null}
-          <ResourceHistoryChart buckets={history.data?.buckets ?? []} />
-          <HistoryProcessTable processes={history.data?.topProcesses ?? []} />
-        </div>
-      </SettingsSection>
+      {/* Section 3: Local storage & WizTree Squarified Treemap */}
+      <StorageTreemapSection
+        id="storage-treemap"
+        inventory={storageInventory}
+        loading={storageLoading}
+        error={storageError}
+        onRefresh={() => refreshStorage(true)}
+        onInventoryChange={(next) => {
+          setStorageInventory(next);
+          setStorageError(null);
+        }}
+      />
 
+      {/* Section 4: Live processes & resource trends (segmented toggle) */}
       <SettingsSection
-        title={gt("Live process tree")}
+        title={gt("Live processes & resource trends")}
         icon={<CpuIcon className="size-4 text-muted-foreground" />}
         headerAction={
-          snapshot ? (
-            <span className="text-3xs text-muted-foreground/55">
-              <T>
-                Identity: <span className="font-mono">PID + start time</span>
-              </T>
-            </span>
-          ) : null
-        }
-      >
-        <div className="overflow-hidden rounded-[inherit]">
-          <ProcessTable
-            processes={snapshot?.processes ?? []}
-            canMaintainEnvironment={canMaintainEnvironment}
-            signalingKeys={signalingKeys}
-            onSignal={signalProcess}
-          />
-        </div>
-      </SettingsSection>
-
-      <SettingsSection
-        title={gt("Instrumented application I/O")}
-        icon={<DatabaseIcon className="size-4 text-muted-foreground" />}
-        headerAction={
-          <span className="text-3xs text-muted-foreground/55">
-            <T>Logical bytes by operation</T>
-          </span>
-        }
-      >
-        <div className="overflow-hidden rounded-[inherit]">
-          <div className="bg-muted/15 px-4 py-3 text-2xs leading-relaxed text-muted-foreground sm:px-5">
-            <T>
-              Native counters identify which process is reading or writing. These application-level
-              counters identify known Prismux operations so process spikes can be correlated with
-              specific persistence and logging paths.
-            </T>
+          <div className="flex flex-wrap items-center gap-2">
+            <ToggleGroup
+              aria-label={gt("Process and resource view")}
+              variant="segmented"
+              value={[processViewTab]}
+              onValueChange={(next) => {
+                const value = next[0];
+                if (value === "processes" || value === "timeline") {
+                  setProcessViewTab(value);
+                }
+              }}
+            >
+              <Toggle value="processes">
+                <T>Live process tree</T>
+              </Toggle>
+              <Toggle value="timeline">
+                <T>Resource timeline</T>
+              </Toggle>
+            </ToggleGroup>
+            {processViewTab === "timeline" ? (
+              <>
+                <HistoryWindowSelector selectedWindowMs={windowMs} onSelect={setWindowMs} />
+                <Button
+                  size="icon-micro"
+                  variant="ghost"
+                  disabled={history.isPending}
+                  onClick={history.refresh}
+                  aria-label={gt("Refresh resource history")}
+                >
+                  <RefreshIcon size="xs" refreshing={history.isPending} />
+                </Button>
+              </>
+            ) : snapshot ? (
+              <span className="hidden text-3xs text-muted-foreground/65 sm:inline">
+                <T>
+                  Identity: <span className="font-mono">PID + start time</span>
+                </T>
+              </span>
+            ) : null}
           </div>
-          <AttributionTable entries={snapshot?.attribution.entries ?? []} />
+        }
+      >
+        <div className="overflow-hidden rounded-[inherit]">
+          {processViewTab === "processes" ? (
+            <ProcessTable
+              processes={snapshot?.processes ?? []}
+              canMaintainEnvironment={canMaintainEnvironment}
+              signalingKeys={signalingKeys}
+              onSignal={signalProcess}
+            />
+          ) : (
+            <>
+              {history.error ? (
+                <div className="flex items-start gap-2 border-b border-destructive/20 bg-destructive/5 px-4 py-3 text-xs text-destructive sm:px-5">
+                  <AlertTriangleIcon className="size-3.5 h-lh shrink-0" />
+                  <span>{history.error}</span>
+                </div>
+              ) : null}
+              <ResourceHistoryChart buckets={history.data?.buckets ?? []} />
+              <HistoryProcessTable processes={history.data?.topProcesses ?? []} />
+            </>
+          )}
         </div>
       </SettingsSection>
     </>

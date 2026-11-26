@@ -86,6 +86,8 @@ import {
   formatCompactUsageTokens,
   formatResetCountdown,
   formatUsageWindowValue,
+  normalizeUsageProviderKind,
+  resolveServerProviderUsageKind,
   type PrismuxProviderProbeSnapshot,
 } from "./statusBarUsage";
 import { getResetCountdownNextTickDelay } from "./useResetCountdownClock";
@@ -876,6 +878,246 @@ describe("statusBarUsage compliance and urgency sorting", () => {
     );
     expect(statusBarSource).toContain("/v1/providers/probe");
     expect(statusBarSource).toContain("providerProbeSnapshots");
+  });
+
+  it("deduplicates auto-seeded and renamed local DSH ACP rows, keeps distinct ACP agents separate, and guards ACP Antigravity", () => {
+    const now = Date.parse("2026-11-26T08:00:00Z");
+
+    expect(normalizeUsageProviderKind("dsh-acp")).toBe("dsh");
+    expect(normalizeUsageProviderKind("dsh_acp")).toBe("dsh");
+    expect(normalizeUsageProviderKind("dsh-cli")).toBe("dsh");
+    expect(normalizeUsageProviderKind("dsh_cli")).toBe("dsh");
+    expect(normalizeUsageProviderKind("deepseek_harness")).toBe("dsh");
+    expect(normalizeUsageProviderKind("deepseek-harness-acp")).toBe("dsh");
+
+    const buildDshMergedUsage = (providerKey: string, weekTokens: number, todayTokens: number) =>
+      ({
+        costUsd: 0.42,
+        uncachedInputTokens: weekTokens,
+        cachedInputTokens: 0,
+        cacheCreationTokens: 0,
+        outputTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: weekTokens,
+        records: 6,
+        sessions: 2,
+        providers: [
+          {
+            provider: providerKey,
+            costUsd: 0.42,
+            totalTokens: weekTokens,
+            records: 6,
+            sessions: 2,
+            costShare: 1,
+            tokenShare: 1,
+          },
+        ],
+        models: [],
+        daily: [
+          {
+            day: "2026-11-26",
+            costUsd: 0.12,
+            totalTokens: todayTokens,
+            byProvider: new Map([[providerKey, { costUsd: 0.12, totalTokens: todayTokens }]]),
+          },
+        ],
+        hourly: [],
+        costQuality: {
+          providerReportedShare: 0,
+          modelPricedShare: 1,
+          unpricedShare: 0,
+          cacheSavingsUsd: 0,
+        },
+        categoryCost: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, unsplit: 0 },
+        speedCost: { standard: 0.42, fast: 0, ultrafast: 0, premium: 0 },
+        duplicateSources: [],
+        contributingEnvironments: [],
+        contractMismatches: [],
+      }) as unknown as MergedUsage;
+
+    // 1. Auto-seeded DSH (driver: "acpRegistry") + mergedUsage ("dsh") -> strictly 1 row (no duplicate DSH [本地统计]).
+    const autoSeededDshId = ProviderInstanceId.make("acpRegistry-dsh");
+    const autoSeededDshProvider = {
+      instanceId: autoSeededDshId,
+      driver: ProviderDriverKind.make("acpRegistry"),
+      displayName: "DeepSeek Harness",
+      enabled: true,
+      installed: true,
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: "2026-11-26T00:00:00.000Z",
+      models: [],
+      slashCommands: [],
+      skills: [],
+    } as unknown as ServerProvider;
+    const autoSeededEntries = providerInstanceEntriesFor(
+      [autoSeededDshProvider],
+      {
+        providerInstances: {
+          [autoSeededDshId]: {
+            driver: ProviderDriverKind.make("acpRegistry"),
+            enabled: true,
+            displayName: "DeepSeek Harness",
+            config: { source: "local", commandPath: "C:\\Program Files\\DeepSeek\\dsh.exe" },
+          },
+        },
+        projectSettingsOverrides: {},
+      },
+      null,
+    );
+    expect(resolveServerProviderUsageKind(autoSeededDshProvider, autoSeededEntries)).toBe("dsh");
+
+    const autoSeededSummary = collectStatusBarUsageSummary(
+      [autoSeededDshProvider],
+      now,
+      buildDshMergedUsage("dsh", 51_746, 12_000),
+      "2026-11-26",
+      undefined,
+      { entries: autoSeededEntries },
+    );
+    expect(autoSeededSummary.telemetry.providers).toHaveLength(1);
+    expect(autoSeededSummary.telemetry.providers[0]?.providerKind).toBe("dsh");
+    expect(autoSeededSummary.telemetry.providers[0]?.weekTokens).toBe(51_746);
+
+    // 2. Renamed local DSH with opaque instanceId + commandPath -> strictly 1 row showing custom name.
+    const renamedDshId = ProviderInstanceId.make("acp_custom_88");
+    const renamedDshProvider = {
+      instanceId: renamedDshId,
+      driver: ProviderDriverKind.make("acpRegistry"),
+      displayName: "我的推理引擎",
+      enabled: true,
+      installed: true,
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: "2026-11-26T00:00:00.000Z",
+      models: [],
+      slashCommands: [],
+      skills: [],
+    } as unknown as ServerProvider;
+    const renamedEntries = providerInstanceEntriesFor(
+      [renamedDshProvider],
+      {
+        providerInstances: {
+          [renamedDshId]: {
+            driver: ProviderDriverKind.make("acpRegistry"),
+            enabled: true,
+            displayName: "我的推理引擎",
+            config: { source: "local", commandPath: "D:\\Apps\\dsh.exe" },
+          },
+        },
+        projectSettingsOverrides: {},
+      },
+      null,
+    );
+    const renamedSummary = collectStatusBarUsageSummary(
+      [renamedDshProvider],
+      now,
+      buildDshMergedUsage("dsh-acp", 88_000, 10_000),
+      "2026-11-26",
+      undefined,
+      { entries: renamedEntries },
+    );
+    expect(renamedSummary.telemetry.providers).toHaveLength(1);
+    expect(renamedSummary.telemetry.providers[0]?.providerKind).toBe("dsh");
+    expect(renamedSummary.telemetry.providers[0]?.providerName).toBe("我的推理引擎");
+
+    // 3. Multiple ACP agents (DSH + Kimi) -> 2 distinct rows, never colliding under raw "acpRegistry".
+    const kimiId = ProviderInstanceId.make("acp_kimi_1");
+    const kimiProvider = {
+      instanceId: kimiId,
+      driver: ProviderDriverKind.make("acpRegistry"),
+      displayName: "Kimi Code",
+      enabled: true,
+      installed: true,
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: "2026-11-26T00:00:00.000Z",
+      models: [],
+      slashCommands: [],
+      skills: [],
+    } as unknown as ServerProvider;
+    const multiAcpEntries = providerInstanceEntriesFor(
+      [autoSeededDshProvider, kimiProvider],
+      {
+        providerInstances: {
+          [autoSeededDshId]: {
+            driver: ProviderDriverKind.make("acpRegistry"),
+            enabled: true,
+            displayName: "DeepSeek Harness",
+            config: { source: "local", commandPath: "dsh" },
+          },
+          [kimiId]: {
+            driver: ProviderDriverKind.make("acpRegistry"),
+            enabled: true,
+            displayName: "Kimi Code",
+            config: { agentId: "kimi-code" },
+          },
+        },
+        projectSettingsOverrides: {},
+      },
+      null,
+    );
+    expect(resolveServerProviderUsageKind(kimiProvider, multiAcpEntries)).toBe("kimi");
+    const multiAcpSummary = collectStatusBarUsageSummary(
+      [autoSeededDshProvider, kimiProvider],
+      now,
+      buildDshMergedUsage("dsh", 25_000, 5_000),
+      "2026-11-26",
+      undefined,
+      { entries: multiAcpEntries },
+    );
+    expect(multiAcpSummary.telemetry.providers.map((p) => p.providerKind)).toEqual(["dsh", "kimi"]);
+    expect(multiAcpSummary.telemetry.providers.some((p) => p.providerKind === "acpRegistry")).toBe(
+      false,
+    );
+
+    // 4. Antigravity configured via ACP -> excluded from 0-usage insertion & quota windows, surfaced in antigravityEntries.
+    const agyAcpId = ProviderInstanceId.make("acp_agy_local");
+    const agyAcpProvider = {
+      instanceId: agyAcpId,
+      driver: ProviderDriverKind.make("acpRegistry"),
+      displayName: "Antigravity ACP",
+      enabled: true,
+      installed: true,
+      status: "ready",
+      auth: { status: "authenticated", label: "Local agy CLI · Google AI Pro" },
+      usageLimits: {
+        windows: [{ id: "forbidden", label: "5h", usedPercent: 95 }],
+      },
+      checkedAt: "2026-11-26T00:00:00.000Z",
+      models: [],
+      slashCommands: [],
+      skills: [],
+    } as unknown as ServerProvider;
+    const agyAcpEntries = providerInstanceEntriesFor(
+      [agyAcpProvider],
+      {
+        providerInstances: {
+          [agyAcpId]: {
+            driver: ProviderDriverKind.make("acpRegistry"),
+            enabled: true,
+            displayName: "Antigravity ACP",
+            config: { source: "local", commandPath: "C:\\Users\\Fish\\AppData\\Local\\agy\\bin\\agy.exe" },
+          },
+        },
+        projectSettingsOverrides: {},
+      },
+      null,
+    );
+    expect(resolveServerProviderUsageKind(agyAcpProvider, agyAcpEntries)).toBe("antigravity");
+    const agyAcpSummary = collectStatusBarUsageSummary(
+      [agyAcpProvider],
+      now,
+      null,
+      "2026-11-26",
+      undefined,
+      { entries: agyAcpEntries },
+    );
+    expect(agyAcpSummary.windows).toHaveLength(0);
+    expect(agyAcpSummary.telemetry.providers).toHaveLength(0);
+    expect(agyAcpSummary.antigravityEntries).toHaveLength(1);
+    expect(agyAcpSummary.antigravityEntries[0]?.providerName).toBe("Antigravity ACP");
+    expect(agyAcpSummary.antigravityEntries[0]?.tierLabel).toBe("Google AI Pro");
   });
 });
 

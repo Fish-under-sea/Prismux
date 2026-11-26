@@ -21,6 +21,7 @@ import {
 } from "@prismux/client-runtime/state/provider-instance-display";
 import {
   formatAgentBrandName,
+  resolveAcpAgentBrandKey,
   resolveAgentBrandId,
   resolveProviderEntryDisplayName,
   toCanonicalChiefProviderId,
@@ -47,6 +48,7 @@ export interface ProviderInstanceEntry {
   readonly accentColor?: string | undefined;
   readonly acpRegistryAgentId?: string | undefined;
   readonly acpRegistryIconUrl?: string | undefined;
+  readonly acpCommandPath?: string | undefined;
   readonly continuationGroupKey?: string | undefined;
   readonly enabled: boolean;
   readonly installed: boolean;
@@ -196,9 +198,20 @@ function resolveLookupCanonicalId(rawKey: string): string | null {
 function resolveEntryCanonicalId(
   entry: Pick<
     ProviderInstanceEntry,
-    "instanceId" | "driverKind" | "acpRegistryAgentId" | "displayName"
+    "instanceId" | "driverKind" | "acpRegistryAgentId" | "acpCommandPath" | "displayName"
   >,
 ): string | null {
+  if (entry.driverKind === "acpRegistry") {
+    const acpBrand = resolveAcpAgentBrandKey({
+      agentId: entry.acpRegistryAgentId,
+      commandPath: entry.acpCommandPath,
+      instanceId: entry.instanceId,
+      displayName: entry.displayName,
+    });
+    if (acpBrand) {
+      return toCanonicalChiefProviderId(acpBrand);
+    }
+  }
   const candidates = [
     entry.acpRegistryAgentId,
     entry.driverKind !== "acpRegistry" ? entry.driverKind : undefined,
@@ -460,12 +473,22 @@ function applyProviderInstanceBranding(
       ? (explicitInstance.config as Readonly<Record<string, unknown>>)
       : null;
   if (config?.source === "local") {
-    return { ...syncedEntry, acpRegistryAgentId: undefined, acpRegistryIconUrl: undefined };
+    const commandPath =
+      typeof config.commandPath === "string" && config.commandPath.trim()
+        ? config.commandPath.trim()
+        : undefined;
+    return {
+      ...syncedEntry,
+      acpRegistryAgentId: undefined,
+      acpRegistryIconUrl: undefined,
+      acpCommandPath: commandPath,
+    };
   }
   const agentId = config?.agentId;
   const iconUrl = config?.registryIconUrl;
   return {
     ...syncedEntry,
+    acpCommandPath: undefined,
     ...(typeof agentId === "string" && agentId.trim()
       ? { acpRegistryAgentId: agentId.trim() }
       : {}),

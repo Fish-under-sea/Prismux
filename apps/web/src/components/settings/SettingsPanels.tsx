@@ -207,7 +207,7 @@ export const MAINTENANCE_TAB_HASH_ANCHORS = {
     "storage-artifacts",
     "storage-delete-now",
   ] as const,
-  telemetry: ["telemetry-export", "processes"] as const,
+  telemetry: ["telemetry-export", "processes", "storage-treemap"] as const,
 } as const;
 
 const RESPONSE_STREAMING_MODE_LABELS: Record<ResponseStreamingMode, string> = {
@@ -2644,7 +2644,7 @@ export function MaintenanceSettingsPanel() {
     },
     {
       id: MAINTENANCE_TAB_IDS.telemetry,
-      label: gt("Telemetry & tracing"),
+      label: gt("Performance & storage"),
       hashAnchors: MAINTENANCE_TAB_HASH_ANCHORS.telemetry,
       content: (
         <div id="processes">
@@ -2655,7 +2655,7 @@ export function MaintenanceSettingsPanel() {
   ];
 
   return (
-    <SettingsPageContainer width="wide">
+    <SettingsPageContainer width="full">
       <SettingsSegmentedTabs
         tabs={tabs}
         defaultTabId={MAINTENANCE_TAB_IDS.runtime}

@@ -49,11 +49,15 @@ import {
   type PrismuxDaemonClient,
 } from "./daemonClient";
 import {
-  createPortsPollingController,
-  INITIAL_PORTS_SCAN_STATE,
-  type PortsPollingController,
-  type PortsScanState,
-} from "./statusBar/portsPolling";
+  createPrismuxTelemetryMirror,
+  PrismuxTelemetryProvider,
+  useOptionalPrismuxTelemetry,
+  usePrismuxTelemetry,
+  type PrismuxTelemetryContextValue,
+} from "./PrismuxTelemetryContext";
+import type { PortsScanState } from "./statusBar/portsPolling";
+
+export { useOptionalPrismuxTelemetry, usePrismuxTelemetry, type PrismuxTelemetryContextValue };
 
 export type PrismuxDialMode = "agent" | "oracle" | "review";
 
@@ -543,8 +547,6 @@ const DEFAULT_UPDATER_BADGE: PrismuxUpdaterBadgeState = Object.freeze({
   checking: false,
 });
 
-const RESOURCES_POLL_INTERVAL_MS = 30_000;
-
 function deriveUpdaterBadgeFromPayload(
   raw: unknown,
   prev: PrismuxUpdaterBadgeState,
@@ -684,19 +686,11 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
   const [chiefProvider, setChiefProvider] = useState<string>("codex");
   const [dialMode, setDialMode] = useState<PrismuxDialMode>("agent");
-  const [portsState, setPortsState] = useState<PortsScanState>(INITIAL_PORTS_SCAN_STATE);
-  const [systemResources, setSystemResources] = useState<DaemonSystemResourcesResponse | null>(
-    null,
-  );
-  const [resourcesLoading, setResourcesLoading] = useState<boolean>(false);
-  const [resourcesError, setResourcesError] = useState<string | null>(null);
+  const [telemetryMirror] = useState(() => createPrismuxTelemetryMirror());
   const [updaterBadge, setUpdaterBadge] = useState<PrismuxUpdaterBadgeState>(DEFAULT_UPDATER_BADGE);
   const [portsPopoverRequest, setPortsPopoverRequest] = useState<PrismuxPortsPopoverRequest | null>(
     null,
   );
-  const portsControllerRef = useRef<PortsPollingController | null>(null);
-  const occludedRef = useRef<boolean>(occluded);
-  occludedRef.current = occluded;
   const portsRequestSeqRef = useRef<number>(0);
   const [reducedTransparency, setReducedTransparency] = useState<boolean>(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
@@ -1405,67 +1399,25 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
     };
   }, [scheduleDaemonSave, syncHostPolarity, wallpaperHost, wallpaperStore]);
 
-  const refreshSystemPorts = useCallback(async (workspace?: string): Promise<void> => {
-    const controller = portsControllerRef.current;
-    if (controller) {
-      await controller.refreshNow(workspace);
-      return;
-    }
-    if (!daemonReadyRef.current) return;
-    try {
-      const res = await prismuxDaemonClient.fetchSystemPorts(workspace);
-      const list = Array.isArray(res?.ports) ? res.ports : [];
-      setPortsState({
-        ports: list,
-        loading: false,
-        error: null,
-        failureStreak: 0,
-        lastScannedAt: Date.now(),
-      });
-    } catch (err) {
-      setPortsState((prev) => {
-        const nextStreak = prev.failureStreak + 1;
-        return {
-          ports: nextStreak >= 2 ? [] : prev.ports,
-          loading: false,
-          error: err instanceof Error ? err.message : String(err),
-          failureStreak: nextStreak,
-          lastScannedAt: prev.lastScannedAt,
-        };
-      });
-    }
-  }, []);
-
-  const killSystemPort = useCallback(
-    async (pid: number): Promise<DaemonKillSystemPortResponse> => {
-      const result = await prismuxDaemonClient.killSystemPort(pid);
-      void refreshSystemPorts();
-      return result;
-    },
-    [refreshSystemPorts],
+  const refreshSystemPorts = useCallback(
+    (workspace?: string): Promise<void> => telemetryMirror.refreshSystemPorts(workspace),
+    [telemetryMirror],
   );
 
-  const refreshSystemResources = useCallback(async (): Promise<void> => {
-    if (!daemonReadyRef.current) return;
-    setResourcesLoading(true);
-    try {
-      const res = await prismuxDaemonClient.fetchSystemResources();
-      setSystemResources(res);
-      setResourcesError(null);
-    } catch (err) {
-      setResourcesError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setResourcesLoading(false);
-    }
-  }, []);
+  const killSystemPort = useCallback(
+    (pid: number): Promise<DaemonKillSystemPortResponse> => telemetryMirror.killSystemPort(pid),
+    [telemetryMirror],
+  );
+
+  const refreshSystemResources = useCallback(
+    (): Promise<void> => telemetryMirror.refreshSystemResources(),
+    [telemetryMirror],
+  );
 
   const killStalePty = useCallback(
-    async (sessionId: string): Promise<DaemonKillStalePtyResponse> => {
-      const result = await prismuxDaemonClient.killStalePty(sessionId);
-      void refreshSystemResources();
-      return result;
-    },
-    [refreshSystemResources],
+    (sessionId: string): Promise<DaemonKillStalePtyResponse> =>
+      telemetryMirror.killStalePty(sessionId),
+    [telemetryMirror],
   );
 
   const refreshUpdaterStatus = useCallback(async (): Promise<void> => {
@@ -1485,60 +1437,6 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       ...(workspace !== undefined ? { workspace } : {}),
     });
   }, []);
-
-  // Shared 30s silent port polling controller (auto-pauses when window is occluded/hidden, 2-failure debounce).
-  useEffect(() => {
-    if (!daemonInfo.ready) {
-      portsControllerRef.current?.stop();
-      portsControllerRef.current = null;
-      return;
-    }
-
-    const controller = createPortsPollingController({
-      fetcher: async (workspace) => {
-        const res = await prismuxDaemonClient.fetchSystemPorts(workspace);
-        return Array.isArray(res?.ports) ? res.ports : [];
-      },
-      isPaused: () =>
-        occludedRef.current ||
-        (typeof document !== "undefined" && document.visibilityState === "hidden"),
-      onStateChange: (next) => setPortsState(next),
-    });
-    portsControllerRef.current = controller;
-    controller.start();
-
-    return () => {
-      controller.stop();
-      if (portsControllerRef.current === controller) {
-        portsControllerRef.current = null;
-      }
-    };
-  }, [daemonInfo.ready]);
-
-  // Synchronize occlusion/visibility pause state into the active ports controller.
-  useEffect(() => {
-    const isHidden =
-      occluded || (typeof document !== "undefined" && document.visibilityState === "hidden");
-    portsControllerRef.current?.setPaused(isHidden);
-  }, [occluded]);
-
-  // Shared silent system resources polling (auto-paused when occluded/hidden).
-  useEffect(() => {
-    if (!daemonInfo.ready || occluded) return;
-    void refreshSystemResources();
-    const timer = setInterval(() => {
-      if (
-        occludedRef.current ||
-        (typeof document !== "undefined" && document.visibilityState === "hidden")
-      ) {
-        return;
-      }
-      void refreshSystemResources();
-    }, RESOURCES_POLL_INTERVAL_MS);
-    return () => {
-      clearInterval(timer);
-    };
-  }, [daemonInfo.ready, occluded, refreshSystemResources]);
 
   // Subscribe to Daemon unified updater status & SSE events for non-intrusive update badge.
   useEffect(() => {
@@ -1583,12 +1481,20 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       chiefProvider,
       dialMode,
       switchChief,
-      portsState,
+      get portsState() {
+        return telemetryMirror.portsState;
+      },
       refreshSystemPorts,
       killSystemPort,
-      systemResources,
-      resourcesLoading,
-      resourcesError,
+      get systemResources() {
+        return telemetryMirror.systemResources;
+      },
+      get resourcesLoading() {
+        return telemetryMirror.resourcesLoading;
+      },
+      get resourcesError() {
+        return telemetryMirror.resourcesError;
+      },
       refreshSystemResources,
       killStalePty,
       updaterBadge,
@@ -1609,12 +1515,9 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       chiefProvider,
       dialMode,
       switchChief,
-      portsState,
+      telemetryMirror,
       refreshSystemPorts,
       killSystemPort,
-      systemResources,
-      resourcesLoading,
-      resourcesError,
       refreshSystemResources,
       killStalePty,
       updaterBadge,
@@ -1626,7 +1529,13 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
 
   return (
     <PrismuxRuntimeContext.Provider value={contextValue}>
-      {children}
+      <PrismuxTelemetryProvider
+        daemonReady={daemonInfo.ready}
+        occluded={occluded}
+        mirror={telemetryMirror}
+      >
+        {children}
+      </PrismuxTelemetryProvider>
     </PrismuxRuntimeContext.Provider>
   );
 }
