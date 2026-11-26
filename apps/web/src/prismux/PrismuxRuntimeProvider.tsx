@@ -11,9 +11,11 @@ import {
   type ThemeMode,
 } from "@prismux/appearance";
 import {
+  createBlobUrlRegistry,
   createDefaultSettings,
   createWallpaperStore,
   normalizeWallpaperSettingsPatch,
+  type BlobUrlRegistry,
   type SystemFontsResult,
   type UserPropDef,
   type UserPropType,
@@ -890,9 +892,23 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
     return unsubscribe;
   }, [scheduleDaemonSave, syncHostPolarity, wallpaperStore]);
 
-  // Dispose wallpaper store timer cleanly on provider unmount.
+  const offlineWallpaperBlobsRef = useRef<BlobUrlRegistry | null>(null);
+  offlineWallpaperBlobsRef.current ??= createBlobUrlRegistry();
+
+  // Reconcile offline-imported blob URLs when wallpaper inventory changes & dispose cleanly on unmount.
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- subscribes to external wallpaper store to revoke orphaned browser object URLs and disposes store on unmount
   useEffect(() => {
+    let prevWallpapers = wallpaperStore.getSnapshot().wallpapers;
+    const unsubscribeBlobs = wallpaperStore.subscribe(() => {
+      const nextWallpapers = wallpaperStore.getSnapshot().wallpapers;
+      if (nextWallpapers === prevWallpapers) return;
+      prevWallpapers = nextWallpapers;
+      offlineWallpaperBlobsRef.current?.reconcile(nextWallpapers);
+    });
+    const registry = offlineWallpaperBlobsRef.current;
     return () => {
+      unsubscribeBlobs();
+      registry?.revokeAll();
       if (saveTimerRef.current !== null) {
         clearTimeout(saveTimerRef.current);
         saveTimerRef.current = null;
@@ -1223,9 +1239,11 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
           }
         } else {
           const isVideo = file.type.startsWith("video/");
+          const id = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
           const blobUrl = URL.createObjectURL(file);
+          offlineWallpaperBlobsRef.current?.track(id, blobUrl);
           imported.push({
-            id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            id,
             title: file.name.replace(/\.[^.]+$/, ""),
             type: isVideo ? "video" : "image",
             source: "custom",

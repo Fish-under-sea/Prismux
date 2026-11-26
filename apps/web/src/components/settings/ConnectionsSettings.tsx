@@ -245,11 +245,11 @@ function AccessWrappedConnectionsSettings({
   const gt = useGT();
   // A link that names an environment, such as the MCP wizard's, opens the page on it. The
   // settings layout remounts this page when the link changes.
-  const linkedEnvironmentId = useSearch({
+  const linkedMachine = useSearch({
     strict: false,
-    select: (search) =>
-      typeof search.machine === "string" ? EnvironmentId.make(search.machine) : null,
+    select: (search) => (typeof search.machine === "string" ? search.machine : null),
   });
+  const linkedEnvironmentId = linkedMachine !== null ? EnvironmentId.make(linkedMachine) : null;
   const [selectedEnvironmentId, setSelectedEnvironmentId] = useState(linkedEnvironmentId);
   const { candidates, environment: accessEnvironment } =
     useAccessEnvironment(selectedEnvironmentId);

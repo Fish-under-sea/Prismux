@@ -141,27 +141,39 @@ export function createDeclarativeGestureTracker(
       container = element;
     },
     track(id, element) {
-      let set = attached.get(id);
-      if (!set) {
-        set = new Set();
-        attached.set(id, set);
-      }
       if (element) {
+        let set = attached.get(id);
+        if (!set) {
+          set = new Set();
+          attached.set(id, set);
+        }
         set.add(element);
         placements.set(element, { id, rect: rectOf(element), since: clock() });
         return;
       }
-      for (const known of [...set]) {
+      const set = attached.get(id);
+      if (!set) return;
+      for (const known of set) {
         if (known.isConnected === false) {
           set.delete(known);
           placements.delete(known);
         }
+      }
+      if (set.size === 0) {
+        attached.delete(id);
       }
     },
     sample(now = clock()) {
       for (const [el, placement] of placements.entries()) {
         if (el.isConnected === false) {
           placements.delete(el);
+          const set = attached.get(placement.id);
+          if (set) {
+            set.delete(el);
+            if (set.size === 0) {
+              attached.delete(placement.id);
+            }
+          }
           continue;
         }
         const rect = rectOf(el);

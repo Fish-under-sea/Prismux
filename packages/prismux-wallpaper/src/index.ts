@@ -5,10 +5,16 @@ export * from "./userProps.js";
 export * from "./videoPrewarm.js";
 export {
   WallpaperStage,
+  ImageCrossfadeStage,
+  disposeWebWallGLCanvas,
   WATCHDOG_BACKOFF_MS,
   resolveEffectiveLiveFps,
 } from "./WallpaperStage.js";
-export type { WallpaperStageProps } from "./WallpaperStage.js";
+export type {
+  WallpaperStageProps,
+  ImageCrossfadeStageProps,
+  WebWallGLDisposableContextLike,
+} from "./WallpaperStage.js";
 export {
   WallpaperQuickPanel,
   QP_VIRTUALIZE_THRESHOLD,

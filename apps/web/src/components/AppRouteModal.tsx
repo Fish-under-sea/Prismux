@@ -1,9 +1,11 @@
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { T, useGT } from "gt-react";
 import { XIcon } from "lucide-react";
-import { useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 import { getCommandPaletteOpener } from "../commandPaletteStore";
+import { useStableCallback } from "../hooks/useStableCallback";
+import { cn } from "../lib/utils";
 import { useNativeTitlebarHeight } from "../lib/windowControlsOverlay";
 import { requestWorkspaceFocus } from "../lib/workspaceFocus";
 import { useCloseAppModal } from "./sidebar/mainAppLocation";
@@ -18,6 +20,13 @@ import {
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 /**
+ * Failsafe deadline past the 150ms entrance transition: if a wedged transition/frame ever leaves
+ * `data-starting-style` stuck on an open modal, force visibility so Settings can never stall at opacity 0.
+ */
+const APP_MODAL_ENTRANCE_FAILSAFE_MS = 260;
+const APP_MODAL_EXIT_FAILSAFE_MS = 500;
+
+/**
  * Large modal for the Settings and Usage routes. Esc, the close button, or a press on the
  * backdrop returns to the page that opened it. Keyboard guards that skip dialogs exempt
  * `[data-app-modal]`, because these pages own their shortcuts.
@@ -25,6 +34,8 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 export function AppRouteModal({ label, children }: { label: string; children: ReactNode }) {
   const closeAppModal = useCloseAppModal();
   const [open, setOpen] = useState(true);
+  const [entranceFailsafeActive, setEntranceFailsafeActive] = useState(false);
+  const closeCompletedRef = useRef(false);
   // Text selection ending on backdrop or dismissing an inner Select/Popover must never close Settings.
   const backdropGuardRef = useRef(createBackdropDismissGuardState());
   // Focus the surface, not its first control: no stray focus ring, no phone keyboard.
@@ -40,9 +51,37 @@ export function AppRouteModal({ label, children }: { label: string; children: Re
   // buttons) symmetrically on top and bottom so the modal stays strictly centered in the viewport.
   const nativeTitlebarHeight = useNativeTitlebarHeight();
 
+  const finalizeClose = useStableCallback(() => {
+    if (closeCompletedRef.current) return;
+    closeCompletedRef.current = true;
+    void closeAppModal();
+  });
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- Entrance visibility & exit completion failsafes guarantee the modal never stalls at opacity 0 or fails to unmount.
+  useEffect(() => {
+    if (open) {
+      const timer = window.setTimeout(() => {
+        const popup = popupRef.current;
+        if (!popup) return;
+        const opacity = Number.parseFloat(window.getComputedStyle(popup).opacity);
+        if (
+          popup.hasAttribute("data-starting-style") ||
+          (Number.isFinite(opacity) && opacity < 0.99)
+        ) {
+          popup.removeAttribute("data-starting-style");
+          setEntranceFailsafeActive(true);
+        }
+      }, APP_MODAL_ENTRANCE_FAILSAFE_MS);
+      return () => window.clearTimeout(timer);
+    }
+    const exitTimer = window.setTimeout(finalizeClose, APP_MODAL_EXIT_FAILSAFE_MS);
+    return () => window.clearTimeout(exitTimer);
+  }, [finalizeClose, open]);
+
   const requestClose = () => {
     const focused = document.activeElement;
     if (focused instanceof HTMLElement && popupRef.current?.contains(focused)) focused.blur();
+    setEntranceFailsafeActive(false);
     setOpen(false);
   };
 
@@ -70,7 +109,7 @@ export function AppRouteModal({ label, children }: { label: string; children: Re
         requestClose();
       }}
       onOpenChangeComplete={(nextOpen) => {
-        if (!nextOpen) void closeAppModal();
+        if (!nextOpen) finalizeClose();
       }}
     >
       <DialogPrimitive.Portal container={portalContainer}>
@@ -123,7 +162,10 @@ export function AppRouteModal({ label, children }: { label: string; children: Re
             data-pmx-glass-zone="overlays"
             data-slot="dialog-popup"
             data-app-modal=""
-            className="relative flex size-full min-h-0 min-w-0 flex-col overflow-hidden bg-background max-sm:pt-(--app-modal-top-inset) max-sm:pb-safe text-foreground outline-none transition-[opacity,scale] duration-150 ease-out [-webkit-app-region:no-drag] data-ending-style:scale-[0.985] data-ending-style:opacity-0 data-starting-style:scale-[0.985] data-starting-style:opacity-0 sm:max-h-[60rem] sm:max-w-[80rem] sm:rounded-2xl sm:border sm:shadow-2xl/40"
+            className={cn(
+              "relative flex size-full min-h-0 min-w-0 flex-col overflow-hidden bg-background max-sm:pt-(--app-modal-top-inset) max-sm:pb-safe text-foreground outline-none transition-[opacity,scale] duration-150 ease-out [-webkit-app-region:no-drag] data-ending-style:scale-[0.985] data-ending-style:opacity-0 data-starting-style:scale-[0.985] data-starting-style:opacity-0 sm:max-h-[60rem] sm:max-w-[80rem] sm:rounded-2xl sm:border sm:shadow-2xl/40",
+              open && entranceFailsafeActive && "scale-100! opacity-100!",
+            )}
           >
             {/* The emptied strip still moves the window, as the titlebar it replaces does. */}
             <div

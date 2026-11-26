@@ -3,8 +3,9 @@ import { parseT3ProjectFile } from "@prismux/core-shared/t3ProjectFile";
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { useMessages } from "gt-react";
-import { createContext, type ReactNode, useContext } from "react";
+import { createContext, type ReactNode, useContext, useMemo } from "react";
 
+import { useStableCallback } from "../../hooks/useStableCallback";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { getProjectFileQueryAtom, optimisticFileAtom } from "../files/projectFilesQueryState";
 import { useSettingsProjectGroups } from "./useSettingsProjectGroups";
@@ -47,18 +48,19 @@ const memberProjectFilesAtom = Atom.family((membersKey: string) => {
 });
 
 function useMemberProjectFiles(scope: ReturnType<typeof resolveSettingsScope>) {
-  const members = scope.kind === "project" || scope.kind === "checkout" ? scope.members : [];
-  return useAtomValue(
-    memberProjectFilesAtom(
-      JSON.stringify(
-        members.map((member): ProjectFileMember => [
-          member.environmentId,
-          member.workspaceRoot,
-          member.physicalProjectKey,
-        ]),
-      ),
-    ),
-  );
+  const members = scope.kind === "project" || scope.kind === "checkout" ? scope.members : null;
+  // oxlint-disable-next-line prismux/no-manual-memo -- memoizes serialized project-file member key so Atom.family lookup avoids per-render JSON.stringify
+  const membersKey = useMemo(() => {
+    if (!members || members.length === 0) return "[]";
+    return JSON.stringify(
+      members.map((member): ProjectFileMember => [
+        member.environmentId,
+        member.workspaceRoot,
+        member.physicalProjectKey,
+      ]),
+    );
+  }, [members]);
+  return useAtomValue(memberProjectFilesAtom(membersKey));
 }
 
 function useResolvedSettingsScope(rawSearch: SettingsScopeSearch, singleEnvironment: boolean) {
@@ -91,7 +93,11 @@ function useResolvedSettingsScope(rawSearch: SettingsScopeSearch, singleEnvironm
     targets.find((candidate) => candidate.environmentId === selected.environment?.environmentId) ??
     targets[0] ??
     null;
-  return { scope, groups, search, ...selected, targets, target };
+  // oxlint-disable-next-line prismux/no-manual-memo -- keeps resolved scope tuple referentially stable for SettingsScopeProvider value memoization
+  return useMemo(
+    () => ({ scope, groups, search, ...selected, targets, target }),
+    [groups, scope, search, selected, target, targets],
+  );
 }
 
 const SettingsScopeContext = createContext<
@@ -119,7 +125,12 @@ export function SettingsScopeProvider({
   children: ReactNode;
 }) {
   const resolved = useResolvedSettingsScope(search, singleEnvironment);
-  const value = { ...resolved, singleEnvironment, deviceOnly, selectScope: onChange };
+  const selectScope = useStableCallback(onChange);
+  // oxlint-disable-next-line prismux/no-manual-memo -- preserves stable SettingsScopeContext value identity across parent re-renders
+  const value = useMemo(
+    () => ({ ...resolved, singleEnvironment, deviceOnly, selectScope }),
+    [deviceOnly, resolved, selectScope, singleEnvironment],
+  );
   return <SettingsScopeContext value={value}>{children}</SettingsScopeContext>;
 }
 

@@ -29,6 +29,7 @@ import {
 
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { getClientSettings, subscribeClientSettings } from "~/hooks/useSettings";
+import { useStableCallback } from "~/hooks/useStableCallback";
 import { cn } from "~/lib/utils";
 import { ensureLocalApi } from "~/localApi";
 import {
@@ -206,7 +207,9 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
   const [daemonQuota, setDaemonQuota] = useState<DaemonOfficialQuotaSummaryResponse | null>(
     initialDaemonQuota,
   );
+  const daemonQuotaRef = useRef<DaemonOfficialQuotaSummaryResponse | null>(initialDaemonQuota);
   const [agyCredits, setAgyCredits] = useState<DaemonOfficialQuotaCreditsResponse | null>(null);
+  const agyCreditsRef = useRef<DaemonOfficialQuotaCreditsResponse | null>(null);
   const [agyCreditsLoading, setAgyCreditsLoading] = useState(false);
   const [quotaRefreshing, setQuotaRefreshing] = useState(false);
   const [quotaMinuteTick, setQuotaMinuteTick] = useState<number>(() => Date.now());
@@ -224,10 +227,11 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
         | Partial<Record<"environmentId" | "threadId", string | undefined>>
         | undefined;
       return {
-        environmentId: params?.environmentId,
-        threadId: params?.threadId,
+        environmentId: params?.environmentId ?? "",
+        threadId: params?.threadId ?? "",
       };
     },
+    structuralSharing: true,
   });
   const activeThreadRef = useMemo(
     () => resolveThreadRouteRef(routeParams),
@@ -770,7 +774,7 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
   const agyAuthAllowed = isAntigravityQuotaAuthAllowed(allProviders);
 
   // AGY-ONLY lazy `/v1/quota/summary` fetcher (never spawns `/credits`, never touches Codex/Claude).
-  const fetchAntigravityQuotaSummary = async (force = false) => {
+  const fetchAntigravityQuotaSummary = useStableCallback(async (force: boolean = false) => {
     if (!runtime?.daemonInfo.ready) return;
     if (typeof runtime.daemon?.fetchQuotaSummary !== "function") return;
     if (agyQuotaInflightRef.current && !force) {
@@ -779,14 +783,18 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
     }
     const run = runtime.daemon.fetchQuotaSummary(force).then(
       (snapshot) => {
+        daemonQuotaRef.current = snapshot;
         setDaemonQuota(snapshot);
         setQuotaMinuteTick(Date.now());
         if (!snapshot.antigravity.available || snapshot.antigravity.status !== "ok") {
+          agyCreditsRef.current = null;
           setAgyCredits(null);
         }
       },
       () => {
         if (force) {
+          daemonQuotaRef.current = null;
+          agyCreditsRef.current = null;
           setDaemonQuota(null);
           setAgyCredits(null);
         }
@@ -800,10 +808,10 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
         agyQuotaInflightRef.current = null;
       }
     }
-  };
+  });
 
   // AGY-ONLY on-demand `/v1/quota/credits` fetcher (invoked ONLY when user opens QuotaStatusPopover).
-  const fetchAntigravityCredits = async (force = false) => {
+  const fetchAntigravityCredits = useStableCallback(async (force: boolean = false) => {
     if (!runtime?.daemonInfo.ready) return;
     if (typeof runtime.daemon?.requestJson !== "function") return;
     if (agyCreditsInflightRef.current && !force) {
@@ -817,11 +825,14 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
       .then(
         (credits) => {
           if (credits.status === "unauthenticated" || credits.status === "not_installed") {
+            daemonQuotaRef.current = null;
+            agyCreditsRef.current = null;
             setDaemonQuota(null);
             setAgyCredits(null);
             agyColdStartFetchedRef.current = false;
             return;
           }
+          agyCreditsRef.current = credits;
           setAgyCredits(credits);
         },
         () => {
@@ -839,10 +850,10 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
         agyCreditsInflightRef.current = null;
       }
     }
-  };
+  });
 
   // Upstream non-AGY providers (Claude Code / Codex / OpenCode / DSH): 100% unchanged real-time refresh.
-  const refreshUpstreamProvidersQuota = async () => {
+  const refreshUpstreamProvidersQuota = useStableCallback(async () => {
     const tasks: Array<Promise<unknown>> = [];
     for (const [environmentId, presentation] of presentations) {
       if (
@@ -862,7 +873,7 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
     if (tasks.length > 0) {
       await Promise.allSettled(tasks);
     }
-  };
+  });
 
   // Trigger 3 (Manual user refresh click): refreshes upstream providers + AGY `/v1/quota/summary?force=1`
   // ONLY if AGY is enabled & authenticated. Never invokes `/v1/quota/credits` concurrently.
@@ -887,9 +898,17 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
 
     if (!agyAuthAllowed) {
       agyColdStartFetchedRef.current = false;
+      const hasFrontendAgyCache =
+        daemonQuotaRef.current !== null || agyCreditsRef.current !== null;
       const clearFrontendAgyCache = () => {
-        setDaemonQuota(null);
-        setAgyCredits(null);
+        if (daemonQuotaRef.current !== null) {
+          daemonQuotaRef.current = null;
+          setDaemonQuota(null);
+        }
+        if (agyCreditsRef.current !== null) {
+          agyCreditsRef.current = null;
+          setAgyCredits(null);
+        }
       };
       if (
         prevAllowed === true &&
@@ -900,7 +919,7 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
           .requestJson("/v1/quota/invalidate", { method: "POST" })
           .catch(() => {})
           .finally(clearFrontendAgyCache);
-      } else {
+      } else if (hasFrontendAgyCache) {
         queueMicrotask(clearFrontendAgyCache);
       }
       return;

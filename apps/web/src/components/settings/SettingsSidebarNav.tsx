@@ -37,7 +37,6 @@ import { useLocation, useNavigate } from "@tanstack/react-router";
 import { T, useGT, useMessages } from "gt-react";
 
 import { useMediaQuery } from "../../hooks/useMediaQuery";
-import { observeResize } from "../../lib/observeResize";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Kbd } from "../ui/kbd";
@@ -63,6 +62,7 @@ import {
 import {
   areGeometryMapsEqual,
   buildIndicatorPillStyle,
+  createGeometryOscillationGuard,
   createInitialIndicatorState,
   findSettingsNavTarget,
   resolveSettingsNavActivePath,
@@ -231,12 +231,20 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
     });
   };
 
-  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- observeResize commits measured slot geometry before paint with value-equality guard
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- rAF-batched ResizeObserver commits measured slot geometry without flushSync, guarded by 1px tolerance and an oscillation circuit-breaker
   useEffect(() => {
     if (isSearching) return;
     const container = groupsContainerRef.current;
     if (!container) return;
-    const measure = () => {
+
+    let disposed = false;
+    let rafId: number | null = null;
+    let cooldownTimerId: number | null = null;
+    const oscillationGuard = createGeometryOscillationGuard();
+
+    const commitMeasuredGeometry = () => {
+      rafId = null;
+      if (disposed || !groupsContainerRef.current) return;
       const next: Record<string, SettingsNavItemGeometry> = {};
       for (const group of navGroups) {
         const menuElement = menuRefs.current.get(group.id);
@@ -250,11 +258,48 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
       if (areGeometryMapsEqual(itemGeometriesRef.current, next)) {
         return;
       }
+      if (!oscillationGuard.allowCommit()) {
+        if (cooldownTimerId === null) {
+          cooldownTimerId = window.setTimeout(() => {
+            cooldownTimerId = null;
+            scheduleMeasure();
+          }, 420);
+        }
+        return;
+      }
       itemGeometriesRef.current = next;
       setSuppressMotionForLayout(true);
       setItemGeometries(next);
     };
-    return observeResize(container, measure);
+
+    const scheduleMeasure = () => {
+      if (disposed || rafId !== null) return;
+      rafId = window.requestAnimationFrame(commitMeasuredGeometry);
+    };
+
+    scheduleMeasure();
+
+    const observer =
+      typeof ResizeObserver === "function"
+        ? // oxlint-disable-next-line prismux/no-raw-resize-observer -- intentionally rAF-batched without ReactDOM.flushSync to prevent ScrollArea layout competition
+          new ResizeObserver(() => {
+            scheduleMeasure();
+          })
+        : null;
+    observer?.observe(container);
+
+    return () => {
+      disposed = true;
+      observer?.disconnect();
+      if (rafId !== null) {
+        window.cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      if (cooldownTimerId !== null) {
+        window.clearTimeout(cooldownTimerId);
+        cooldownTimerId = null;
+      }
+    };
   }, [isSearching, navGroups]);
 
   // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- window keydown listener for the find and slash search shortcuts

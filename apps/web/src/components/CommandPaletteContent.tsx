@@ -2,6 +2,8 @@ import { T } from "gt-react";
 import { ArrowDownIcon, ArrowUpIcon } from "lucide-react";
 import { type ComponentProps, type ReactNode, type RefObject } from "react";
 
+import { useCommandPaletteStore } from "../commandPaletteStore";
+import { useStableCallback } from "../hooks/useStableCallback";
 import { Command, CommandFooter, CommandInput, CommandPanel } from "./ui/command";
 import { Kbd, KbdGroup } from "./ui/kbd";
 
@@ -9,14 +11,30 @@ import { Kbd, KbdGroup } from "./ui/kbd";
  * A view replacing another inside an open dialog mounts with focus on the body,
  * left there by the removed input. Claim it so typing cannot reach the composer
  * behind the modal. On first open the dialog's own initial focus handles it.
+ * Never steal focus while the command palette is closing/closed or an AppRouteModal is active.
  */
 function claimFocusInOpenDialog(input: HTMLInputElement) {
-  const active = input.ownerDocument.activeElement;
+  const dialog = input.closest<HTMLElement>('[role="dialog"]');
+  if (!dialog) return;
   if (
-    active === null ||
-    active === input.ownerDocument.body ||
-    input.closest('[role="dialog"]')?.contains(active)
+    !dialog.hasAttribute("data-open") ||
+    dialog.hasAttribute("data-closed") ||
+    dialog.hasAttribute("data-ending-style")
   ) {
+    return;
+  }
+  if (dialog.hasAttribute("data-command-palette") && !useCommandPaletteStore.getState().open) {
+    return;
+  }
+  const doc = input.ownerDocument;
+  const activeAppModal = doc.querySelector<HTMLElement>(
+    "[data-app-modal]:not([data-closed]):not([data-ending-style])",
+  );
+  if (activeAppModal && !dialog.contains(activeAppModal)) {
+    return;
+  }
+  const active = doc.activeElement;
+  if (active === null || active === doc.body || dialog.contains(active)) {
     input.focus();
   }
 }
@@ -65,19 +83,17 @@ export function CommandPaletteContent({
   testId,
   ...commandProps
 }: CommandPaletteContentProps) {
+  const handleInputRef = useStableCallback((input: HTMLInputElement | null) => {
+    if (!input) return;
+    restorePendingSelection(input, pendingSelectionRef);
+    claimFocusInOpenDialog(input);
+  });
+
   return (
     <div className="contents" data-testid={testId}>
       <Command {...commandProps}>
         <div className="relative">
-          <CommandInput
-            autoFocus={false}
-            {...inputProps}
-            ref={(input) => {
-              if (!input) return;
-              restorePendingSelection(input, pendingSelectionRef);
-              claimFocusInOpenDialog(input);
-            }}
-          />
+          <CommandInput autoFocus={false} {...inputProps} ref={handleInputRef} />
           {inputAccessory}
         </div>
         <CommandPanel

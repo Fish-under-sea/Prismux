@@ -262,22 +262,37 @@ function SidebarProvider({
     isMobile ? (open ? "expanded" : "collapsed") : motionPhase,
   );
 
-  const contextValue: SidebarContextProps = {
-    isMobile,
-    open,
-    openMobile,
-    mobileSheetMounted,
-    setMobileSheetMounted,
-    setOpen: store.setOpen,
-    setOpenMobile: store.setOpenMobile,
-    state,
-    toggleSidebar: store.toggle,
-    onCollapse: store.onCollapse,
-    motionPhase: visualMotion.phase,
-    isWidthNarrow: visualMotion.isWidthNarrow,
-    isTextHidden: visualMotion.isTextHidden,
-    isIconRail: visualMotion.isIconRail,
-  };
+  // oxlint-disable-next-line prismux/no-manual-memo -- SidebarProvider bails out of React Compiler, so explicit useMemo prevents context-value cascade rerenders
+  const contextValue = React.useMemo<SidebarContextProps>(
+    () => ({
+      isMobile,
+      open,
+      openMobile,
+      mobileSheetMounted,
+      setMobileSheetMounted,
+      setOpen: store.setOpen,
+      setOpenMobile: store.setOpenMobile,
+      state,
+      toggleSidebar: store.toggle,
+      onCollapse: store.onCollapse,
+      motionPhase: visualMotion.phase,
+      isWidthNarrow: visualMotion.isWidthNarrow,
+      isTextHidden: visualMotion.isTextHidden,
+      isIconRail: visualMotion.isIconRail,
+    }),
+    [
+      isMobile,
+      open,
+      openMobile,
+      mobileSheetMounted,
+      store,
+      state,
+      visualMotion.phase,
+      visualMotion.isWidthNarrow,
+      visualMotion.isTextHidden,
+      visualMotion.isIconRail,
+    ],
+  );
 
   return (
     <SidebarContext value={contextValue}>

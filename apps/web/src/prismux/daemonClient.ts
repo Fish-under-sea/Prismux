@@ -1803,6 +1803,7 @@ export class PrismuxDaemonClient {
     const cleanup = () => {
       if (disposed) return;
       disposed = true;
+      options.signal?.removeEventListener("abort", cleanup);
       if (reconnectTimer !== null) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
@@ -1969,12 +1970,7 @@ export class PrismuxDaemonClient {
 
     void connect();
 
-    return () => {
-      if (options.signal) {
-        options.signal.removeEventListener("abort", cleanup);
-      }
-      cleanup();
-    };
+    return cleanup;
   }
 }
 

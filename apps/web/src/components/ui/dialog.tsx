@@ -9,9 +9,9 @@ import {
   type ReactNode,
   use,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
-  useState,
 } from "react";
 import { cn } from "~/lib/utils";
 import { useNativeTitlebarHeight } from "~/lib/windowControlsOverlay";
@@ -37,14 +37,34 @@ interface DialogBackdropDismissContextValue {
 
 const DialogBackdropDismissContext = createContext<DialogBackdropDismissContextValue | null>(null);
 
+const RETAINED_CLOSE_RELEASE_MS = 350;
+
 function RetainedWhileClosed({ open, children }: { open: boolean; children: ReactNode }) {
   const controlledOpen = use(ControlledOpenContext);
   const isOpen = open && controlledOpen !== false;
-  const [retained, setRetained] = useState(children);
-  if (isOpen && retained !== children) {
-    setRetained(children);
+  const retainedRef = useRef<ReactNode>(isOpen ? children : null);
+  if (isOpen) {
+    // oxlint-disable-next-line react-hooks/refs -- ref-based retention avoids double synchronous setState renders while open
+    retainedRef.current = children;
   }
-  return isOpen ? children : retained;
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- releases retained closed-dialog children ref after exit animation or unmount
+  useEffect(() => {
+    if (isOpen) return;
+    const timer = window.setTimeout(() => {
+      retainedRef.current = null;
+    }, RETAINED_CLOSE_RELEASE_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [isOpen]);
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- clears retained children ref on unmount
+  useEffect(() => {
+    return () => {
+      retainedRef.current = null;
+    };
+  }, []);
+  // oxlint-disable-next-line react-hooks/refs -- renders last open snapshot while popup plays its closing transition
+  return isOpen ? children : retainedRef.current;
 }
 
 function renderRetainedPopup(props: ComponentProps<"div">, state: { open: boolean }) {

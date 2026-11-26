@@ -125,23 +125,21 @@ function SettingsScopeBoundary({ pathname, children }: { pathname: string; child
 function SettingsContentLayout() {
   const gt = useGT();
   const contentArea = workspaceAreaProps("settings", 1, gt("Settings content"));
-  const location = useLocation();
+  const pathname = useLocation({ select: (location) => location.pathname });
   const { search, environment } = useSettingsScope();
   const contentScopeKey =
-    location.pathname === "/settings/providers"
-      ? environment?.environmentId
-      : JSON.stringify(search);
+    pathname === "/settings/providers" ? environment?.environmentId : JSON.stringify(search);
   const [restoreSignal, setRestoreSignal] = useState(0);
 
   return (
     <AppRouteModal label={gt("Settings")}>
       <div className="relative flex min-h-0 flex-1">
-        <SettingsSidebarNav pathname={location.pathname} />
+        <SettingsSidebarNav pathname={pathname} />
         <div {...contentArea} className="flex min-h-0 min-w-0 flex-1 flex-col">
           <header className="flex h-12 shrink-0 items-center gap-3 border-b ps-5 pe-2">
-            <SettingsBreadcrumb pathname={location.pathname} />
+            <SettingsBreadcrumb pathname={pathname} />
             <div className="ms-auto flex shrink-0 items-center gap-1">
-              {location.pathname === "/settings/general" ? (
+              {pathname === "/settings/general" ? (
                 <RestoreDeviceDefaultsButton
                   onRestored={() => setRestoreSignal((value) => value + 1)}
                 />
@@ -150,7 +148,7 @@ function SettingsContentLayout() {
             </div>
           </header>
           <div key={`${contentScopeKey}:${restoreSignal}`} className="min-h-0 flex flex-1 flex-col">
-            <SettingsScopeBoundary pathname={location.pathname}>
+            <SettingsScopeBoundary pathname={pathname}>
               <Outlet />
             </SettingsScopeBoundary>
           </div>

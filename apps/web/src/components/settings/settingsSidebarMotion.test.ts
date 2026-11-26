@@ -15,9 +15,11 @@ import {
 import {
   areGeometryMapsEqual,
   buildIndicatorPillStyle,
+  createGeometryOscillationGuard,
   createInitialIndicatorState,
   findSettingsNavTarget,
   resolveSettingsNavActivePath,
+  SETTINGS_NAV_GEOMETRY_TOLERANCE_PX,
   SETTINGS_NAV_PARENT_ALIASES,
   SETTINGS_SIDEBAR_LAYOUT,
   transitionIndicatorState,
@@ -479,19 +481,52 @@ describe("settings sidebar indicator motion state machine", () => {
     expect(crossGroup.groupStates["system-about"]?.mode).toBe("instant");
   });
 
-  it("compares geometry maps by value to prevent ResizeObserver loops", () => {
+  it("compares geometry maps by value with 1px subpixel tolerance and trips oscillation circuit-breaker", () => {
+    expect(SETTINGS_NAV_GEOMETRY_TOLERANCE_PX).toBe(1);
     expect(
       areGeometryMapsEqual(
         { "/settings/general": { y: 0, height: 28 }, "/settings/appearance": { y: 30, height: 28 } },
         { "/settings/general": { y: 0, height: 28 }, "/settings/appearance": { y: 30, height: 28 } },
       ),
     ).toBe(true);
+    // Fractional DPI 1px jitter is absorbed to prevent ResizeObserver ping-pong loops
+    expect(
+      areGeometryMapsEqual(
+        { "/settings/general": { y: 0, height: 28 }, "/settings/appearance": { y: 30, height: 28 } },
+        { "/settings/general": { y: 1, height: 29 }, "/settings/appearance": { y: 31, height: 27 } },
+      ),
+    ).toBe(true);
+    // Real layout changes (>= 2px) are still detected
     expect(
       areGeometryMapsEqual(
         { "/settings/general": { y: 0, height: 28 } },
         { "/settings/general": { y: 0, height: 32 } },
       ),
     ).toBe(false);
+    expect(
+      areGeometryMapsEqual(
+        { "/settings/general": { y: 0, height: 28 } },
+        { "/settings/general": { y: 2, height: 28 } },
+      ),
+    ).toBe(false);
+
+    // Oscillation guard allows normal resizes, trips on rapid flips, and recovers after cooldown
+    const guard = createGeometryOscillationGuard({
+      windowMs: 1000,
+      maxCommitsInWindow: 4,
+      cooldownMs: 400,
+    });
+    expect(guard.allowCommit(100)).toBe(true);
+    expect(guard.allowCommit(120)).toBe(true);
+    expect(guard.allowCommit(140)).toBe(true);
+    expect(guard.allowCommit(160)).toBe(true);
+    // 5th rapid commit inside 1000ms trips the breaker
+    expect(guard.allowCommit(180)).toBe(false);
+    expect(guard.isTripped(200)).toBe(true);
+    expect(guard.allowCommit(400)).toBe(false);
+    // After cooldown expires (180 + 400 = 580), settled updates resume cleanly
+    expect(guard.isTripped(580)).toBe(false);
+    expect(guard.allowCommit(600)).toBe(true);
   });
 
   it("enforces divider-free typography & spacing hierarchy (heading > sub-menu, group gap >> item gap)", () => {

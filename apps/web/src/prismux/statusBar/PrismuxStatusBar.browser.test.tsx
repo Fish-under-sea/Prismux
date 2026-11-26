@@ -4,13 +4,16 @@ import { useState } from "react";
 import {
   createMemoryHistory,
   createRootRoute,
+  createRoute,
   createRouter,
+  Outlet,
   RouterProvider,
 } from "@tanstack/react-router";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
+import { getRouter } from "../../router";
 import type { DaemonOfficialQuotaSummaryResponse } from "../daemonClient";
 import { PrismuxStatusBar } from "../PrismuxStatusBar";
 import {
@@ -368,8 +371,8 @@ describe("PrismuxStatusBar (browser)", () => {
 
     // Open popover and switch Remaining -> Used: both bottom bar, mini bar, and popover sync live
     await userEvent.click(trigger);
-    await expect.element(screen.getByTestId("prismux-quota-popover")).toBeVisible();
-    await userEvent.click(screen.getByTestId("quota-percent-mode-toggle"));
+    await expect.element(page.getByTestId("prismux-quota-popover")).toBeVisible();
+    await userEvent.click(page.getByTestId("quota-percent-mode-toggle"));
 
     expect(trigger.getAttribute("data-quota-percent-mode")).toBe("used");
     expect(trigger.textContent).toContain("已用");
@@ -383,7 +386,7 @@ describe("PrismuxStatusBar (browser)", () => {
     ).toBe("10%");
 
     // Switch Detailed -> Compact: bottom bar immediately collapses to single primary window without mini bar
-    await userEvent.click(screen.getByTestId("quota-view-compact"));
+    await userEvent.click(page.getByTestId("quota-view-compact"));
     expect(trigger.getAttribute("data-quota-bar-mode")).toBe("compact");
     expect(trigger.textContent).toContain("Gemini 周 10%");
     expect(trigger.textContent).not.toContain("Gemini 5h");
@@ -391,7 +394,7 @@ describe("PrismuxStatusBar (browser)", () => {
     expect(screen.getByTestId("status-bar-quota-minibar-antigravity").query()).toBeNull();
 
     // Switch back Compact -> Detailed: all 4 windows & mini progress bar return immediately
-    await userEvent.click(screen.getByTestId("quota-view-detailed"));
+    await userEvent.click(page.getByTestId("quota-view-detailed"));
     expect(trigger.getAttribute("data-quota-bar-mode")).toBe("detailed");
     expect(trigger.textContent).toContain("Gemini 周 10%");
     expect(trigger.textContent).toContain("Gemini 5h 16%");
@@ -436,5 +439,85 @@ describe("PrismuxStatusBar (browser)", () => {
     expect(screen.getByTestId("status-bar-quota-trigger").query()).toBeNull();
     expect(barEl.textContent).not.toContain("未登录");
     expect(barEl.textContent).not.toContain("额度 —");
+  });
+
+  it("enables defaultStructuralSharing on app router and avoids spurious PrismuxStatusBar/usePrismuxTraySync rerenders or microtasks across settings navigation", async () => {
+    window.localStorage.removeItem(STATUS_BAR_VISIBILITY_STORAGE_KEY);
+    const appRouter = getRouter(createMemoryHistory({ initialEntries: ["/"] }));
+    expect(appRouter.options.defaultStructuralSharing).toBe(true);
+
+    const hostRenders: number[] = [];
+    const rootRoute = createRootRoute({
+      component: () => (
+        <>
+          <Outlet />
+          <PrismuxStatusBar />
+        </>
+      ),
+    });
+    const homeRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/",
+      component: () => <div data-testid="route-home">Home</div>,
+    });
+    const settingsGeneralRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/settings/general",
+      component: () => <div data-testid="route-settings-general">General</div>,
+    });
+    const settingsAppearanceRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/settings/appearance",
+      component: () => <div data-testid="route-settings-appearance">Appearance</div>,
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([homeRoute, settingsGeneralRoute, settingsAppearanceRoute]),
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+      defaultStructuralSharing: true,
+    });
+
+    function TrackedStatusBarHost() {
+      const [bump, setBump] = useState(0);
+      hostRenders.push(bump);
+      return (
+        <div>
+          <button type="button" onClick={() => setBump((v) => v + 1)}>
+            Rerender host {bump}
+          </button>
+          <RouterProvider router={router} />
+        </div>
+      );
+    }
+
+    await using screen = await render(<TrackedStatusBarHost />);
+    await expect.element(screen.getByTestId("route-home")).toBeVisible();
+
+    const queueMicrotaskSpy = vi.spyOn(globalThis, "queueMicrotask");
+    try {
+      await act(async () => {
+        await router.navigate({ to: "/settings/general" });
+      });
+      await expect.element(screen.getByTestId("route-settings-general")).toBeVisible();
+
+      await act(async () => {
+        await router.navigate({ to: "/settings/appearance" });
+      });
+      await expect.element(screen.getByTestId("route-settings-appearance")).toBeVisible();
+
+      // Trigger an unrelated host rerender; stabilized quota fetchers must not re-fire effects or clear-cache microtasks
+      const rendersBefore = hostRenders.length;
+      await act(() => {
+        (screen.getByRole("button", { name: /Rerender host/ }).element() as HTMLElement).click();
+      });
+      expect(hostRenders.length).toBe(rendersBefore + 1);
+
+      // Verify zero quota-clear microtasks were scheduled for already-null state
+      const clearMicrotasks = queueMicrotaskSpy.mock.calls.filter(([cb]) =>
+        String(cb).includes("setDaemonQuota"),
+      );
+      expect(clearMicrotasks).toHaveLength(0);
+    } finally {
+      queueMicrotaskSpy.mockRestore();
+    }
   });
 });

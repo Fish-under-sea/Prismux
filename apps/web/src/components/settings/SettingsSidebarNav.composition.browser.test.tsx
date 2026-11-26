@@ -1,4 +1,5 @@
 import { decodeMsg } from "gt-react";
+import * as ReactDOM from "react-dom";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
@@ -144,21 +145,15 @@ it("highlights the dedicated Wallpaper entry for /settings/wallpaper and separat
     '[data-settings-section="/settings/providers"]',
   )!;
 
-  await act(() => {
-    generalButton.dispatchEvent(new PointerEvent("pointerenter", { bubbles: false, pointerType: "mouse" }));
-  });
-  await act(() => {
-    chatButton.dispatchEvent(new PointerEvent("pointerenter", { bubbles: false, pointerType: "mouse" }));
-  });
+  await userEvent.hover(generalButton);
+  await userEvent.hover(chatButton);
   const group1HoverPill = document.querySelector<HTMLElement>(
     '[data-settings-nav-pill="hover"][data-pill-group="general-appearance"]',
   );
   expect(group1HoverPill?.getAttribute("data-pill-mode")).toBe("slide");
   expect(group1HoverPill?.getAttribute("data-pill-visible")).toBe("true");
 
-  await act(() => {
-    providersButton.dispatchEvent(new PointerEvent("pointerenter", { bubbles: false, pointerType: "mouse" }));
-  });
+  await userEvent.hover(providersButton);
   const group2HoverPill = document.querySelector<HTMLElement>(
     '[data-settings-nav-pill="hover"][data-pill-group="agents-workspace"]',
   );
@@ -166,4 +161,37 @@ it("highlights the dedicated Wallpaper entry for /settings/wallpaper and separat
   expect(group1HoverPill?.getAttribute("data-pill-visible")).toBe("false");
   expect(group2HoverPill?.getAttribute("data-pill-mode")).toBe("crossfade");
   expect(group2HoverPill?.getAttribute("data-pill-visible")).toBe("true");
+});
+
+it("batches ResizeObserver geometry measurements via rAF without calling flushSync and absorbs rapid resize bursts", async () => {
+  await page.viewport(1280, 800);
+  const flushSyncSpy = vi.spyOn(ReactDOM, "flushSync");
+  try {
+    await using _screen = await renderNav();
+
+    // Wait deterministically for initial rAF-batched geometry measurement to paint the active pill
+    await vi.waitFor(() => {
+      const activePill = document.querySelector<HTMLElement>(
+        '[data-settings-nav-pill="active"][data-pill-group="general-appearance"]',
+      );
+      expect(activePill?.getAttribute("data-pill-visible")).toBe("true");
+    });
+    // SettingsSidebarNav must NEVER invoke ReactDOM.flushSync inside ResizeObserver
+    expect(flushSyncSpy).not.toHaveBeenCalled();
+
+    // Trigger rapid viewport resizes across fractional height boundaries
+    await page.viewport(1280, 420);
+    await page.viewport(1280, 421);
+    await page.viewport(1280, 420);
+    await vi.waitFor(() => {
+      expect(window.innerHeight).toBe(420);
+      const activePill = document.querySelector<HTMLElement>(
+        '[data-settings-nav-pill="active"][data-pill-group="general-appearance"]',
+      );
+      expect(activePill?.getAttribute("data-pill-visible")).toBe("true");
+    });
+    expect(flushSyncSpy).not.toHaveBeenCalled();
+  } finally {
+    flushSyncSpy.mockRestore();
+  }
 });

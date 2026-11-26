@@ -255,9 +255,12 @@ export function buildIndicatorPillStyle(params: {
   };
 }
 
+export const SETTINGS_NAV_GEOMETRY_TOLERANCE_PX = 1;
+
 export function areGeometryMapsEqual(
   left: Readonly<Record<string, SettingsNavItemGeometry>>,
   right: Readonly<Record<string, SettingsNavItemGeometry>>,
+  tolerancePx = SETTINGS_NAV_GEOMETRY_TOLERANCE_PX,
 ): boolean {
   const leftKeys = Object.keys(left);
   const rightKeys = Object.keys(right);
@@ -265,9 +268,68 @@ export function areGeometryMapsEqual(
   for (const key of leftKeys) {
     const a = left[key];
     const b = right[key];
-    if (!a || !b || a.y !== b.y || a.height !== b.height) {
+    if (
+      !a ||
+      !b ||
+      Math.abs(a.y - b.y) > tolerancePx ||
+      Math.abs(a.height - b.height) > tolerancePx
+    ) {
       return false;
     }
   }
   return true;
+}
+
+export interface GeometryOscillationGuardOptions {
+  /** Rolling time window (ms) for counting geometry commits. Defaults to 1000ms. */
+  readonly windowMs?: number;
+  /** Maximum commits permitted inside `windowMs` before tripping. Defaults to 8. */
+  readonly maxCommitsInWindow?: number;
+  /** Cooldown duration (ms) during which rapid flips are ignored. Defaults to 400ms. */
+  readonly cooldownMs?: number;
+}
+
+export interface GeometryOscillationGuard {
+  allowCommit(now?: number): boolean;
+  isTripped(now?: number): boolean;
+  reset(): void;
+}
+
+/**
+ * Circuit-breaker guard preventing fractional-DPI / CSS-scale resize oscillation loops
+ * from committing geometry state updates indefinitely.
+ */
+export function createGeometryOscillationGuard(
+  options: GeometryOscillationGuardOptions = {},
+): GeometryOscillationGuard {
+  const windowMs = Math.max(50, options.windowMs ?? 1_000);
+  const maxCommitsInWindow = Math.max(2, options.maxCommitsInWindow ?? 8);
+  const cooldownMs = Math.max(50, options.cooldownMs ?? 400);
+  const timestamps: number[] = [];
+  let trippedUntil = 0;
+
+  return {
+    allowCommit(now = performance.now()) {
+      if (now < trippedUntil) {
+        return false;
+      }
+      while (timestamps.length > 0 && now - timestamps[0]! > windowMs) {
+        timestamps.shift();
+      }
+      if (timestamps.length >= maxCommitsInWindow) {
+        trippedUntil = now + cooldownMs;
+        timestamps.length = 0;
+        return false;
+      }
+      timestamps.push(now);
+      return true;
+    },
+    isTripped(now = performance.now()) {
+      return now < trippedUntil;
+    },
+    reset() {
+      timestamps.length = 0;
+      trippedUntil = 0;
+    },
+  };
 }

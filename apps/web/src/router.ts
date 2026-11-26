@@ -8,6 +8,7 @@ export function getRouter(history: RouterHistory) {
     history,
     context: {},
     defaultPreload: "intent",
+    defaultStructuralSharing: true,
   });
 }
 
