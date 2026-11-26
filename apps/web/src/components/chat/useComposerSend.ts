@@ -117,6 +117,9 @@ import {
   isBtwSideThread,
   resolveBtwRuntimeMode,
 } from "./btwMode";
+import { attachComposerCollaboratorsToContext } from "./chatViewSend";
+import { getCachedProviderProbes } from "./composerCollaborators.logic";
+import { getCachedSubscriptionWaiverState } from "../../prismux/SubscriptionRiskWaiverSection";
 import { type ComposerDispatchMode } from "@prismux/client-runtime/state/composer-dispatch";
 import {
   getUploadedAttachments,
@@ -1559,9 +1562,20 @@ export function useComposerSend(input: ComposerSendInput) {
       const wireContext = buildOutgoingMessageContext(
         boundAttachmentIds(turnAttachmentsResult.value, composerAttachmentsSnapshot),
       );
-      const finalWireContext = isBtwThread
+      const btwWireContext = isBtwThread
         ? attachBtwReadOnlyGuardrailContext(wireContext)
         : wireContext;
+      const sendCollaborators =
+        sendCtx.collaborators ??
+        useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.collaborators ??
+        [];
+      const finalWireContext = attachComposerCollaboratorsToContext({
+        context: btwWireContext,
+        collaborators: isBtwThread ? [] : sendCollaborators,
+        providerInstanceEntries,
+        probes: getCachedProviderProbes(),
+        waiver: getCachedSubscriptionWaiverState(),
+      });
       const startPromise = startThreadTurn({
         environmentId,
         input: {

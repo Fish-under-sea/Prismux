@@ -3,6 +3,10 @@ import {
   composerImageDedupKey,
   rememberComposerImageBytes,
 } from "./components/chat/composerAttachmentFiles";
+import {
+  normalizeCollaboratorSelections,
+  type ComposerCollaboratorSelection,
+} from "./components/chat/composerCollaborators.logic";
 import { elementContextToPreviewAnnotation } from "./lib/elementContext";
 import {
   ResponseContextRecord,
@@ -336,6 +340,13 @@ const PersistedTerminalContextDraft = Schema.Struct({
 });
 type PersistedTerminalContextDraft = typeof PersistedTerminalContextDraft.Type;
 
+const PersistedComposerCollaboratorSelection = Schema.Struct({
+  providerInstanceId: ProviderInstanceId,
+  model: Schema.String,
+  maxCount: Schema.Number,
+});
+type PersistedComposerCollaboratorSelection = typeof PersistedComposerCollaboratorSelection.Type;
+
 const PersistedComposerThreadDraftState = Schema.Struct({
   prompt: Schema.String,
   attachments: Schema.Array(PersistedComposerImageAttachment),
@@ -351,6 +362,7 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   modelSelectionExplicit: Schema.optionalKey(Schema.Boolean),
   runtimeMode: Schema.optionalKey(RuntimeMode),
   interactionMode: Schema.optionalKey(ProviderInteractionMode),
+  collaborators: Schema.optionalKey(Schema.Array(PersistedComposerCollaboratorSelection)),
 });
 type PersistedComposerThreadDraftState = typeof PersistedComposerThreadDraftState.Type;
 
@@ -481,6 +493,7 @@ export interface ComposerThreadDraftState {
   modelSelectionExplicit?: boolean;
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
+  collaborators: ReadonlyArray<ComposerCollaboratorSelection>;
 }
 
 export function composerDraftHasUserContent(
@@ -678,6 +691,11 @@ interface ComposerDraftStoreState {
     threadRef: ComposerThreadTarget,
     interactionMode: ProviderInteractionMode | null | undefined,
   ) => void;
+  setCollaborators: (
+    threadRef: ComposerThreadTarget,
+    collaborators: ReadonlyArray<ComposerCollaboratorSelection>,
+  ) => void;
+  clearCollaborators: (threadRef: ComposerThreadTarget) => void;
   addImage: (threadRef: ComposerThreadTarget, image: ComposerImageAttachment) => boolean;
   addImages: (
     threadRef: ComposerThreadTarget,
@@ -880,6 +898,7 @@ const EMPTY_PREVIEW_ANNOTATIONS: PreviewAnnotationPayload[] = [];
 const EMPTY_REVIEW_COMMENTS: ReviewCommentContext[] = [];
 const EMPTY_THREAD_CONTEXTS: ThreadContextRecord[] = [];
 const EMPTY_ENVIRONMENT_CONTEXTS: EnvironmentContextRecord[] = [];
+const EMPTY_COLLABORATORS: ReadonlyArray<ComposerCollaboratorSelection> = [];
 Object.freeze(EMPTY_IMAGES);
 Object.freeze(EMPTY_FILES);
 Object.freeze(EMPTY_IDS);
@@ -888,6 +907,7 @@ Object.freeze(EMPTY_PREVIEW_ANNOTATIONS);
 Object.freeze(EMPTY_REVIEW_COMMENTS);
 Object.freeze(EMPTY_THREAD_CONTEXTS);
 Object.freeze(EMPTY_ENVIRONMENT_CONTEXTS);
+Object.freeze(EMPTY_COLLABORATORS);
 const EMPTY_MODEL_SELECTION_BY_PROVIDER: Partial<Record<ProviderDriverKind, ModelSelection>> =
   Object.freeze({});
 const EMPTY_COMPOSER_DRAFT_MODEL_STATE = Object.freeze<ComposerDraftModelState>({
@@ -912,6 +932,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   activeProvider: null,
   runtimeMode: null,
   interactionMode: null,
+  collaborators: EMPTY_COLLABORATORS,
 });
 
 function createEmptyThreadDraft(): ComposerThreadDraftState {
@@ -931,6 +952,7 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     activeProvider: null,
     runtimeMode: null,
     interactionMode: null,
+    collaborators: [],
   };
 }
 
@@ -941,6 +963,7 @@ function composerDraftContent({
   modelSelectionExplicit: _modelSelectionExplicit,
   runtimeMode: _runtimeMode,
   interactionMode: _interactionMode,
+  collaborators: _collaborators,
   ...content
 }: ComposerThreadDraftState) {
   return content;
@@ -1044,7 +1067,8 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     Object.keys(draft.modelSelectionByProvider).length === 0 &&
     draft.activeProvider === null &&
     draft.runtimeMode === null &&
-    draft.interactionMode === null
+    draft.interactionMode === null &&
+    draft.collaborators.length === 0
   );
 }
 
@@ -2210,6 +2234,23 @@ function normalizePersistedDraftsByThreadId(
       draftCandidate.interactionMode === "plan" || draftCandidate.interactionMode === "default"
         ? draftCandidate.interactionMode
         : null;
+    const collaborators = Array.isArray(draftCandidate.collaborators)
+      ? normalizeCollaboratorSelections(
+          draftCandidate.collaborators.flatMap((entry) => {
+            if (!entry || typeof entry !== "object") return [];
+            const record = entry as Record<string, unknown>;
+            const providerInstanceId = normalizeProviderInstanceId(record.providerInstanceId);
+            if (!providerInstanceId) return [];
+            return [
+              {
+                providerInstanceId,
+                model: typeof record.model === "string" ? record.model : "",
+                maxCount: typeof record.maxCount === "number" ? record.maxCount : 1,
+              },
+            ];
+          }),
+        )
+      : [];
     const contextIds = new Map<string, string>();
     for (const [kind, entries] of [
       ["image", attachments],
@@ -2301,7 +2342,8 @@ function normalizePersistedDraftsByThreadId(
       replyTo === null &&
       !hasModelData &&
       !runtimeMode &&
-      !interactionMode
+      !interactionMode &&
+      collaborators.length === 0
     ) {
       continue;
     }
@@ -2336,6 +2378,9 @@ function normalizePersistedDraftsByThreadId(
         : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
       ...(interactionMode ? { interactionMode } : {}),
+      ...(collaborators.length > 0
+        ? { collaborators: collaborators.map((item) => ({ ...item })) }
+        : {}),
     };
   }
 
@@ -2376,7 +2421,11 @@ function stripLegacyModelSeedsFromEmptyDraftSessions(
         modelSelectionExplicit: _modelSelectionExplicit,
         ...retained
       } = draft;
-      return retained.runtimeMode || retained.interactionMode ? [[threadKey, retained]] : [];
+      return retained.runtimeMode ||
+        retained.interactionMode ||
+        (retained.collaborators?.length ?? 0) > 0
+        ? [[threadKey, retained]]
+        : [];
     }),
   );
 }
@@ -2435,7 +2484,8 @@ export function partializeComposerDraftStoreState(
       draft.replyTo === null &&
       !hasModelData &&
       draft.runtimeMode === null &&
-      draft.interactionMode === null
+      draft.interactionMode === null &&
+      draft.collaborators.length === 0
     ) {
       continue;
     }
@@ -2505,6 +2555,9 @@ export function partializeComposerDraftStoreState(
         : {}),
       ...(draft.runtimeMode ? { runtimeMode: draft.runtimeMode } : {}),
       ...(draft.interactionMode ? { interactionMode: draft.interactionMode } : {}),
+      ...(draft.collaborators.length > 0
+        ? { collaborators: draft.collaborators.map((item) => ({ ...item })) }
+        : {}),
     };
     persistedDraftsByThreadKey[threadKey] = persistedDraft;
   }
@@ -2783,6 +2836,7 @@ function toHydratedThreadDraft(
     ...(persistedDraft.modelSelectionExplicit ? { modelSelectionExplicit: true } : {}),
     runtimeMode: persistedDraft.runtimeMode ?? null,
     interactionMode: persistedDraft.interactionMode ?? null,
+    collaborators: normalizeCollaboratorSelections(persistedDraft.collaborators),
   };
 }
 
@@ -3603,6 +3657,45 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             }
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
+        },
+        setCollaborators: (threadRef, collaborators) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
+          if (threadKey.length === 0) {
+            return;
+          }
+          const normalized = normalizeCollaboratorSelections(collaborators);
+          set((state) => {
+            const existing = state.draftsByThreadKey[threadKey];
+            if (!existing && normalized.length === 0) {
+              return state;
+            }
+            const base = existing ?? createEmptyThreadDraft();
+            if (
+              base.collaborators.length === normalized.length &&
+              base.collaborators.every(
+                (item, index) =>
+                  item.providerInstanceId === normalized[index]?.providerInstanceId &&
+                  item.model === normalized[index]?.model &&
+                  item.maxCount === normalized[index]?.maxCount,
+              )
+            ) {
+              return state;
+            }
+            const nextDraft: ComposerThreadDraftState = {
+              ...base,
+              collaborators: normalized,
+            };
+            const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
+            if (shouldRemoveDraft(nextDraft)) {
+              delete nextDraftsByThreadKey[threadKey];
+            } else {
+              nextDraftsByThreadKey[threadKey] = nextDraft;
+            }
+            return { draftsByThreadKey: nextDraftsByThreadKey };
+          });
+        },
+        clearCollaborators: (threadRef) => {
+          get().setCollaborators(threadRef, []);
         },
         addImage: (threadRef, image) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef);
@@ -4749,6 +4842,14 @@ export function clearComposerDraftsEnvironment(environmentId: EnvironmentId): vo
 export function useComposerThreadDraft(threadRef: ComposerThreadTarget): ComposerThreadDraftState {
   return useComposerDraftStore((state) => {
     return getComposerDraftState(state, threadRef) ?? EMPTY_THREAD_DRAFT;
+  });
+}
+
+export function useComposerDraftCollaborators(
+  threadRef: ComposerThreadTarget,
+): ReadonlyArray<ComposerCollaboratorSelection> {
+  return useComposerDraftStore((state) => {
+    return getComposerDraftState(state, threadRef)?.collaborators ?? EMPTY_COLLABORATORS;
   });
 }
 

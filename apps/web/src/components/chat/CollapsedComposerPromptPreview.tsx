@@ -16,6 +16,7 @@ import {
 import type { ReactElement } from "react";
 
 import { splitPromptIntoComposerSegments } from "~/composer-editor-mentions";
+import { ComposerSlashCommandChip } from "./ComposerSlashCommandChip";
 import { composerFileNeedsReattach } from "~/composerDraftStore";
 import type {
   ComposerDraftContextRecord,
@@ -71,6 +72,8 @@ export function CollapsedComposerPromptPreview(props: {
     switch (segment.type) {
       case "text":
         return segment.text;
+      case "slash-command":
+        return <ComposerSlashCommandChip key={key} command={segment.command} interactive={false} />;
       // The editor's model chip is a popover trigger, which cannot nest in the row's button.
       case "model":
         return segment.source;

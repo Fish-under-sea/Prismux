@@ -69,6 +69,7 @@ import {
   buildComposerSlashMenuItems,
   slashCommandItemsForPromptPosition,
 } from "./composerSlashCommandSearch";
+import { isAtLeadingSlashCommandPosition } from "./ComposerSlashCommandChip";
 
 const COMPOSER_PULL_REQUEST_LIST_LIMIT = 99;
 const COMPOSER_PULL_REQUEST_RESULT_LIMIT = 12;
@@ -213,7 +214,8 @@ export function buildComposerSlashTriggerItems(input: {
     crossProviderEgoBrowserName ??
     "ego-browser";
 
-  const showUniversalBtw = (input.sideChatOffered ?? input.sideChatAvailable) || input.sideChatAvailable;
+  const showUniversalBtw =
+    (input.sideChatOffered ?? input.sideChatAvailable) || input.sideChatAvailable;
   const btwDescriptionOverride =
     input.sideChatDisabledReason === null
       ? undefined
@@ -421,6 +423,7 @@ export function buildComposerSkillTriggerItems(input: {
 
 /** Builds the @, /, $ and # suggestion lists, running the searches each trigger needs. */
 export function useComposerMenuItems({
+  prompt = "",
   composerTrigger,
   environmentId,
   linkedEnvironments,
@@ -443,6 +446,7 @@ export function useComposerMenuItems({
   questionAttachmentTarget,
   modelMentions,
 }: {
+  readonly prompt?: string | undefined;
   readonly composerTrigger: ComposerTrigger | null;
   readonly environmentId: EnvironmentId;
   readonly linkedEnvironments: ReadonlyMap<EnvironmentId, string>;
@@ -630,7 +634,7 @@ export function useComposerMenuItems({
     if (composerTrigger.kind === "slash-command") {
       return buildComposerSlashTriggerItems({
         query: composerTrigger.query,
-        isAtPromptStart: composerTrigger.rangeStart === 0,
+        isAtPromptStart: isAtLeadingSlashCommandPosition(prompt, composerTrigger.rangeStart),
         sideChatAvailable,
         sideChatOffered,
         sideChatDisabledReason,

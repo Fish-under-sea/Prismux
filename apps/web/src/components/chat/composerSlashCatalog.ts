@@ -16,6 +16,7 @@ import {
   ClipboardListIcon,
   ClockIcon,
   CoinsIcon,
+  EyeIcon,
   FileDiffIcon,
   FileTextIcon,
   FlameIcon,
@@ -48,8 +49,8 @@ import {
   // oxlint-disable-next-line prismux/no-sparkles-icon -- design spec explicitly maps /model to SparklesIcon
   SparklesIcon,
   StethoscopeIcon,
-  TargetIcon,
   TerminalIcon,
+  TimerIcon,
   Undo2Icon,
   UserRoundIcon,
   UsersIcon,
@@ -162,8 +163,7 @@ export function isHiddenSlashCommand(rawName: string): boolean {
   const key = normalizeSlashCommandKey(rawName);
   if (!key) return false;
   return (
-    HIDDEN_SLASH_COMMAND_KEYS.has(key) ||
-    HIDDEN_SLASH_COMMAND_KEYS.has(key.replaceAll("_", "-"))
+    HIDDEN_SLASH_COMMAND_KEYS.has(key) || HIDDEN_SLASH_COMMAND_KEYS.has(key.replaceAll("_", "-"))
   );
 }
 
@@ -252,10 +252,22 @@ export const SLASH_COMMAND_CATALOG: Readonly<Record<string, SlashCommandCatalogE
     aliases: ["reset", "清空", "新会话", "重置"],
   },
   goal: {
-    icon: lucide(TargetIcon),
+    icon: lucide(TimerIcon),
     zhTitle: "长程目标",
     description: "设定持续推进目标，让 Agent 自主执行直到完全达成",
     aliases: ["目标", "自动推进", "通宵"],
+  },
+  oracle: {
+    icon: lucide(EyeIcon),
+    zhTitle: "深度研判",
+    description: "以只读高阶架构视角深度分析方案、排查根因与风险",
+    aliases: ["分析", "研判", "架构", "只读"],
+  },
+  skills: {
+    icon: lucide(BlocksIcon),
+    zhTitle: "技能列表",
+    description: "查看或调用当前工作区与全局可用技能",
+    aliases: ["skill", "技能"],
   },
   swarm: {
     icon: swarmBee(),
@@ -597,7 +609,8 @@ export const BUILTIN_SKILL_ZH_DESCRIPTIONS: Readonly<Record<string, string>> = {
     "Google Antigravity 全面使用指南，涵盖 CLI、IDE、斜杠命令、快捷键与自定义扩展",
   generative_ui: "在对话中内联或作为独立产物渲染交互式 HTML 图表、可视化控件与演示界面",
   "run-workflow": "编写并执行 Python 动态工作流脚本，通过并行或流水线编排多个智能体协同完成任务",
-  "mcp-app-development": "构建、打包与调试 Antigravity MCP 应用，为 MCP 工具提供交互式侧边栏或内联界面",
+  "mcp-app-development":
+    "构建、打包与调试 Antigravity MCP 应用，为 MCP 工具提供交互式侧边栏或内联界面",
   "migrate-agent-settings":
     "将 Claude Code、Codex、Cursor 或 Gemini CLI 的 MCP、技能与配置迁移为 Antigravity 插件",
   "migrate-workflows": "自动扫描并把旧版工作流配置迁移为现代技能目录（SKILL.md）并安全归档旧文件",
@@ -646,7 +659,8 @@ export const BUILTIN_SKILL_ZH_DESCRIPTIONS: Readonly<Record<string, string>> = {
   dataviz: "面向图表、仪表盘与交互式数据可视化的专业设计与绘制技能",
   "update-config": "通过 settings.json 配置 Claude Code 运行参数与自动化规则",
   verify: "通过真实运行、操作与观测端到端验证代码改动是否真正符合预期",
-  "fewer-permission-prompts": "扫描历史记录中高频只读 Bash 与 MCP 调用，为项目生成优先白名单减少审批弹窗",
+  "fewer-permission-prompts":
+    "扫描历史记录中高频只读 Bash 与 MCP 调用，为项目生成优先白名单减少审批弹窗",
   "workflow-authoring": "编写与调试 Workflow 工作流脚本的 API 指南、恢复机制与实践范例",
   run: "启动并驱动当前项目应用，实机运行或截屏验证改动效果",
   "run-skill-generator": "为项目生成或优化专属的 run-<unit> 构建、启动与驱动技能",
