@@ -14,30 +14,20 @@ import {
   type ServerProviderSkill,
   type ServerProviderSlashCommand,
 } from "@prismux/core-contracts";
-import {
-  BlocksIcon,
-  ChevronDownIcon,
-  ChevronRightIcon,
-  MessagesSquareIcon,
-} from "lucide-react";
+import { BlocksIcon, ChevronDownIcon, ChevronRightIcon, MessagesSquareIcon } from "lucide-react";
 import { msg, useGT, useMessages } from "gt-react";
 import { memo, useLayoutEffect, useRef, useState } from "react";
 
 import { type ComposerSlashCommand, type ComposerTriggerKind } from "../../composer-logic";
 import { cn } from "~/lib/utils";
 import { Badge } from "../ui/badge";
-import {
-  Command,
-  CommandGroup,
-  CommandGroupLabel,
-  CommandItem,
-  CommandList,
-} from "../ui/command";
+import { Command, CommandGroup, CommandGroupLabel, CommandItem, CommandList } from "../ui/command";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { ComposerBanner } from "./ComposerBanner";
+import { SwarmQueenBeeIcon } from "./ComposerSlashCommandChip";
 import { resolvePullRequestState } from "../pullRequest/pullRequestPresentation";
 import {
   SKILL_SOURCE_ICON_BY_KIND,
@@ -211,11 +201,7 @@ export function groupComposerCommandMenuItems(
               : "builtin-skills"
             : "commands";
       const label =
-        bucket === "personal-skills"
-          ? "个人技能"
-          : bucket === "builtin-skills"
-            ? "自带技能"
-            : null;
+        bucket === "personal-skills" ? "个人技能" : bucket === "builtin-skills" ? "自带技能" : null;
       const current = sections.at(-1);
       if (current && current.bucket === bucket) {
         current.items.push(item);
@@ -332,86 +318,6 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
     </Command>
   );
 });
-
-/** 1:1 native Antigravity `/swarm` pixel queen bee icon (crisp pixel SVG, used exclusively for `/swarm`). */
-function SwarmQueenBeeIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      data-slash-icon="swarm-bee"
-      viewBox="5 7 18 13"
-      shapeRendering="crispEdges"
-      className="size-4 shrink-0"
-    >
-      {/* Ruby-tipped queen crown */}
-      <rect x="9" y="7" width="1" height="1" fill="#FFE9A6" />
-      <rect x="7" y="8" width="1" height="1" fill="#FFE9A6" />
-      <rect x="9" y="8" width="1" height="1" fill="#FFE9A6" />
-      <rect x="11" y="8" width="1" height="1" fill="#FFE9A6" />
-      <rect x="7" y="9" width="1" height="1" fill="#C98A2B" />
-      <rect x="8" y="9" width="1" height="1" fill="#F7CE5B" />
-      <rect x="9" y="9" width="1" height="1" fill="#E4566A" />
-      <rect x="10" y="9" width="1" height="1" fill="#F7CE5B" />
-      <rect x="11" y="9" width="1" height="1" fill="#C98A2B" />
-      {/* Translucent wing */}
-      <rect x="16" y="9" width="4" height="1" fill="rgba(140,160,192,0.9)" />
-      <rect x="15" y="10" width="6" height="1" fill="rgba(140,160,192,0.9)" />
-      {/* Body outline & stinger */}
-      <rect x="12" y="9" width="2" height="1" fill="#451c1e" />
-      <rect x="14" y="9" width="1" height="1" fill="#b1502f" />
-      <rect x="15" y="9" width="1" height="1" fill="#451c1e" />
-      <rect x="7" y="10" width="2" height="1" fill="#b1502f" />
-      <rect x="6" y="11" width="1" height="1" fill="#b1502f" />
-      <rect x="19" y="11" width="1" height="1" fill="#451c1e" />
-      <rect x="5" y="12" width="1" height="2" fill="#b1502f" />
-      <rect x="5" y="14" width="1" height="3" fill="#451c1e" />
-      <rect x="20" y="12" width="1" height="5" fill="#451c1e" />
-      <rect x="21" y="14" width="2" height="1" fill="#451c1e" />
-      <rect x="6" y="17" width="1" height="1" fill="#451c1e" />
-      <rect x="19" y="17" width="1" height="1" fill="#451c1e" />
-      <rect x="7" y="18" width="2" height="1" fill="#451c1e" />
-      <rect x="17" y="18" width="2" height="1" fill="#451c1e" />
-      <rect x="9" y="19" width="8" height="1" fill="#451c1e" />
-      {/* Golden honey body & dark stripes */}
-      <rect x="9" y="10" width="3" height="1" fill="#f8e081" />
-      <rect x="12" y="10" width="2" height="1" fill="#5c4a3d" />
-      <rect x="14" y="10" width="1" height="1" fill="#e9c349" />
-      <rect x="7" y="11" width="2" height="1" fill="#f8e081" />
-      <rect x="9" y="11" width="3" height="1" fill="#fef5cd" />
-      <rect x="12" y="11" width="2" height="1" fill="#5c4a3d" />
-      <rect x="14" y="11" width="1" height="1" fill="#f8e081" />
-      <rect x="15" y="11" width="1" height="1" fill="#e9c349" />
-      <rect x="16" y="11" width="2" height="1" fill="#392423" />
-      <rect x="18" y="11" width="1" height="1" fill="#b1502f" />
-      <rect x="6" y="12" width="1" height="3" fill="#e9c349" />
-      <rect x="7" y="12" width="5" height="1" fill="#f8e081" />
-      <rect x="9" y="12" width="1" height="1" fill="#fef5cd" />
-      <rect x="12" y="12" width="2" height="1" fill="#5c4a3d" />
-      <rect x="14" y="12" width="2" height="4" fill="#e9c349" />
-      <rect x="16" y="12" width="2" height="2" fill="#392423" />
-      <rect x="18" y="12" width="1" height="1" fill="#e9c349" />
-      <rect x="19" y="12" width="1" height="5" fill="#b1502f" />
-      <rect x="7" y="13" width="6" height="1" fill="#f8e081" />
-      <rect x="8" y="13" width="1" height="1" fill="#FFFFFF" />
-      <rect x="9" y="13" width="1" height="1" fill="#221116" />
-      <rect x="13" y="13" width="1" height="4" fill="#392423" />
-      <rect x="18" y="13" width="1" height="5" fill="#b1502f" />
-      <rect x="7" y="14" width="6" height="3" fill="#e9c349" />
-      <rect x="8" y="14" width="2" height="1" fill="#221116" />
-      <rect x="16" y="14" width="1" height="1" fill="#392423" />
-      <rect x="17" y="14" width="1" height="4" fill="#221116" />
-      <rect x="6" y="15" width="1" height="1" fill="rgba(255,128,150,0.45)" />
-      <rect x="7" y="15" width="1" height="1" fill="rgba(255,128,150,0.65)" />
-      <rect x="16" y="15" width="1" height="4" fill="#221116" />
-      <rect x="6" y="16" width="1" height="1" fill="#b1502f" />
-      <rect x="12" y="16" width="1" height="1" fill="#392423" />
-      <rect x="14" y="16" width="2" height="3" fill="#b1502f" />
-      <rect x="7" y="17" width="5" height="1" fill="#b1502f" />
-      <rect x="12" y="17" width="2" height="2" fill="#221116" />
-      <rect x="9" y="18" width="3" height="1" fill="#b1502f" />
-    </svg>
-  );
-}
 
 function SlashCommandLeadingIcon(props: { icon: SlashCommandIconSpec }) {
   if (props.icon.kind === "swarm-bee") {

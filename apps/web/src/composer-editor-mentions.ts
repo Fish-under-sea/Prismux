@@ -7,12 +7,18 @@ import {
   composerMathRanges,
   type ComposerInlineToken,
 } from "@prismux/core-shared/composerInlineTokens";
+import { collectLeadingSlashCommandTokens } from "~/components/chat/ComposerSlashCommandChip";
 import { markdownMathRanges } from "~/markdown/wordsHast";
 
 export type ComposerPromptSegment =
   | {
       type: "text";
       text: string;
+    }
+  | {
+      type: "slash-command";
+      command: string;
+      source: string;
     }
   | {
       type: "mention";
@@ -100,11 +106,14 @@ function collectModelTokens(text: string, inlineTokens: ReadonlyArray<ComposerIn
 
 export function collectComposerPromptInlineTokens(text: string) {
   const inlineTokens = collectComposerInlineTokens(text, { findMath: markdownMathRanges });
+  const slashCommands = collectLeadingSlashCommandTokens(text);
   const models = collectModelTokens(text, inlineTokens);
   const tokens =
-    models.length === 0
+    models.length === 0 && slashCommands.length === 0
       ? inlineTokens
-      : [...inlineTokens, ...models].sort((left, right) => left.start - right.start);
+      : [...slashCommands, ...inlineTokens, ...models].sort(
+          (left, right) => left.start - right.start,
+        );
   const citations = collectAssistantCitations(text);
   const references = collectComposerContextReferences(text);
   if (citations.length === 0 && references.length === 0) return tokens;
@@ -139,7 +148,13 @@ function splitPromptTextIntoComposerSegments(text: string): ComposerPromptSegmen
       pushTextSegment(segments, text.slice(cursor, match.start));
     }
 
-    if (match.type === "citation") {
+    if (match.type === "slash-command") {
+      segments.push({
+        type: "slash-command",
+        command: match.command,
+        source: match.source,
+      });
+    } else if (match.type === "citation") {
       segments.push({ type: "citation", citation: match.citation, source: match.source });
     } else if (match.type === "context-reference") {
       segments.push({

@@ -807,6 +807,12 @@ function atomJsonForSegment(
   segment: Exclude<ReturnType<typeof splitPromptIntoComposerSegments>[number], { type: "text" }>,
   chips: ChipResolver,
 ): AtomJson | null {
+  if (segment.type === "slash-command") {
+    return {
+      type: "composer-slash-command",
+      attrs: { command: segment.command, source: segment.source },
+    };
+  }
   if (segment.type === "mention") {
     return {
       type: "composer-mention",
@@ -1206,6 +1212,7 @@ export interface RichDocMap {
 function readAtomSource(node: ProseMirrorNode): string {
   const attrs = node.attrs as Record<string, unknown>;
   switch (node.type.name) {
+    case "composer-slash-command":
     case "composer-mention":
     case "composer-model":
     case "composer-citation":
@@ -1833,7 +1840,8 @@ export function skillChipReplacements(
   for (const segment of splitPromptIntoComposerSegments(map.value)) {
     const start = end;
     end += segment.type === "text" ? segment.text.length : segment.source.length;
-    if (segment.type !== "skill" && segment.type !== "model") continue;
+    if (segment.type !== "skill" && segment.type !== "model" && segment.type !== "slash-command")
+      continue;
     const atom = atomJsonForSegment(segment, chips);
     const type = atom && schema.nodes[atom.type];
     if (!atom || !type) continue;

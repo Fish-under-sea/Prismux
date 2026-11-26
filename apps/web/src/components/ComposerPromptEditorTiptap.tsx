@@ -64,6 +64,7 @@ import {
   pastedPathQueryLength,
 } from "~/composer-logic";
 import { useStableCallback } from "~/hooks/useStableCallback";
+import { ComposerSlashCommandChip } from "./chat/ComposerSlashCommandChip";
 import { caretLineDirection, ComposerTextDirectionExtension } from "~/composer-text-direction";
 import {
   collapseShownMarkdownSource,
@@ -266,6 +267,53 @@ function resolvedThemeFromDocument(): "light" | "dark" {
 
 const CHIP_NODE_SELECTION_CLASS_NAME =
   "relative inline-flex min-w-0 max-w-full select-none items-baseline data-[composer-chip-selected]:after:pointer-events-none data-[composer-chip-selected]:after:absolute data-[composer-chip-selected]:after:inset-0 data-[composer-chip-selected]:after:rounded-sm data-[composer-chip-selected]:after:bg-[Highlight] data-[composer-chip-selected]:after:opacity-30 data-[composer-chip-selected]:after:content-['']";
+
+const ComposerSlashCommandExtension = Node.create({
+  name: "composer-slash-command",
+  group: "inline",
+  inline: true,
+  atom: true,
+  selectable: true,
+  addAttributes() {
+    return {
+      command: { default: "" },
+      source: { default: "" },
+    };
+  },
+  parseHTML() {
+    return [{ tag: "span[data-composer-slash-command-node]" }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ["span", { "data-composer-slash-command-node": "", ...HTMLAttributes }];
+  },
+  addNodeView() {
+    return ReactNodeViewRenderer(ComposerSlashCommandNodeView);
+  },
+});
+
+function ComposerSlashCommandNodeView({ node, editor, getPos }: NodeViewProps) {
+  const command = String(node.attrs.command ?? "");
+  const onRemove = () => {
+    if (!editor.isEditable) return;
+    const pos = typeof getPos === "function" ? getPos() : null;
+    if (typeof pos !== "number") return;
+    const { doc } = editor.state;
+    const current = doc.nodeAt(pos);
+    if (!current || current.type.name !== "composer-slash-command") return;
+    const end = pos + current.nodeSize;
+    const to = doc.textBetween(end, Math.min(doc.content.size, end + 1)) === " " ? end + 1 : end;
+    editor.chain().focus().deleteRange({ from: pos, to }).run();
+  };
+  return (
+    <NodeViewWrapper as="span" className={CHIP_NODE_SELECTION_CLASS_NAME}>
+      <ComposerSlashCommandChip
+        command={command}
+        interactive={editor.isEditable}
+        onRemove={onRemove}
+      />
+    </NodeViewWrapper>
+  );
+}
 
 const ComposerMentionExtension = Node.create({
   name: "composer-mention",
@@ -801,7 +849,9 @@ const SILENT_SELECTION_META = "composerSilentSelection";
  * Safely returns the mounted ProseMirror view or `null` when Tiptap v3's editor
  * is unmounted/destroyed (accessing `editor.view.dom` on an unmounted view throws).
  */
-function getMountedEditorView(editor: TiptapEditor | null | undefined): TiptapEditor["view"] | null {
+function getMountedEditorView(
+  editor: TiptapEditor | null | undefined,
+): TiptapEditor["view"] | null {
   if (!editor || editor.isDestroyed) return null;
   try {
     const view = editor.view;
@@ -900,6 +950,7 @@ function createComposerExtensions(richText: boolean) {
     Paragraph.extend({ selectable: false }),
     ComposerUndoGroupingExtension,
     ComposerTextDirectionExtension,
+    ComposerSlashCommandExtension,
     ComposerMentionExtension,
     ComposerSkillExtension,
     ComposerModelExtension,
@@ -1507,6 +1558,7 @@ function ComposerPromptEditorTiptapInner(
           const tokens = literalText ? [] : collectComposerPromptInlineTokens(`${text}\n`);
           const isChip = (token: (typeof tokens)[number] | undefined) =>
             token?.type === "mention" ||
+            token?.type === "slash-command" ||
             (token?.type === "skill" && skillLabelFor(token.value) !== null) ||
             (token?.type === "model" && isKnownModel(token.instanceId, token.model));
           const lastToken = tokens.at(-1);
@@ -1565,16 +1617,32 @@ function ComposerPromptEditorTiptapInner(
         },
       },
       onUpdate: ({ editor: updated, transaction }) => {
-        // Undo can restore a chip for a skill or model the environment no longer offers.
-        if (!literalText && isHistoryTransaction(transaction)) {
-          const stale = skillChipReplacements(
-            updated.state.doc,
-            skillLabelFor,
-            isKnownModel,
-          ).filter(({ node }) => node.isText);
-          if (stale.length > 0) {
-            replaceSkillChips(updated, stale);
-            return;
+        if (!literalText) {
+          // Undo can restore a chip for a skill or model the environment no longer offers.
+          if (isHistoryTransaction(transaction)) {
+            const stale = skillChipReplacements(
+              updated.state.doc,
+              skillLabelFor,
+              isKnownModel,
+            ).filter(({ node }) => node.isText);
+            if (stale.length > 0) {
+              replaceSkillChips(updated, stale);
+              return;
+            }
+          } else if (
+            transaction.docChanged &&
+            updated.state.doc.textContent.trimStart().startsWith("/")
+          ) {
+            // Upgrade confirmed leading `/command ` text into inline visual icon/bee chips.
+            const slashChips = skillChipReplacements(
+              updated.state.doc,
+              skillLabelFor,
+              isKnownModel,
+            ).filter(({ node }) => node.type.name === "composer-slash-command");
+            if (slashChips.length > 0) {
+              replaceSkillChips(updated, slashChips);
+              return;
+            }
           }
         }
         handleEditorChange(updated, transaction);

@@ -300,6 +300,9 @@ import {
   shouldWrapComposerTelemetryRow,
 } from "./ComposerLiveTelemetryStrip";
 import { ComposerWorkspaceLocationBar } from "./ComposerWorkspaceLocationBar";
+import { ComposerCollaboratorsPopover } from "./ComposerCollaboratorsPopover";
+import type { ComposerCollaboratorSelection } from "./composerCollaborators.logic";
+import { useComposerDraftCollaborators } from "../../composerDraftStore";
 import { composerCommandKeyHandler } from "./composerCommandKey";
 import { promptSuggestionToAccept, usePromptSuggestion } from "./usePromptSuggestion";
 import { useFreshSessionArmed } from "./freshSessionArms";
@@ -365,6 +368,7 @@ export interface ChatComposerHandle {
     selectedModel: string;
     selectedProviderModels: ReadonlyArray<ServerProvider["models"][number]>;
     shownPendingApprovalIds: ReadonlyArray<RuntimeRequestId>;
+    collaborators: ReadonlyArray<ComposerCollaboratorSelection>;
   };
   validateProviderInput: (providerInput: string) => boolean;
   setMultipleModelSelections: (selections: ReadonlyArray<ModelSelection>) => void;
@@ -850,6 +854,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             )
           : null
       : null);
+  const composerCollaborators = useComposerDraftCollaborators(composerDraftTarget);
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const removeComposerDraftImage = useComposerDraftStore((store) => store.removeImage);
@@ -1190,6 +1195,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isLoading: isComposerMenuLoading,
     emptyState: composerMenuEmptyState,
   } = useComposerMenuItems({
+    prompt,
     composerTrigger,
     environmentId,
     linkedEnvironments,
@@ -3501,6 +3507,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         selectedProvider,
         selectedModel,
         selectedProviderModels,
+        collaborators: composerCollaborators,
       }),
       setMultipleModelSelections,
       validateProviderInput: (providerInput: string) => {
@@ -3564,6 +3571,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       selectedPromptEffort,
       selectedProvider,
       selectedProviderModels,
+      composerCollaborators,
       compactThreadContextStable,
     ],
   );
@@ -3732,9 +3740,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           {!isComposerCollapsedMobile ? (
             <div
               data-pmx-composer-top-tray="1"
-              className="flex min-w-0 flex-wrap items-center gap-1 px-2 pb-1.5 pt-0.5 text-xs"
+              className="flex min-w-0 flex-wrap items-center justify-between gap-1 px-2 pb-1.5 pt-0.5 text-xs"
             >
               <ComposerWorkspaceLocationBar variant="top-tray" />
+              <ComposerCollaboratorsPopover
+                draftTarget={composerDraftTarget}
+                providerInstanceEntries={providerInstanceEntries}
+                modelOptionsByInstance={modelOptionsByInstance}
+                disabled={!canOperateThread}
+                className="ms-auto"
+              />
             </div>
           ) : null}
           <div

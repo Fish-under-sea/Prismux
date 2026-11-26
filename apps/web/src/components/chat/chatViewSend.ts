@@ -36,6 +36,14 @@ import {
 import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@prismux/core-shared/composerContextReferences";
 import { createModelSelection } from "@prismux/core-shared/model";
 import type { ProviderInstanceEntry } from "../../providerInstances";
+import {
+  attachCollaboratorsContext,
+  pruneLockedCollaborators,
+  type CollaboratorProviderProbeLike,
+  type CollaboratorWaiverPolicy,
+  type ComposerCollaboratorSelection,
+} from "./composerCollaborators.logic";
+import type { OrchestrationMessageContext } from "@prismux/core-contracts";
 import { getComposerPromptInjectionState, getComposerProviderState } from "./composerProviderState";
 import {
   formatOutgoingPrompt,
@@ -384,6 +392,39 @@ export function resolveMultipleModelTargets(input: {
       }),
     };
   });
+}
+
+/**
+ * Attaches the invisible `<prismux_collaborators>` context record when one or more
+ * collaborators are selected. Strict 0-byte no-op when empty: returns `context` verbatim.
+ */
+export function attachComposerCollaboratorsToContext(input: {
+  readonly context: OrchestrationMessageContext | undefined;
+  readonly collaborators: ReadonlyArray<ComposerCollaboratorSelection>;
+  readonly providerInstanceEntries: ReadonlyArray<ProviderInstanceEntry>;
+  readonly probes?: ReadonlyArray<CollaboratorProviderProbeLike> | null | undefined;
+  readonly waiver?: CollaboratorWaiverPolicy | null | undefined;
+}): OrchestrationMessageContext | undefined {
+  if (input.collaborators.length === 0) {
+    return input.context;
+  }
+  const effectiveCollaborators =
+    input.waiver !== undefined
+      ? pruneLockedCollaborators({
+          selections: input.collaborators,
+          entries: input.providerInstanceEntries,
+          probes: input.probes,
+          waiver: input.waiver,
+        })
+      : input.collaborators;
+  if (effectiveCollaborators.length === 0) {
+    return input.context;
+  }
+  return attachCollaboratorsContext(
+    input.context,
+    effectiveCollaborators,
+    input.providerInstanceEntries,
+  );
 }
 
 /**
