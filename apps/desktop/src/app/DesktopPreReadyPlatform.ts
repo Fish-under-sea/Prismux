@@ -21,6 +21,7 @@ import {
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 
 const WINDOWS_HEVC_DECODER_FEATURE = "PlatformHEVCDecoderSupport";
+export const DEFAULT_DISK_CACHE_SIZE_BYTES = 268_435_456;
 
 function parseFeatureListNames(value: string | null): ReadonlyArray<string> {
   return (value ?? "")
@@ -36,6 +37,13 @@ export function resolveWindowsEnableFeaturesSwitch(existingEnableFeatures: strin
   return trimmed.length === 0
     ? WINDOWS_HEVC_DECODER_FEATURE
     : `${trimmed},${WINDOWS_HEVC_DECODER_FEATURE}`;
+}
+
+export function resolveDiskCacheSizeSwitch(existingDiskCacheSize: string | null): string | null {
+  if (existingDiskCacheSize !== null && existingDiskCacheSize.trim().length > 0) {
+    return null;
+  }
+  return String(DEFAULT_DISK_CACHE_SIZE_BYTES);
 }
 
 export interface DesktopPreReadyCommandLineReader {
@@ -209,6 +217,14 @@ export const make = Effect.gen(function* () {
       if (nextEnableFeatures !== null) {
         Electron.app.commandLine.appendSwitch("enable-features", nextEnableFeatures);
       }
+    }
+
+    // Cap Chromium's HTTP disk cache to 256 MiB unless explicitly overridden on the command line.
+    const nextDiskCacheSize = resolveDiskCacheSizeSwitch(
+      readCommandLineSwitchValue(Electron.app.commandLine, "disk-cache-size"),
+    );
+    if (nextDiskCacheSize !== null) {
+      Electron.app.commandLine.appendSwitch("disk-cache-size", nextDiskCacheSize);
     }
 
     return { linux, linuxPasswordStoreCommandLine };

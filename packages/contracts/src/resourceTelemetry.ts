@@ -170,6 +170,28 @@ export const ResourceMonitorHelloEvent = Schema.Struct({
 });
 export type ResourceMonitorHelloEvent = typeof ResourceMonitorHelloEvent.Type;
 
+export const ResourceMonitorPowerStatus = Schema.Struct({
+  onBattery: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
+  lowPowerMode: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
+  batteryPercent: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  isCharging: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
+});
+export type ResourceMonitorPowerStatus = typeof ResourceMonitorPowerStatus.Type;
+
+export const ResourceTelemetryHostInfo = Schema.Struct({
+  osName: Schema.String,
+  osVersion: Schema.String,
+  arch: Schema.String,
+  cpuBrand: Schema.String,
+  physicalCores: NonNegativeInt,
+  logicalCores: NonNegativeInt,
+  totalMemoryBytes: NonNegativeInt,
+  usedMemoryBytes: NonNegativeInt,
+  uptimeSeconds: NonNegativeInt,
+  temperatureCelsius: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+});
+export type ResourceTelemetryHostInfo = typeof ResourceTelemetryHostInfo.Type;
+
 export const ResourceMonitorSnapshotEvent = Schema.Struct({
   version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
   type: Schema.Literal("snapshot"),
@@ -182,6 +204,8 @@ export const ResourceMonitorSnapshotEvent = Schema.Struct({
   requestId: Schema.optionalKey(TrimmedNonEmptyString),
   externalProcesses: Schema.optionalKey(Schema.Array(ResourceMonitorExternalProcess)),
   processes: Schema.Array(ResourceMonitorProcessSample),
+  host: Schema.optionalKey(ResourceTelemetryHostInfo),
+  powerStatus: Schema.optionalKey(ResourceMonitorPowerStatus),
 });
 export type ResourceMonitorSnapshotEvent = typeof ResourceMonitorSnapshotEvent.Type;
 
@@ -498,6 +522,7 @@ export const ResourceTelemetrySnapshot = Schema.Struct({
   processes: Schema.Array(ResourceTelemetryProcess),
   groups: ResourceTelemetryGroups,
   power: HostPowerSnapshot,
+  host: Schema.optionalKey(ResourceTelemetryHostInfo),
   speedLimitPercent: Schema.Option(Schema.Number),
   attribution: ResourceAttributionSnapshot,
   health: ResourceTelemetryHealth,

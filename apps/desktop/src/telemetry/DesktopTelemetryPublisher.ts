@@ -268,6 +268,8 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
             locked: observedPower.locked,
             suspended: observedPower.suspended,
             onBattery: observedPower.onBattery,
+            // Leave lowPowerMode unknown so ResourceTelemetry preserves real OS Energy Saver
+            // status reported by the native resource-monitor without clobbering it.
             lowPowerMode: "unknown",
             thermalState: observedPower.thermalState,
             stale: false,

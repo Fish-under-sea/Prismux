@@ -86,9 +86,51 @@ ipcRenderer.on(
   },
 );
 
+const GET_PRELOAD_BOOTSTRAP_SYNC_CHANNEL = "desktop:get-preload-bootstrap-sync";
+const LOCAL_ENVIRONMENT_BOOTSTRAPS_CACHE_TTL_MS = 2_000;
+const PRELOAD_BOOTSTRAP_SYNC_CHANNELS = [
+  IpcChannels.TAKE_LEGACY_LOCAL_STORAGE_CHANNEL,
+  IpcChannels.GET_PRIMARY_PASTE_ENABLED_CHANNEL,
+  IpcChannels.GET_APP_BRANDING_CHANNEL,
+  IpcChannels.GET_RELAY_TELEMETRY_ENABLED_CHANNEL,
+  IpcChannels.GET_SYSTEM_LOCALE_CHANNEL,
+  IpcChannels.GET_PREFERRED_SYSTEM_LANGUAGES_CHANNEL,
+  IpcChannels.GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL,
+  IpcChannels.GET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL,
+  IpcChannels.GET_WINDOW_FULLSCREEN_STATE_CHANNEL,
+] as const;
+
+// Fetch all 9 preload bootstrap properties in a single synchronous IPC round trip.
+let preloadBootstrapPayload: Record<string, unknown> | null = null;
+try {
+  const rawBootstrap: unknown = ipcRenderer.sendSync(
+    GET_PRELOAD_BOOTSTRAP_SYNC_CHANNEL,
+    PRELOAD_BOOTSTRAP_SYNC_CHANNELS,
+  );
+  if (typeof rawBootstrap === "object" && rawBootstrap !== null) {
+    preloadBootstrapPayload = rawBootstrap as Record<string, unknown>;
+  }
+} catch {}
+
+function readBootstrapSyncChannel(channel: string): unknown {
+  if (
+    preloadBootstrapPayload !== null &&
+    Object.prototype.hasOwnProperty.call(preloadBootstrapPayload, channel)
+  ) {
+    return preloadBootstrapPayload[channel];
+  }
+  try {
+    return ipcRenderer.sendSync(channel);
+  } catch {
+    return undefined;
+  }
+}
+
 // Runs before any app script reads localStorage. See DesktopLegacyLocalStorage.
 try {
-  const legacyItems: unknown = ipcRenderer.sendSync(IpcChannels.TAKE_LEGACY_LOCAL_STORAGE_CHANNEL);
+  const legacyItems: unknown = readBootstrapSyncChannel(
+    IpcChannels.TAKE_LEGACY_LOCAL_STORAGE_CHANNEL,
+  );
   if (typeof legacyItems === "object" && legacyItems !== null) {
     if (mergeLegacyLocalStorage(window.localStorage, legacyItems as Record<string, string>)) {
       void ipcRenderer.invoke(IpcChannels.COMPLETE_LEGACY_LOCAL_STORAGE_CHANNEL);
@@ -127,11 +169,68 @@ const syncHtmlFullscreen = () => {
 syncHtmlFullscreen();
 document.addEventListener("fullscreenchange", syncHtmlFullscreen);
 
-let primaryPasteEnabled = true;
-try {
-  primaryPasteEnabled =
-    ipcRenderer.sendSync(IpcChannels.GET_PRIMARY_PASTE_ENABLED_CHANNEL) !== false;
-} catch {}
+const primaryPasteEnabled =
+  readBootstrapSyncChannel(IpcChannels.GET_PRIMARY_PASTE_ENABLED_CHANNEL) !== false;
+
+const cachedAppBranding: ReturnType<DesktopBridge["getAppBranding"]> = (() => {
+  const result = readBootstrapSyncChannel(IpcChannels.GET_APP_BRANDING_CHANNEL);
+  if (typeof result !== "object" || result === null) {
+    return null;
+  }
+  return result as ReturnType<DesktopBridge["getAppBranding"]>;
+})();
+
+const cachedRelayTelemetryEnabled: boolean | null = (() => {
+  const enabled = readBootstrapSyncChannel(IpcChannels.GET_RELAY_TELEMETRY_ENABLED_CHANNEL);
+  return enabled === null || enabled === undefined ? null : enabled === true;
+})();
+
+const cachedSystemLocale: string | null = (() => {
+  const result = readBootstrapSyncChannel(IpcChannels.GET_SYSTEM_LOCALE_CHANNEL);
+  return typeof result === "string" ? result : null;
+})();
+
+const cachedPreferredSystemLanguages: ReadonlyArray<string> = (() => {
+  const result = readBootstrapSyncChannel(IpcChannels.GET_PREFERRED_SYSTEM_LANGUAGES_CHANNEL);
+  return Array.isArray(result) ? result.filter((tag) => typeof tag === "string") : [];
+})();
+
+let cachedLocalEnvironmentEnabled =
+  readBootstrapSyncChannel(IpcChannels.GET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL) !== false;
+
+let cachedLocalEnvironmentBootstraps: ReturnType<
+  DesktopBridge["getLocalEnvironmentBootstraps"]
+> | null = (() => {
+  const result = readBootstrapSyncChannel(IpcChannels.GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL);
+  return Array.isArray(result)
+    ? (result as ReturnType<DesktopBridge["getLocalEnvironmentBootstraps"]>)
+    : null;
+})();
+function monotonicNowMs(): number {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : 0;
+}
+
+let cachedLocalEnvironmentBootstrapsAt =
+  cachedLocalEnvironmentBootstraps !== null ? monotonicNowMs() : 0;
+
+function invalidateLocalEnvironmentBootstrapsCache(): void {
+  cachedLocalEnvironmentBootstraps = null;
+  cachedLocalEnvironmentBootstrapsAt = 0;
+}
+
+let cachedWindowFullscreenState =
+  readBootstrapSyncChannel(IpcChannels.GET_WINDOW_FULLSCREEN_STATE_CHANNEL) === true;
+
+ipcRenderer.on(
+  IpcChannels.WINDOW_FULLSCREEN_STATE_CHANNEL,
+  (_event: Electron.IpcRendererEvent, fullscreen: unknown) => {
+    if (typeof fullscreen === "boolean") {
+      cachedWindowFullscreenState = fullscreen;
+    }
+  },
+);
 
 if (!primaryPasteEnabled) {
   // Blink pastes the PRIMARY selection on a middle-click mouseup unless it is default-prevented.
@@ -161,17 +260,8 @@ function unwrapEnsureSshEnvironmentResult(result: unknown) {
 }
 
 contextBridge.exposeInMainWorld("desktopBridge", {
-  getAppBranding: () => {
-    const result = ipcRenderer.sendSync(IpcChannels.GET_APP_BRANDING_CHANNEL);
-    if (typeof result !== "object" || result === null) {
-      return null;
-    }
-    return result as ReturnType<DesktopBridge["getAppBranding"]>;
-  },
-  getRelayTelemetryEnabled: () => {
-    const enabled = ipcRenderer.sendSync(IpcChannels.GET_RELAY_TELEMETRY_ENABLED_CHANNEL);
-    return enabled === null ? null : enabled === true;
-  },
+  getAppBranding: () => cachedAppBranding,
+  getRelayTelemetryEnabled: () => cachedRelayTelemetryEnabled,
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   getClientPlatform: () => clientPlatform,
   osUsername,
@@ -196,29 +286,39 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   },
   revealWindow: () => ipcRenderer.invoke(IpcChannels.REVEAL_WINDOW_CHANNEL),
   getPrimaryPasteEnabled: () => primaryPasteEnabled,
-  getSystemLocale: () => {
-    const result = ipcRenderer.sendSync(IpcChannels.GET_SYSTEM_LOCALE_CHANNEL);
-    return typeof result === "string" ? result : null;
-  },
-  getPreferredSystemLanguages: () => {
-    const result: unknown = ipcRenderer.sendSync(
-      IpcChannels.GET_PREFERRED_SYSTEM_LANGUAGES_CHANNEL,
-    );
-    return Array.isArray(result) ? result.filter((tag) => typeof tag === "string") : [];
-  },
+  getSystemLocale: () => cachedSystemLocale,
+  getPreferredSystemLanguages: () => [...cachedPreferredSystemLanguages],
   getLocalEnvironmentBootstraps: () => {
+    if (
+      cachedLocalEnvironmentBootstraps !== null &&
+      monotonicNowMs() - cachedLocalEnvironmentBootstrapsAt <=
+        LOCAL_ENVIRONMENT_BOOTSTRAPS_CACHE_TTL_MS
+    ) {
+      return cachedLocalEnvironmentBootstraps;
+    }
     const result = ipcRenderer.sendSync(IpcChannels.GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL);
     if (!Array.isArray(result)) {
       return [];
     }
-    return result as ReturnType<DesktopBridge["getLocalEnvironmentBootstraps"]>;
+    cachedLocalEnvironmentBootstraps = result as ReturnType<
+      DesktopBridge["getLocalEnvironmentBootstraps"]
+    >;
+    cachedLocalEnvironmentBootstrapsAt = monotonicNowMs();
+    return cachedLocalEnvironmentBootstraps;
   },
   getLocalEnvironmentBearerToken: () =>
     ipcRenderer.invoke(IpcChannels.GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL),
-  getLocalEnvironmentEnabled: () =>
-    ipcRenderer.sendSync(IpcChannels.GET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL) !== false,
-  setLocalEnvironmentEnabled: (enabled) =>
-    ipcRenderer.invoke(IpcChannels.SET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL, enabled),
+  getLocalEnvironmentEnabled: () => cachedLocalEnvironmentEnabled,
+  setLocalEnvironmentEnabled: (enabled) => {
+    invalidateLocalEnvironmentBootstrapsCache();
+    return ipcRenderer
+      .invoke(IpcChannels.SET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL, enabled)
+      .then((result) => {
+        cachedLocalEnvironmentEnabled = Boolean(enabled);
+        invalidateLocalEnvironmentBootstrapsCache();
+        return result;
+      });
+  },
   getHostEnvironmentId: () => ipcRenderer.invoke(IpcChannels.GET_HOST_ENVIRONMENT_ID_CHANNEL),
   getClientSettings: () => ipcRenderer.invoke(IpcChannels.GET_CLIENT_SETTINGS_CHANNEL),
   setClientSettings: (settings) =>
@@ -289,16 +389,28 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   resolveSshPasswordPrompt: (requestId, password) =>
     ipcRenderer.invoke(IpcChannels.RESOLVE_SSH_PASSWORD_PROMPT_CHANNEL, { requestId, password }),
   getServerExposureState: () => ipcRenderer.invoke(IpcChannels.GET_SERVER_EXPOSURE_STATE_CHANNEL),
-  setServerExposureMode: (mode) =>
-    ipcRenderer.invoke(IpcChannels.SET_SERVER_EXPOSURE_MODE_CHANNEL, mode),
-  setTailscaleServeEnabled: (input) =>
-    ipcRenderer.invoke(IpcChannels.SET_TAILSCALE_SERVE_ENABLED_CHANNEL, input),
+  setServerExposureMode: (mode) => {
+    invalidateLocalEnvironmentBootstrapsCache();
+    return ipcRenderer.invoke(IpcChannels.SET_SERVER_EXPOSURE_MODE_CHANNEL, mode);
+  },
+  setTailscaleServeEnabled: (input) => {
+    invalidateLocalEnvironmentBootstrapsCache();
+    return ipcRenderer.invoke(IpcChannels.SET_TAILSCALE_SERVE_ENABLED_CHANNEL, input);
+  },
   getAdvertisedEndpoints: () => ipcRenderer.invoke(IpcChannels.GET_ADVERTISED_ENDPOINTS_CHANNEL),
   getWslState: () => ipcRenderer.invoke(IpcChannels.GET_WSL_STATE_CHANNEL),
-  setWslBackendEnabled: (enabled) =>
-    ipcRenderer.invoke(IpcChannels.SET_WSL_BACKEND_ENABLED_CHANNEL, enabled),
-  setWslDistro: (distro) => ipcRenderer.invoke(IpcChannels.SET_WSL_DISTRO_CHANNEL, distro),
-  setWslOnly: (enabled) => ipcRenderer.invoke(IpcChannels.SET_WSL_ONLY_CHANNEL, enabled),
+  setWslBackendEnabled: (enabled) => {
+    invalidateLocalEnvironmentBootstrapsCache();
+    return ipcRenderer.invoke(IpcChannels.SET_WSL_BACKEND_ENABLED_CHANNEL, enabled);
+  },
+  setWslDistro: (distro) => {
+    invalidateLocalEnvironmentBootstrapsCache();
+    return ipcRenderer.invoke(IpcChannels.SET_WSL_DISTRO_CHANNEL, distro);
+  },
+  setWslOnly: (enabled) => {
+    invalidateLocalEnvironmentBootstrapsCache();
+    return ipcRenderer.invoke(IpcChannels.SET_WSL_ONLY_CHANNEL, enabled);
+  },
   pickFolder: (options) => ipcRenderer.invoke(IpcChannels.PICK_FOLDER_CHANNEL, options),
   toLocalBackendPath: (backendId, path) =>
     ipcRenderer.invoke(IpcChannels.TO_LOCAL_BACKEND_PATH_CHANNEL, { backendId, path }),
@@ -376,8 +488,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.removeListener(IpcChannels.QUIT_SHORTCUT_CHANNEL, wrappedListener);
     };
   },
-  getWindowFullscreenState: () =>
-    ipcRenderer.sendSync(IpcChannels.GET_WINDOW_FULLSCREEN_STATE_CHANNEL) === true,
+  getWindowFullscreenState: () => cachedWindowFullscreenState,
   getWindowZoomFactor: () => webFrame.getZoomFactor(),
   onWindowFullscreenStateChange: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, fullscreen: unknown) => {

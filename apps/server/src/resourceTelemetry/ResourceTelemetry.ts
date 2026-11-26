@@ -1,6 +1,8 @@
 import type {
+  BackgroundBooleanState,
   DesktopHostTelemetrySnapshot,
   HostPowerSnapshot,
+  ResourceMonitorPowerStatus,
   ResourceMonitorSnapshotEvent,
   ResourceTelemetryHealth,
   ResourceTelemetryHistoryInput,
@@ -97,6 +99,56 @@ function unknownPower(updatedAt: DateTime.Utc): HostPowerSnapshot {
     thermalState: "unknown",
     stale: true,
     updatedAt,
+  };
+}
+
+function preferKnownBooleanState(
+  primary: BackgroundBooleanState,
+  fallback: boolean | null | undefined,
+): BackgroundBooleanState {
+  if (primary === "true" || primary === "false") {
+    return primary;
+  }
+  if (typeof fallback === "boolean") {
+    return fallback ? "true" : "false";
+  }
+  return "unknown";
+}
+
+/**
+ * Merges Electron main-process power telemetry with real OS power telemetry reported
+ * by the native resource-monitor (e.g. Windows Energy Saver `lowPowerMode`,
+ * `batteryPercent`, and `isCharging`). Known `"true"`/`"false"` values always take
+ * precedence over `"unknown"` so desktop snapshots never clobber native readings.
+ */
+export function mergeHostPowerSnapshot(
+  desktopPower: Option.Option<HostPowerSnapshot>,
+  nativePower: ResourceMonitorPowerStatus | undefined,
+  fallbackUpdatedAt: DateTime.Utc,
+): HostPowerSnapshot {
+  const base = Option.match(desktopPower, {
+    onNone: () => unknownPower(fallbackUpdatedAt),
+    onSome: (power) => power,
+  });
+  if (nativePower === undefined) {
+    return base;
+  }
+  const onBattery = preferKnownBooleanState(base.onBattery, nativePower.onBattery);
+  const lowPowerMode = preferKnownBooleanState(base.lowPowerMode, nativePower.lowPowerMode);
+  const batteryPercent =
+    base.batteryPercent !== undefined && base.batteryPercent !== null
+      ? base.batteryPercent
+      : nativePower.batteryPercent;
+  const isCharging =
+    base.isCharging !== undefined || nativePower.isCharging !== undefined
+      ? preferKnownBooleanState(base.isCharging ?? "unknown", nativePower.isCharging)
+      : undefined;
+  return {
+    ...base,
+    onBattery,
+    lowPowerMode,
+    ...(batteryPercent !== undefined ? { batteryPercent } : {}),
+    ...(isCharging !== undefined ? { isCharging } : {}),
   };
 }
 
@@ -306,15 +358,25 @@ export const make = Effect.fn("resourceTelemetry.resourceTelemetry.make")(functi
           updatePrevious: input.updatePrevious,
         });
         const readAt = DateTime.makeUnsafe(merged.sampledAtMs);
+        const nativePowerStatus = Option.match(nativeSnapshot, {
+          onNone: () => undefined,
+          onSome: (snapshot) => snapshot.powerStatus,
+        });
+        const host = Option.match(nativeSnapshot, {
+          onNone: () => undefined,
+          onSome: (snapshot) => snapshot.host,
+        });
         const snapshot: ResourceTelemetrySnapshot = {
           readAt,
           sampleIntervalMs: nativeHealth.sampleIntervalMs,
           processes: merged.processes,
           groups: merged.groups,
-          power: Option.match(desktopSnapshot, {
-            onNone: () => unknownPower(readAt),
-            onSome: (desktop) => desktop.power,
-          }),
+          power: mergeHostPowerSnapshot(
+            Option.map(desktopSnapshot, (desktop) => desktop.power),
+            nativePowerStatus,
+            readAt,
+          ),
+          ...(host === undefined ? {} : { host }),
           speedLimitPercent: Option.match(desktopSnapshot, {
             onNone: () => Option.none(),
             onSome: (desktop) => resolveEffectiveSpeedLimitPercent(desktop),
@@ -343,8 +405,19 @@ export const make = Effect.fn("resourceTelemetry.resourceTelemetry.make")(functi
       }),
     );
 
-  const ingestNative = (snapshot: NativeTelemetryClient.NativeTelemetrySnapshot) =>
-    rebuild({ nativeSnapshot: snapshot, updatePrevious: true });
+  const ingestNative =
+    /* Native samples arrive continuously; avoid a span per telemetry sample. */
+    Effect.fnUntraced(function* (snapshot: NativeTelemetryClient.NativeTelemetrySnapshot) {
+      const previousPower = (yield* Ref.get(state)).latest.power;
+      const rebuilt = yield* rebuild({ nativeSnapshot: snapshot, updatePrevious: true });
+      if (
+        rebuilt.power.lowPowerMode !== previousPower.lowPowerMode ||
+        rebuilt.power.onBattery !== previousPower.onBattery
+      ) {
+        yield* nativeClient.setHostPowerState(rebuilt.power).pipe(Effect.ignore);
+      }
+      return rebuilt;
+    });
   const ingestDesktop =
     /* Desktop samples arrive continuously; avoid a span per telemetry sample. */
     Effect.fnUntraced(function* (snapshot: DesktopHostTelemetrySnapshot) {
@@ -359,12 +432,13 @@ export const make = Effect.fn("resourceTelemetry.resourceTelemetry.make")(functi
           },
         ])
         .pipe(Effect.ignore);
-      yield* nativeClient.setHostPowerState(snapshot.power).pipe(Effect.ignore);
-      return yield* rebuild({
+      const rebuilt = yield* rebuild({
         desktopSnapshot: snapshot,
         updatePrevious: false,
         publishWhenLive: true,
       });
+      yield* nativeClient.setHostPowerState(rebuilt.power).pipe(Effect.ignore);
+      return rebuilt;
     });
 
   yield* desktopSubscription.changes.pipe(

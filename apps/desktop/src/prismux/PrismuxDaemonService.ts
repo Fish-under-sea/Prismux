@@ -11,11 +11,13 @@ import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
+import type * as Electron from "electron";
 import type { PrismuxDaemonInfo } from "@prismux/core-contracts";
 import * as HostProcess from "@prismux/core-shared/HostProcess";
 import * as NetService from "@prismux/core-shared/Net";
@@ -24,11 +26,15 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
+import * as ElectronPowerMonitor from "../electron/ElectronPowerMonitor.ts";
+import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import {
   buildHostMetricsPayload,
-  HOST_METRICS_POLL_INTERVAL,
   HOST_METRICS_WARMUP_DELAY,
   postHostMetricsToDaemon,
+  resolveHostMetricsCadence,
+  shouldWakeHostMetricsReporter,
+  type HostMetricsActivityState,
 } from "./PrismuxHostMetricsReporter.ts";
 
 class PrismuxDaemonSpawnError extends Schema.TaggedError<PrismuxDaemonSpawnError>()(
@@ -213,40 +219,38 @@ function waitForChildExit(child: NodeChildProcess.ChildProcess): Effect.Effect<v
   });
 }
 
-function terminateChildProcess(
+const terminateChildProcess = Effect.fn("PrismuxDaemonService.terminateChildProcess")(function* (
   child: NodeChildProcess.ChildProcess,
   platform: NodeJS.Platform,
-): Effect.Effect<void> {
-  return Effect.gen(function* () {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      return;
-    }
-    const signalSent = yield* Effect.sync(() => {
-      try {
-        child.kill("SIGTERM");
-        return true;
-      } catch {
-        return false;
-      }
-    });
-    if (!signalSent) {
-      if (child.pid !== undefined) {
-        forceKillProcessTree(child.pid, platform);
-      }
-      return;
-    }
-    const exited = yield* waitForChildExit(child).pipe(
-      Effect.as(true),
-      Effect.timeoutOrElse({
-        duration: Duration.millis(DAEMON_STOP_GRACE_MS),
-        orElse: () => Effect.succeed(false),
-      }),
-    );
-    if (!exited && child.exitCode === null && child.signalCode === null && child.pid !== undefined) {
-      forceKillProcessTree(child.pid, platform);
+) {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  const signalSent = yield* Effect.sync(() => {
+    try {
+      child.kill("SIGTERM");
+      return true;
+    } catch {
+      return false;
     }
   });
-}
+  if (!signalSent) {
+    if (child.pid !== undefined) {
+      forceKillProcessTree(child.pid, platform);
+    }
+    return;
+  }
+  const exited = yield* waitForChildExit(child).pipe(
+    Effect.as(true),
+    Effect.timeoutOrElse({
+      duration: Duration.millis(DAEMON_STOP_GRACE_MS),
+      orElse: () => Effect.succeed(false),
+    }),
+  );
+  if (!exited && child.exitCode === null && child.signalCode === null && child.pid !== undefined) {
+    forceKillProcessTree(child.pid, platform);
+  }
+});
 
 const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
@@ -257,13 +261,195 @@ const make = Effect.gen(function* () {
   const executablePath = yield* HostProcess.ExecutablePath;
   const hostEnv = yield* HostProcess.Environment;
   const electronAppOption = yield* Effect.serviceOption(ElectronApp.ElectronApp);
+  const electronWindowOption = yield* Effect.serviceOption(ElectronWindow.ElectronWindow);
+  const powerMonitorOption = yield* Effect.serviceOption(
+    ElectronPowerMonitor.ElectronPowerMonitor,
+  );
   const backendPoolOption = yield* Effect.serviceOption(DesktopBackendPool.DesktopBackendPool);
 
   const stateRef = yield* Ref.make<PrismuxDaemonState>(INITIAL_DAEMON_STATE);
   const lifecycleMutex = yield* Semaphore.make(1);
   const metricsReporterHandle = yield* FiberHandle.make<void>();
+  let activityState: HostMetricsActivityState = {
+    windowVisible: true,
+    windowFocused: true,
+    systemLocked: false,
+    systemSuspended: false,
+  };
+  const activityWakeQueue = yield* Queue.sliding<void>(1);
   const runtimeContext = yield* Effect.context<never>();
   const runPromise = Effect.runPromiseWith(runtimeContext);
+
+  let hasObservedMainWindow = false;
+  const attachedWindows = new WeakSet<Electron.BrowserWindow>();
+  const windowListenerCleanups: Array<() => void> = [];
+
+  const updateActivityState = (
+    update: (current: HostMetricsActivityState) => HostMetricsActivityState,
+  ): void => {
+    const previous = activityState;
+    const next = update(previous);
+    if (
+      previous.windowVisible === next.windowVisible &&
+      previous.windowFocused === next.windowFocused &&
+      previous.systemLocked === next.systemLocked &&
+      previous.systemSuspended === next.systemSuspended
+    ) {
+      return;
+    }
+    activityState = next;
+    if (
+      shouldWakeHostMetricsReporter(
+        resolveHostMetricsCadence(previous),
+        resolveHostMetricsCadence(next),
+      )
+    ) {
+      Queue.offerUnsafe(activityWakeQueue, undefined);
+    }
+  };
+
+  const readWindowActivity = (
+    window: Electron.BrowserWindow | null,
+  ): Pick<HostMetricsActivityState, "windowVisible" | "windowFocused"> => {
+    if (window !== null) {
+      try {
+        if (!window.isDestroyed()) {
+          hasObservedMainWindow = true;
+          const windowVisible = window.isVisible() && !window.isMinimized();
+          const windowFocused = windowVisible && window.isFocused();
+          return { windowVisible, windowFocused };
+        }
+      } catch {
+        // Fall through if the window was destroyed concurrently.
+      }
+    }
+    // Before the first main window is created at boot, keep background visibility so warmup works.
+    // Once a window has existed and is closed/hidden to tray, pause polling completely.
+    return hasObservedMainWindow
+      ? { windowVisible: false, windowFocused: false }
+      : { windowVisible: true, windowFocused: false };
+  };
+
+  const attachWindowListeners = (window: Electron.BrowserWindow): void => {
+    if (attachedWindows.has(window)) {
+      return;
+    }
+    try {
+      if (window.isDestroyed()) {
+        return;
+      }
+    } catch {
+      return;
+    }
+    attachedWindows.add(window);
+    hasObservedMainWindow = true;
+    const syncThisWindow = () => {
+      const nextWindow = readWindowActivity(window);
+      updateActivityState((current) => ({ ...current, ...nextWindow }));
+    };
+    const onClosed = () => {
+      updateActivityState((current) => ({
+        ...current,
+        windowVisible: false,
+        windowFocused: false,
+      }));
+    };
+    const events = ["minimize", "restore", "hide", "show", "focus", "blur"] as const;
+    for (const eventName of events) {
+      window.on(eventName as any, syncThisWindow);
+    }
+    window.on("closed", onClosed);
+    windowListenerCleanups.push(() => {
+      try {
+        if (window.isDestroyed()) return;
+        for (const eventName of events) {
+          window.removeListener(eventName as any, syncThisWindow);
+        }
+        window.removeListener("closed", onClosed);
+      } catch {
+        // Ignore cleanup errors during window teardown.
+      }
+    });
+    syncThisWindow();
+  };
+
+  const syncActivityFromCurrentWindow: Effect.Effect<HostMetricsActivityState> = Effect.gen(
+    function* () {
+      if (Option.isSome(electronWindowOption)) {
+        const currentWindow = yield* electronWindowOption.value.currentMainOrFirst.pipe(
+          Effect.orElseSucceed(() => Option.none<Electron.BrowserWindow>()),
+        );
+        if (Option.isSome(currentWindow)) {
+          attachWindowListeners(currentWindow.value);
+          const nextWindow = readWindowActivity(currentWindow.value);
+          updateActivityState((current) => ({ ...current, ...nextWindow }));
+        } else if (hasObservedMainWindow) {
+          updateActivityState((current) => ({
+            ...current,
+            windowVisible: false,
+            windowFocused: false,
+          }));
+        }
+      }
+      return activityState;
+    },
+  );
+
+  if (Option.isSome(powerMonitorOption)) {
+    const powerMonitor = powerMonitorOption.value;
+    yield* Effect.all(
+      [
+        powerMonitor.onSimpleEvent("lock-screen", () =>
+          updateActivityState((current) => ({ ...current, systemLocked: true })),
+        ),
+        powerMonitor.onSimpleEvent("unlock-screen", () =>
+          updateActivityState((current) => ({ ...current, systemLocked: false })),
+        ),
+        powerMonitor.onSimpleEvent("suspend", () =>
+          updateActivityState((current) => ({ ...current, systemSuspended: true })),
+        ),
+        powerMonitor.onSimpleEvent("resume", () =>
+          updateActivityState((current) => ({ ...current, systemSuspended: false })),
+        ),
+      ],
+      { concurrency: "unbounded" },
+    );
+  }
+
+  if (Option.isSome(electronAppOption)) {
+    const electronApp = electronAppOption.value;
+    yield* Effect.all(
+      [
+        electronApp.on("browser-window-created", (_event: unknown, window: unknown) => {
+          if (window && typeof window === "object" && "on" in window && "isDestroyed" in window) {
+            attachWindowListeners(window as Electron.BrowserWindow);
+          }
+        }),
+        electronApp.on("browser-window-focus", (_event: unknown, window: unknown) => {
+          if (window && typeof window === "object" && "on" in window && "isDestroyed" in window) {
+            attachWindowListeners(window as Electron.BrowserWindow);
+            const nextWindow = readWindowActivity(window as Electron.BrowserWindow);
+            updateActivityState((current) => ({ ...current, ...nextWindow }));
+          }
+        }),
+        electronApp.on("browser-window-blur", (_event: unknown, window: unknown) => {
+          if (window && typeof window === "object" && "on" in window && "isDestroyed" in window) {
+            const nextWindow = readWindowActivity(window as Electron.BrowserWindow);
+            updateActivityState((current) => ({ ...current, ...nextWindow }));
+          }
+        }),
+      ],
+      { concurrency: "unbounded" },
+    );
+  }
+
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      for (const cleanup of windowListenerCleanups.splice(0)) {
+        cleanup();
+      }
+    }),
+  );
 
   const readPrimaryBackendSnapshot = Option.match(backendPoolOption, {
     onNone: () => Effect.succeed(null),
@@ -274,12 +460,13 @@ const make = Effect.gen(function* () {
       ),
   });
 
-  const pushHostMetricsOnce = (
-    baseUrl: string,
-    token: string,
-    t3HttpUrl: string | undefined,
-  ): Effect.Effect<boolean> =>
-    Effect.gen(function* () {
+  const pushHostMetricsOnce =
+    /* Periodic host metrics loop; avoid a span per telemetry tick. */
+    Effect.fnUntraced(function* (
+      baseUrl: string,
+      token: string,
+      t3HttpUrl: string | undefined,
+    ) {
       const metrics = yield* Option.match(electronAppOption, {
         onNone: () => Effect.succeed([] as const),
         onSome: (electronApp) =>
@@ -328,11 +515,19 @@ const make = Effect.gen(function* () {
       // Immediate first push delivers Electron memory & T3 Server PID within <100ms,
       // and primes Electron app.getAppMetrics() CPU interval.
       yield* pushHostMetricsOnce(baseUrl, token, t3HttpUrl);
-      // Short follow-up push (800ms) yields real non-zero CPU% deltas on startup.
+      // Short follow-up push (300ms) yields real non-zero CPU% deltas on startup.
       yield* Effect.sleep(HOST_METRICS_WARMUP_DELAY);
       while (yield* isActive) {
+        const activity = yield* syncActivityFromCurrentWindow;
+        const cadence = resolveHostMetricsCadence(activity);
+        if (cadence.mode === "paused") {
+          // Completely pause polling while minimized, hidden, locked, or suspended.
+          yield* Queue.take(activityWakeQueue);
+          continue;
+        }
         yield* pushHostMetricsOnce(baseUrl, token, t3HttpUrl);
-        yield* Effect.sleep(HOST_METRICS_POLL_INTERVAL);
+        // @effect-diagnostics-next-line raceFirstWithSleepToTimeout:off - races window/power wakeups against the active/background cadence interval.
+        yield* Effect.raceFirst(Queue.take(activityWakeQueue), Effect.sleep(cadence.interval));
       }
     }).pipe(Effect.ignore);
 
@@ -369,23 +564,22 @@ const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => false),
     );
 
-  const waitForDaemonHealth = (
+  const waitForDaemonHealth = Effect.fn("PrismuxDaemonService.waitForDaemonHealth")(function* (
     baseUrl: string,
     child: NodeChildProcess.ChildProcess,
-  ): Effect.Effect<boolean> =>
-    Effect.gen(function* () {
-      for (let attempt = 0; attempt < DAEMON_HEALTH_ATTEMPTS; attempt += 1) {
-        if (child.exitCode !== null || child.signalCode !== null) {
-          return false;
-        }
-        const ok = yield* probeHealth(baseUrl);
-        if (ok) {
-          return true;
-        }
-        yield* Effect.sleep(DAEMON_HEALTH_POLL_INTERVAL);
+  ) {
+    for (let attempt = 0; attempt < DAEMON_HEALTH_ATTEMPTS; attempt += 1) {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        return false;
       }
-      return false;
-    });
+      const ok = yield* probeHealth(baseUrl);
+      if (ok) {
+        return true;
+      }
+      yield* Effect.sleep(DAEMON_HEALTH_POLL_INTERVAL);
+    }
+    return false;
+  });
 
   const stop = lifecycleMutex.withPermits(1)(
     Effect.gen(function* () {

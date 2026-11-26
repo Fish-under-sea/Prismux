@@ -37,7 +37,11 @@ import desktopPackageJson from "../../package.json" with { type: "json" };
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 
 const DESKTOP_LOG_FILE_MAX_BYTES = 10 * 1024 * 1024;
-const DESKTOP_LOG_FILE_MAX_FILES = 10;
+export const DESKTOP_TRACE_FILE_MAX_BYTES = DESKTOP_LOG_FILE_MAX_BYTES;
+export const DESKTOP_TRACE_FILE_MAX_FILES = 5;
+export const DESKTOP_BACKEND_CHILD_LOG_MAX_BYTES = DESKTOP_LOG_FILE_MAX_BYTES;
+export const DESKTOP_BACKEND_CHILD_LOG_MAX_FILES = 3;
+const DESKTOP_LOG_FILE_MAX_FILES = DESKTOP_TRACE_FILE_MAX_FILES;
 const DESKTOP_BACKEND_CHILD_LOG_FIBER_ID = "#backend-child";
 const DESKTOP_TRACE_BATCH_WINDOW_MS = 1_000;
 const DESKTOP_BACKEND_OUTPUT_BUFFER_MAX_BYTES = 1024 * 1024;
@@ -452,6 +456,8 @@ const makeBackendOutputSinkForInstance = (
 > =>
   makeRotatingLogFileWriter({
     filePath: backendLogFilePathForInstance(environment, id),
+    maxBytes: DESKTOP_BACKEND_CHILD_LOG_MAX_BYTES,
+    maxFiles: DESKTOP_BACKEND_CHILD_LOG_MAX_FILES,
   }).pipe(Effect.option);
 
 const makeBackendOutputLogShape = (
@@ -652,8 +658,8 @@ const layerTelemetry = Layer.unwrap(
         const tracePath = environment.path.join(environment.logDir, "desktop.trace.ndjson");
         const sink = yield* makeTraceSink({
           filePath: tracePath,
-          maxBytes: DESKTOP_LOG_FILE_MAX_BYTES,
-          maxFiles: DESKTOP_LOG_FILE_MAX_FILES,
+          maxBytes: DESKTOP_TRACE_FILE_MAX_BYTES,
+          maxFiles: DESKTOP_TRACE_FILE_MAX_FILES,
           batchWindowMs: DESKTOP_TRACE_BATCH_WINDOW_MS,
         });
         // Unscoped: Electron can exit without closing the app scope, e.g. when the display drops.
@@ -673,8 +679,8 @@ const layerTelemetry = Layer.unwrap(
               );
         const tracer = yield* makeLocalFileTracer({
           filePath: tracePath,
-          maxBytes: DESKTOP_LOG_FILE_MAX_BYTES,
-          maxFiles: DESKTOP_LOG_FILE_MAX_FILES,
+          maxBytes: DESKTOP_TRACE_FILE_MAX_BYTES,
+          maxFiles: DESKTOP_TRACE_FILE_MAX_FILES,
           batchWindowMs: DESKTOP_TRACE_BATCH_WINDOW_MS,
           sink,
           ...(delegate ? { delegate } : {}),

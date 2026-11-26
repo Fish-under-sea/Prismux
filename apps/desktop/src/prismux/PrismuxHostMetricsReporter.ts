@@ -9,8 +9,61 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import type * as DesktopBackendManager from "../backend/DesktopBackendManager.ts";
 
 export const HOST_METRICS_WARMUP_DELAY = Duration.millis(300);
-export const HOST_METRICS_POLL_INTERVAL = Duration.millis(2_000);
+export const HOST_METRICS_ACTIVE_POLL_INTERVAL = Duration.millis(2_000);
+export const HOST_METRICS_BACKGROUND_POLL_INTERVAL = Duration.millis(10_000);
+export const HOST_METRICS_POLL_INTERVAL = HOST_METRICS_ACTIVE_POLL_INTERVAL;
 export const HOST_METRICS_POST_TIMEOUT = Duration.millis(1_500);
+
+export interface HostMetricsActivityState {
+  readonly windowVisible: boolean;
+  readonly windowFocused: boolean;
+  readonly systemLocked: boolean;
+  readonly systemSuspended: boolean;
+}
+
+export type HostMetricsCadence =
+  | { readonly mode: "paused" }
+  | { readonly mode: "active"; readonly interval: Duration.Duration }
+  | { readonly mode: "background"; readonly interval: Duration.Duration };
+
+/**
+ * Resolves the host metrics push cadence from window visibility/focus and OS power state:
+ * - Minimized, hidden, locked, or suspended -> paused (zero `app.getAppMetrics()` polling).
+ * - Visible & focused -> active 2s cadence.
+ * - Visible & unfocused -> relaxed 10s background cadence.
+ */
+export function resolveHostMetricsCadence(
+  activity: HostMetricsActivityState,
+): HostMetricsCadence {
+  if (activity.systemSuspended || activity.systemLocked || !activity.windowVisible) {
+    return { mode: "paused" };
+  }
+  if (activity.windowFocused) {
+    return { mode: "active", interval: HOST_METRICS_ACTIVE_POLL_INTERVAL };
+  }
+  return { mode: "background", interval: HOST_METRICS_BACKGROUND_POLL_INTERVAL };
+}
+
+/**
+ * Determines whether a cadence transition should wake a sleeping metrics reporter immediately:
+ * resumes immediately on restore/focus/unlock, switches immediately from 10s -> 2s on focus,
+ * and parks immediately when transitioning to paused without emitting an extra push.
+ */
+export function shouldWakeHostMetricsReporter(
+  previous: HostMetricsCadence,
+  next: HostMetricsCadence,
+): boolean {
+  if (previous.mode === "paused" && next.mode !== "paused") {
+    return true;
+  }
+  if (previous.mode === "background" && next.mode === "active") {
+    return true;
+  }
+  if (previous.mode !== "paused" && next.mode === "paused") {
+    return true;
+  }
+  return false;
+}
 
 export interface PrismuxElectronProcessMetricPayload {
   readonly pid: number;

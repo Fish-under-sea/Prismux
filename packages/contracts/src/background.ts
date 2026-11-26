@@ -39,6 +39,8 @@ export const HostPowerSnapshot = Schema.Struct({
   suspended: Schema.Boolean,
   onBattery: BackgroundBooleanState,
   lowPowerMode: BackgroundBooleanState,
+  batteryPercent: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  isCharging: Schema.optionalKey(BackgroundBooleanState),
   thermalState: HostPowerThermalState,
   stale: Schema.Boolean,
   updatedAt: Schema.DateTimeUtc,

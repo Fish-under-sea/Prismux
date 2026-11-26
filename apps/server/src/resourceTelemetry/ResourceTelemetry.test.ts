@@ -410,4 +410,122 @@ describe("ResourceTelemetry", () => {
       }).pipe(Effect.provide(layerTelemetry));
     }),
   );
+
+  it("merges native power status without letting desktop unknown clobber known lowPowerMode", () => {
+    const updatedAt = DateTime.makeUnsafe(5_000);
+    const desktop = desktopSnapshot(5_000);
+
+    const merged = ResourceTelemetry.mergeHostPowerSnapshot(
+      Option.some(desktop.power),
+      {
+        onBattery: false,
+        lowPowerMode: true,
+        batteryPercent: 42,
+        isCharging: false,
+      },
+      updatedAt,
+    );
+    expect(merged).toEqual({
+      ...desktop.power,
+      // Desktop already reported onBattery: "true" -> desktop known value kept
+      onBattery: "true",
+      // Desktop reported lowPowerMode: "unknown" -> native known value preserved
+      lowPowerMode: "true",
+      batteryPercent: 42,
+      isCharging: "false",
+    });
+
+    const nativeOnly = ResourceTelemetry.mergeHostPowerSnapshot(
+      Option.none(),
+      {
+        onBattery: false,
+        lowPowerMode: false,
+        batteryPercent: null,
+        isCharging: null,
+      },
+      updatedAt,
+    );
+    expect(nativeOnly.onBattery).toBe("false");
+    expect(nativeOnly.lowPowerMode).toBe("false");
+    expect(nativeOnly.batteryPercent).toBeNull();
+    expect(nativeOnly.isCharging).toBe("unknown");
+  });
+
+  it.effect("surfaces native host info and preserves native power fields across desktop updates", () =>
+    Effect.gen(function* () {
+      const startedAt = DateTime.toEpochMillis(yield* DateTime.now);
+      const hostInfo = {
+        osName: "Windows",
+        osVersion: "11 (26100)",
+        arch: "x86_64",
+        cpuBrand: "AMD Ryzen 9 9950X",
+        physicalCores: 16,
+        logicalCores: 32,
+        totalMemoryBytes: 64 * 1024 * 1024 * 1024,
+        usedMemoryBytes: 24 * 1024 * 1024 * 1024,
+        uptimeSeconds: 12_345,
+        temperatureCelsius: 52.5,
+      } as const;
+      const sample: ResourceMonitorSnapshotEvent = {
+        ...nativeSnapshot({
+          sequence: 1,
+          sampledAtUnixMs: startedAt + 1_000,
+          childCpuTimeMs: 100,
+          childWriteBytes: 512,
+        }),
+        host: hostInfo,
+        powerStatus: {
+          onBattery: true,
+          lowPowerMode: true,
+          batteryPercent: 37,
+          isCharging: false,
+        },
+      };
+      const desktopChanges = yield* PubSub.unbounded<DesktopHostTelemetrySnapshot>();
+      const pushedPowers: Array<string> = [];
+      const layerNative = NativeTelemetryClient.layerTest({
+        sampleNow: Effect.succeed(nativeGeneration(sample, 0)),
+        setHostPowerState: (power) =>
+          Effect.sync(() => {
+            pushedPowers.push(power.lowPowerMode);
+          }),
+        health: Effect.succeed({
+          status: "healthy",
+          hello: Option.none(),
+          lastSampleAt: Option.none(),
+          lastError: Option.none(),
+          restartCount: 0,
+          sampleIntervalMs: 1_000,
+        }),
+      });
+      const layerDesktop = DesktopTelemetryReceiver.layerTest({
+        changes: Stream.fromPubSub(desktopChanges),
+      });
+      const layerTelemetry = ResourceTelemetry.layer.pipe(
+        Layer.provide(Layer.mergeAll(layerNative, layerDesktop, ResourceAttribution.layer)),
+      );
+
+      yield* Effect.gen(function* () {
+        const telemetry = yield* ResourceTelemetry.ResourceTelemetry;
+        const refreshed = yield* telemetry.refresh;
+        expect(refreshed.host).toEqual(hostInfo);
+        expect(refreshed.power.lowPowerMode).toBe("true");
+        expect(refreshed.power.batteryPercent).toBe(37);
+        expect(refreshed.power.isCharging).toBe("false");
+
+        // Subsequent desktop telemetry with lowPowerMode: "unknown" must NOT clobber "true".
+        const nextDesktop = desktopSnapshot(startedAt + 2_000);
+        yield* PubSub.publish(desktopChanges, nextDesktop);
+        yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
+
+        const latest = yield* telemetry.latest;
+        expect(latest.host).toEqual(hostInfo);
+        expect(latest.power.lowPowerMode).toBe("true");
+        expect(latest.power.batteryPercent).toBe(37);
+        expect(latest.power.isCharging).toBe("false");
+        expect(pushedPowers.at(-1)).toBe("true");
+      }).pipe(Effect.provide(layerTelemetry));
+    }),
+  );
 });

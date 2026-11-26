@@ -298,24 +298,25 @@ describe("DesktopPreReadyPlatform", () => {
         });
         assert.deepEqual(events, ["pre-ready", "async"]);
         assert.equal(registerSchemesMock.mock.calls.length, 1);
-        assert.equal(appendSwitchMock.mock.calls.length, 0);
+        assert.deepEqual(appendSwitchMock.mock.calls, [["disk-cache-size", "268435456"]]);
         assert.equal(setDesktopNameMock.mock.calls.length, 0);
       }),
   );
 
   it.effect(
-    "enables PlatformHEVCDecoderSupport on Windows without clobbering existing enable-features",
+    "enables PlatformHEVCDecoderSupport on Windows and caps disk-cache-size without clobbering existing switches",
     () =>
       Effect.gen(function* () {
-        // Case 1: no existing enable-features switch
+        // Case 1: no existing enable-features or disk-cache-size switch
         hasSwitchMock.mockReturnValue(false);
         getSwitchValueMock.mockReturnValue("");
         yield* DesktopPreReadyPlatform.make;
         assert.deepEqual(appendSwitchMock.mock.calls, [
           ["enable-features", "PlatformHEVCDecoderSupport"],
+          ["disk-cache-size", "268435456"],
         ]);
 
-        // Case 2: existing enable-features gets merged cleanly
+        // Case 2: existing enable-features gets merged cleanly; disk-cache-size appended
         appendSwitchMock.mockClear();
         hasSwitchMock.mockImplementation((name: string) => name === "enable-features");
         getSwitchValueMock.mockImplementation((name: string) =>
@@ -324,12 +325,20 @@ describe("DesktopPreReadyPlatform", () => {
         yield* DesktopPreReadyPlatform.make;
         assert.deepEqual(appendSwitchMock.mock.calls, [
           ["enable-features", "HardwareMediaKeyHandling,WebGPU,PlatformHEVCDecoderSupport"],
+          ["disk-cache-size", "268435456"],
         ]);
 
-        // Case 3: already present -> no duplicate append
+        // Case 3: both already present -> no duplicate append
         appendSwitchMock.mockClear();
+        hasSwitchMock.mockImplementation(
+          (name: string) => name === "enable-features" || name === "disk-cache-size",
+        );
         getSwitchValueMock.mockImplementation((name: string) =>
-          name === "enable-features" ? "WebGPU,PlatformHEVCDecoderSupport" : "",
+          name === "enable-features"
+            ? "WebGPU,PlatformHEVCDecoderSupport"
+            : name === "disk-cache-size"
+              ? "536870912"
+              : "",
         );
         yield* DesktopPreReadyPlatform.make;
         assert.equal(appendSwitchMock.mock.calls.length, 0);

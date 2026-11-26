@@ -395,4 +395,44 @@ describe("DesktopObservability", () => {
       Effect.provide(Layer.mergeAll(NodeServices.layer, layerCollector(requests), layerEmptyEnv)),
     );
   });
+
+  it.effect("tightens desktop trace rotation to 5x10 MiB and server-child rotation to 3x10 MiB", () =>
+    Effect.gen(function* () {
+      assert.equal(DesktopObservability.DESKTOP_TRACE_FILE_MAX_BYTES, 10 * 1024 * 1024);
+      assert.equal(DesktopObservability.DESKTOP_TRACE_FILE_MAX_FILES, 5);
+      assert.equal(DesktopObservability.DESKTOP_BACKEND_CHILD_LOG_MAX_BYTES, 10 * 1024 * 1024);
+      assert.equal(DesktopObservability.DESKTOP_BACKEND_CHILD_LOG_MAX_FILES, 3);
+
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-desktop-rotation-quota-",
+      });
+      const layerEnvironment = layerEnvironmentFor(baseDir, false);
+      const logDir = yield* Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        return environment.logDir;
+      }).pipe(Effect.provide(layerEnvironment));
+      yield* fileSystem.makeDirectory(logDir, { recursive: true });
+      for (const suffix of ["1", "2", "3", "4", "5"]) {
+        yield* fileSystem.writeFileString(`${logDir}/server-child.log.${suffix}`, suffix);
+      }
+
+      yield* Effect.gen(function* () {
+        const factory = yield* DesktopObservability.DesktopBackendOutputLogFactory;
+        yield* factory.forInstance("primary");
+      }).pipe(Effect.provide(DesktopObservability.layer.pipe(Layer.provideMerge(layerEnvironment))));
+
+      const entries = (yield* fileSystem.readDirectory(logDir))
+        .filter((name) => name.startsWith("server-child.log."))
+        .sort();
+      assert.deepEqual(entries, [
+        "server-child.log.1",
+        "server-child.log.2",
+        "server-child.log.3",
+      ]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerUndici, layerEmptyEnv)),
+    ),
+  );
 });
