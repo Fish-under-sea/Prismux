@@ -58,6 +58,7 @@ function useCleanUpdateNotifierStore(): Disposable {
 
 describe("SidebarBrandMenu inline check for updates", () => {
   it("keeps menu open while checking, guards duplicate clicks, shows emerald up-to-date pill, and resets when closed", async () => {
+    await page.viewport(1280, 800);
     using _notifier = useCleanUpdateNotifierStore();
     const firstCheck = createDeferred<Record<string, unknown>>();
     using checkSpy = vi
