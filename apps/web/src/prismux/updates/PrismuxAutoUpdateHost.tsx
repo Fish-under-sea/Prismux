@@ -7,6 +7,7 @@ import { APP_VERSION } from "../../branding";
 import { T3AppIcon } from "../../components/T3AppIcon";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { useStableCallback } from "../../hooks/useStableCallback";
 import { cn } from "../../lib/utils";
 import { prismuxDaemonClient, type PrismuxDaemonClient } from "../daemonClient";
 import { useOptionalPrismuxRuntime } from "../PrismuxRuntimeProvider";
@@ -468,7 +469,7 @@ export const PrismuxAutoUpdateHost = memo(function PrismuxAutoUpdateHost() {
     };
   }, [ownerId]);
 
-  const runSilentUpdateCheck = async () => {
+  const runSilentUpdateCheck = useStableCallback(async () => {
     const current = prismuxUpdateNotifierStore.getState();
     if (!current.autoCheckEnabled || current.checking || current.downloading) {
       return;
@@ -489,7 +490,7 @@ export const PrismuxAutoUpdateHost = memo(function PrismuxAutoUpdateHost() {
     } finally {
       prismuxUpdateNotifierStore.setChecking(false);
     }
-  };
+  });
 
   // Hydrate initial updater status + subscribe to real-time SSE events when daemon is ready.
   // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- subscribes to Daemon updater SSE stream and hydrates initial updater status while mounted
