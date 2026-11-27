@@ -88,6 +88,7 @@ export const COLLABORATORS_DIRECTIVE_CONTEXT_ID =
   "btw-guardrail_collaborators" as ComposerContextId;
 
 export interface ComposerCollaboratorSelection {
+  readonly id?: string | undefined;
   readonly providerInstanceId: ProviderInstanceId;
   readonly model: string;
   readonly maxCount: number;
@@ -159,32 +160,131 @@ export function getRemainingCollaboratorCapacity(
   return Math.max(0, MAX_TOTAL_COLLABORATOR_COUNT - getTotalCollaboratorCount(selections));
 }
 
+export function getProviderCollaboratorCount(
+  selections: ReadonlyArray<Pick<ComposerCollaboratorSelection, "providerInstanceId" | "maxCount">>,
+  providerInstanceId: ProviderInstanceId,
+): number {
+  let total = 0;
+  for (const item of selections) {
+    if (item.providerInstanceId === providerInstanceId) {
+      total += clampSingleCollaboratorCount(item.maxCount);
+    }
+  }
+  return total;
+}
+
+export function getRemainingProviderCollaboratorCapacity(
+  selections: ReadonlyArray<Pick<ComposerCollaboratorSelection, "providerInstanceId" | "maxCount">>,
+  providerInstanceId: ProviderInstanceId,
+): number {
+  const remainingProvider = Math.max(
+    0,
+    MAX_COLLABORATOR_COUNT_PER_AGENT - getProviderCollaboratorCount(selections, providerInstanceId),
+  );
+  return Math.min(remainingProvider, getRemainingCollaboratorCapacity(selections));
+}
+
+function allocateNextCollaboratorRowId(
+  selections: ReadonlyArray<Pick<ComposerCollaboratorSelection, "id" | "providerInstanceId">>,
+  providerInstanceId: string,
+): string {
+  const usedIds = new Set<string>();
+  const prefix = `${providerInstanceId}#`;
+  let maxSeq = 0;
+  for (const item of selections) {
+    const id = typeof item.id === "string" ? item.id.trim() : "";
+    if (!id) continue;
+    usedIds.add(id);
+    if (id.startsWith(prefix)) {
+      const suffix = id.slice(prefix.length);
+      if (/^[1-9]\d*$/.test(suffix)) {
+        const parsed = Number.parseInt(suffix, 10);
+        if (parsed > maxSeq) maxSeq = parsed;
+      }
+    }
+  }
+  let seq = maxSeq + 1;
+  while (usedIds.has(`${prefix}${seq}`)) {
+    seq += 1;
+  }
+  return `${prefix}${seq}`;
+}
+
+function findCollaboratorRowIndex(
+  selections: ReadonlyArray<ComposerCollaboratorSelection>,
+  targetIdOrProviderId: string,
+): number {
+  const normalizedTarget = targetIdOrProviderId.trim();
+  if (!normalizedTarget) return -1;
+  const byRowId = selections.findIndex((item) => item.id === normalizedTarget);
+  if (byRowId >= 0) return byRowId;
+  return selections.findIndex((item) => item.providerInstanceId === normalizedTarget);
+}
+
 export function normalizeCollaboratorSelections(
   selections: ReadonlyArray<ComposerCollaboratorSelection> | null | undefined,
 ): ComposerCollaboratorSelection[] {
   if (!Array.isArray(selections) || selections.length === 0) {
     return [];
   }
-  const seen = new Set<string>();
+  const reservedExplicitIds = new Set<string>();
+  for (const raw of selections) {
+    if (!raw || typeof raw !== "object") continue;
+    const explicitId = typeof raw.id === "string" ? raw.id.trim() : "";
+    if (explicitId) {
+      reservedExplicitIds.add(explicitId);
+    }
+  }
+
+  const seenIds = new Set<string>();
+  const usedByProvider = new Map<string, number>();
+  const nextSeqByProvider = new Map<string, number>();
   const normalized: ComposerCollaboratorSelection[] = [];
-  let remaining = MAX_TOTAL_COLLABORATOR_COUNT;
+  let remainingGlobal = MAX_TOTAL_COLLABORATOR_COUNT;
 
   for (const raw of selections) {
     if (!raw || typeof raw !== "object") continue;
     const providerInstanceId =
       typeof raw.providerInstanceId === "string" ? raw.providerInstanceId.trim() : "";
-    if (!providerInstanceId || seen.has(providerInstanceId)) continue;
-    if (remaining <= 0) break;
+    if (!providerInstanceId) continue;
 
-    const clampedCount = Math.min(remaining, clampSingleCollaboratorCount(raw.maxCount));
+    const explicitId = typeof raw.id === "string" ? raw.id.trim() : "";
+    let rowId: string;
+    if (explicitId) {
+      if (seenIds.has(explicitId)) continue;
+      rowId = explicitId;
+    } else {
+      let seq = nextSeqByProvider.get(providerInstanceId) ?? 1;
+      while (
+        seenIds.has(`${providerInstanceId}#${seq}`) ||
+        reservedExplicitIds.has(`${providerInstanceId}#${seq}`)
+      ) {
+        seq += 1;
+      }
+      rowId = `${providerInstanceId}#${seq}`;
+      nextSeqByProvider.set(providerInstanceId, seq + 1);
+    }
+
+    if (remainingGlobal < MIN_COLLABORATOR_COUNT) break;
+    const providerUsed = usedByProvider.get(providerInstanceId) ?? 0;
+    const remainingForProvider = MAX_COLLABORATOR_COUNT_PER_AGENT - providerUsed;
+    if (remainingForProvider < MIN_COLLABORATOR_COUNT) continue;
+
+    const clampedCount = Math.min(
+      remainingGlobal,
+      remainingForProvider,
+      clampSingleCollaboratorCount(raw.maxCount),
+    );
     const model = typeof raw.model === "string" ? raw.model.trim() : "";
-    seen.add(providerInstanceId);
+    seenIds.add(rowId);
+    usedByProvider.set(providerInstanceId, providerUsed + clampedCount);
     normalized.push({
+      id: rowId,
       providerInstanceId: providerInstanceId as ProviderInstanceId,
       model,
       maxCount: clampedCount,
     });
-    remaining -= clampedCount;
+    remainingGlobal -= clampedCount;
   }
 
   return normalized;
@@ -207,16 +307,18 @@ export function toggleCollaboratorSelection(
     readonly defaultModel: string;
   },
 ): ComposerCollaboratorSelection[] {
-  const existing = selections.find((item) => item.providerInstanceId === input.providerInstanceId);
+  const normalized = normalizeCollaboratorSelections(selections);
+  const existing = normalized.some((item) => item.providerInstanceId === input.providerInstanceId);
   if (existing) {
-    return selections.filter((item) => item.providerInstanceId !== input.providerInstanceId);
+    return normalized.filter((item) => item.providerInstanceId !== input.providerInstanceId);
   }
-  if (getRemainingCollaboratorCapacity(selections) < MIN_COLLABORATOR_COUNT) {
-    return normalizeCollaboratorSelections(selections);
+  if (getRemainingCollaboratorCapacity(normalized) < MIN_COLLABORATOR_COUNT) {
+    return normalized;
   }
   return normalizeCollaboratorSelections([
-    ...selections,
+    ...normalized,
     {
+      id: allocateNextCollaboratorRowId(normalized, input.providerInstanceId),
       providerInstanceId: input.providerInstanceId,
       model: input.defaultModel.trim(),
       maxCount: MIN_COLLABORATOR_COUNT,
@@ -224,45 +326,103 @@ export function toggleCollaboratorSelection(
   ]);
 }
 
+export function addCollaboratorModelRow(
+  selections: ReadonlyArray<ComposerCollaboratorSelection>,
+  input: {
+    readonly providerInstanceId: ProviderInstanceId;
+    readonly fallbackModel: string;
+  },
+): ComposerCollaboratorSelection[] {
+  const normalized = normalizeCollaboratorSelections(selections);
+  if (
+    getRemainingProviderCollaboratorCapacity(normalized, input.providerInstanceId) <
+    MIN_COLLABORATOR_COUNT
+  ) {
+    return normalized;
+  }
+
+  let lastProviderIndex = -1;
+  let inheritedModel = "";
+  for (let index = 0; index < normalized.length; index += 1) {
+    const item = normalized[index]!;
+    if (item.providerInstanceId === input.providerInstanceId) {
+      lastProviderIndex = index;
+      inheritedModel = item.model;
+    }
+  }
+
+  const nextRow: ComposerCollaboratorSelection = {
+    id: allocateNextCollaboratorRowId(normalized, input.providerInstanceId),
+    providerInstanceId: input.providerInstanceId,
+    model: inheritedModel || input.fallbackModel.trim(),
+    maxCount: MIN_COLLABORATOR_COUNT,
+  };
+
+  if (lastProviderIndex < 0) {
+    return normalizeCollaboratorSelections([...normalized, nextRow]);
+  }
+  return normalizeCollaboratorSelections([
+    ...normalized.slice(0, lastProviderIndex + 1),
+    nextRow,
+    ...normalized.slice(lastProviderIndex + 1),
+  ]);
+}
+
 export function setCollaboratorModel(
   selections: ReadonlyArray<ComposerCollaboratorSelection>,
-  providerInstanceId: ProviderInstanceId,
+  targetIdOrProviderId: string,
   model: string,
 ): ComposerCollaboratorSelection[] {
+  const normalized = normalizeCollaboratorSelections(selections);
+  const targetIndex = findCollaboratorRowIndex(normalized, targetIdOrProviderId);
+  if (targetIndex < 0) return normalized;
   const trimmedModel = model.trim();
-  let changed = false;
-  const next = selections.map((item) => {
-    if (item.providerInstanceId !== providerInstanceId) return item;
-    if (item.model === trimmedModel) return item;
-    changed = true;
-    return { ...item, model: trimmedModel };
-  });
-  return changed ? next : [...selections];
+  const current = normalized[targetIndex]!;
+  if (current.model === trimmedModel) return normalized;
+  return normalized.map((item, index) =>
+    index === targetIndex ? { ...item, model: trimmedModel } : item,
+  );
 }
 
 export function stepCollaboratorCount(
   selections: ReadonlyArray<ComposerCollaboratorSelection>,
-  providerInstanceId: ProviderInstanceId,
+  targetIdOrProviderId: string,
   delta: 1 | -1,
 ): ComposerCollaboratorSelection[] {
-  const current = selections.find((item) => item.providerInstanceId === providerInstanceId);
-  if (!current) return [...selections];
-  const remaining = getRemainingCollaboratorCapacity(selections);
+  const normalized = normalizeCollaboratorSelections(selections);
+  const targetIndex = findCollaboratorRowIndex(normalized, targetIdOrProviderId);
+  if (targetIndex < 0) return normalized;
+  const current = normalized[targetIndex]!;
+  const remainingProvider = getRemainingProviderCollaboratorCapacity(
+    normalized,
+    current.providerInstanceId,
+  );
   const nextCount =
     delta > 0
-      ? Math.min(MAX_COLLABORATOR_COUNT_PER_AGENT, current.maxCount + Math.min(1, remaining))
+      ? current.maxCount + Math.min(1, remainingProvider)
       : Math.max(MIN_COLLABORATOR_COUNT, current.maxCount - 1);
-  if (nextCount === current.maxCount) return [...selections];
-  return selections.map((item) =>
-    item.providerInstanceId === providerInstanceId ? { ...item, maxCount: nextCount } : item,
+  if (nextCount === current.maxCount) return normalized;
+  return normalized.map((item, index) =>
+    index === targetIndex ? { ...item, maxCount: nextCount } : item,
   );
 }
 
 export function removeCollaboratorSelection(
   selections: ReadonlyArray<ComposerCollaboratorSelection>,
+  targetIdOrProviderId: string,
+): ComposerCollaboratorSelection[] {
+  const normalized = normalizeCollaboratorSelections(selections);
+  const targetIndex = findCollaboratorRowIndex(normalized, targetIdOrProviderId);
+  if (targetIndex < 0) return normalized;
+  return normalized.filter((_, index) => index !== targetIndex);
+}
+
+export function removeCollaboratorProvider(
+  selections: ReadonlyArray<ComposerCollaboratorSelection>,
   providerInstanceId: ProviderInstanceId,
 ): ComposerCollaboratorSelection[] {
-  return selections.filter((item) => item.providerInstanceId !== providerInstanceId);
+  const normalized = normalizeCollaboratorSelections(selections);
+  return normalized.filter((item) => item.providerInstanceId !== providerInstanceId);
 }
 
 function canonicalProbeAliasesForEntry(entry: ProviderInstanceEntry): ReadonlyArray<string> {
@@ -464,19 +624,39 @@ export function resolveCollaboratorDescriptors(
   if (normalized.length === 0) return [];
   const entriesById = new Map(entries.map((entry) => [entry.instanceId, entry]));
 
-  return normalized.map((selection) => {
+  const aggregated = new Map<
+    string,
+    {
+      providerInstanceId: ProviderInstanceId;
+      displayName: string;
+      model: string;
+      maxCount: number;
+    }
+  >();
+
+  for (const selection of normalized) {
     const entry = entriesById.get(selection.providerInstanceId);
-    const displayName = sanitizeDirectiveField(entry?.displayName ?? selection.providerInstanceId);
+    const displayName =
+      sanitizeDirectiveField(entry?.displayName ?? selection.providerInstanceId) ||
+      selection.providerInstanceId;
     const model = sanitizeDirectiveField(
       selection.model || (entry ? resolveDefaultModelForEntry(entry) : "") || "default",
     );
-    return {
-      providerInstanceId: selection.providerInstanceId,
-      displayName: displayName || selection.providerInstanceId,
-      model,
-      maxCount: selection.maxCount,
-    };
-  });
+    const key = `${selection.providerInstanceId}\0${model}`;
+    const existing = aggregated.get(key);
+    if (existing) {
+      existing.maxCount += selection.maxCount;
+    } else {
+      aggregated.set(key, {
+        providerInstanceId: selection.providerInstanceId,
+        displayName,
+        model,
+        maxCount: selection.maxCount,
+      });
+    }
+  }
+
+  return [...aggregated.values()];
 }
 
 /**

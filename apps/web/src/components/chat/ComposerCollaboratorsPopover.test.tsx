@@ -23,19 +23,24 @@ import type { ProviderInstanceEntry } from "../../providerInstances";
 import { attachBtwReadOnlyGuardrailContext, hasUserVisibleMessageContext } from "./btwMode";
 import { attachComposerCollaboratorsToContext } from "./chatViewSend";
 import {
+  addCollaboratorModelRow,
   attachCollaboratorsContext,
   buildCollaboratorsContextRecord,
   COLLABORATOR_WAIVER_ROUTE,
   COLLABORATORS_DIRECTIVE_CONTEXT_ID,
   evaluateCollaboratorGovernance,
   formatCollaboratorsDirective,
+  getProviderCollaboratorCount,
   getRemainingCollaboratorCapacity,
+  getRemainingProviderCollaboratorCapacity,
   getTotalCollaboratorCount,
   MAX_COLLABORATOR_COUNT_PER_AGENT,
   MAX_TOTAL_COLLABORATOR_COUNT,
   normalizeCollaboratorSelections,
   pruneLockedCollaborators,
+  removeCollaboratorProvider,
   removeCollaboratorSelection,
+  resolveCollaboratorDescriptors,
   setCollaboratorModel,
   stepCollaboratorCount,
   toggleCollaboratorSelection,
@@ -292,18 +297,184 @@ describe("composerCollaborators.logic — multi-agent, model & count clamping", 
     expect(state[0]?.providerInstanceId).toBe(codexApiEntry.instanceId);
   });
 
-  it("normalizes duplicates, invalid counts, and over-budget arrays deterministically", () => {
+  it("normalizes duplicate row ids, invalid counts, and per-agent/global over-budget arrays deterministically", () => {
     const normalized = normalizeCollaboratorSelections([
       { providerInstanceId: dshEntry.instanceId, model: " deepseek-reasoner ", maxCount: 99 },
-      { providerInstanceId: dshEntry.instanceId, model: "duplicate", maxCount: 3 },
+      { providerInstanceId: dshEntry.instanceId, model: "over-agent-cap", maxCount: 3 },
       { providerInstanceId: codexApiEntry.instanceId, model: "gpt-5.4", maxCount: 5 },
       { providerInstanceId: ollamaEntry.instanceId, model: "qwen3-coder:32b", maxCount: 2 },
     ]);
     expect(normalized).toEqual([
-      { providerInstanceId: dshEntry.instanceId, model: "deepseek-reasoner", maxCount: 6 },
-      { providerInstanceId: codexApiEntry.instanceId, model: "gpt-5.4", maxCount: 2 },
+      {
+        id: "dsh#1",
+        providerInstanceId: dshEntry.instanceId,
+        model: "deepseek-reasoner",
+        maxCount: 6,
+      },
+      {
+        id: "codex#1",
+        providerInstanceId: codexApiEntry.instanceId,
+        model: "gpt-5.4",
+        maxCount: 2,
+      },
     ]);
     expect(getTotalCollaboratorCount(normalized)).toBe(8);
+
+    // Deduplicates duplicate explicit row ids while preserving distinct rows under the same provider
+    const multiRow = normalizeCollaboratorSelections([
+      {
+        id: "row-a",
+        providerInstanceId: dshEntry.instanceId,
+        model: "deepseek-reasoner",
+        maxCount: 2,
+      },
+      {
+        id: "row-a",
+        providerInstanceId: dshEntry.instanceId,
+        model: "ignored-duplicate-id",
+        maxCount: 2,
+      },
+      {
+        id: "row-b",
+        providerInstanceId: dshEntry.instanceId,
+        model: "deepseek-chat",
+        maxCount: 5,
+      },
+    ]);
+    expect(multiRow).toEqual([
+      {
+        id: "row-a",
+        providerInstanceId: dshEntry.instanceId,
+        model: "deepseek-reasoner",
+        maxCount: 2,
+      },
+      {
+        id: "row-b",
+        providerInstanceId: dshEntry.instanceId,
+        model: "deepseek-chat",
+        maxCount: 4,
+      },
+    ]);
+    expect(getProviderCollaboratorCount(multiRow, dshEntry.instanceId)).toBe(
+      MAX_COLLABORATOR_COUNT_PER_AGENT,
+    );
+  });
+
+  it("supports multiple model rows under the same provider, inherits previous model, enforces caps, and aggregates identical models on send", () => {
+    let state: ComposerCollaboratorSelection[] = [];
+    state = toggleCollaboratorSelection(state, {
+      providerInstanceId: dshEntry.instanceId,
+      defaultModel: "deepseek-reasoner",
+    });
+    expect(state).toHaveLength(1);
+    const firstRowId = state[0]!.id!;
+
+    // Switch first row to deepseek-chat, then add a 2nd model row -> inherits deepseek-chat with maxCount 1
+    state = setCollaboratorModel(state, firstRowId, "deepseek-chat");
+    state = addCollaboratorModelRow(state, {
+      providerInstanceId: dshEntry.instanceId,
+      fallbackModel: "deepseek-reasoner",
+    });
+    expect(state).toHaveLength(2);
+    const secondRowId = state[1]!.id!;
+    expect(secondRowId).not.toBe(firstRowId);
+    expect(state[1]).toEqual({
+      id: secondRowId,
+      providerInstanceId: dshEntry.instanceId,
+      model: "deepseek-chat",
+      maxCount: 1,
+    });
+
+    // While both rows share the same model, UI keeps 2 rows while outgoing directive aggregates counts
+    state = stepCollaboratorCount(state, secondRowId, 1);
+    expect(state[0]?.maxCount).toBe(1);
+    expect(state[1]?.maxCount).toBe(2);
+    expect(resolveCollaboratorDescriptors(state, ALL_ENTRIES)).toEqual([
+      {
+        providerInstanceId: dshEntry.instanceId,
+        displayName: "DeepSeek Harness",
+        model: "deepseek-chat",
+        maxCount: 3,
+      },
+    ]);
+    const sameModelDirective = formatCollaboratorsDirective(state, ALL_ENTRIES);
+    expect(sameModelDirective).toContain("- dsh|DeepSeek Harness|deepseek-chat|max=3");
+    expect(sameModelDirective.match(/- dsh\|/g)).toHaveLength(1);
+
+    // Changing second row to a different model emits two distinct lines in outgoing directive & payload
+    state = setCollaboratorModel(state, secondRowId, "deepseek-reasoner");
+    expect(state[0]?.model).toBe("deepseek-chat");
+    expect(state[1]?.model).toBe("deepseek-reasoner");
+    const distinctDirective = formatCollaboratorsDirective(state, ALL_ENTRIES);
+    expect(distinctDirective).toContain("- dsh|DeepSeek Harness|deepseek-chat|max=1");
+    expect(distinctDirective).toContain("- dsh|DeepSeek Harness|deepseek-reasoner|max=2");
+    const record = buildCollaboratorsContextRecord(state, ALL_ENTRIES);
+    expect(record).not.toBeNull();
+    expect(
+      (record!.payload as { collaborators: ReadonlyArray<{ model: string; maxCount: number }> })
+        .collaborators,
+    ).toEqual([
+      {
+        providerInstanceId: dshEntry.instanceId,
+        displayName: "DeepSeek Harness",
+        model: "deepseek-chat",
+        maxCount: 1,
+      },
+      {
+        providerInstanceId: dshEntry.instanceId,
+        displayName: "DeepSeek Harness",
+        model: "deepseek-reasoner",
+        maxCount: 2,
+      },
+    ]);
+
+    // Stepping row 2 cannot push combined provider total past MAX_COLLABORATOR_COUNT_PER_AGENT (6)
+    for (let index = 0; index < 8; index += 1) {
+      state = stepCollaboratorCount(state, secondRowId, 1);
+    }
+    expect(state[0]?.maxCount).toBe(1);
+    expect(state[1]?.maxCount).toBe(5);
+    expect(getProviderCollaboratorCount(state, dshEntry.instanceId)).toBe(6);
+    expect(getRemainingProviderCollaboratorCapacity(state, dshEntry.instanceId)).toBe(0);
+
+    // Adding a 3rd row when provider is at 6 is a safe no-op
+    const blockedPerAgent = addCollaboratorModelRow(state, {
+      providerInstanceId: dshEntry.instanceId,
+      fallbackModel: "deepseek-reasoner",
+    });
+    expect(blockedPerAgent).toHaveLength(2);
+
+    // Fill remaining global slots with Codex (2), then adding a row on Codex is blocked by global cap (8)
+    state = toggleCollaboratorSelection(state, {
+      providerInstanceId: codexApiEntry.instanceId,
+      defaultModel: "gpt-5.4",
+    });
+    state = addCollaboratorModelRow(state, {
+      providerInstanceId: codexApiEntry.instanceId,
+      fallbackModel: "gpt-5.4",
+    });
+    expect(getTotalCollaboratorCount(state)).toBe(MAX_TOTAL_COLLABORATOR_COUNT);
+    const blockedGlobal = addCollaboratorModelRow(state, {
+      providerInstanceId: codexApiEntry.instanceId,
+      fallbackModel: "gpt-5.4",
+    });
+    expect(blockedGlobal).toHaveLength(4);
+
+    // Removing a single row removes only that row; removing the provider removes all rows of that provider
+    state = removeCollaboratorSelection(state, firstRowId);
+    expect(state.filter((item) => item.providerInstanceId === dshEntry.instanceId)).toEqual([
+      {
+        id: secondRowId,
+        providerInstanceId: dshEntry.instanceId,
+        model: "deepseek-reasoner",
+        maxCount: 5,
+      },
+    ]);
+    state = removeCollaboratorProvider(state, codexApiEntry.instanceId);
+    expect(state.filter((item) => item.providerInstanceId === codexApiEntry.instanceId)).toEqual(
+      [],
+    );
+    expect(state).toHaveLength(1);
   });
 });
 
@@ -393,7 +564,12 @@ describe("composerCollaborators.logic — unified waiver & subscription risk gov
       waiver: LOCKED_WAIVER,
     });
     expect(pruned).toEqual([
-      { providerInstanceId: dshEntry.instanceId, model: "deepseek-reasoner", maxCount: 2 },
+      {
+        id: "dsh#1",
+        providerInstanceId: dshEntry.instanceId,
+        model: "deepseek-reasoner",
+        maxCount: 2,
+      },
     ]);
 
     const agyOnlyContext = attachComposerCollaboratorsToContext({
@@ -427,16 +603,33 @@ describe("composerDraftStore — split-pane & per-thread collaborator isolation"
     const store = useComposerDraftStore.getState();
     store.setCollaborators(threadA, [
       { providerInstanceId: dshEntry.instanceId, model: "deepseek-reasoner", maxCount: 2 },
+      { providerInstanceId: dshEntry.instanceId, model: "deepseek-chat", maxCount: 1 },
     ]);
     store.setCollaborators(threadB, [
       { providerInstanceId: codexApiEntry.instanceId, model: "gpt-5.4", maxCount: 1 },
     ]);
 
     expect(useComposerDraftStore.getState().getComposerDraft(threadA)?.collaborators).toEqual([
-      { providerInstanceId: dshEntry.instanceId, model: "deepseek-reasoner", maxCount: 2 },
+      {
+        id: "dsh#1",
+        providerInstanceId: dshEntry.instanceId,
+        model: "deepseek-reasoner",
+        maxCount: 2,
+      },
+      {
+        id: "dsh#2",
+        providerInstanceId: dshEntry.instanceId,
+        model: "deepseek-chat",
+        maxCount: 1,
+      },
     ]);
     expect(useComposerDraftStore.getState().getComposerDraft(threadB)?.collaborators).toEqual([
-      { providerInstanceId: codexApiEntry.instanceId, model: "gpt-5.4", maxCount: 1 },
+      {
+        id: "codex#1",
+        providerInstanceId: codexApiEntry.instanceId,
+        model: "gpt-5.4",
+        maxCount: 1,
+      },
     ]);
     expect(useComposerDraftStore.getState().getComposerDraft(draftC)).toBeNull();
 
@@ -445,7 +638,7 @@ describe("composerDraftStore — split-pane & per-thread collaborator isolation"
     store.clearComposerContent(threadA);
     expect(useComposerDraftStore.getState().getComposerDraft(threadA)?.prompt).toBe("");
     expect(useComposerDraftStore.getState().getComposerDraft(threadA)?.collaborators).toHaveLength(
-      1,
+      2,
     );
 
     const persisted = partializeComposerDraftStoreState(useComposerDraftStore.getState());

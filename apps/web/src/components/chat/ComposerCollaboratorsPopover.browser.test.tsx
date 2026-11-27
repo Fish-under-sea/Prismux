@@ -8,6 +8,7 @@ import { type CSSProperties, createRef, useState } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
+import "@prismux/appearance/styles.css";
 import "~/index.css";
 import { render } from "../../../test/render";
 import type { AppModelOption } from "../../modelSelection";
@@ -82,6 +83,8 @@ const dshEntry = makeProviderEntry({
   driverKind: "dsh",
   displayName: "DeepSeek Harness",
   models: [
+    { slug: "deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash 1017 · Bailian Token Plan" },
+    { slug: "glm5.4-max", name: "GLM5.4-Max · 付费组" },
     { slug: "deepseek-reasoner", name: "DeepSeek Reasoner" },
     { slug: "deepseek-chat", name: "DeepSeek Chat" },
   ],
@@ -329,25 +332,39 @@ describe("ComposerCollaboratorsPopover & inline slash-command chips (real Chrome
     expect(agyToggle.disabled).toBe(true);
     expect(claudeToggle.disabled).toBe(true);
 
-    // Select DSH + increment to 2, select Codex + switch model
+    // Select DSH + increment to 2, select Codex + switch model via custom themed dropdown (zero native <select>)
     await userEvent.click(
       document.querySelector<HTMLButtonElement>('[data-testid="composer-collab-toggle-dsh"]')!,
     );
+    expect(popover!.querySelectorAll("select")).toHaveLength(0);
     await userEvent.click(
       document.querySelector<HTMLButtonElement>('[data-testid="composer-collab-inc-dsh"]')!,
     );
     await userEvent.click(
       document.querySelector<HTMLButtonElement>('[data-testid="composer-collab-toggle-codex"]')!,
     );
-    const codexModelSelect = document.querySelector<HTMLSelectElement>(
+    const codexModelTrigger = document.querySelector<HTMLButtonElement>(
       '[data-testid="composer-collab-model-codex"]',
     )!;
-    await userEvent.selectOptions(codexModelSelect, "gpt-5.3-codex");
+    expect(codexModelTrigger.tagName).toBe("BUTTON");
+    await userEvent.click(codexModelTrigger);
+
+    const codexPopup = page.getByTestId("composer-collab-model-popup-codex");
+    await expect.element(codexPopup).toBeVisible();
+    await userEvent.click(
+      document.querySelector<HTMLElement>(
+        '[data-testid="composer-collab-model-option-codex-gpt-5.3-codex"]',
+      )!,
+    );
+
+    // Parent collaborators popover remains open after selecting from nested model dropdown
+    await expect.element(page.getByTestId("composer-collaborators-popover")).toBeVisible();
 
     expect(
       document.querySelector<HTMLElement>('[data-testid="composer-collab-count-dsh"]')?.textContent,
     ).toBe("2");
-    expect(codexModelSelect.value).toBe("gpt-5.3-codex");
+    expect(codexModelTrigger.dataset.pmxCollabModelValue).toBe("gpt-5.3-codex");
+    expect(codexModelTrigger.textContent).toContain("GPT-5.3 Codex");
     expect(trigger!.dataset.pmxCollabTrigger).toBe("active");
     expect(trigger!.textContent).toContain("协作 · 3");
 
@@ -366,6 +383,342 @@ describe("ComposerCollaboratorsPopover & inline slash-command chips (real Chrome
     );
     expect(trigger!.dataset.pmxCollabTrigger).toBe("idle");
     expect(trigger!.textContent).toContain("邀请协作");
+  });
+
+  it("supports adding multiple model rows under the same provider, inherits previous model, deduplicates stacked icons, and enforces caps", async () => {
+    const onOpenWaiver = vi.fn();
+    await using _screen = await render(
+      <InteractiveCollaboratorsHarness onOpenWaiver={onOpenWaiver} />,
+    );
+
+    const trigger = document.querySelector<HTMLButtonElement>(
+      '[data-testid="composer-collaborators-trigger"]',
+    )!;
+    await userEvent.click(trigger);
+
+    // Enable DSH (defaults to first model: deepseek-v4.1-flash, count 1)
+    await userEvent.click(
+      document.querySelector<HTMLButtonElement>('[data-testid="composer-collab-toggle-dsh"]')!,
+    );
+    expect(document.querySelector('[data-testid="composer-collab-remove-row-dsh-0"]')).toBeNull();
+
+    // Switch row 0 to deepseek-reasoner
+    await userEvent.click(
+      document.querySelector<HTMLButtonElement>('[data-testid="composer-collab-model-dsh"]')!,
+    );
+    await expect.element(page.getByTestId("composer-collab-model-popup-dsh")).toBeVisible();
+    await userEvent.click(
+      document.querySelector<HTMLElement>(
+        '[data-testid="composer-collab-model-option-dsh-deepseek-reasoner"]',
+      )!,
+    );
+
+    // Click "+ 添加模型类别" -> row 1 inherits row 0's model (deepseek-reasoner) with count 1
+    await userEvent.click(
+      document.querySelector<HTMLButtonElement>('[data-testid="composer-collab-add-model-dsh"]')!,
+    );
+    const secondTrigger = document.querySelector<HTMLButtonElement>(
+      '[data-testid="composer-collab-model-dsh-1"]',
+    )!;
+    expect(secondTrigger).not.toBeNull();
+    expect(secondTrigger.dataset.pmxCollabModelValue).toBe("deepseek-reasoner");
+    expect(
+      document.querySelector<HTMLElement>('[data-testid="composer-collab-count-dsh-1"]')
+        ?.textContent,
+    ).toBe("1");
+
+    // Trigger icon stack deduplicates DSH to 1 icon even with 2 DSH model rows
+    expect(trigger.querySelectorAll('[data-pmx-collab-stack-icon="dsh"]')).toHaveLength(1);
+    expect(trigger.textContent).toContain("协作 · 2");
+
+    // Change row 1 model to GLM5.4-Max and step its count to 2 independently
+    await userEvent.click(secondTrigger);
+    await expect.element(page.getByTestId("composer-collab-model-popup-dsh-1")).toBeVisible();
+    await userEvent.click(
+      document.querySelector<HTMLElement>(
+        '[data-testid="composer-collab-model-option-dsh-1-glm5.4-max"]',
+      )!,
+    );
+    await userEvent.click(
+      document.querySelector<HTMLButtonElement>('[data-testid="composer-collab-inc-dsh-1"]')!,
+    );
+
+    expect(
+      document.querySelector<HTMLButtonElement>('[data-testid="composer-collab-model-dsh"]')!
+        .dataset.pmxCollabModelValue,
+    ).toBe("deepseek-reasoner");
+    expect(secondTrigger.dataset.pmxCollabModelValue).toBe("glm5.4-max");
+    expect(
+      document.querySelector<HTMLElement>('[data-testid="composer-collab-count-dsh"]')?.textContent,
+    ).toBe("1");
+    expect(
+      document.querySelector<HTMLElement>('[data-testid="composer-collab-count-dsh-1"]')
+        ?.textContent,
+    ).toBe("2");
+    expect(trigger.textContent).toContain("协作 · 3");
+    expect(
+      document.querySelector<HTMLElement>('[data-testid="composer-collaborators-popover"]')
+        ?.textContent,
+    ).toContain("已选 1 个代理 · 2 组模型（最多委派 3 次）");
+
+    // Step row 1 up to reach per-agent cap 6 (1 + 5) -> both + buttons and add-model disable
+    for (let index = 0; index < 3; index += 1) {
+      await userEvent.click(
+        document.querySelector<HTMLButtonElement>('[data-testid="composer-collab-inc-dsh-1"]')!,
+      );
+    }
+    expect(
+      document.querySelector<HTMLButtonElement>('[data-testid="composer-collab-inc-dsh"]')!
+        .disabled,
+    ).toBe(true);
+    expect(
+      document.querySelector<HTMLButtonElement>('[data-testid="composer-collab-inc-dsh-1"]')!
+        .disabled,
+    ).toBe(true);
+    expect(
+      document.querySelector<HTMLButtonElement>('[data-testid="composer-collab-add-model-dsh"]')!
+        .disabled,
+    ).toBe(true);
+
+    // Delete row 1 -> back to 1 row, single-row delete button disappears
+    await userEvent.click(
+      document.querySelector<HTMLButtonElement>(
+        '[data-testid="composer-collab-remove-row-dsh-1"]',
+      )!,
+    );
+    expect(document.querySelector('[data-testid="composer-collab-model-dsh-1"]')).toBeNull();
+    expect(document.querySelector('[data-testid="composer-collab-remove-row-dsh-0"]')).toBeNull();
+    expect(trigger.textContent).toContain("协作 · 1");
+
+    // Top-right × removes entire provider
+    await userEvent.click(
+      document.querySelector<HTMLButtonElement>('[data-testid="composer-collab-remove-dsh"]')!,
+    );
+    expect(trigger.dataset.pmxCollabTrigger).toBe("idle");
+  });
+
+  it("renders themed custom model dropdown with >= 4.5:1 contrast across Light, Dark, and Liquid Glass modes", async () => {
+    await page.viewport(1280, 820);
+
+    type Rgba = { r: number; g: number; b: number; a: number };
+    const parseColor = (raw: string): Rgba => {
+      const match = raw.match(
+        /rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:[\s,/]+([\d.]+))?\s*\)/,
+      );
+      if (match) {
+        return {
+          r: Number(match[1]),
+          g: Number(match[2]),
+          b: Number(match[3]),
+          a: match[4] !== undefined ? Number(match[4]) : 1,
+        };
+      }
+      // Fallback for CSS Color 4 formats (e.g. oklch/oklab/color(srgb ...)) via 1x1 canvas pixel read
+      const canvas = document.createElement("canvas");
+      canvas.width = 1;
+      canvas.height = 1;
+      const ctx = canvas.getContext("2d")!;
+      ctx.clearRect(0, 0, 1, 1);
+      ctx.fillStyle = raw;
+      ctx.fillRect(0, 0, 1, 1);
+      const data = ctx.getImageData(0, 0, 1, 1).data;
+      return { r: data[0]!, g: data[1]!, b: data[2]!, a: data[3]! / 255 };
+    };
+    const compositeOver = (fg: Rgba, bg: Rgba): Rgba => {
+      const a = fg.a + bg.a * (1 - fg.a);
+      if (a <= 0) return { r: 0, g: 0, b: 0, a: 0 };
+      return {
+        r: (fg.r * fg.a + bg.r * bg.a * (1 - fg.a)) / a,
+        g: (fg.g * fg.a + bg.g * bg.a * (1 - fg.a)) / a,
+        b: (fg.b * fg.a + bg.b * bg.a * (1 - fg.a)) / a,
+        a,
+      };
+    };
+    const relLum = (c: Rgba): number => {
+      const chan = (v: number) => {
+        const s = v / 255;
+        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * chan(c.r) + 0.7152 * chan(c.g) + 0.0722 * chan(c.b);
+    };
+    const contrastRatio = (a: Rgba, b: Rgba): number => {
+      const l1 = relLum(a);
+      const l2 = relLum(b);
+      return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+    };
+
+    const scenarios: ReadonlyArray<{
+      readonly name: string;
+      readonly dark: boolean;
+      readonly glass: boolean;
+      readonly backdrop: Rgba;
+      readonly rootOverrides?: Readonly<Record<string, string>>;
+    }> = [
+      {
+        name: "light",
+        dark: false,
+        glass: false,
+        backdrop: { r: 244, g: 245, b: 247, a: 1 },
+      },
+      {
+        name: "dark",
+        dark: true,
+        glass: false,
+        backdrop: { r: 18, g: 19, b: 22, a: 1 },
+      },
+      {
+        name: "dark-glass",
+        dark: true,
+        glass: true,
+        backdrop: { r: 15, g: 41, b: 66, a: 1 },
+        rootOverrides: {
+          "--popover": "rgba(13, 21, 36, 0.84)",
+          "--popover-foreground": "rgba(255, 255, 255, 0.96)",
+          "--contrast-popover-foreground": "rgba(255, 255, 255, 0.96)",
+          "--pmx-overlay-bg": "rgba(13, 21, 36, 0.84)",
+          "--pmx-glass-zone-overlays-bg": "rgba(13, 21, 36, 0.84)",
+          "--pmx-accent": "#38bdf8",
+          "--pmx-accent-text": "#7dd3fc",
+          "--pmx-accent-soft": "rgba(56, 189, 248, 0.18)",
+        },
+      },
+      {
+        name: "light-glass",
+        dark: false,
+        glass: true,
+        backdrop: { r: 224, g: 236, b: 250, a: 1 },
+        rootOverrides: {
+          "--pmx-glass-tint": "#f8fafc",
+          "--pmx-canvas-bg": "rgba(248, 250, 255, 0.84)",
+          "--popover": "rgba(248, 250, 255, 0.84)",
+          "--popover-foreground": "rgba(15, 23, 42, 0.95)",
+          "--contrast-popover-foreground": "rgba(15, 23, 42, 0.95)",
+          "--pmx-overlay-bg": "rgba(248, 250, 255, 0.84)",
+          "--pmx-glass-zone-overlays-bg": "rgba(248, 250, 255, 0.84)",
+          "--pmx-accent": "#2563eb",
+          "--pmx-accent-text": "#1d4ed8",
+          "--pmx-accent-soft": "rgba(37, 99, 235, 0.12)",
+        },
+      },
+    ];
+
+    const root = document.documentElement;
+    const prevDark = root.classList.contains("dark");
+    const prevGlass = root.getAttribute("data-pmx-glass");
+
+    try {
+      for (const scenario of scenarios) {
+        root.classList.toggle("dark", scenario.dark);
+        root.setAttribute("data-pmx-glass", scenario.glass ? "1" : "0");
+        const prevProps = new Map<string, string>();
+        for (const [key, value] of Object.entries(scenario.rootOverrides ?? {})) {
+          prevProps.set(key, root.style.getPropertyValue(key));
+          root.style.setProperty(key, value);
+        }
+
+        try {
+          await using screen = await render(
+            <InteractiveCollaboratorsHarness
+              initialSelections={[
+                {
+                  id: "dsh#1",
+                  providerInstanceId: dshEntry.instanceId,
+                  model: "deepseek-v4.1-flash",
+                  maxCount: 1,
+                },
+                {
+                  id: "dsh#2",
+                  providerInstanceId: dshEntry.instanceId,
+                  model: "glm5.4-max",
+                  maxCount: 2,
+                },
+              ]}
+              onOpenWaiver={() => {}}
+            />,
+          );
+
+          await userEvent.click(
+            document.querySelector<HTMLButtonElement>(
+              '[data-testid="composer-collaborators-trigger"]',
+            )!,
+          );
+          await expect.element(page.getByTestId("composer-collaborators-popover")).toBeVisible();
+
+          const modelTrigger = document.querySelector<HTMLButtonElement>(
+            '[data-testid="composer-collab-model-dsh"]',
+          )!;
+          await userEvent.click(modelTrigger);
+
+          const popup = page.getByTestId("composer-collab-model-popup-dsh");
+          await expect.element(popup).toBeVisible();
+
+          const popupEl = document.querySelector<HTMLElement>(
+            '[data-testid="composer-collab-model-popup-dsh"]',
+          )!;
+          const surfaceEl = popupEl.querySelector<HTMLElement>('[data-pmx-glass-zone="overlays"]')!;
+          expect(surfaceEl).not.toBeNull();
+
+          const surfaceBg = compositeOver(
+            parseColor(getComputedStyle(surfaceEl).backgroundColor),
+            scenario.backdrop,
+          );
+
+          const selectedOption = document.querySelector<HTMLElement>(
+            '[data-testid="composer-collab-model-option-dsh-deepseek-v4.1-flash"]',
+          )!;
+          const unselectedOption = document.querySelector<HTMLElement>(
+            '[data-testid="composer-collab-model-option-dsh-glm5.4-max"]',
+          )!;
+
+          // Verify top-most hit-testing (not hidden behind PopoverPopup)
+          const unselectedRect = unselectedOption.getBoundingClientRect();
+          const hitEl = document.elementFromPoint(
+            unselectedRect.left + unselectedRect.width / 2,
+            unselectedRect.top + unselectedRect.height / 2,
+          );
+          expect(hitEl !== null && unselectedOption.contains(hitEl)).toBe(true);
+
+          // Verify WCAG >= 4.5:1 contrast for both unselected and selected items
+          const unselectedFg = compositeOver(
+            parseColor(getComputedStyle(unselectedOption).color),
+            surfaceBg,
+          );
+          const unselectedContrast = contrastRatio(unselectedFg, surfaceBg);
+          expect(
+            unselectedContrast,
+            `${scenario.name} unselected option contrast (${unselectedContrast.toFixed(2)}:1)`,
+          ).toBeGreaterThanOrEqual(4.5);
+
+          const selectedRowBg = compositeOver(
+            parseColor(getComputedStyle(selectedOption).backgroundColor),
+            surfaceBg,
+          );
+          const selectedFg = compositeOver(
+            parseColor(getComputedStyle(selectedOption).color),
+            selectedRowBg,
+          );
+          const selectedContrast = contrastRatio(selectedFg, selectedRowBg);
+          expect(
+            selectedContrast,
+            `${scenario.name} selected option contrast (${selectedContrast.toFixed(2)}:1)`,
+          ).toBeGreaterThanOrEqual(4.5);
+
+          expect(selectedOption.dataset.pmxCollabModelSelected).toBe("true");
+          expect(unselectedOption.dataset.pmxCollabModelSelected).toBe("false");
+
+          await screen.unmount();
+        } finally {
+          for (const [key, prev] of prevProps) {
+            if (prev) root.style.setProperty(key, prev);
+            else root.style.removeProperty(key);
+          }
+        }
+      }
+    } finally {
+      root.classList.toggle("dark", prevDark);
+      if (prevGlass === null) root.removeAttribute("data-pmx-glass");
+      else root.setAttribute("data-pmx-glass", prevGlass);
+    }
   });
 
   it("renders inline [⏱ goal] and [🐝 swarm] visual chips on typing and removes them cleanly", async () => {
