@@ -262,6 +262,40 @@ describe("ReasoningTranslationSettingsCard (Simplified Chinese i18n & A+B+C UI)"
     expect(followGlobalHtml).toContain("配置文本生成模型 →");
     expect(followGlobalHtml).toContain("测试翻译");
 
+    const customGlobalHtml = renderToStaticMarkup(
+      <ReasoningTranslationSettingsCardView
+        id="reasoning-translation"
+        title={m(msg("Reasoning translation"))}
+        settings={makeSettings({
+          reasoningTranslationProvider: "text_model",
+          reasoningTranslationModelSelection: null,
+          textGenerationModelSelection: {
+            instanceId: ProviderInstanceId.make("claudeAgent"),
+            model: "claude-haiku-5-5",
+          },
+        })}
+        providerEntries={[
+          {
+            instanceId: ProviderInstanceId.make("claudeAgent"),
+            driverKind: "claudeAgent" as never,
+            displayName: "主力 Claude",
+            hasCustomDisplayName: true,
+            enabled: true,
+            installed: true,
+            status: "ready",
+            isDefault: true,
+            isAvailable: true,
+            snapshot: {} as never,
+            models: [],
+          },
+        ]}
+        onUpdateSettings={vi.fn()}
+        disableInitialStatusFetch
+      />,
+    );
+    expect(customGlobalHtml).toContain("主力 Claude / claude-haiku-5-5");
+    expect(customGlobalHtml).not.toContain("claudeAgent / claude-haiku-5-5");
+
     const dedicatedHtml = renderToStaticMarkup(
       <ReasoningTranslationSettingsCardView
         id="reasoning-translation"

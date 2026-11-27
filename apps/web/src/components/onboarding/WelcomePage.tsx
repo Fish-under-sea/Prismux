@@ -56,6 +56,10 @@ import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { usePersistEnvironmentProviderInstanceMutation } from "../../hooks/useSettings";
 import { hasCloudPublicConfig } from "../../cloud/publicConfig";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
+import {
+  CANONICAL_PROVIDER_DISPLAY_NAMES,
+  useResolveConfiguredProviderDisplayName,
+} from "../../prismux/providerDisplayName";
 import { workspaceAreaProps } from "../../lib/workspaceFocus";
 import { completeOnboarding } from "../../onboarding/firstRun";
 import {
@@ -355,10 +359,7 @@ export function WelcomePage({
             </div>
             <div className="mt-8 border-t border-border/60">
               {prismuxRuntime !== null && wallpaperSnapshot !== null ? (
-                <AppearanceSection
-                  runtime={prismuxRuntime}
-                  wallpaperSnapshot={wallpaperSnapshot}
-                />
+                <AppearanceSection runtime={prismuxRuntime} wallpaperSnapshot={wallpaperSnapshot} />
               ) : null}
               <AgentsSection
                 environmentId={environmentId}
@@ -458,9 +459,7 @@ function AppearanceSection({
                 <T>Theme & Liquid Glass</T>
               </span>
               <span className="block text-xs text-muted-foreground">
-                <T>
-                  Switch between Light, Dark, and translucent Liquid Glass with live preview.
-                </T>
+                <T>Switch between Light, Dark, and translucent Liquid Glass with live preview.</T>
               </span>
             </div>
             <span className="rounded-full border border-border/70 bg-muted/60 px-2.5 py-0.5 text-2xs font-medium text-foreground">
@@ -2175,13 +2174,20 @@ function ImportCandidateRow({
 }
 
 const IMPORT_SOURCE_NAMES: Record<AgentSessionSource, string> = {
-  claudeAgent: "Claude Code",
-  codex: "Codex",
-  pi: "Pi",
+  claudeAgent: CANONICAL_PROVIDER_DISPLAY_NAMES.claudeAgent,
+  codex: CANONICAL_PROVIDER_DISPLAY_NAMES.codex,
+  pi: CANONICAL_PROVIDER_DISPLAY_NAMES.pi,
 };
 function useImportSourcesLabel() {
+  const { resolveName } = useResolveConfiguredProviderDisplayName();
   return new Intl.ListFormat(useLocale(), { type: "conjunction" }).format(
-    AgentSessionSource.literals.map((source) => IMPORT_SOURCE_NAMES[source]),
+    AgentSessionSource.literals.map((source) =>
+      resolveName({
+        provider: source,
+        driverKind: source,
+        fallbackDisplayName: IMPORT_SOURCE_NAMES[source],
+      }),
+    ),
   );
 }
 
@@ -2196,6 +2202,7 @@ function ImportRowMeta({
 }) {
   const gt = useGT();
   const messages = useMessages();
+  const { resolveName } = useResolveConfiguredProviderDisplayName();
   const relative =
     lastActiveAt === null ? null : formatRelativeTime(lastActiveAt, undefined, messages);
   const age =
@@ -2206,19 +2213,26 @@ function ImportRowMeta({
         : relative.value;
   return (
     <span className="ml-auto grid shrink-0 grid-cols-[1rem_1rem_1rem_2.5rem_2.25rem] items-center gap-x-1 text-xs text-muted-foreground tabular-nums">
-      {AgentSessionSource.literals.map((source) => (
-        <span key={source} className="flex size-4 items-center justify-center">
-          {sources?.includes(source) ? (
-            <span role="img" aria-label={IMPORT_SOURCE_NAMES[source]}>
-              <ProviderInstanceIcon
-                driverKind={ProviderDriverKind.make(source)}
-                displayName={IMPORT_SOURCE_NAMES[source]}
-                iconClassName="size-3"
-              />
-            </span>
-          ) : null}
-        </span>
-      ))}
+      {AgentSessionSource.literals.map((source) => {
+        const displayName = resolveName({
+          provider: source,
+          driverKind: source,
+          fallbackDisplayName: IMPORT_SOURCE_NAMES[source],
+        });
+        return (
+          <span key={source} className="flex size-4 items-center justify-center">
+            {sources?.includes(source) ? (
+              <span role="img" aria-label={displayName}>
+                <ProviderInstanceIcon
+                  driverKind={ProviderDriverKind.make(source)}
+                  displayName={displayName}
+                  iconClassName="size-3"
+                />
+              </span>
+            ) : null}
+          </span>
+        );
+      })}
       <span className="text-right">{threadCount}</span>
       <span className="text-right whitespace-nowrap">{age}</span>
     </span>

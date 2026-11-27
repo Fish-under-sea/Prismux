@@ -8,7 +8,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
-  writeFileSync
+  writeFileSync,
 } from "node:fs";
 import * as http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -23,7 +23,7 @@ import type {
   SyncTestResponse,
   SystemPortsResponse,
   SystemResourcesResponse,
-  UpdaterStatusSnapshot
+  UpdaterStatusSnapshot,
 } from "@prismux/protocol";
 import { PrismuxDaemon } from "../index.js";
 import { PersistentPtyPool } from "../pty/PersistentPtyPool.js";
@@ -31,17 +31,17 @@ import { getOfficialPluginArchiveCandidateFilenames } from "../server/DaemonBusi
 import {
   PortKillError,
   PortScannerService,
-  parseWindowsNetstatOutput
+  parseWindowsNetstatOutput,
 } from "../system/PortScannerService.js";
 import {
   ResourceMonitorService,
   parseWindowsProcessTreeTsv,
   type ExtendedSystemResourcesResponse,
-  type OsProcessSnapshotEntry
+  type OsProcessSnapshotEntry,
 } from "../system/ResourceMonitorService.js";
 import {
   ServiceDiagnosticsService,
-  normalizeCoreHttpProbeUrl
+  normalizeCoreHttpProbeUrl,
 } from "../system/ServiceDiagnosticsService.js";
 import {
   AppUpdater,
@@ -51,7 +51,7 @@ import {
   parseGiteeWebReleasesHtml,
   resolve7zaBinary,
   selectSoftwareChecksumAsset,
-  type AppUpdaterTimerApi
+  type AppUpdaterTimerApi,
 } from "../updater/AppUpdater.js";
 
 const execFileAsync = promisify(execFile);
@@ -82,7 +82,7 @@ function findTestHostSevenZip(): string | null {
     "C:\\Program Files\\7-Zip\\7za.exe",
     "C:\\Program Files\\7-Zip\\7z.exe",
     "C:\\Program Files (x86)\\7-Zip\\7za.exe",
-    "C:\\Program Files (x86)\\7-Zip\\7z.exe"
+    "C:\\Program Files (x86)\\7-Zip\\7z.exe",
   ]) {
     const resolved = resolve7zaBinary(candidate);
     if (resolved !== null) {
@@ -93,7 +93,7 @@ function findTestHostSevenZip(): string | null {
 }
 
 async function startMockServer(
-  handler: http.RequestListener
+  handler: http.RequestListener,
 ): Promise<{ server: http.Server; baseUrl: string }> {
   const server = http.createServer(handler);
   await new Promise<void>((resolvePromise) => {
@@ -117,7 +117,7 @@ async function createRealSplit7zFixture(
   sevenZipExe: string,
   exeName: string,
   payload: Buffer,
-  volumeSizeArg = "24k"
+  volumeSizeArg = "24k",
 ): Promise<{
   fixtureDir: string;
   parts: Array<{ name: string; bytes: Buffer }>;
@@ -130,23 +130,20 @@ async function createRealSplit7zFixture(
   await execFileAsync(
     sevenZipExe,
     ["a", "-t7z", "-mx=0", `-v${volumeSizeArg}`, archiveBase, sourceExe],
-    { windowsHide: true, timeout: 15_000 }
+    { windowsHide: true, timeout: 15_000 },
   );
 
   const partNames = readdirSync(fixtureDir)
     .filter((name) => name.startsWith(`${exeName}.7z.`))
     .sort((a, b) => a.localeCompare(b));
-  assert.ok(
-    partNames.length >= 2,
-    `Expected >=2 split 7z volumes, got ${partNames.join(", ")}`
-  );
+  assert.ok(partNames.length >= 2, `Expected >=2 split 7z volumes, got ${partNames.join(", ")}`);
 
   return {
     fixtureDir,
     parts: partNames.map((name) => ({
       name,
-      bytes: readFileSync(join(fixtureDir, name))
-    }))
+      bytes: readFileSync(join(fixtureDir, name)),
+    })),
   };
 }
 
@@ -166,7 +163,7 @@ test("AppUpdater recognizes Gitee split-7z-exe, resumes mid-part, extracts via 7
   const sumsText =
     [
       `${expectedSha}  ${exeName}`,
-      ...fixture.parts.map((part) => `${sha256Hex(part.bytes)}  ${part.name}`)
+      ...fixture.parts.map((part) => `${sha256Hex(part.bytes)}  ${part.name}`),
     ].join("\n") + "\n";
 
   let part2RequestCount = 0;
@@ -187,15 +184,15 @@ test("AppUpdater recognizes Gitee split-7z-exe, resumes mid-part, extracts via 7
               ...fixture.parts.map((part) => ({
                 name: part.name,
                 browser_download_url: `${mockRef.baseUrl}/dl/${encodeURIComponent(part.name)}`,
-                size: part.bytes.length
+                size: part.bytes.length,
               })),
               {
                 name: "SHA256SUMS.txt",
-                browser_download_url: `${mockRef.baseUrl}/dl/SHA256SUMS.txt`
-              }
-            ]
-          }
-        ])
+                browser_download_url: `${mockRef.baseUrl}/dl/SHA256SUMS.txt`,
+              },
+            ],
+          },
+        ]),
       );
       return;
     }
@@ -207,7 +204,7 @@ test("AppUpdater recognizes Gitee split-7z-exe, resumes mid-part, extracts via 7
     }
 
     const matchedPart = fixture.parts.find(
-      (part) => urlPath === `/dl/${encodeURIComponent(part.name)}`
+      (part) => urlPath === `/dl/${encodeURIComponent(part.name)}`,
     );
     if (matchedPart) {
       const rangeHeader = req.headers.range;
@@ -216,12 +213,9 @@ test("AppUpdater recognizes Gitee split-7z-exe, resumes mid-part, extracts via 7
         part2RequestCount += 1;
         res.writeHead(200, {
           "content-type": "application/octet-stream",
-          "content-length": String(matchedPart.bytes.length)
+          "content-length": String(matchedPart.bytes.length),
         });
-        const firstHalf = matchedPart.bytes.subarray(
-          0,
-          Math.floor(matchedPart.bytes.length / 2)
-        );
+        const firstHalf = matchedPart.bytes.subarray(0, Math.floor(matchedPart.bytes.length / 2));
         res.write(firstHalf);
         setTimeout(() => {
           res.destroy();
@@ -235,7 +229,7 @@ test("AppUpdater recognizes Gitee split-7z-exe, resumes mid-part, extracts via 7
         res.writeHead(206, {
           "content-type": "application/octet-stream",
           "content-range": `bytes ${start}-${matchedPart.bytes.length - 1}/${matchedPart.bytes.length}`,
-          "content-length": String(slice.length)
+          "content-length": String(slice.length),
         });
         res.end(slice);
         return;
@@ -243,7 +237,7 @@ test("AppUpdater recognizes Gitee split-7z-exe, resumes mid-part, extracts via 7
 
       res.writeHead(200, {
         "content-type": "application/octet-stream",
-        "content-length": String(matchedPart.bytes.length)
+        "content-length": String(matchedPart.bytes.length),
       });
       res.end(matchedPart.bytes);
       return;
@@ -263,7 +257,7 @@ test("AppUpdater recognizes Gitee split-7z-exe, resumes mid-part, extracts via 7
       githubApiBase: `${mockRef.baseUrl}/github-offline`,
       initialPolicy: { routePreference: "domestic", includePrerelease: true },
       retryDelaysMs: [10, 20],
-      allowInsecureLoopbackForTesting: true
+      allowInsecureLoopbackForTesting: true,
     });
 
     const events: string[] = [];
@@ -286,7 +280,7 @@ test("AppUpdater recognizes Gitee split-7z-exe, resumes mid-part, extracts via 7
       checkResult: check,
       onProgress: (p) => {
         progressStages.add(p.stage);
-      }
+      },
     });
 
     unsubscribe();
@@ -332,18 +326,13 @@ test("AppUpdater rejects 1-byte tampered split-7z extracted exe and wipes all te
   tamperedPayload[1024] = tamperedPayload[1024]! ^ 0x01;
   assert.notEqual(sha256Hex(tamperedPayload), legitSha);
 
-  const fixture = await createRealSplit7zFixture(
-    sevenZip,
-    exeName,
-    tamperedPayload,
-    "24k"
-  );
+  const fixture = await createRealSplit7zFixture(sevenZip, exeName, tamperedPayload, "24k");
   // Provide matching volume SHA-256s so pre-extract volume checks pass,
   // proving post-extract .exe SHA-256 verification catches the tampered inner exe.
   const sumsText =
     [
       `${legitSha}  ${exeName}`,
-      ...fixture.parts.map((part) => `${sha256Hex(part.bytes)}  ${part.name}`)
+      ...fixture.parts.map((part) => `${sha256Hex(part.bytes)}  ${part.name}`),
     ].join("\n") + "\n";
 
   let mockRef!: { server: http.Server; baseUrl: string };
@@ -362,15 +351,15 @@ test("AppUpdater rejects 1-byte tampered split-7z extracted exe and wipes all te
               ...fixture.parts.map((part) => ({
                 name: part.name,
                 browser_download_url: `${mockRef.baseUrl}/dl/${encodeURIComponent(part.name)}`,
-                size: part.bytes.length
+                size: part.bytes.length,
               })),
               {
                 name: "SHA256SUMS.txt",
-                browser_download_url: `${mockRef.baseUrl}/dl/SHA256SUMS.txt`
-              }
-            ]
-          }
-        ])
+                browser_download_url: `${mockRef.baseUrl}/dl/SHA256SUMS.txt`,
+              },
+            ],
+          },
+        ]),
       );
       return;
     }
@@ -382,12 +371,12 @@ test("AppUpdater rejects 1-byte tampered split-7z extracted exe and wipes all te
     }
 
     const matchedPart = fixture.parts.find(
-      (part) => urlPath === `/dl/${encodeURIComponent(part.name)}`
+      (part) => urlPath === `/dl/${encodeURIComponent(part.name)}`,
     );
     if (matchedPart) {
       res.writeHead(200, {
         "content-type": "application/octet-stream",
-        "content-length": String(matchedPart.bytes.length)
+        "content-length": String(matchedPart.bytes.length),
       });
       res.end(matchedPart.bytes);
       return;
@@ -406,13 +395,13 @@ test("AppUpdater rejects 1-byte tampered split-7z extracted exe and wipes all te
       giteeApiBase: `${mockRef.baseUrl}/gitee`,
       githubApiBase: `${mockRef.baseUrl}/github-offline`,
       initialPolicy: { routePreference: "domestic", includePrerelease: true },
-      allowInsecureLoopbackForTesting: true
+      allowInsecureLoopbackForTesting: true,
     });
 
     const check = await updater.checkForUpdates({ sourceOverride: "gitee" });
     await assert.rejects(
       () => updater.downloadUpdate({ checkResult: check }),
-      (err: unknown) => err instanceof UpdateIntegrityError
+      (err: unknown) => err instanceof UpdateIntegrityError,
     );
 
     const status = updater.getStatus();
@@ -436,7 +425,9 @@ test("AppUpdater schedules silent background auto-check (15s initial + 4h interv
       checkHits += 1;
       res.statusCode = 200;
       res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify([{ tag_name: "v0.1.0", prerelease: false, draft: false, assets: [] }]));
+      res.end(
+        JSON.stringify([{ tag_name: "v0.1.0", prerelease: false, draft: false, assets: [] }]),
+      );
       return;
     }
     res.statusCode = 404;
@@ -465,7 +456,7 @@ test("AppUpdater schedules silent background auto-check (15s initial + 4h interv
       clearInterval: ((handle: unknown) => {
         const entry = handle as { cleared?: boolean } | undefined;
         if (entry) entry.cleared = true;
-      }) as typeof clearInterval
+      }) as typeof clearInterval,
     };
 
     const dataDir = makeTempDir("prismux-autocheck-");
@@ -476,7 +467,7 @@ test("AppUpdater schedules silent background auto-check (15s initial + 4h interv
       giteeApiBase: `${mockRef.baseUrl}/gitee-offline`,
       initialPolicy: { routePreference: "global", autoCheckEnabled: true },
       timers: fakeTimers,
-      allowInsecureLoopbackForTesting: true
+      allowInsecureLoopbackForTesting: true,
     });
 
     updater.startAutoCheck();
@@ -518,7 +509,7 @@ test("PortScannerService parses netstat, attributes workspace/external ports, an
     "  TCP    127.0.0.1:5173         0.0.0.0:0              LISTENING       22334",
     "  TCP    [::1]:3000             [::]:0                 LISTENING       33445",
     `  TCP    127.0.0.1:41900        0.0.0.0:0              LISTENING       ${process.pid}`,
-    "  TCP    127.0.0.1:9999         0.0.0.0:0              ESTABLISHED     44556"
+    "  TCP    127.0.0.1:9999         0.0.0.0:0              ESTABLISHED     44556",
   ].join("\r\n");
 
   const parsed = parseWindowsNetstatOutput(sampleNetstat);
@@ -536,7 +527,7 @@ test("PortScannerService parses netstat, attributes workspace/external ports, an
       { pid: process.pid, address: "127.0.0.1", port: 41900, protocol: "tcp" },
       { pid: fakeT3Pid, address: "127.0.0.1", port: 3773, protocol: "tcp" },
       { pid: 22334, address: "127.0.0.1", port: 5173, protocol: "tcp" },
-      { pid: 33445, address: "127.0.0.1", port: 8080, protocol: "tcp" }
+      { pid: 33445, address: "127.0.0.1", port: 8080, protocol: "tcp" },
     ],
     inspectProcesses: async (pids) => {
       const map = new Map();
@@ -555,13 +546,13 @@ test("PortScannerService parses netstat, attributes workspace/external ports, an
             pid,
             processName: "node.exe",
             cwd: join(workspaceRoot, "web"),
-            commandLine: `node vite --root "${workspaceRoot}"`
+            commandLine: `node vite --root "${workspaceRoot}"`,
           });
         } else if (pid === 33445) {
           map.set(pid, {
             pid,
             processName: "python.exe",
-            cwd: join(tmpdir(), "other-project")
+            cwd: join(tmpdir(), "other-project"),
           });
         }
       }
@@ -569,7 +560,7 @@ test("PortScannerService parses netstat, attributes workspace/external ports, an
     },
     killProcessFn: async (pid) => {
       killedPids.push(pid);
-    }
+    },
   });
 
   const scanRes = await scanner.scanPorts(workspaceRoot);
@@ -596,7 +587,7 @@ test("PortScannerService parses netstat, attributes workspace/external ports, an
     901, // csrss.exe
     902, // wininit.exe
     903, // services.exe
-    904 // Prismux.exe
+    904, // Prismux.exe
   ];
 
   for (const forbiddenPid of forbiddenTargets) {
@@ -606,7 +597,7 @@ test("PortScannerService parses netstat, attributes workspace/external ports, an
         err instanceof PortKillError &&
         err.statusCode === 403 &&
         err.code === "PROTECTED_PROCESS" &&
-        err.message.includes("禁止终止")
+        err.message.includes("禁止终止"),
     );
   }
   assert.deepEqual(killedPids, []);
@@ -630,7 +621,7 @@ test("ServiceDiagnosticsService enforces < 3s timeout protection under hanging p
     machineId: "win-1",
     embeddingDimensions: 4,
     enableWal: true,
-    loadVectorExtension: false
+    loadVectorExtension: false,
   });
   await storeFtsOnly.initialize();
 
@@ -657,7 +648,7 @@ test("ServiceDiagnosticsService enforces < 3s timeout protection under hanging p
         probeCalls += 1;
         await new Promise((r) => setTimeout(r, 10_000));
         return { reachable: false, statusCode: null, latencyMs: 10_000 };
-      }
+      },
     });
 
     const t0 = performance.now();
@@ -666,10 +657,7 @@ test("ServiceDiagnosticsService enforces < 3s timeout protection under hanging p
 
     assert.equal(first.ok, true);
     assert.equal(first.cached, false);
-    assert.ok(
-      elapsedMs < 3_000,
-      `Diagnostics exceeded 3s budget: ${Math.round(elapsedMs)}ms`
-    );
+    assert.ok(elapsedMs < 3_000, `Diagnostics exceeded 3s budget: ${Math.round(elapsedMs)}ms`);
     assert.equal(first.groups.length, 6);
     assert.ok(first.items.length >= 18);
 
@@ -697,7 +685,7 @@ test("ServiceDiagnosticsService enforces < 3s timeout protection under hanging p
     dbPath: ":memory:",
     machineId: "win-1",
     embeddingDimensions: 4,
-    enableWal: false
+    enableWal: false,
   });
   await storeHybrid.initialize();
   try {
@@ -714,7 +702,7 @@ test("ServiceDiagnosticsService enforces < 3s timeout protection under hanging p
       resolve7za: () => null,
       detectAndroidSdk: () => ({ sdkRoot: null, adbPath: null }),
       cliProbe: async () => ({ found: false, latencyMs: 1 }),
-      networkProbe: async () => ({ reachable: false, statusCode: null, latencyMs: 1 })
+      networkProbe: async () => ({ reachable: false, statusCode: null, latencyMs: 1 }),
     });
     const report = await hybridSvc.runDiagnostics(true);
     const vecCheck = report.items.find((i) => i.id === "memory.sqlite_vec");
@@ -722,11 +710,11 @@ test("ServiceDiagnosticsService enforces < 3s timeout protection under hanging p
     assert.equal(vecCheck.status, "ok");
     assert.ok(
       typeof vecCheck.version === "string" && /^v?\d+\.\d+\.\d+/.test(vecCheck.version),
-      `Expected real vec0 version in diagnostics, got: ${String(vecCheck.version)}`
+      `Expected real vec0 version in diagnostics, got: ${String(vecCheck.version)}`,
     );
     assert.ok(
       vecCheck.summary.includes(vecCheck.version),
-      `Expected diagnostics summary to include vec0 version, got: ${vecCheck.summary}`
+      `Expected diagnostics summary to include vec0 version, got: ${vecCheck.summary}`,
     );
     assert.ok(vecCheck.detail?.includes("vec0"));
   } finally {
@@ -744,7 +732,7 @@ test("PrismuxDaemon exposes v0.1.1-alpha.1 HTTP APIs: SSE updater events, diagno
   // Mock WebDAV server for real SyncVault /v1/sync/test and /v1/sync/now testing.
   const webdavState: { blob: Buffer | null; etag: string } = {
     blob: null,
-    etag: "etag-initial-1"
+    etag: "etag-initial-1",
   };
   const expectedWebdavPass = "SuperSecretWebDavPass999";
   const expectedAuthHeader = `Basic ${Buffer.from(`prismux:${expectedWebdavPass}`).toString("base64")}`;
@@ -765,7 +753,7 @@ test("PrismuxDaemon exposes v0.1.1-alpha.1 HTTP APIs: SSE updater events, diagno
       } else {
         res.writeHead(200, {
           etag: `"${webdavState.etag}"`,
-          "content-length": String(webdavState.blob.length)
+          "content-length": String(webdavState.blob.length),
         });
         res.end();
       }
@@ -807,14 +795,14 @@ test("PrismuxDaemon exposes v0.1.1-alpha.1 HTTP APIs: SSE updater events, diagno
     host: "127.0.0.1",
     port: 0,
     authToken,
-    disableAutoUpdateCheck: true
+    disableAutoUpdateCheck: true,
   });
 
   try {
     const ready = await daemon.start();
     const headers = {
       authorization: `Bearer ${authToken}`,
-      "content-type": "application/json"
+      "content-type": "application/json",
     };
 
     // 1. /v1/memory/stats exposes retrievalMode & sqliteVecLoaded
@@ -823,10 +811,10 @@ test("PrismuxDaemon exposes v0.1.1-alpha.1 HTTP APIs: SSE updater events, diagno
       kind: "fact",
       title: "Sync Check Entry",
       content: "End-to-end sync verification record.",
-      machineId: "local"
+      machineId: "local",
     });
     const memStatsRes = await fetch(`${ready.httpUrl}/v1/memory/stats`, {
-      headers
+      headers,
     });
     assert.equal(memStatsRes.status, 200);
     const memStats = (await memStatsRes.json()) as {
@@ -840,7 +828,7 @@ test("PrismuxDaemon exposes v0.1.1-alpha.1 HTTP APIs: SSE updater events, diagno
 
     // 2. /v1/updater/status & /v1/updater/events (SSE)
     const upStatusRes = await fetch(`${ready.httpUrl}/v1/updater/status`, {
-      headers
+      headers,
     });
     assert.equal(upStatusRes.status, 200);
     const upStatus = (await upStatusRes.json()) as UpdaterStatusSnapshot;
@@ -851,12 +839,10 @@ test("PrismuxDaemon exposes v0.1.1-alpha.1 HTTP APIs: SSE updater events, diagno
     const sseController = new AbortController();
     const sseRes = await fetch(
       `${ready.httpUrl}/v1/updater/events?token=${encodeURIComponent(authToken)}`,
-      { signal: sseController.signal }
+      { signal: sseController.signal },
     );
     assert.equal(sseRes.status, 200);
-    assert.ok(
-      sseRes.headers.get("content-type")?.includes("text/event-stream")
-    );
+    assert.ok(sseRes.headers.get("content-type")?.includes("text/event-stream"));
     const reader = sseRes.body!.getReader();
     const firstChunk = await reader.read();
     const sseText = new TextDecoder().decode(firstChunk.value);
@@ -869,7 +855,7 @@ test("PrismuxDaemon exposes v0.1.1-alpha.1 HTTP APIs: SSE updater events, diagno
     const selfKillRes = await fetch(`${ready.httpUrl}/v1/system/ports/kill`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ pid: process.pid })
+      body: JSON.stringify({ pid: process.pid }),
     });
     assert.equal(selfKillRes.status, 403);
     const selfKillJson = (await selfKillRes.json()) as {
@@ -884,7 +870,7 @@ test("PrismuxDaemon exposes v0.1.1-alpha.1 HTTP APIs: SSE updater events, diagno
     const sysKillRes = await fetch(`${ready.httpUrl}/v1/system/ports/kill`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ pid: 4 })
+      body: JSON.stringify({ pid: 4 }),
     });
     assert.equal(sysKillRes.status, 403);
 
@@ -893,12 +879,12 @@ test("PrismuxDaemon exposes v0.1.1-alpha.1 HTTP APIs: SSE updater events, diagno
     mkdirSync(fakeWs, { recursive: true });
     daemon.ptyPool.registerSession({
       ptyId: "stale-pty-1",
-      cwd: fakeWs
+      cwd: fakeWs,
     });
     await daemon.ptyPool.kill("stale-pty-1");
 
     const resResp = await fetch(`${ready.httpUrl}/v1/system/resources`, {
-      headers
+      headers,
     });
     assert.equal(resResp.status, 200);
     const resources = (await resResp.json()) as SystemResourcesResponse;
@@ -909,7 +895,7 @@ test("PrismuxDaemon exposes v0.1.1-alpha.1 HTTP APIs: SSE updater events, diagno
     const killPtyRes = await fetch(`${ready.httpUrl}/v1/system/pty/kill`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ sessionId: "stale-pty-1" })
+      body: JSON.stringify({ sessionId: "stale-pty-1" }),
     });
     assert.equal(killPtyRes.status, 200);
     const killPtyJson = (await killPtyRes.json()) as {
@@ -923,7 +909,7 @@ test("PrismuxDaemon exposes v0.1.1-alpha.1 HTTP APIs: SSE updater events, diagno
     const missingPtyRes = await fetch(`${ready.httpUrl}/v1/system/pty/kill`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ sessionId: "nonexistent-pty" })
+      body: JSON.stringify({ sessionId: "nonexistent-pty" }),
     });
     assert.equal(missingPtyRes.status, 404);
 
@@ -939,17 +925,17 @@ test("PrismuxDaemon exposes v0.1.1-alpha.1 HTTP APIs: SSE updater events, diagno
             endpointUrl: `${webdavServer.baseUrl}/dav`,
             username: "prismux",
             password: expectedWebdavPass,
-            remotePath: "prismux.prismux-backup"
-          }
-        }
-      })
+            remotePath: "prismux.prismux-backup",
+          },
+        },
+      }),
     });
     assert.equal(cfgRes.status, 200);
 
     const testSyncRes = await fetch(`${ready.httpUrl}/v1/sync/test`, {
       method: "POST",
       headers,
-      body: JSON.stringify({})
+      body: JSON.stringify({}),
     });
     assert.equal(testSyncRes.status, 200);
     const testSyncJson = (await testSyncRes.json()) as SyncTestResponse;
@@ -961,7 +947,7 @@ test("PrismuxDaemon exposes v0.1.1-alpha.1 HTTP APIs: SSE updater events, diagno
     const syncNowRes = await fetch(`${ready.httpUrl}/v1/sync/now`, {
       method: "POST",
       headers,
-      body: JSON.stringify({})
+      body: JSON.stringify({}),
     });
     assert.equal(syncNowRes.status, 200);
     const syncNowJson = (await syncNowRes.json()) as SyncNowResponse;
@@ -981,27 +967,27 @@ test("PrismuxDaemon exposes v0.1.1-alpha.1 HTTP APIs: SSE updater events, diagno
             enabled: true,
             endpointUrl: `${webdavServer.baseUrl}/dav`,
             username: "wrong-user",
-            password: expectedWebdavPass
-          }
-        }
-      })
+            password: expectedWebdavPass,
+          },
+        },
+      }),
     });
     const failedTestRes = await fetch(`${ready.httpUrl}/v1/sync/test`, {
       method: "POST",
       headers,
-      body: JSON.stringify({})
+      body: JSON.stringify({}),
     });
     assert.equal(failedTestRes.status, 200);
     const failedText = await failedTestRes.text();
     assert.ok(
       !failedText.includes(expectedWebdavPass),
-      "Sync test response must NEVER leak plaintext password!"
+      "Sync test response must NEVER leak plaintext password!",
     );
 
     // 6. /v1/diagnostics/services responds cleanly in < 3s with 6 groups & >= 18 checks
     const diagStart = performance.now();
     const diagRes = await fetch(`${ready.httpUrl}/v1/diagnostics/services`, {
-      headers
+      headers,
     });
     const diagElapsed = performance.now() - diagStart;
     assert.equal(diagRes.status, 200);
@@ -1011,19 +997,19 @@ test("PrismuxDaemon exposes v0.1.1-alpha.1 HTTP APIs: SSE updater events, diagno
     assert.ok(diagJson.items.length >= 18);
     assert.ok(
       diagElapsed < 3_500,
-      `Live /v1/diagnostics/services took ${Math.round(diagElapsed)}ms`
+      `Live /v1/diagnostics/services took ${Math.round(diagElapsed)}ms`,
     );
 
     // 7. /v1/system/ports responds cleanly with Daemon's own bound port protected
     const portsRes = await fetch(`${ready.httpUrl}/v1/system/ports`, {
-      headers
+      headers,
     });
     assert.equal(portsRes.status, 200);
     const portsJson = (await portsRes.json()) as SystemPortsResponse;
     assert.equal(portsJson.ok, true);
     assert.ok(Array.isArray(portsJson.ports));
     const daemonPortEntry = portsJson.ports.find(
-      (p) => p.pid === process.pid && p.port === ready.port
+      (p) => p.pid === process.pid && p.port === ready.port,
     );
     if (daemonPortEntry) {
       assert.equal(daemonPortEntry.protected, true);
@@ -1044,7 +1030,7 @@ test("ResourceMonitorService groups alive & stale PTY sessions by workspace clea
 
   const monitor = new ResourceMonitorService({
     ptyPool: pool,
-    sampleProcesses: async () => new Map()
+    sampleProcesses: async () => new Map(),
   });
 
   const snap = await monitor.getResources();
@@ -1056,7 +1042,7 @@ test("ResourceMonitorService groups alive & stale PTY sessions by workspace clea
   assert.ok(
     snap.processMemoryMetric === "working-set" ||
       snap.processMemoryMetric === "rss" ||
-      snap.processMemoryMetric === "footprint"
+      snap.processMemoryMetric === "footprint",
   );
   const bEntry = snap.ptys.find((p) => p.sessionId === "pty-b-1");
   assert.equal(bEntry?.alive, false);
@@ -1085,7 +1071,7 @@ test("PortScannerService aligns with Orca: bindHost/connectHost, HTTPS inference
         { pid: 41001, address: "0.0.0.0", port: 8443, protocol: "tcp" },
         { pid: 41002, address: "127.0.0.1", port: 5173, protocol: "tcp" },
         { pid: 41003, address: "0.0.0.0", port: 5432, protocol: "tcp" },
-        { pid: 41004, address: "127.0.0.1", port: 9090, protocol: "tcp" }
+        { pid: 41004, address: "127.0.0.1", port: 9090, protocol: "tcp" },
       ];
     },
     inspectProcesses: async (pids) => {
@@ -1095,29 +1081,29 @@ test("PortScannerService aligns with Orca: bindHost/connectHost, HTTPS inference
           map.set(pid, {
             pid,
             processName: "node.exe",
-            commandLine: `node tls-dev --cwd "${wsRoot}"`
+            commandLine: `node tls-dev --cwd "${wsRoot}"`,
           });
         } else if (pid === 41002) {
           map.set(pid, {
             pid,
             processName: "node.exe",
-            cwd: wsRoot
+            cwd: wsRoot,
           });
         } else if (pid === 41003) {
           map.set(pid, {
             pid,
             processName: "com.docker.backend.exe",
-            commandLine: "docker-proxy -proto tcp -host-port 5432"
+            commandLine: "docker-proxy -proto tcp -host-port 5432",
           });
         } else if (pid === 41004) {
           map.set(pid, {
             pid,
-            processName: "external-srv.exe"
+            processName: "external-srv.exe",
           });
         }
       }
       return map;
-    }
+    },
   });
 
   const scan = await scanner.scanPorts(wsRoot);
@@ -1128,7 +1114,7 @@ test("PortScannerService aligns with Orca: bindHost/connectHost, HTTPS inference
   // Priority order: workspace (5173, 8443) -> container (5432) -> external (9090)
   assert.deepEqual(
     scan.ports.map((p) => p.port),
-    [5173, 8443, 5432, 9090]
+    [5173, 8443, 5432, 9090],
   );
 
   const vitePort = scan.ports[0]!;
@@ -1167,11 +1153,9 @@ test("ResourceMonitorService aligns with Orca: computes Windows CPU% deltas, tra
     ptyId: "live-pty-cpu",
     cwd: ws,
     command: process.execPath,
-    args: ["-e", "setInterval(() => {}, 1000)"]
+    args: ["-e", "setInterval(() => {}, 1000)"],
   });
-  const runtimeInfo = pool
-    .listSessionRuntimeInfos()
-    .find((item) => item.ptyId === session.ptyId);
+  const runtimeInfo = pool.listSessionRuntimeInfos().find((item) => item.ptyId === session.ptyId);
   assert.ok(runtimeInfo?.pid && runtimeInfo.pid > 0);
   const childPid = runtimeInfo.pid;
 
@@ -1188,12 +1172,12 @@ test("ResourceMonitorService aligns with Orca: computes Windows CPU% deltas, tra
             cpuPercent: null,
             cpuSeconds: callIndex === 1 ? 1.0 : 1.25,
             memoryBytes: callIndex === 1 ? 30 * 1024 * 1024 : 34 * 1024 * 1024,
-            privateMemoryBytes: 22 * 1024 * 1024
+            privateMemoryBytes: 22 * 1024 * 1024,
           });
         }
       }
       return map;
-    }
+    },
   });
 
   try {
@@ -1209,7 +1193,7 @@ test("ResourceMonitorService aligns with Orca: computes Windows CPU% deltas, tra
     assert.equal(s2.workspaces[0]?.history.length, 2);
     assert.ok(
       s2.ptys[0]?.cpuPercent !== null && s2.ptys[0]!.cpuPercent > 0,
-      `Expected positive derived CPU%, got ${String(s2.ptys[0]?.cpuPercent)}`
+      `Expected positive derived CPU%, got ${String(s2.ptys[0]?.cpuPercent)}`,
     );
   } finally {
     await pool.dispose();
@@ -1227,38 +1211,38 @@ test("AppUpdater prefers Prismux-<ver>-SHA256SUMS.txt over prismux-plugins-*-SHA
         { name: "prismux-plugins-0.1.1-alpha.1-SHA256SUMS.txt" },
         { name: "prismux-plugin-0.1.1-alpha.1-SHA256SUMS.txt" },
         { name: "Prismux-0.1.1-alpha.1-SHA256SUMS.txt" },
-        { name: "SHA256SUMS.txt" }
+        { name: "SHA256SUMS.txt" },
       ],
-      "0.1.1-alpha.1"
+      "0.1.1-alpha.1",
     )?.name,
-    "Prismux-0.1.1-alpha.1-SHA256SUMS.txt"
+    "Prismux-0.1.1-alpha.1-SHA256SUMS.txt",
   );
   assert.equal(
     selectSoftwareChecksumAsset(
       [
         { name: "prismux-plugins-0.1.1-alpha.1-SHA256SUMS.txt" },
-        { name: "Prismux-SHA256SUMS.txt" }
+        { name: "Prismux-SHA256SUMS.txt" },
       ],
-      "0.1.1-alpha.1"
+      "0.1.1-alpha.1",
     )?.name,
-    "Prismux-SHA256SUMS.txt"
+    "Prismux-SHA256SUMS.txt",
   );
   assert.equal(
     selectSoftwareChecksumAsset(
       [{ name: "prismux-plugins-0.1.1-alpha.1-SHA256SUMS.txt" }],
-      "0.1.1-alpha.1"
+      "0.1.1-alpha.1",
     ),
-    undefined
+    undefined,
   );
 
   // Plugin archive filename helper avoids duplicate prefix and preserves legacy fallback
-  assert.deepEqual(
-    getOfficialPluginArchiveCandidateFilenames("qq", "0.1.1-alpha.1"),
-    ["prismux-plugin-qq-0.1.1-alpha.1.wb-plugin", "qq-0.1.1-alpha.1.wb-plugin"]
-  );
+  assert.deepEqual(getOfficialPluginArchiveCandidateFilenames("qq", "0.1.1-alpha.1"), [
+    "prismux-plugin-qq-0.1.1-alpha.1.wb-plugin",
+    "qq-0.1.1-alpha.1.wb-plugin",
+  ]);
   assert.deepEqual(
     getOfficialPluginArchiveCandidateFilenames("prismux-plugin-qq", "0.1.1-alpha.1"),
-    ["prismux-plugin-qq-0.1.1-alpha.1.wb-plugin"]
+    ["prismux-plugin-qq-0.1.1-alpha.1.wb-plugin"],
   );
 
   const ver = "0.1.1-alpha.1";
@@ -1267,10 +1251,10 @@ test("AppUpdater prefers Prismux-<ver>-SHA256SUMS.txt over prismux-plugins-*-SHA
   const exeSha = sha256Hex(exePayload);
   const fixture = await createRealSplit7zFixture(sevenZip, exeName, exePayload, "24k");
 
-  const softwareSumsText = [
-    `${exeSha}  ${exeName}`,
-    ...fixture.parts.map((p) => `${sha256Hex(p.bytes)}  ${p.name}`)
-  ].join("\n") + "\n";
+  const softwareSumsText =
+    [`${exeSha}  ${exeName}`, ...fixture.parts.map((p) => `${sha256Hex(p.bytes)}  ${p.name}`)].join(
+      "\n",
+    ) + "\n";
   // Deliberately bogus plugin sums placed FIRST in release assets list!
   const pluginSumsText = `${"0".repeat(64)}  prismux-plugin-qq-${ver}.wb-plugin\n${"f".repeat(64)}  ${exeName}\n`;
 
@@ -1290,20 +1274,20 @@ test("AppUpdater prefers Prismux-<ver>-SHA256SUMS.txt over prismux-plugins-*-SHA
             assets: [
               {
                 name: `prismux-plugins-${ver}-SHA256SUMS.txt`,
-                browser_download_url: `${mockRef.baseUrl}/dl/plugin-sums.txt`
+                browser_download_url: `${mockRef.baseUrl}/dl/plugin-sums.txt`,
               },
               {
                 name: `Prismux-${ver}-SHA256SUMS.txt`,
-                browser_download_url: `${mockRef.baseUrl}/dl/software-sums.txt`
+                browser_download_url: `${mockRef.baseUrl}/dl/software-sums.txt`,
               },
               {
                 name: exeName,
                 browser_download_url: `${mockRef.baseUrl}/dl/${encodeURIComponent(exeName)}`,
-                size: exePayload.length
-              }
-            ]
-          }
-        ])
+                size: exePayload.length,
+              },
+            ],
+          },
+        ]),
       );
       return;
     }
@@ -1320,20 +1304,20 @@ test("AppUpdater prefers Prismux-<ver>-SHA256SUMS.txt over prismux-plugins-*-SHA
             assets: [
               {
                 name: `prismux-plugins-${ver}-SHA256SUMS.txt`,
-                browser_download_url: `${mockRef.baseUrl}/dl/plugin-sums.txt`
+                browser_download_url: `${mockRef.baseUrl}/dl/plugin-sums.txt`,
               },
               {
                 name: `Prismux-${ver}-SHA256SUMS.txt`,
-                browser_download_url: `${mockRef.baseUrl}/dl/software-sums.txt`
+                browser_download_url: `${mockRef.baseUrl}/dl/software-sums.txt`,
               },
               ...fixture.parts.map((part) => ({
                 name: part.name,
                 browser_download_url: `${mockRef.baseUrl}/dl/${encodeURIComponent(part.name)}`,
-                size: part.bytes.length
-              }))
-            ]
-          }
-        ])
+                size: part.bytes.length,
+              })),
+            ],
+          },
+        ]),
       );
       return;
     }
@@ -1351,18 +1335,16 @@ test("AppUpdater prefers Prismux-<ver>-SHA256SUMS.txt over prismux-plugins-*-SHA
     if (urlPath === `/dl/${encodeURIComponent(exeName)}`) {
       res.writeHead(200, {
         "content-type": "application/octet-stream",
-        "content-length": String(exePayload.length)
+        "content-length": String(exePayload.length),
       });
       res.end(exePayload);
       return;
     }
-    const matchedPart = fixture.parts.find(
-      (p) => urlPath === `/dl/${encodeURIComponent(p.name)}`
-    );
+    const matchedPart = fixture.parts.find((p) => urlPath === `/dl/${encodeURIComponent(p.name)}`);
     if (matchedPart) {
       res.writeHead(200, {
         "content-type": "application/octet-stream",
-        "content-length": String(matchedPart.bytes.length)
+        "content-length": String(matchedPart.bytes.length),
       });
       res.end(matchedPart.bytes);
       return;
@@ -1380,7 +1362,7 @@ test("AppUpdater prefers Prismux-<ver>-SHA256SUMS.txt over prismux-plugins-*-SHA
       githubApiBase: `${mockRef.baseUrl}/github`,
       giteeApiBase: `${mockRef.baseUrl}/gitee`,
       initialPolicy: { routePreference: "global", includePrerelease: true },
-      allowInsecureLoopbackForTesting: true
+      allowInsecureLoopbackForTesting: true,
     });
 
     const ghCheck = await ghUpdater.checkForUpdates({ sourceOverride: "github" });
@@ -1400,7 +1382,7 @@ test("AppUpdater prefers Prismux-<ver>-SHA256SUMS.txt over prismux-plugins-*-SHA
       githubApiBase: `${mockRef.baseUrl}/github`,
       giteeApiBase: `${mockRef.baseUrl}/gitee`,
       initialPolicy: { routePreference: "domestic", includePrerelease: true },
-      allowInsecureLoopbackForTesting: true
+      allowInsecureLoopbackForTesting: true,
     });
 
     const giteeCheck = await giteeUpdater.checkForUpdates({ sourceOverride: "gitee" });
@@ -1426,7 +1408,7 @@ test("Daemon CORS preflight allows Cache-Control and Last-Event-ID on /v1/update
     dataDir,
     host: "127.0.0.1",
     port: 0,
-    authToken
+    authToken,
   });
   const ready = await daemon.start();
 
@@ -1438,25 +1420,22 @@ test("Daemon CORS preflight allows Cache-Control and Last-Event-ID on /v1/update
         headers: {
           Origin: "prismux://app",
           "Access-Control-Request-Method": "GET",
-          "Access-Control-Request-Headers": "cache-control, last-event-id"
-        }
-      }
+          "Access-Control-Request-Headers": "cache-control, last-event-id",
+        },
+      },
     );
     assert.equal(preflightRes.status, 204);
-    assert.equal(
-      preflightRes.headers.get("access-control-allow-origin"),
-      "prismux://app"
-    );
+    assert.equal(preflightRes.headers.get("access-control-allow-origin"), "prismux://app");
     const allowedHeaders = (
       preflightRes.headers.get("access-control-allow-headers") ?? ""
     ).toLowerCase();
     assert.ok(
       allowedHeaders.includes("cache-control"),
-      `Expected Cache-Control in allow-headers, got: ${allowedHeaders}`
+      `Expected Cache-Control in allow-headers, got: ${allowedHeaders}`,
     );
     assert.ok(
       allowedHeaders.includes("last-event-id"),
-      `Expected Last-Event-ID in allow-headers, got: ${allowedHeaders}`
+      `Expected Last-Event-ID in allow-headers, got: ${allowedHeaders}`,
     );
     assert.ok(allowedHeaders.includes("pragma"));
     assert.ok(allowedHeaders.includes("accept"));
@@ -1467,19 +1446,14 @@ test("Daemon CORS preflight allows Cache-Control and Last-Event-ID on /v1/update
       {
         headers: {
           Origin: "prismux://app",
-          "Cache-Control": "no-cache"
+          "Cache-Control": "no-cache",
         },
-        signal: controller.signal
-      }
+        signal: controller.signal,
+      },
     );
     assert.equal(sseRes.status, 200);
-    assert.equal(
-      sseRes.headers.get("access-control-allow-origin"),
-      "prismux://app"
-    );
-    assert.ok(
-      (sseRes.headers.get("content-type") ?? "").includes("text/event-stream")
-    );
+    assert.equal(sseRes.headers.get("access-control-allow-origin"), "prismux://app");
+    assert.ok((sseRes.headers.get("content-type") ?? "").includes("text/event-stream"));
     controller.abort();
     await sseRes.body?.cancel().catch(() => undefined);
   } finally {
@@ -1506,7 +1480,7 @@ test("PortScannerService collapses IPv4/IPv6 dual-stack duplicate listeners pref
       // Distinct LAN interface IP on same port & PID must remain separate
       { pid: 46784, address: "192.168.1.50", port: 53, protocol: "tcp" },
       // Pure IPv6-only listener survives with connectHost 127.0.0.1
-      { pid: 55200, address: "[::1]", port: 3001, protocol: "tcp" }
+      { pid: 55200, address: "[::1]", port: 3001, protocol: "tcp" },
     ],
     inspectProcesses: async (pids) => {
       const map = new Map();
@@ -1520,11 +1494,11 @@ test("PortScannerService collapses IPv4/IPv6 dual-stack duplicate listeners pref
                 ? "svchost.exe"
                 : pid === 4
                   ? "System"
-                  : "node.exe"
+                  : "node.exe",
         });
       }
       return map;
-    }
+    },
   });
 
   const scan = await scanner.scanPorts();
@@ -1532,13 +1506,13 @@ test("PortScannerService collapses IPv4/IPv6 dual-stack duplicate listeners pref
   assert.equal(scan.ports.length, 6);
 
   const dnsLoopback = scan.ports.filter(
-    (p) => p.pid === 46784 && p.port === 53 && p.connectHost === "127.0.0.1"
+    (p) => p.pid === 46784 && p.port === 53 && p.connectHost === "127.0.0.1",
   );
   assert.equal(dnsLoopback.length, 1);
   assert.equal(dnsLoopback[0]!.bindHost, "0.0.0.0");
 
   const dnsLan = scan.ports.filter(
-    (p) => p.pid === 46784 && p.port === 53 && p.connectHost === "192.168.1.50"
+    (p) => p.pid === 46784 && p.port === 53 && p.connectHost === "192.168.1.50",
   );
   assert.equal(dnsLan.length, 1);
 
@@ -1564,11 +1538,11 @@ test("PortScannerService collapses IPv4/IPv6 dual-stack duplicate listeners pref
 test("ServiceDiagnosticsService marks desktop-hosted T3 Server ok via HTTP liveness probe even when bare WS RPC is disconnected", async () => {
   assert.equal(
     normalizeCoreHttpProbeUrl("ws://127.0.0.1:3773/ws?orchestrationProtocol=2"),
-    "http://127.0.0.1:3773/"
+    "http://127.0.0.1:3773/",
   );
   assert.equal(
     normalizeCoreHttpProbeUrl("http://127.0.0.1:3773/health"),
-    "http://127.0.0.1:3773/health"
+    "http://127.0.0.1:3773/health",
   );
 
   let receivedAuthHeader: string | undefined;
@@ -1577,9 +1551,7 @@ test("ServiceDiagnosticsService marks desktop-hosted T3 Server ok via HTTP liven
   const mockT3Http = await startMockServer((req, res) => {
     receivedMethod = req.method;
     receivedAuthHeader =
-      typeof req.headers.authorization === "string"
-        ? req.headers.authorization
-        : undefined;
+      typeof req.headers.authorization === "string" ? req.headers.authorization : undefined;
     res.statusCode = responseStatus;
     res.end("ok");
   });
@@ -1593,8 +1565,8 @@ test("ServiceDiagnosticsService marks desktop-hosted T3 Server ok via HTTP liven
       protocolVersion: "2",
       reconnectAttempts: 3,
       pendingRequestCount: 0,
-      lastError: "WebSocket was closed before the connection was established"
-    })
+      lastError: "WebSocket was closed before the connection was established",
+    }),
   };
 
   try {
@@ -1608,7 +1580,7 @@ test("ServiceDiagnosticsService marks desktop-hosted T3 Server ok via HTTP liven
       t3Token: secretToken,
       cliProbe: async () => ({ found: true, version: "1.0.0", latencyMs: 1 }),
       detectAndroidSdk: () => ({ sdkRoot: null, adbPath: null }),
-      resolve7za: () => "7za.exe"
+      resolve7za: () => "7za.exe",
     });
     const reportOk = await diagFromWsUrl.runDiagnostics(true);
     const t3OkItem = reportOk.items.find((i) => i.id === "host.core_server");
@@ -1632,7 +1604,7 @@ test("ServiceDiagnosticsService marks desktop-hosted T3 Server ok via HTTP liven
         startedAt: Date.now(),
         cliProbe: async () => ({ found: true, version: "1.0.0", latencyMs: 1 }),
         detectAndroidSdk: () => ({ sdkRoot: null, adbPath: null }),
-        resolve7za: () => "7za.exe"
+        resolve7za: () => "7za.exe",
       });
       const reportEnv = await diagFromEnv.runDiagnostics(true);
       const t3EnvItem = reportEnv.items.find((i) => i.id === "host.core_server");
@@ -1658,7 +1630,7 @@ test("ServiceDiagnosticsService marks desktop-hosted T3 Server ok via HTTP liven
     coreServerUrl: mockT3Http.baseUrl,
     cliProbe: async () => ({ found: true, version: "1.0.0", latencyMs: 1 }),
     detectAndroidSdk: () => ({ sdkRoot: null, adbPath: null }),
-    resolve7za: () => "7za.exe"
+    resolve7za: () => "7za.exe",
   });
   const reportDown = await diagDown.runDiagnostics(true);
   const t3DownItem = reportDown.items.find((i) => i.id === "host.core_server");
@@ -1674,17 +1646,16 @@ test("GET /v1/plugins/logs gracefully returns HTTP 200 empty logs for uninstalle
     dataDir,
     host: "127.0.0.1",
     port: 0,
-    authToken
+    authToken,
   });
   const ready = await daemon.start();
   const headers = { Authorization: `Bearer ${authToken}` };
 
   try {
     // 1. Uninstalled official plugin -> HTTP 200 (never 404!) with empty logs array
-    const missingRes = await fetch(
-      `${ready.httpUrl}/v1/plugins/logs?pluginId=qq&limit=20`,
-      { headers }
-    );
+    const missingRes = await fetch(`${ready.httpUrl}/v1/plugins/logs?pluginId=qq&limit=20`, {
+      headers,
+    });
     assert.equal(missingRes.status, 200);
     const missingBody = (await missingRes.json()) as {
       ok: boolean;
@@ -1697,7 +1668,7 @@ test("GET /v1/plugins/logs gracefully returns HTTP 200 empty logs for uninstalle
 
     // 2. Omitted pluginId -> HTTP 200 with empty logs array
     const allEmptyRes = await fetch(`${ready.httpUrl}/v1/plugins/logs`, {
-      headers
+      headers,
     });
     assert.equal(allEmptyRes.status, 200);
     const allEmptyBody = (await allEmptyRes.json()) as {
@@ -1710,23 +1681,12 @@ test("GET /v1/plugins/logs gracefully returns HTTP 200 empty logs for uninstalle
     assert.deepEqual(allEmptyBody.logs, []);
 
     // 3. Recorded plugin runtime logs are returned newest-first and honor `limit`
-    daemon.businessService.recordPluginLog(
-      "qq",
-      "info",
-      "daemon",
-      "插件 qq 已加载"
-    );
-    daemon.businessService.recordPluginLog(
-      "qq",
-      "warn",
-      "onebot",
-      "OneBot 重连退避中"
-    );
+    daemon.businessService.recordPluginLog("qq", "info", "daemon", "插件 qq 已加载");
+    daemon.businessService.recordPluginLog("qq", "warn", "onebot", "OneBot 重连退避中");
 
-    const limitedRes = await fetch(
-      `${ready.httpUrl}/v1/plugins/logs?pluginId=qq&limit=1`,
-      { headers }
-    );
+    const limitedRes = await fetch(`${ready.httpUrl}/v1/plugins/logs?pluginId=qq&limit=1`, {
+      headers,
+    });
     assert.equal(limitedRes.status, 200);
     const limitedBody = (await limitedRes.json()) as {
       ok: boolean;
@@ -1770,7 +1730,7 @@ test("AppUpdater falls back to Gitee public Web Releases on OpenAPI v5 HTTP 403 
     sampleHtml,
     "https://gitee.com",
     "Fish-under-sea",
-    "Prismux"
+    "Prismux",
   );
   assert.equal(parsed.length, 2);
   const previewRec = parsed.find((r) => r.tag_name === "v0.1.1-preview.1");
@@ -1790,16 +1750,10 @@ test("AppUpdater falls back to Gitee public Web Releases on OpenAPI v5 HTTP 403 
       res.end('{"message":"API rate limit exceeded"}');
       return;
     }
-    if (
-      urlPath === "/github-web/Fish-under-sea/Prismux/releases/latest" &&
-      req.method === "HEAD"
-    ) {
+    if (urlPath === "/github-web/Fish-under-sea/Prismux/releases/latest" && req.method === "HEAD") {
       githubWebHeadHits += 1;
       res.statusCode = 302;
-      res.setHeader(
-        "location",
-        "/github-web/Fish-under-sea/Prismux/releases/tag/v0.1.1-preview.1"
-      );
+      res.setHeader("location", "/github-web/Fish-under-sea/Prismux/releases/tag/v0.1.1-preview.1");
       res.end();
       return;
     }
@@ -1810,16 +1764,10 @@ test("AppUpdater falls back to Gitee public Web Releases on OpenAPI v5 HTTP 403 
       res.end("403 Forbidden (Rate Limit Exceeded)");
       return;
     }
-    if (
-      urlPath === "/gitee-web/Fish-under-sea/Prismux/releases/latest" &&
-      req.method === "HEAD"
-    ) {
+    if (urlPath === "/gitee-web/Fish-under-sea/Prismux/releases/latest" && req.method === "HEAD") {
       giteeWebHeadHits += 1;
       res.statusCode = 302;
-      res.setHeader(
-        "location",
-        "/gitee-web/Fish-under-sea/Prismux/releases/tag/v0.1.1-preview.1"
-      );
+      res.setHeader("location", "/gitee-web/Fish-under-sea/Prismux/releases/tag/v0.1.1-preview.1");
       res.end();
       return;
     }
@@ -1858,7 +1806,7 @@ test("AppUpdater falls back to Gitee public Web Releases on OpenAPI v5 HTTP 403 
       giteeApiBase: `${mockServer.baseUrl}/gitee-api`,
       giteeWebBase: `${mockServer.baseUrl}/gitee-web`,
       initialPolicy: { routePreference: "domestic", includePrerelease: true },
-      allowInsecureLoopbackForTesting: true
+      allowInsecureLoopbackForTesting: true,
     });
 
     const probe = await updater.probeSources();
@@ -1872,9 +1820,7 @@ test("AppUpdater falls back to Gitee public Web Releases on OpenAPI v5 HTTP 403 
     assert.ok(giteeProbe);
     assert.equal(giteeProbe.reachable, true);
     assert.equal(giteeProbe.statusCode, 302);
-    assert.ok(
-      giteeProbe.url.endsWith("/gitee-web/Fish-under-sea/Prismux/releases/latest")
-    );
+    assert.ok(giteeProbe.url.endsWith("/gitee-web/Fish-under-sea/Prismux/releases/latest"));
     assert.equal(giteeWebHeadHits, 1);
 
     const check = await updater.checkForUpdates({ sourceOverride: "gitee" });
@@ -1893,12 +1839,12 @@ test("AppUpdater falls back to Gitee public Web Releases on OpenAPI v5 HTTP 403 
 
 test("ResourceMonitorService fuses Electron host-metrics + OS process tree + T3 Server + Agent/Terminal descendants without double counting", async () => {
   const sampleTsv = [
-    "1000\t1\tPrismux.exe\t150000000\t100000000\t10000000\t20000000\t\"C:\\Program Files\\Prismux\\Prismux.exe\"",
+    '1000\t1\tPrismux.exe\t150000000\t100000000\t10000000\t20000000\t"C:\\Program Files\\Prismux\\Prismux.exe"',
     "2000\t1000\tnode.exe\t120000000\t88000000\t5000000\t15000000\tnode apps\\server\\dist\\index.mjs --mode desktop",
     "2100\t2000\tpwsh.exe\t64000000\t42000000\t2000000\t4000000\tpwsh.exe -NoLogo",
     "2101\t2100\tnode.exe\t95000000\t71000000\t3000000\t9000000\tnode C:\\Users\\Fish\\AppData\\Roaming\\npm\\claude.js",
     `${process.pid}\t1000\tnode.exe\t82000000\t55000000\t1000000\t2000000\tnode apps\\daemon\\dist\\cli.js`,
-    `99999\t${process.pid}\tpowershell.exe\t30000000\t20000000\t100000\t200000\tpowershell.exe -Command # PRISMUX_RES_PROBE Get-CimInstance Win32_Process`
+    `99999\t${process.pid}\tpowershell.exe\t30000000\t20000000\t100000\t200000\tpowershell.exe -Command # PRISMUX_RES_PROBE Get-CimInstance Win32_Process`,
   ].join("\r\n");
 
   const parsedTree = parseWindowsProcessTreeTsv(sampleTsv);
@@ -1918,11 +1864,11 @@ test("ResourceMonitorService fuses Electron host-metrics + OS process tree + T3 
         const cpuBoost = tick === 1 ? 0 : pid === 2000 ? 0.4 : pid === 2101 ? 0.6 : 0.1;
         entries.set(pid, {
           ...row,
-          cpuSeconds: (row.cpuSeconds ?? 0) + cpuBoost
+          cpuSeconds: (row.cpuSeconds ?? 0) + cpuBoost,
         });
       }
       return entries;
-    }
+    },
   });
 
   try {
@@ -1931,8 +1877,16 @@ test("ResourceMonitorService fuses Electron host-metrics + OS process tree + T3 
     assert.equal(autoSnap.coreServer?.pid, 2000);
     assert.equal(autoSnap.coreServer?.hostedBy, "electron");
     assert.equal(autoSnap.coreServer?.memoryBytes, 120_000_000);
-    assert.ok(autoSnap.processes.some((p) => p.pid === 2101 && p.category === "agent" && p.name === "Claude Code"));
-    assert.ok(autoSnap.processes.some((p) => p.pid === 2100 && p.category === "terminal" && p.name === "PowerShell 7"));
+    assert.ok(
+      autoSnap.processes.some(
+        (p) => p.pid === 2101 && p.category === "agent" && p.name === "Claude",
+      ),
+    );
+    assert.ok(
+      autoSnap.processes.some(
+        (p) => p.pid === 2100 && p.category === "terminal" && p.name === "PowerShell 7",
+      ),
+    );
     assert.ok(!autoSnap.processes.some((p) => p.pid === 99999), "Self probe must be excluded");
 
     // 2. Push real Electron app.getAppMetrics() (Browser + Tab + GPU + Network) + T3 Server PID
@@ -1947,14 +1901,40 @@ test("ResourceMonitorService fuses Electron host-metrics + OS process tree + T3 
         desiredRunning: true,
         state: "running",
         hostedBy: "electron",
-        httpUrl: "http://127.0.0.1:3773"
+        httpUrl: "http://127.0.0.1:3773",
       },
       electronProcesses: [
-        { pid: 1000, type: "Browser", cpuPercent: 8.0, workingSetBytes: 155_000_000, privateMemoryBytes: 102_000_000 },
-        { pid: 1001, type: "Tab", name: "Workbench", cpuPercent: 24.0, workingSetBytes: 240_000_000, privateMemoryBytes: 195_000_000 },
-        { pid: 1002, type: "GPU", cpuPercent: 16.0, workingSetBytes: 130_000_000, privateMemoryBytes: 98_000_000 },
-        { pid: 1003, type: "Utility", name: "Network Service", cpuPercent: 4.0, workingSetBytes: 45_000_000, privateMemoryBytes: 30_000_000 }
-      ]
+        {
+          pid: 1000,
+          type: "Browser",
+          cpuPercent: 8.0,
+          workingSetBytes: 155_000_000,
+          privateMemoryBytes: 102_000_000,
+        },
+        {
+          pid: 1001,
+          type: "Tab",
+          name: "Workbench",
+          cpuPercent: 24.0,
+          workingSetBytes: 240_000_000,
+          privateMemoryBytes: 195_000_000,
+        },
+        {
+          pid: 1002,
+          type: "GPU",
+          cpuPercent: 16.0,
+          workingSetBytes: 130_000_000,
+          privateMemoryBytes: 98_000_000,
+        },
+        {
+          pid: 1003,
+          type: "Utility",
+          name: "Network Service",
+          cpuPercent: 4.0,
+          workingSetBytes: 45_000_000,
+          privateMemoryBytes: 30_000_000,
+        },
+      ],
     });
     assert.equal(ingest.ok, true);
     assert.equal(ingest.acceptedProcesses, 4);
@@ -1972,14 +1952,40 @@ test("ResourceMonitorService fuses Electron host-metrics + OS process tree + T3 
         desiredRunning: true,
         state: "running",
         hostedBy: "electron",
-        httpUrl: "http://127.0.0.1:3773"
+        httpUrl: "http://127.0.0.1:3773",
       },
       electronProcesses: [
-        { pid: 1000, type: "Browser", cpuPercent: 8.0, workingSetBytes: 155_000_000, privateMemoryBytes: 102_000_000 },
-        { pid: 1001, type: "Tab", name: "Workbench", cpuPercent: 24.0, workingSetBytes: 240_000_000, privateMemoryBytes: 195_000_000 },
-        { pid: 1002, type: "GPU", cpuPercent: 16.0, workingSetBytes: 130_000_000, privateMemoryBytes: 98_000_000 },
-        { pid: 1003, type: "Utility", name: "Network Service", cpuPercent: 4.0, workingSetBytes: 45_000_000, privateMemoryBytes: 30_000_000 }
-      ]
+        {
+          pid: 1000,
+          type: "Browser",
+          cpuPercent: 8.0,
+          workingSetBytes: 155_000_000,
+          privateMemoryBytes: 102_000_000,
+        },
+        {
+          pid: 1001,
+          type: "Tab",
+          name: "Workbench",
+          cpuPercent: 24.0,
+          workingSetBytes: 240_000_000,
+          privateMemoryBytes: 195_000_000,
+        },
+        {
+          pid: 1002,
+          type: "GPU",
+          cpuPercent: 16.0,
+          workingSetBytes: 130_000_000,
+          privateMemoryBytes: 98_000_000,
+        },
+        {
+          pid: 1003,
+          type: "Utility",
+          name: "Network Service",
+          cpuPercent: 4.0,
+          workingSetBytes: 45_000_000,
+          privateMemoryBytes: 30_000_000,
+        },
+      ],
     });
 
     await new Promise((r) => setTimeout(r, 80));
@@ -1996,7 +2002,10 @@ test("ResourceMonitorService fuses Electron host-metrics + OS process tree + T3 
     assert.ok(fused.activeTerminalCount >= 1);
     // Total memory sums all unique PIDs without double-counting Main/Daemon/T3
     const expectedTotalMem =
-      155_000_000 + 240_000_000 + 130_000_000 + 45_000_000 + // Electron 4 procs
+      155_000_000 +
+      240_000_000 +
+      130_000_000 +
+      45_000_000 + // Electron 4 procs
       120_000_000 + // T3 Server
       82_000_000 + // Daemon
       64_000_000 + // pwsh
@@ -2018,7 +2027,7 @@ test("PrismuxDaemon exposes POST /v1/resources/host-metrics and live Windows pro
     host: "127.0.0.1",
     port: 0,
     authToken,
-    disableAutoUpdateCheck: true
+    disableAutoUpdateCheck: true,
   });
 
   // Spawn a real lightweight child process performing brief CPU activity so live OS tree sampling observes real RAM & CPU
@@ -2026,23 +2035,23 @@ test("PrismuxDaemon exposes POST /v1/resources/host-metrics and live Windows pro
     process.execPath,
     [
       "-e",
-      "const end = Date.now() + 8000; function spin(){ const t = Date.now() + 25; while(Date.now() < t){} if(Date.now() < end) setTimeout(spin, 15); } spin();"
+      "const end = Date.now() + 8000; function spin(){ const t = Date.now() + 25; while(Date.now() < t){} if(Date.now() < end) setTimeout(spin, 15); } spin();",
     ],
-    { stdio: "ignore", windowsHide: true }
+    { stdio: "ignore", windowsHide: true },
   );
 
   try {
     const ready = await daemon.start();
     const headers = {
       authorization: `Bearer ${authToken}`,
-      "content-type": "application/json"
+      "content-type": "application/json",
     };
 
     // 1. Reject malformed payload with 400
     const badRes = await fetch(`${ready.httpUrl}/v1/resources/host-metrics`, {
       method: "POST",
       headers,
-      body: JSON.stringify({})
+      body: JSON.stringify({}),
     });
     assert.equal(badRes.status, 400);
 
@@ -2061,10 +2070,10 @@ test("PrismuxDaemon exposes POST /v1/resources/host-metrics and live Windows pro
           desiredRunning: true,
           state: "running",
           hostedBy: "electron",
-          httpUrl: "http://127.0.0.1:3773"
+          httpUrl: "http://127.0.0.1:3773",
         },
-        electronProcesses: []
-      })
+        electronProcesses: [],
+      }),
     });
     assert.equal(postRes.status, 200);
     const postJson = (await postRes.json()) as { ok: boolean; coreServerPid: number | null };
@@ -2076,12 +2085,16 @@ test("PrismuxDaemon exposes POST /v1/resources/host-metrics and live Windows pro
     assert.equal(firstRes.status, 200);
     const snap1 = (await firstRes.json()) as ExtendedSystemResourcesResponse;
     assert.equal(snap1.ok, true);
-    assert.ok(snap1.daemon.memoryBytes > 10 * 1024 * 1024, `Expected real daemon RAM, got ${snap1.daemon.memoryBytes}`);
+    assert.ok(
+      snap1.daemon.memoryBytes > 10 * 1024 * 1024,
+      `Expected real daemon RAM, got ${snap1.daemon.memoryBytes}`,
+    );
     assert.ok(snap1.coreServer !== null, "Expected coreServer to be populated");
     assert.equal(snap1.coreServer?.pid, busyChild.pid);
     assert.ok(
-      typeof snap1.coreServer?.memoryBytes === "number" && snap1.coreServer.memoryBytes > 5 * 1024 * 1024,
-      `Expected real T3 Server RAM > 5MB, got ${String(snap1.coreServer?.memoryBytes)}`
+      typeof snap1.coreServer?.memoryBytes === "number" &&
+        snap1.coreServer.memoryBytes > 5 * 1024 * 1024,
+      `Expected real T3 Server RAM > 5MB, got ${String(snap1.coreServer?.memoryBytes)}`,
     );
 
     await new Promise((r) => setTimeout(r, 450));
@@ -2089,14 +2102,17 @@ test("PrismuxDaemon exposes POST /v1/resources/host-metrics and live Windows pro
     assert.equal(secondRes.status, 200);
     const snap2 = (await secondRes.json()) as ExtendedSystemResourcesResponse;
     assert.equal(snap2.ok, true);
-    assert.ok(snap2.totalMemoryBytes > snap2.daemon.memoryBytes, "Total RAM must exceed daemon-only RAM");
+    assert.ok(
+      snap2.totalMemoryBytes > snap2.daemon.memoryBytes,
+      "Total RAM must exceed daemon-only RAM",
+    );
     assert.ok(
       typeof snap2.coreServer?.cpuPercent === "number" && snap2.coreServer.cpuPercent > 0,
-      `Expected live T3 Server CPU% > 0, got ${String(snap2.coreServer?.cpuPercent)}`
+      `Expected live T3 Server CPU% > 0, got ${String(snap2.coreServer?.cpuPercent)}`,
     );
     assert.ok(
       typeof snap2.totalCpuPercent === "number" && snap2.totalCpuPercent > 0,
-      `Expected live total CPU% > 0, got ${String(snap2.totalCpuPercent)}`
+      `Expected live total CPU% > 0, got ${String(snap2.totalCpuPercent)}`,
     );
     assert.ok(snap2.processes.some((p) => p.pid === busyChild.pid && p.role === "core-server"));
     assert.ok(snap2.processes.some((p) => p.pid === process.pid && p.role === "daemon"));

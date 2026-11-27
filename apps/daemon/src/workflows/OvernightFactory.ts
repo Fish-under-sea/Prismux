@@ -16,6 +16,7 @@ import {
 } from "@prismux/memory-core";
 import {
   BRAND,
+  CANONICAL_PROVIDER_DISPLAY_NAMES,
   isAntigravityProvider,
   type DispatchCallerKind,
   type DispatchReasoningEffort,
@@ -1596,25 +1597,25 @@ function buildOvernightCliAgentPlan(
           ...(effectiveModel ? ["--model", effectiveModel] : []),
         ],
         stdinPrompt: prompt,
-        providerLabel: "Claude Code",
+        providerLabel: CANONICAL_PROVIDER_DISPLAY_NAMES.claudeAgent,
       };
     case "opencode":
       return {
         commands: ["opencode"],
         args: ["run", ...(effectiveModel ? ["--model", effectiveModel] : []), prompt],
-        providerLabel: "OpenCode",
+        providerLabel: CANONICAL_PROVIDER_DISPLAY_NAMES.opencode,
       };
     case "gemini":
       return {
         commands: ["gemini"],
         args: [...(effectiveModel ? ["-m", effectiveModel] : []), "-p", prompt],
-        providerLabel: "Gemini CLI",
+        providerLabel: CANONICAL_PROVIDER_DISPLAY_NAMES.gemini,
       };
     case "dsh":
       return {
         commands: ["dsh"],
         args: ["run", ...(effectiveModel ? ["--model", effectiveModel] : []), prompt],
-        providerLabel: "DeepSeek Harness (dsh)",
+        providerLabel: `${CANONICAL_PROVIDER_DISPLAY_NAMES.dsh} (dsh)`,
       };
     case "codex":
     default:
@@ -1628,7 +1629,7 @@ function buildOvernightCliAgentPlan(
           "-",
         ],
         stdinPrompt: prompt,
-        providerLabel: "Codex",
+        providerLabel: CANONICAL_PROVIDER_DISPLAY_NAMES.codex,
       };
   }
 }

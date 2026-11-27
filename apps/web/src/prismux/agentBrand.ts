@@ -104,7 +104,7 @@ const CANONICAL_BRAND_META: Readonly<Record<Exclude<AgentBrandId, "custom">, Age
   },
   "claude-code": {
     id: "claude-code",
-    displayName: "Claude Code",
+    displayName: "Claude",
     canonicalProviderId: "claude-code",
     accentColor: "#d97757",
     glowColor: "rgba(217, 119, 87, 0.62)",
@@ -299,6 +299,52 @@ const CANONICAL_BRAND_META: Readonly<Record<Exclude<AgentBrandId, "custom">, Age
     glowColor: "rgba(99, 102, 241, 0.48)",
   },
 };
+
+/**
+ * Single Source of Truth for default user-facing provider / agent display names across Prismux.
+ * Aligned with server `PROVIDER_DISPLAY_NAMES` (`Claude`, `Codex`, `Antigravity`, `OpenCode`, `Pi`, `Cursor`, `DeepSeek Harness`, etc.).
+ */
+export const CANONICAL_PROVIDER_DISPLAY_NAMES = {
+  codex: CANONICAL_BRAND_META.codex.displayName,
+  claudeAgent: CANONICAL_BRAND_META["claude-code"].displayName,
+  "claude-code": CANONICAL_BRAND_META["claude-code"].displayName,
+  claude: CANONICAL_BRAND_META["claude-code"].displayName,
+  antigravity: CANONICAL_BRAND_META.antigravity.displayName,
+  agy: CANONICAL_BRAND_META.antigravity.displayName,
+  gemini: CANONICAL_BRAND_META.gemini.displayName,
+  opencode: CANONICAL_BRAND_META.opencode.displayName,
+  pi: CANONICAL_BRAND_META.pi.displayName,
+  cursor: CANONICAL_BRAND_META.cursor.displayName,
+  dsh: CANONICAL_BRAND_META.dsh.displayName,
+  glm: CANONICAL_BRAND_META.glm.displayName,
+  qwen: CANONICAL_BRAND_META.qwen.displayName,
+  kimi: CANONICAL_BRAND_META.kimi.displayName,
+  "github-copilot": CANONICAL_BRAND_META["github-copilot"].displayName,
+  "mistral-vibe": CANONICAL_BRAND_META["mistral-vibe"].displayName,
+  "factory-droid": CANONICAL_BRAND_META["factory-droid"].displayName,
+  cline: CANONICAL_BRAND_META.cline.displayName,
+  goose: CANONICAL_BRAND_META.goose.displayName,
+  auggie: CANONICAL_BRAND_META.auggie.displayName,
+  devin: CANONICAL_BRAND_META.devin.displayName,
+  kiro: CANONICAL_BRAND_META.kiro.displayName,
+  openhands: CANONICAL_BRAND_META.openhands.displayName,
+  hermes: CANONICAL_BRAND_META.hermes.displayName,
+  minimax: CANONICAL_BRAND_META.minimax.displayName,
+  grok: CANONICAL_BRAND_META.grok.displayName,
+  kilo: CANONICAL_BRAND_META.kilo.displayName,
+  junie: CANONICAL_BRAND_META.junie.displayName,
+  amp: CANONICAL_BRAND_META.amp.displayName,
+  codebuddy: CANONICAL_BRAND_META.codebuddy.displayName,
+  muse: CANONICAL_BRAND_META.muse.displayName,
+  acp: CANONICAL_BRAND_META.acp.displayName,
+} as const;
+
+export function getCanonicalProviderDisplayName(
+  providerIdOrName: string | null | undefined,
+  customDisplayName?: string | null,
+): string {
+  return formatAgentBrandName(providerIdOrName, customDisplayName);
+}
 
 const KNOWN_ALIASES: Readonly<Record<string, Exclude<AgentBrandId, "custom">>> = {
   codex: "codex",

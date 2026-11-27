@@ -8,10 +8,10 @@ import type {
 import type { MergedUsage } from "@prismux/core-shared/usageMerge";
 import {
   orderItemsByConfiguredProviderOrder,
-  resolveConfiguredProviderLabel,
   type ProviderInstanceEntry,
 } from "../../providerInstances";
-import { resolveAcpAgentBrandKey } from "../agentBrand";
+import { formatAgentBrandName, resolveAcpAgentBrandKey } from "../agentBrand";
+import { resolveConfiguredProviderDisplayName } from "../providerDisplayName";
 import type { UsagePercentMode } from "./statusBarVisibility";
 
 export interface StatusBarProviderDisplayOptions {
@@ -142,34 +142,11 @@ export function classifyUsageUrgency(usedPercent: number): UsageWindowUrgency {
 
 export function canonicalProviderDisplayName(rawName: string | undefined, driver?: string): string {
   const trimmed = (rawName ?? "").trim();
-  const key = (driver ?? trimmed).toLowerCase();
-  if (
-    trimmed.length > 0 &&
-    !/^(codex|claudeagent|claude|antigravity|opencode|cursor|grok|dsh|pi)$/i.test(trimmed)
-  ) {
-    return trimmed;
+  const driverTrimmed = (driver ?? "").trim();
+  if (!trimmed && !driverTrimmed) {
+    return "Provider";
   }
-  switch (key) {
-    case "codex":
-      return "Codex";
-    case "claudeagent":
-    case "claude":
-      return "Claude Code";
-    case "antigravity":
-      return "Antigravity";
-    case "cursor":
-      return "Cursor";
-    case "opencode":
-      return "OpenCode";
-    case "grok":
-      return "Grok";
-    case "dsh":
-      return "DeepSeek Harness";
-    case "pi":
-      return "Pi";
-    default:
-      return trimmed || driver || "Provider";
-  }
+  return formatAgentBrandName(driverTrimmed || trimmed, trimmed || undefined);
 }
 
 export function normalizeUsageProviderKind(raw: string): UsageProviderKind | string {
@@ -418,10 +395,13 @@ function resolveStatusBarProviderName(
   entries: ReadonlyArray<ProviderInstanceEntry> | undefined,
 ): string {
   const fallback = canonicalProviderDisplayName(fallbackDisplayName, driver ?? idOrDriver);
-  if (entries && entries.length > 0) {
-    return resolveConfiguredProviderLabel(idOrDriver, entries, fallback);
-  }
-  return fallback;
+  return resolveConfiguredProviderDisplayName({
+    provider: idOrDriver,
+    instanceId: idOrDriver,
+    driverKind: driver,
+    providerInstances: entries,
+    fallbackDisplayName: fallback,
+  });
 }
 
 export function buildUsageTelemetrySummary(

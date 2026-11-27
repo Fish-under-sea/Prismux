@@ -24,12 +24,15 @@ import {
   disambiguateProviderInstanceDisplayNames,
   orderItemsByConfiguredProviderOrder,
   orderProviderInstanceEntries,
-  resolveConfiguredProviderLabel,
   type ProviderInstanceOrderSettings,
 } from "../providerInstances";
 import { primaryServerProvidersAtom, primaryServerSettingsAtom } from "../state/server";
 import { AgentBrandLogo, formatAgentBrandName } from "./agentBrand";
 import { prismuxDaemonClient, type PrismuxDaemonClient } from "./daemonClient";
+import {
+  formatConfiguredProviderList,
+  resolveConfiguredProviderDisplayName,
+} from "./providerDisplayName";
 
 export const SUBSCRIPTION_WAIVER_ENDPOINT = "/v1/security/subscription-waiver" as const;
 export const PROVIDERS_PROBE_ENDPOINT = "/v1/providers/probe" as const;
@@ -182,11 +185,7 @@ export function AgyWaiverRequiredBadge({
 
   if (!interactive) {
     return (
-      <span
-        data-pmx-agy-waiver-badge="true"
-        aria-label={title}
-        className={sharedClassName}
-      >
+      <span data-pmx-agy-waiver-badge="true" aria-label={title} className={sharedClassName}>
         {label}
       </span>
     );
@@ -343,8 +342,7 @@ export function normalizeSubscriptionWaiverResponse(raw: unknown): SubscriptionW
         ? record.signedAt
         : null,
     // Defense-in-depth: both switches remain strictly locked OFF whenever waiver is unsigned.
-    allowAntigravityAsControlledAgent:
-      signed && record.allowAntigravityAsControlledAgent === true,
+    allowAntigravityAsControlledAgent: signed && record.allowAntigravityAsControlledAgent === true,
     allowExternalSubscriptionAgentsInSwarm:
       signed && record.allowExternalSubscriptionAgentsInSwarm === true,
     defaultLocked: true,
@@ -390,9 +388,10 @@ function normalizeProbeResponse(raw: unknown): ReadonlyArray<ProviderProbeSnapsh
       status,
       authMode,
       authSource: typeof entry.authSource === "string" ? entry.authSource : "none",
-      endpoint: typeof entry.endpoint === "string" && entry.endpoint.trim().length > 0
-        ? entry.endpoint.trim()
-        : null,
+      endpoint:
+        typeof entry.endpoint === "string" && entry.endpoint.trim().length > 0
+          ? entry.endpoint.trim()
+          : null,
       authLabel:
         authMode === "api_or_custom"
           ? UNIFORM_API_CUSTOM_AUTH_LABEL
@@ -430,8 +429,7 @@ export function SubscriptionRiskWaiverSection({
   const liveServerProviders = useAtomValue(primaryServerProvidersAtom);
   const liveServerSettings = useAtomValue(primaryServerSettingsAtom);
   const effectiveProviders = serverProvidersOverride ?? liveServerProviders;
-  const effectiveSettings =
-    settingsOverride !== undefined ? settingsOverride : liveServerSettings;
+  const effectiveSettings = settingsOverride !== undefined ? settingsOverride : liveServerSettings;
   const derivedProviderEntries = deriveProviderInstanceEntries(effectiveProviders);
   const brandedProviderEntries = effectiveSettings
     ? brandProviderInstanceEntries(derivedProviderEntries, effectiveSettings)
@@ -461,9 +459,7 @@ export function SubscriptionRiskWaiverSection({
   const loadProbeSnapshot = async (refresh = false) => {
     setProbeLoading(true);
     try {
-      const endpoint = refresh
-        ? `${PROVIDERS_PROBE_ENDPOINT}?refresh=1`
-        : PROVIDERS_PROBE_ENDPOINT;
+      const endpoint = refresh ? `${PROVIDERS_PROBE_ENDPOINT}?refresh=1` : PROVIDERS_PROBE_ENDPOINT;
       const response = await daemon.requestJson<ProvidersProbeResponse>(endpoint);
       setProbes(normalizeProbeResponse(response));
     } catch {
@@ -611,9 +607,7 @@ export function SubscriptionRiskWaiverSection({
       publishSubscriptionWaiverState(normalized);
       onWaiverChange?.(normalized);
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error ? error.message : "撤销免责声明失败，请重试。",
-      );
+      setErrorMessage(error instanceof Error ? error.message : "撤销免责声明失败，请重试。");
     } finally {
       setSaving(false);
     }
@@ -641,9 +635,7 @@ export function SubscriptionRiskWaiverSection({
       publishSubscriptionWaiverState(normalized);
       onWaiverChange?.(normalized);
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error ? error.message : "保存授权开关失败，请重试。",
-      );
+      setErrorMessage(error instanceof Error ? error.message : "保存授权开关失败，请重试。");
     } finally {
       setSaving(false);
     }
@@ -654,6 +646,23 @@ export function SubscriptionRiskWaiverSection({
     isSigned &&
     (waiver.allowAntigravityAsControlledAgent || waiver.allowExternalSubscriptionAgentsInSwarm);
   const switchesDisabled = !isSigned || readOnly || saving || loading;
+  const externalSwarmProviderList = formatConfiguredProviderList(["codex", "claudeAgent"], {
+    providerInstances: configuredEntries,
+    settings: effectiveSettings,
+  });
+  const codexDisplayName = resolveConfiguredProviderDisplayName({
+    provider: "codex",
+    driverKind: "codex",
+    providerInstances: configuredEntries,
+    settings: effectiveSettings,
+  });
+  const claudeDisplayName = resolveConfiguredProviderDisplayName({
+    provider: "claudeAgent",
+    driverKind: "claudeAgent",
+    providerInstances: configuredEntries,
+    settings: effectiveSettings,
+  });
+  const externalSwarmSwitchLabel = `允许将官方个人订阅态外部 Agent（${externalSwarmProviderList} 等）拉入蜂群与跨代理指挥`;
   const visibleProbes = orderItemsByConfiguredProviderOrder(
     probes.filter((entry) => entry.installed || entry.status !== "not_installed"),
     (entry) => entry.providerId,
@@ -775,10 +784,7 @@ export function SubscriptionRiskWaiverSection({
             data-pmx-probe-refresh="true"
             onClick={() => void loadProbeSnapshot(true)}
           >
-            <RefreshCwIcon
-              className={cn("size-3", probeLoading && "animate-spin")}
-              aria-hidden
-            />
+            <RefreshCwIcon className={cn("size-3", probeLoading && "animate-spin")} aria-hidden />
             {probeLoading ? "探测中…" : "重新探测"}
           </Button>
         </div>
@@ -805,14 +811,17 @@ export function SubscriptionRiskWaiverSection({
                 >
                   <AgentBrandLogo provider={entry.providerId} size={13} />
                   <span className="font-medium text-foreground">
-                    {resolveConfiguredProviderLabel(
-                      entry.providerId,
-                      configuredEntries,
-                      entry.displayName,
-                    )}
+                    {resolveConfiguredProviderDisplayName({
+                      provider: entry.providerId,
+                      providerInstances: configuredEntries,
+                      settings: effectiveSettings,
+                      fallbackDisplayName: entry.displayName,
+                    })}
                   </span>
                   <Badge
-                    variant={isAllowedMode ? "success" : isSubscriptionMode ? "warning" : "secondary"}
+                    variant={
+                      isAllowedMode ? "success" : isSubscriptionMode ? "warning" : "secondary"
+                    }
                     size="sm"
                     data-pmx-probe-auth-badge={entry.providerId}
                   >
@@ -856,7 +865,9 @@ export function SubscriptionRiskWaiverSection({
             className="flex items-center gap-2 bg-muted/50 px-3.5 py-2 text-2xs text-muted-foreground"
           >
             <LockIcon className="size-3 shrink-0" aria-hidden />
-            <span>请先点击右上角「签署统一风险免责」，完成风险确认后方可解锁以下两项细粒度开关。</span>
+            <span>
+              请先点击右上角「签署统一风险免责」，完成风险确认后方可解锁以下两项细粒度开关。
+            </span>
           </div>
         ) : null}
 
@@ -882,8 +893,9 @@ export function SubscriptionRiskWaiverSection({
               )}
             </div>
             <p className="text-2xs leading-relaxed text-muted-foreground">
-              默认仅允许您本人将 AGY 作为总控指挥官向外派发任务。开启后允许受控跨代理调用个人订阅态 AGY，但
-              24h 无人值守 Cron 与夜间工场仍永久禁止自动唤醒，远程 QQ / Gmail 仍强制草稿就位等待本人确认。
+              默认仅允许您本人将 AGY 作为总控指挥官向外派发任务。开启后允许受控跨代理调用个人订阅态
+              AGY，但 24h 无人值守 Cron 与夜间工场仍永久禁止自动唤醒，远程 QQ / Gmail
+              仍强制草稿就位等待本人确认。
             </p>
           </div>
           <div className="shrink-0 pt-0.5">
@@ -904,7 +916,7 @@ export function SubscriptionRiskWaiverSection({
           <div className="min-w-0 flex-1 space-y-1">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-medium text-foreground">
-                允许将官方个人订阅态外部 Agent（Codex / Claude Code 等）拉入蜂群与跨代理指挥
+                {externalSwarmSwitchLabel}
               </span>
               {isSigned && waiver.allowExternalSubscriptionAgentsInSwarm ? (
                 <Badge variant="warning" size="sm" data-pmx-waiver-high-risk-badge="true">
@@ -917,13 +929,14 @@ export function SubscriptionRiskWaiverSection({
               ) : null}
             </div>
             <p className="text-2xs leading-relaxed text-muted-foreground">
-              仅影响官方个人订阅 OAuth 登录态的外部 Agent（如 ChatGPT 登录态 Codex、个人订阅态 Claude
-              Code）。若已配置 API Key 或通过 CCS / Magpie 注入自定义端点，系统默认直接放行，无需开启此开关。
+              仅影响官方个人订阅 OAuth 登录态的外部 Agent（如 ChatGPT 登录态 {codexDisplayName}
+              、个人订阅态 {claudeDisplayName}）。若已配置 API Key 或通过 CCS / Magpie
+              注入自定义端点，系统默认直接放行，无需开启此开关。
             </p>
           </div>
           <div className="shrink-0 pt-0.5">
             <Switch
-              aria-label="允许将官方个人订阅态外部 Agent（Codex / Claude Code 等）拉入蜂群与跨代理指挥"
+              aria-label={externalSwarmSwitchLabel}
               data-pmx-waiver-switch="external-swarm"
               checked={isSigned && waiver.allowExternalSubscriptionAgentsInSwarm}
               disabled={switchesDisabled}
@@ -987,37 +1000,45 @@ export function SubscriptionRiskWaiverSection({
                     统一高风险免责确认：个人订阅跨代理编排与自动化调用
                   </h4>
                   <p className="text-xs text-muted-foreground">
-                    版本 {SUBSCRIPTION_WAIVER_VERSION} · 覆盖 Google Antigravity、Anthropic Claude 与
-                    OpenAI Codex 个人订阅 OAuth 条款
+                    版本 {SUBSCRIPTION_WAIVER_VERSION} · 覆盖 Google Antigravity、Anthropic Claude
+                    与 OpenAI Codex 个人订阅 OAuth 条款
                   </p>
                 </div>
               </div>
 
               <div className="mt-4 space-y-2.5 rounded-xl border border-warning/45 bg-warning/12 p-3.5 text-xs leading-relaxed text-foreground dark:bg-warning/14">
                 <p className="font-semibold text-warning-foreground">
-                  通过跨代理调度或蜂群自动化调用官方个人订阅 OAuth 账号可能违反各厂商服务条款，存在服务端 403
-                  限流、账号冻结与订阅封号风险；签署本免责声明不代表免疫平台风控，建议优先使用企业版、付费 API Key
-                  或 CCS / Magpie 注入 API 模式，后果自负！
+                  通过跨代理调度或蜂群自动化调用官方个人订阅 OAuth
+                  账号可能违反各厂商服务条款，存在服务端 403
+                  限流、账号冻结与订阅封号风险；签署本免责声明不代表免疫平台风控，建议优先使用企业版、付费
+                  API Key 或 CCS / Magpie 注入 API 模式，后果自负！
                 </p>
                 <ul className="list-disc space-y-1.5 pl-4 text-foreground/85">
                   <li>
-                    <strong className="font-medium text-foreground">Google Antigravity (AGY)</strong>
-                    ：个人订阅仅限本人主动交互，反向自动化调用存在 Google 服务端 403 封号风险；且 24h
-                    无人值守 Cron / 夜间工场永久禁止自动唤醒个人版 AGY。
+                    <strong className="font-medium text-foreground">
+                      Google Antigravity (AGY)
+                    </strong>
+                    ：个人订阅仅限本人主动交互，反向自动化调用存在 Google 服务端 403 封号风险；且
+                    24h 无人值守 Cron / 夜间工场永久禁止自动唤醒个人版 AGY。
                   </li>
                   <li>
-                    <strong className="font-medium text-foreground">Anthropic Claude (Claude Code)</strong>
+                    <strong className="font-medium text-foreground">
+                      Anthropic {claudeDisplayName}
+                    </strong>
                     ：官方个人订阅 OAuth（Free / Pro / Max）用于多代理并发编排可能违反 Anthropic
                     个人订阅条款并触发账号风控封禁。
                   </li>
                   <li>
-                    <strong className="font-medium text-foreground">OpenAI Codex (ChatGPT)</strong>
+                    <strong className="font-medium text-foreground">
+                      OpenAI {codexDisplayName} (ChatGPT)
+                    </strong>
                     ：官方 ChatGPT 个人订阅 OAuth 态拉入蜂群或脚本化调度可能违反 OpenAI
                     个人订阅条款并导致限流或封号。
                   </li>
                   <li>
                     <strong className="font-medium text-foreground">本地工具责任边界</strong>
-                    ：Prismux 仅作为纯本地开源编排工具，不介入账号鉴权且不承担任何平台风控或订阅损失连带责任。
+                    ：Prismux
+                    仅作为纯本地开源编排工具，不介入账号鉴权且不承担任何平台风控或订阅损失连带责任。
                   </li>
                   <li>
                     <strong className="font-medium text-foreground">随时一键回退</strong>
@@ -1034,7 +1055,9 @@ export function SubscriptionRiskWaiverSection({
                   <div className="flex items-center justify-between gap-2">
                     <span className="inline-flex items-center gap-2 font-medium text-warning-foreground">
                       <ClockIcon className="size-3.5 shrink-0" aria-hidden />
-                      <span>请仔细阅读上方高风险免责条款，停留 {secondsLeft} 秒后显示确认输入框…</span>
+                      <span>
+                        请仔细阅读上方高风险免责条款，停留 {secondsLeft} 秒后显示确认输入框…
+                      </span>
                     </span>
                     <span className="shrink-0 font-mono text-2xs font-semibold tabular-nums text-warning-foreground">
                       {secondsLeft}s
@@ -1061,10 +1084,7 @@ export function SubscriptionRiskWaiverSection({
                   data-pmx-waiver-confirm-panel="true"
                   className="mt-4 space-y-2.5 rounded-xl border border-border/75 bg-muted/45 p-3.5 text-xs text-foreground dark:bg-white/[0.04]"
                 >
-                  <label
-                    htmlFor={confirmInputId}
-                    className="block font-medium text-foreground"
-                  >
+                  <label htmlFor={confirmInputId} className="block font-medium text-foreground">
                     请完整输入以下免责声明以确认签署：
                   </label>
                   <div

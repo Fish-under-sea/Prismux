@@ -1,5 +1,9 @@
 import { thrownErrorMessage } from "@prismux/client-runtime/errors";
 import {
+  containsUuidNoise,
+  stripUuidNoise,
+} from "@prismux/client-runtime/state/provider-instance-display";
+import {
   defaultInstanceIdForDriver,
   PROVIDER_DISPLAY_NAMES,
   type EnvironmentId,
@@ -83,11 +87,24 @@ function dedupeProvidersByDriver<T extends ServerProvider>(providers: ReadonlyAr
   return [...latestProviderByDriver.values()];
 }
 
+function resolveUpdateProviderName(
+  provider: Pick<ServerProvider, "driver"> & { readonly displayName?: string | undefined },
+): string {
+  const raw = provider.displayName?.trim();
+  if (raw) {
+    const cleaned = containsUuidNoise(raw) ? stripUuidNoise(raw) : raw;
+    if (cleaned.length > 0) return cleaned;
+  }
+  return PROVIDER_DISPLAY_NAMES[provider.driver] ?? provider.driver;
+}
+
 function getProviderUpdatedTitle(
-  provider: Pick<ServerProvider, "driver" | "version" | "installedVersion">,
+  provider: Pick<ServerProvider, "driver" | "version" | "installedVersion"> & {
+    readonly displayName?: string | undefined;
+  },
   resolve: MessageResolver,
 ): string {
-  const providerName = PROVIDER_DISPLAY_NAMES[provider.driver] ?? provider.driver;
+  const providerName = resolveUpdateProviderName(provider);
   const version = provider.installedVersion ?? provider.version;
   return version
     ? resolve(
@@ -118,10 +135,12 @@ function getProviderUpdatedDescription(providerCount: number, resolve: MessageRe
 }
 
 function getProviderFailedUpdateTitle(
-  provider: Pick<ServerProvider, "driver" | "versionAdvisory">,
+  provider: Pick<ServerProvider, "driver" | "versionAdvisory"> & {
+    readonly displayName?: string | undefined;
+  },
   resolve: MessageResolver,
 ): string {
-  const providerName = PROVIDER_DISPLAY_NAMES[provider.driver] ?? provider.driver;
+  const providerName = resolveUpdateProviderName(provider);
   const attemptedVersion = provider.versionAdvisory?.latestVersion;
   return attemptedVersion
     ? resolve(
@@ -209,12 +228,12 @@ export function canOneClickUpdateProviderCandidate(
 }
 
 function formatProviderList(
-  providers: ReadonlyArray<Pick<ServerProvider, "driver">>,
+  providers: ReadonlyArray<
+    Pick<ServerProvider, "driver"> & { readonly displayName?: string | undefined }
+  >,
   resolve: MessageResolver,
 ) {
-  const names = providers.map(
-    (provider) => PROVIDER_DISPLAY_NAMES[provider.driver] ?? provider.driver,
-  );
+  const names = providers.map((provider) => resolveUpdateProviderName(provider));
   if (names.length <= 1) return names.join("");
   if (names.length === 2) {
     return resolve(msg("{first} and {second}", { first: names[0], second: names[1] }));
@@ -232,6 +251,7 @@ export interface ProviderUpdateRun {
   readonly machineLabel: string;
   readonly driver: ProviderDriverKind;
   readonly instanceId: ProviderInstanceId;
+  readonly displayName?: string | undefined;
   readonly result: AtomCommandResult<
     { readonly providers: ReadonlyArray<ServerProvider> },
     unknown
@@ -246,7 +266,15 @@ export function getProviderUpdateRunOutcome(
   | { readonly status: "updated"; readonly message: string | null }
   | { readonly status: "failed"; readonly line: string } {
   if (isAtomCommandInterrupted(run.result)) return { status: "interrupted" };
-  const label = `${run.machineLabel} · ${PROVIDER_DISPLAY_NAMES[run.driver] ?? run.driver}`;
+  const resolvedProvider =
+    run.result._tag === "Success"
+      ? run.result.value.providers.find((candidate) => candidate.instanceId === run.instanceId)
+      : undefined;
+  const providerName = resolveUpdateProviderName({
+    driver: run.driver,
+    displayName: run.displayName ?? resolvedProvider?.displayName,
+  });
+  const label = `${run.machineLabel} · ${providerName}`;
   if (run.result._tag === "Failure") {
     const error = squashAtomCommandFailure(run.result);
     return {
@@ -254,9 +282,7 @@ export function getProviderUpdateRunOutcome(
       line: `${label}: ${thrownErrorMessage(error, resolve) ?? resolve(msg("Provider update failed."))}`,
     };
   }
-  const provider = run.result.value.providers.find(
-    (candidate) => candidate.instanceId === run.instanceId,
-  );
+  const provider = resolvedProvider;
   const updateState = provider?.updateState;
   const restartNotice = provider ? getProviderRestartNotice(provider) : null;
   return updateState?.status === "succeeded"
@@ -388,8 +414,7 @@ export function getProviderUpdateSidebarPillView(
   const activeProviders = dedupeProvidersByDriver(providers.filter(isProviderUpdateActive));
   if (activeProviders.length > 0) {
     const activeProvider = activeProviders[0]!;
-    const activeProviderName =
-      PROVIDER_DISPLAY_NAMES[activeProvider.driver] ?? activeProvider.driver;
+    const activeProviderName = resolveUpdateProviderName(activeProvider);
     return {
       key: `loading:${activeProviders
         .map((provider) => `${provider.driver}:${provider.updateState?.status ?? "idle"}`)
@@ -452,8 +477,7 @@ export function getProviderUpdateSidebarPillView(
   );
   if (unchangedProviders.length > 0) {
     const unchangedProvider = unchangedProviders[0]!;
-    const unchangedProviderName =
-      PROVIDER_DISPLAY_NAMES[unchangedProvider.driver] ?? unchangedProvider.driver;
+    const unchangedProviderName = resolveUpdateProviderName(unchangedProvider);
     terminalCandidates.push({
       ...terminalPillIdentity(unchangedProviders),
       tone: "warning",

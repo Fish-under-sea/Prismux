@@ -3,13 +3,14 @@ import os from "node:os";
 import { basename, resolve } from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
-import type {
-  KillSystemPtyResponse,
-  ProcessCommitMetric,
-  ProcessMemoryMetric,
-  PtyResourceEntry,
-  SystemResourcesResponse,
-  WorkspaceResourceEntry
+import {
+  CANONICAL_PROVIDER_DISPLAY_NAMES,
+  type KillSystemPtyResponse,
+  type ProcessCommitMetric,
+  type ProcessMemoryMetric,
+  type PtyResourceEntry,
+  type SystemResourcesResponse,
+  type WorkspaceResourceEntry,
 } from "@prismux/protocol";
 import type { PersistentPtyPool } from "../pty/PersistentPtyPool.js";
 import type { CoreRpcClient } from "../core/CoreRpcClient.js";
@@ -146,8 +147,10 @@ export interface ExtendedCoreServerResources {
   childCount?: number;
 }
 
-export interface ExtendedSystemResourcesResponse
-  extends Omit<SystemResourcesResponse, "coreServer"> {
+export interface ExtendedSystemResourcesResponse extends Omit<
+  SystemResourcesResponse,
+  "coreServer"
+> {
   coreServer: ExtendedCoreServerResources | null;
   desktop: DesktopResourcesSummary | null;
   processes: ProcessAttributionEntry[];
@@ -225,12 +228,7 @@ function readHostCpuTotals(): CpuTotals {
   let total = 0;
   for (const cpu of cpus) {
     idle += cpu.times.idle;
-    total +=
-      cpu.times.user +
-      cpu.times.nice +
-      cpu.times.sys +
-      cpu.times.idle +
-      cpu.times.irq;
+    total += cpu.times.user + cpu.times.nice + cpu.times.sys + cpu.times.idle + cpu.times.irq;
   }
   return { idle, total };
 }
@@ -264,7 +262,7 @@ function clampPercentPrecise(value: number): number {
 export function computeNormalizedCpuPercent(
   deltaCpuSeconds: number,
   elapsedSeconds: number,
-  cpuCores: number
+  cpuCores: number,
 ): number {
   if (
     !Number.isFinite(deltaCpuSeconds) ||
@@ -313,12 +311,14 @@ function appendBoundedHistory(history: number[], value: number): number[] {
 }
 
 function normalizeProcessStem(name: string): string {
-  return basename(name.trim()).toLowerCase().replace(/\.exe$/i, "");
+  return basename(name.trim())
+    .toLowerCase()
+    .replace(/\.exe$/i, "");
 }
 
 function isTransientSelfProbe(
   entry: Pick<OsProcessSnapshotEntry, "parentPid" | "processName" | "commandLine">,
-  daemonPid: number
+  daemonPid: number,
 ): boolean {
   const cmd = entry.commandLine ?? "";
   if (cmd.includes(SELF_PROBE_MARKER)) {
@@ -343,9 +343,7 @@ function isTransientSelfProbe(
  * Parses tab-separated Windows `Win32_Process` rows emitted by the zero-window
  * PowerShell CIM sampler into structured `OsProcessSnapshotEntry` records.
  */
-export function parseWindowsProcessTreeTsv(
-  stdout: string
-): Map<number, OsProcessSnapshotEntry> {
+export function parseWindowsProcessTreeTsv(stdout: string): Map<number, OsProcessSnapshotEntry> {
   const map = new Map<number, OsProcessSnapshotEntry>();
   for (const rawLine of stdout.split(/\r?\n/)) {
     if (!rawLine || rawLine.trim().length === 0) continue;
@@ -375,7 +373,7 @@ export function parseWindowsProcessTreeTsv(
       memoryBytes,
       privateMemoryBytes,
       cpuSeconds,
-      cpuPercent: null
+      cpuPercent: null,
     });
   }
   return map;
@@ -387,7 +385,7 @@ export function parseWindowsProcessTreeTsv(
  */
 export function parseUnixProcessTreeOutput(
   stdout: string,
-  cpuCores: number = Math.max(1, os.cpus().length)
+  cpuCores: number = Math.max(1, os.cpus().length),
 ): Map<number, OsProcessSnapshotEntry> {
   const map = new Map<number, OsProcessSnapshotEntry>();
   const cores = Math.max(1, cpuCores);
@@ -411,7 +409,7 @@ export function parseUnixProcessTreeOutput(
       privateMemoryBytes: null,
       cpuSeconds: null,
       cpuPercent:
-        Number.isFinite(rawCpu) && rawCpu >= 0 ? clampPercentPrecise(rawCpu / cores) : null
+        Number.isFinite(rawCpu) && rawCpu >= 0 ? clampPercentPrecise(rawCpu / cores) : null,
     });
   }
   return map;
@@ -422,7 +420,7 @@ export function parseUnixProcessTreeOutput(
  * (column 7, from `Win32_PerfRawData_PerfProc_Process`) before `CommandLine`.
  */
 export function parseWindowsProcessTreeWithPrivateWsTsv(
-  stdout: string
+  stdout: string,
 ): Map<number, OsProcessSnapshotEntry> {
   const map = new Map<number, OsProcessSnapshotEntry>();
   let sampleTsMs: number | undefined;
@@ -464,7 +462,7 @@ export function parseWindowsProcessTreeWithPrivateWsTsv(
       privateWorkingSetBytes,
       cpuSeconds,
       cpuPercent: null,
-      ...(sampleTsMs !== undefined ? { sampledAtMs: sampleTsMs } : {})
+      ...(sampleTsMs !== undefined ? { sampledAtMs: sampleTsMs } : {}),
     });
   }
   return map;
@@ -472,14 +470,14 @@ export function parseWindowsProcessTreeWithPrivateWsTsv(
 
 async function defaultSampleProcessTree(
   timeoutMs: number,
-  familyRootPids: readonly number[] = []
+  familyRootPids: readonly number[] = [],
 ): Promise<Map<number, OsProcessSnapshotEntry>> {
   if (process.platform === "win32") {
     // Fast Win32_Process dump + filtered Win32_PerfRawData_PerfProc_Process.WorkingSetPrivate
     // ONLY for Prismux family PIDs (exact Task Manager Memory column without Chromium/Electron
     // shared-page double counting, ~4x faster than scanning all system PerfProc counters).
     const sanitizedRoots = [
-      ...new Set(familyRootPids.filter((pid) => Number.isInteger(pid) && pid > 0))
+      ...new Set(familyRootPids.filter((pid) => Number.isInteger(pid) && pid > 0)),
     ];
     const rootInit =
       sanitizedRoots.length > 0 ? `@(${sanitizedRoots.join(",")})` : `@(${process.pid})`;
@@ -519,7 +517,7 @@ async function defaultSampleProcessTree(
       "  $pidInt = [int]$p.ProcessId",
       "  $pws = if ($pwsMap.ContainsKey($pidInt)) { $pwsMap[$pidInt] } else { '' }",
       '  "$($p.ProcessId)`t$($p.ParentProcessId)`t$($p.Name)`t$($p.WorkingSetSize)`t$($p.PrivatePageCount)`t$($p.KernelModeTime)`t$($p.UserModeTime)`t$pws`t$c"',
-      "}"
+      "}",
     ].join("\n");
 
     try {
@@ -529,8 +527,8 @@ async function defaultSampleProcessTree(
         {
           timeout: timeoutMs,
           windowsHide: true,
-          maxBuffer: 8 * 1024 * 1024
-        }
+          maxBuffer: 8 * 1024 * 1024,
+        },
       );
       return parseWindowsProcessTreeWithPrivateWsTsv(stdout);
     } catch {
@@ -539,14 +537,10 @@ async function defaultSampleProcessTree(
   }
 
   try {
-    const { stdout } = await execFileAsync(
-      "ps",
-      ["-eo", "pid=,ppid=,pcpu=,rss=,comm=,args="],
-      {
-        timeout: timeoutMs,
-        maxBuffer: 8 * 1024 * 1024
-      }
-    );
+    const { stdout } = await execFileAsync("ps", ["-eo", "pid=,ppid=,pcpu=,rss=,comm=,args="], {
+      timeout: timeoutMs,
+      maxBuffer: 8 * 1024 * 1024,
+    });
     return parseUnixProcessTreeOutput(stdout, os.cpus().length);
   } catch {
     return new Map();
@@ -555,7 +549,7 @@ async function defaultSampleProcessTree(
 
 async function defaultSampleProcesses(
   pids: number[],
-  timeoutMs: number
+  timeoutMs: number,
 ): Promise<Map<number, ProcessUsageReading>> {
   const map = new Map<number, ProcessUsageReading>();
   const uniquePids = [...new Set(pids.filter((p) => Number.isInteger(p) && p > 0))];
@@ -578,7 +572,7 @@ async function defaultSampleProcesses(
       `Get-Process -Id ${idList} -ErrorAction SilentlyContinue | ForEach-Object {`,
       "  $pws = if ($pwsMap.ContainsKey($_.Id)) { $pwsMap[$_.Id] } else { $null }",
       "  [PSCustomObject]@{ Id = $_.Id; WorkingSet64 = $_.WorkingSet64; PrivateWorkingSet64 = $pws; PrivateMemorySize64 = $_.PrivateMemorySize64; CPU = $_.CPU }",
-      "} | ConvertTo-Json -Compress"
+      "} | ConvertTo-Json -Compress",
     ].join("\n");
     try {
       const { stdout } = await execFileAsync(
@@ -587,8 +581,8 @@ async function defaultSampleProcesses(
         {
           timeout: timeoutMs,
           windowsHide: true,
-          maxBuffer: 4 * 1024 * 1024
-        }
+          maxBuffer: 4 * 1024 * 1024,
+        },
       );
       const trimmed = stdout.trim();
       if (trimmed.length > 0) {
@@ -600,8 +594,7 @@ async function defaultSampleProcesses(
           const pid = typeof rec["Id"] === "number" ? rec["Id"] : -1;
           if (pid <= 0) continue;
           const wsBytes =
-            typeof rec["WorkingSet64"] === "number" &&
-            Number.isFinite(rec["WorkingSet64"])
+            typeof rec["WorkingSet64"] === "number" && Number.isFinite(rec["WorkingSet64"])
               ? rec["WorkingSet64"]
               : null;
           const pwsBytes =
@@ -615,16 +608,14 @@ async function defaultSampleProcesses(
               ? rec["PrivateMemorySize64"]
               : null;
           const cpuSec =
-            typeof rec["CPU"] === "number" && Number.isFinite(rec["CPU"])
-              ? rec["CPU"]
-              : null;
+            typeof rec["CPU"] === "number" && Number.isFinite(rec["CPU"]) ? rec["CPU"] : null;
           map.set(pid, {
             pid,
             cpuPercent: null,
             memoryBytes: pwsBytes ?? wsBytes,
             privateMemoryBytes: privBytes,
             privateWorkingSetBytes: pwsBytes,
-            cpuSeconds: cpuSec
+            cpuSeconds: cpuSec,
           });
         }
       }
@@ -639,7 +630,7 @@ async function defaultSampleProcesses(
     const { stdout } = await execFileAsync(
       "ps",
       ["-o", "pid=,%cpu=,rss=", "-p", uniquePids.join(",")],
-      { timeout: timeoutMs, maxBuffer: 2 * 1024 * 1024 }
+      { timeout: timeoutMs, maxBuffer: 2 * 1024 * 1024 },
     );
     for (const line of stdout.split(/\r?\n/)) {
       const match = /^\s*(\d+)\s+([\d.]+)\s+(\d+)\s*$/.exec(line);
@@ -650,7 +641,7 @@ async function defaultSampleProcesses(
       map.set(pid, {
         pid,
         cpuPercent: Number.isFinite(cpu) ? clampPercentPrecise(cpu / cpuCores) : null,
-        memoryBytes: Number.isFinite(rssKb) ? rssKb * 1024 : null
+        memoryBytes: Number.isFinite(rssKb) ? rssKb * 1024 : null,
       });
     }
   } catch {
@@ -670,21 +661,36 @@ const SHELL_PROCESS_NAMES = new Map<string, string>([
   ["wsl", "WSL Bridge"],
   ["wslhost", "WSL Host"],
   ["openconsole", "OpenConsole PTY"],
-  ["conhost", "Console Host"]
+  ["conhost", "Console Host"],
 ]);
 
 const AGENT_PATTERNS: ReadonlyArray<{
   readonly regex: RegExp;
   readonly label: string;
 }> = [
-  { regex: /(?:^|[\\/.\s-])(claude(?:-code)?|@anthropic-ai[\\/]claude-code)(?:$|[\\/.\s-])/i, label: "Claude Code" },
-  { regex: /(?:^|[\\/.\s-])(codex|@openai[\\/]codex)(?:$|[\\/.\s-])/i, label: "Codex Agent" },
-  { regex: /(?:^|[\\/.\s-])(agy|antigravity)(?:$|[\\/.\s-])/i, label: "Antigravity ACP" },
-  { regex: /(?:^|[\\/.\s-])(gemini(?:-cli)?)(?:$|[\\/.\s-])/i, label: "Gemini CLI" },
-  { regex: /(?:^|[\\/.\s-])(opencode|cursor-agent|aider)(?:$|[\\/.\s-])/i, label: "Coding Agent" }
+  {
+    regex: /(?:^|[\\/.\s-])(claude(?:-code)?|@anthropic-ai[\\/]claude-code)(?:$|[\\/.\s-])/i,
+    label: CANONICAL_PROVIDER_DISPLAY_NAMES.claudeAgent,
+  },
+  {
+    regex: /(?:^|[\\/.\s-])(codex|@openai[\\/]codex)(?:$|[\\/.\s-])/i,
+    label: `${CANONICAL_PROVIDER_DISPLAY_NAMES.codex} Agent`,
+  },
+  {
+    regex: /(?:^|[\\/.\s-])(agy|antigravity)(?:$|[\\/.\s-])/i,
+    label: `${CANONICAL_PROVIDER_DISPLAY_NAMES.antigravity} ACP`,
+  },
+  {
+    regex: /(?:^|[\\/.\s-])(gemini(?:-cli)?)(?:$|[\\/.\s-])/i,
+    label: CANONICAL_PROVIDER_DISPLAY_NAMES.gemini,
+  },
+  { regex: /(?:^|[\\/.\s-])(opencode|cursor-agent|aider)(?:$|[\\/.\s-])/i, label: "Coding Agent" },
 ];
 
-function formatElectronProcessLabel(metric: HostElectronProcessMetric, isInProcessCore: boolean): {
+function formatElectronProcessLabel(
+  metric: HostElectronProcessMetric,
+  isInProcessCore: boolean,
+): {
   role: ProcessAttributionRole;
   name: string;
 } {
@@ -692,20 +698,20 @@ function formatElectronProcessLabel(metric: HostElectronProcessMetric, isInProce
   if (typeLower === "browser") {
     return {
       role: "electron-main",
-      name: isInProcessCore ? "Prismux 主进程 (含 Prismux Server)" : "Prismux 主进程"
+      name: isInProcessCore ? "Prismux 主进程 (含 Prismux Server)" : "Prismux 主进程",
     };
   }
   if (typeLower === "tab") {
     const customName = metric.name?.trim();
     return {
       role: "electron-renderer",
-      name: customName && customName.length > 0 ? `渲染进程 · ${customName}` : "工作台渲染进程"
+      name: customName && customName.length > 0 ? `渲染进程 · ${customName}` : "工作台渲染进程",
     };
   }
   if (typeLower === "gpu") {
     return {
       role: "electron-gpu",
-      name: "GPU 合成 / 壁纸渲染"
+      name: "GPU 合成 / 壁纸渲染",
     };
   }
   const rawLabel = (metric.name ?? metric.serviceName ?? "").trim();
@@ -724,14 +730,14 @@ function formatElectronProcessLabel(metric: HostElectronProcessMetric, isInProce
   }
   return {
     role: "electron-utility",
-    name: rawLabel.length > 0 ? rawLabel : `Electron ${metric.type || "辅助进程"}`
+    name: rawLabel.length > 0 ? rawLabel : `Electron ${metric.type || "辅助进程"}`,
   };
 }
 
 function detectCoreServerFromOsEntry(
   entry: OsProcessSnapshotEntry,
   daemonPid: number,
-  mainPid: number | null
+  mainPid: number | null,
 ): boolean {
   if (entry.pid === daemonPid || entry.pid === mainPid) {
     return false;
@@ -753,8 +759,10 @@ function detectCoreServerFromOsEntry(
     cmd.includes("apps\\server\\") ||
     cmd.includes("apps/server/") ||
     cmd.includes("core-server") ||
-    (cmd.includes("resources\\server\\") || cmd.includes("resources/server/")) ||
-    (cmd.includes("dist\\index.mjs") || cmd.includes("dist/index.mjs"))
+    cmd.includes("resources\\server\\") ||
+    cmd.includes("resources/server/") ||
+    cmd.includes("dist\\index.mjs") ||
+    cmd.includes("dist/index.mjs")
   );
 }
 
@@ -770,7 +778,7 @@ export function classifyOsProcessEntry(
     corePid: number | null;
     electronMetric?: HostElectronProcessMetric;
     ptyTitle?: string | null;
-  }
+  },
 ): {
   role: ProcessAttributionRole;
   category: ProcessAttributionCategory;
@@ -785,7 +793,7 @@ export function classifyOsProcessEntry(
   if (ctx.electronMetric) {
     const formatted = formatElectronProcessLabel(
       ctx.electronMetric,
-      ctx.corePid !== null && entry.pid === ctx.corePid
+      ctx.corePid !== null && entry.pid === ctx.corePid,
     );
     return { role: formatted.role, category: "desktop", name: formatted.name };
   }
@@ -793,7 +801,7 @@ export function classifyOsProcessEntry(
     return {
       role: "electron-main",
       category: "desktop",
-      name: ctx.corePid === ctx.mainPid ? "Prismux 主进程 (含 Prismux Server)" : "Prismux 主进程"
+      name: ctx.corePid === ctx.mainPid ? "Prismux 主进程 (含 Prismux Server)" : "Prismux 主进程",
     };
   }
 
@@ -841,17 +849,22 @@ export function classifyOsProcessEntry(
 
   // Meaningful dev tool sub-command label (e.g. `node (vite)`, `pnpm`, `git`)
   if (stem === "node" || stem === "bun" || stem === "deno") {
-    if (cmdLower.includes("vite")) return { role: "child", category: "terminal", name: `${entry.processName} (vite)` };
-    if (cmdLower.includes("vitest")) return { role: "child", category: "terminal", name: `${entry.processName} (vitest)` };
-    if (cmdLower.includes("tsc") || cmdLower.includes("tsgo")) return { role: "child", category: "terminal", name: `${entry.processName} (tsc)` };
-    if (cmdLower.includes("esbuild")) return { role: "child", category: "terminal", name: `${entry.processName} (esbuild)` };
-    if (cmdLower.includes("mcp")) return { role: "agent", category: "agent", name: `${entry.processName} (MCP)` };
+    if (cmdLower.includes("vite"))
+      return { role: "child", category: "terminal", name: `${entry.processName} (vite)` };
+    if (cmdLower.includes("vitest"))
+      return { role: "child", category: "terminal", name: `${entry.processName} (vitest)` };
+    if (cmdLower.includes("tsc") || cmdLower.includes("tsgo"))
+      return { role: "child", category: "terminal", name: `${entry.processName} (tsc)` };
+    if (cmdLower.includes("esbuild"))
+      return { role: "child", category: "terminal", name: `${entry.processName} (esbuild)` };
+    if (cmdLower.includes("mcp"))
+      return { role: "agent", category: "agent", name: `${entry.processName} (MCP)` };
   }
 
   return {
     role: "child",
     category: "terminal",
-    name: entry.processName || `PID ${entry.pid}`
+    name: entry.processName || `PID ${entry.pid}`,
   };
 }
 
@@ -913,13 +926,11 @@ export function normalizeHostMetricsReport(raw: unknown): HostMetricsReport | nu
       ...(desiredRunning !== undefined ? { desiredRunning } : {}),
       state,
       hostedBy,
-      httpUrl
+      httpUrl,
     };
   }
 
-  const rawProcs = Array.isArray(rec["electronProcesses"])
-    ? rec["electronProcesses"]
-    : [];
+  const rawProcs = Array.isArray(rec["electronProcesses"]) ? rec["electronProcesses"] : [];
   const electronProcesses: HostElectronProcessMetric[] = [];
   for (const item of rawProcs) {
     if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
@@ -955,7 +966,7 @@ export function normalizeHostMetricsReport(raw: unknown): HostMetricsReport | nu
       ...(cumulativeCpuSeconds !== null ? { cumulativeCpuSeconds } : {}),
       workingSetBytes,
       ...(privateMemoryBytes !== null ? { privateMemoryBytes } : {}),
-      ...(peakWorkingSetBytes !== null ? { peakWorkingSetBytes } : {})
+      ...(peakWorkingSetBytes !== null ? { peakWorkingSetBytes } : {}),
     });
   }
 
@@ -969,7 +980,7 @@ export function normalizeHostMetricsReport(raw: unknown): HostMetricsReport | nu
     ...(cpuCores !== undefined ? { cpuCores } : {}),
     cpuScale,
     ...(coreServer !== undefined ? { coreServer } : {}),
-    electronProcesses
+    electronProcesses,
   };
 }
 
@@ -1035,7 +1046,8 @@ export class ResourceMonitorService {
     this.configuredCoreServerPid =
       options.coreServerPid !== undefined
         ? parsePositiveInt(options.coreServerPid)
-        : (parsePositiveInt(process.env["PRISMUX_SERVER_PID"]) ?? parsePositiveInt(process.env["PRISMUX_CORE_SERVER_PID"]));
+        : (parsePositiveInt(process.env["PRISMUX_SERVER_PID"]) ??
+          parsePositiveInt(process.env["PRISMUX_CORE_SERVER_PID"]));
     this.customSampleProcessesFn = options.sampleProcesses;
     this.sampleProcessTreeFn = options.sampleProcessTree;
 
@@ -1126,7 +1138,7 @@ export class ResourceMonitorService {
           cumulativeDeltaPct = computeNormalizedCpuPercent(
             curCum - prev.cumulativeCpuSeconds,
             elapsedSec,
-            effectiveCores
+            effectiveCores,
           );
         } else if (elapsedSec < 0.05 && prev.lastCpuPercent !== null) {
           cumulativeDeltaPct = prev.lastCpuPercent;
@@ -1148,7 +1160,7 @@ export class ResourceMonitorService {
         cumulativeCpuSeconds: curCum,
         collectedAtMs: reportTimeMs,
         lastCpuPercent: resolvedPct,
-        pushCount
+        pushCount,
       });
     }
 
@@ -1165,7 +1177,7 @@ export class ResourceMonitorService {
       receivedAt,
       acceptedProcesses: report.electronProcesses.length,
       mainPid: report.mainPid > 0 ? report.mainPid : null,
-      coreServerPid: report.coreServer?.pid ?? null
+      coreServerPid: report.coreServer?.pid ?? null,
     };
   }
 
@@ -1197,7 +1209,7 @@ export class ResourceMonitorService {
     reading: Pick<ProcessUsageReading, "pid" | "cpuPercent" | "cpuSeconds"> | undefined,
     sampledAtMs: number,
     cpuCores: number,
-    fromCache: boolean
+    fromCache: boolean,
   ): number | null {
     if (!reading) {
       return null;
@@ -1213,7 +1225,7 @@ export class ResourceMonitorService {
       this.previousProcCpuByPid.set(reading.pid, {
         cpuSeconds: reading.cpuSeconds,
         sampledAtMs,
-        lastCpuPercent: null
+        lastCpuPercent: null,
       });
       return null;
     }
@@ -1230,19 +1242,19 @@ export class ResourceMonitorService {
       this.previousProcCpuByPid.set(reading.pid, {
         cpuSeconds: reading.cpuSeconds,
         sampledAtMs,
-        lastCpuPercent: null
+        lastCpuPercent: null,
       });
       return null;
     }
     const normalized = computeNormalizedCpuPercent(
       reading.cpuSeconds - prev.cpuSeconds,
       elapsedSec,
-      cpuCores
+      cpuCores,
     );
     this.previousProcCpuByPid.set(reading.pid, {
       cpuSeconds: reading.cpuSeconds,
       sampledAtMs,
-      lastCpuPercent: normalized
+      lastCpuPercent: normalized,
     });
     return normalized;
   }
@@ -1276,12 +1288,12 @@ export class ResourceMonitorService {
       0,
       currentUsage.user -
         this.lastDaemonCpuUsage.user +
-        (currentUsage.system - this.lastDaemonCpuUsage.system)
+        (currentUsage.system - this.lastDaemonCpuUsage.system),
     );
     const cpuCores = Math.max(1, os.cpus().length);
     const safeElapsedMs = Math.max(1, elapsedMs);
     const instantPercent = clampPercentPrecise(
-      (deltaCpuMicros / (safeElapsedMs * 1000 * cpuCores)) * 100
+      (deltaCpuMicros / (safeElapsedMs * 1000 * cpuCores)) * 100,
     );
 
     if (elapsedMs >= MIN_CPU_DELTA_MS) {
@@ -1337,7 +1349,7 @@ export class ResourceMonitorService {
       return {
         entries: this.cachedProcessTree.entries,
         sampledAtMs: this.cachedProcessTree.cpuSampledAtMs,
-        fromCache: true
+        fromCache: true,
       };
     }
     if (this.inflightProcessTree !== null) {
@@ -1345,7 +1357,7 @@ export class ResourceMonitorService {
       return {
         entries: snapshot.entries,
         sampledAtMs: snapshot.cpuSampledAtMs,
-        fromCache: false
+        fromCache: false,
       };
     }
 
@@ -1366,7 +1378,7 @@ export class ResourceMonitorService {
         const snapshot: CachedProcessTree = {
           entries,
           sampledAtMs: completedAtMs,
-          cpuSampledAtMs
+          cpuSampledAtMs,
         };
         this.cachedProcessTree = snapshot;
         return snapshot;
@@ -1377,7 +1389,7 @@ export class ResourceMonitorService {
           this.cachedProcessTree ?? {
             entries: new Map<number, OsProcessSnapshotEntry>(),
             sampledAtMs: fallbackAtMs,
-            cpuSampledAtMs: fallbackAtMs
+            cpuSampledAtMs: fallbackAtMs,
           }
         );
       })
@@ -1392,7 +1404,7 @@ export class ResourceMonitorService {
     return {
       entries: snapshot.entries,
       sampledAtMs: snapshot.cpuSampledAtMs,
-      fromCache: false
+      fromCache: false,
     };
   }
 
@@ -1400,7 +1412,7 @@ export class ResourceMonitorService {
     metric: HostElectronProcessMetric,
     report: HostMetricsReport,
     cpuCores: number,
-    osDerivedCpu: number | null
+    osDerivedCpu: number | null,
   ): number | null {
     const tracked = this.previousElectronCpuByPid.get(metric.pid);
     if (tracked && tracked.lastCpuPercent !== null) {
@@ -1422,9 +1434,7 @@ export class ResourceMonitorService {
     return null;
   }
 
-  async getResources(
-    options: GetResourcesOptions = {}
-  ): Promise<ExtendedSystemResourcesResponse> {
+  async getResources(options: GetResourcesOptions = {}): Promise<ExtendedSystemResourcesResponse> {
     const forceRefresh = options.forceRefresh === true;
     const now = Date.now();
     const cpuCores = Math.max(1, os.cpus().length);
@@ -1468,7 +1478,8 @@ export class ResourceMonitorService {
         parsePositiveInt(coreSupervisorStatus?.pid) ??
         parsePositiveInt(hostReport?.coreServer?.pid) ??
         this.configuredCoreServerPid ??
-        (parsePositiveInt(process.env["PRISMUX_SERVER_PID"]) ?? parsePositiveInt(process.env["PRISMUX_CORE_SERVER_PID"]));
+        parsePositiveInt(process.env["PRISMUX_SERVER_PID"]) ??
+        parsePositiveInt(process.env["PRISMUX_CORE_SERVER_PID"]);
       if (hintCorePid !== null) {
         pidsToSample.push(hintCorePid);
       }
@@ -1478,9 +1489,7 @@ export class ResourceMonitorService {
         }
       }
       legacySampledMap =
-        pidsToSample.length > 0
-          ? await this.customSampleProcessesFn(pidsToSample)
-          : new Map();
+        pidsToSample.length > 0 ? await this.customSampleProcessesFn(pidsToSample) : new Map();
       osSampledAtMs = Date.now();
       osFromCache = false;
     } else {
@@ -1491,10 +1500,7 @@ export class ResourceMonitorService {
         this.cachedProcessTree !== null &&
         now - this.cachedProcessTree.sampledAtMs < this.treeCacheTtlMs;
       const shouldSkipOsTreeSpawn =
-        !forceRefresh &&
-        !this.sampleProcessTreeFn &&
-        hostReport !== null &&
-        !hasFreshCachedTree;
+        !forceRefresh && !this.sampleProcessTreeFn && hostReport !== null && !hasFreshCachedTree;
 
       if (shouldSkipOsTreeSpawn) {
         osTree = new Map();
@@ -1519,10 +1525,7 @@ export class ResourceMonitorService {
               fallbackPids.add(info.pid);
             }
           }
-          legacySampledMap = await defaultSampleProcesses(
-            [...fallbackPids],
-            this.sampleTimeoutMs
-          );
+          legacySampledMap = await defaultSampleProcesses([...fallbackPids], this.sampleTimeoutMs);
           osSampledAtMs = Date.now();
           osFromCache = false;
         }
@@ -1546,13 +1549,14 @@ export class ResourceMonitorService {
       parsePositiveInt(hostReport?.coreServer?.pid) ??
       parsePositiveInt(this.latestHostMetrics?.report.coreServer?.pid) ??
       this.configuredCoreServerPid ??
-      (parsePositiveInt(process.env["PRISMUX_SERVER_PID"]) ?? parsePositiveInt(process.env["PRISMUX_CORE_SERVER_PID"]));
+      parsePositiveInt(process.env["PRISMUX_SERVER_PID"]) ??
+      parsePositiveInt(process.env["PRISMUX_CORE_SERVER_PID"]);
     let coreHostedBy: ExtendedCoreServerResources["hostedBy"] =
       coreSupervisorStatus !== undefined
         ? "daemon-supervisor"
-        : hostReport?.coreServer?.hostedBy ??
+        : (hostReport?.coreServer?.hostedBy ??
           this.latestHostMetrics?.report.coreServer?.hostedBy ??
-          (mainPid !== null ? "electron" : undefined);
+          (mainPid !== null ? "electron" : undefined));
     let coreState: string | null =
       coreSupervisorStatus?.state ??
       hostReport?.coreServer?.state ??
@@ -1563,7 +1567,7 @@ export class ResourceMonitorService {
     if (corePid === null && mainPid !== null && osTree.size > 0) {
       const mainChildren = childrenByParent.get(mainPid) ?? [];
       const detected = mainChildren.find((child) =>
-        detectCoreServerFromOsEntry(child, process.pid, mainPid)
+        detectCoreServerFromOsEntry(child, process.pid, mainPid),
       );
       if (detected) {
         corePid = detected.pid;
@@ -1584,7 +1588,7 @@ export class ResourceMonitorService {
           cpuPercent: treeRow.cpuPercent,
           memoryBytes: treeRow.memoryBytes,
           privateMemoryBytes: treeRow.privateMemoryBytes,
-          cpuSeconds: treeRow.cpuSeconds
+          cpuSeconds: treeRow.cpuSeconds,
         };
       }
       return legacySampledMap.get(pid);
@@ -1615,7 +1619,7 @@ export class ResourceMonitorService {
 
     const bfsQueue: Array<{ pid: number; depth: number }> = [...familyPids].map((pid) => ({
       pid,
-      depth: 0
+      depth: 0,
     }));
     const visited = new Set<number>(familyPids);
     while (bfsQueue.length > 0 && visited.size < MAX_ATTRIBUTED_PROCESSES) {
@@ -1640,7 +1644,7 @@ export class ResourceMonitorService {
       if (reading) {
         derivedOsCpuByPid.set(
           pid,
-          this.resolveDerivedCpuPercent(reading, osSampledAtMs, cpuCores, osFromCache)
+          this.resolveDerivedCpuPercent(reading, osSampledAtMs, cpuCores, osFromCache),
         );
       }
     }
@@ -1670,8 +1674,8 @@ export class ResourceMonitorService {
             electronMetric,
             hostReport,
             cpuCores,
-            derivedOsCpuByPid.get(pid) ?? null
-          )
+            derivedOsCpuByPid.get(pid) ?? null,
+          ),
         );
         continue;
       }
@@ -1732,15 +1736,14 @@ export class ResourceMonitorService {
                 : coreHostedBy === "daemon-supervisor"
                   ? "Prismux Server (Daemon 托管)"
                   : "Prismux Server",
-          childCount: coreChildCount
+          childCount: coreChildCount,
         }
       : null;
 
     // Build PersistentPtyPool entries (100% compatible with existing workspace/kill API).
     const ptyEntries: PtyResourceEntry[] = ptyInfos.map((info) => {
       const sample = info.pid !== null ? getOsReading(info.pid) : undefined;
-      const cpuPercent =
-        info.pid !== null ? (resolvedCpuByPid.get(info.pid) ?? null) : null;
+      const cpuPercent = info.pid !== null ? (resolvedCpuByPid.get(info.pid) ?? null) : null;
       const memoryBytes = sample?.memoryBytes ?? null;
       const idleMs = Math.max(0, now - info.lastActivityAt);
       const normalizedCwd = resolve(info.cwd);
@@ -1767,7 +1770,7 @@ export class ResourceMonitorService {
         bufferBytes: info.bufferBytes,
         alive: info.alive,
         stale,
-        idleMs
+        idleMs,
       };
     });
 
@@ -1780,18 +1783,11 @@ export class ResourceMonitorService {
       const ptyInfo = ptyByPid.get(pid);
 
       // Skip ghost PIDs that have neither live OS reading, Electron metric, nor Daemon self identity.
-      if (
-        pid !== process.pid &&
-        !osRow &&
-        !legacyRow &&
-        !electronMetric
-      ) {
+      if (pid !== process.pid && !osRow && !legacyRow && !electronMetric) {
         continue;
       }
 
-      const ptyEntry = ptyInfo
-        ? ptyEntries.find((e) => e.sessionId === ptyInfo.ptyId)
-        : undefined;
+      const ptyEntry = ptyInfo ? ptyEntries.find((e) => e.sessionId === ptyInfo.ptyId) : undefined;
 
       const processName =
         osRow?.processName ??
@@ -1799,21 +1795,21 @@ export class ResourceMonitorService {
           ? basename(process.execPath)
           : electronMetric
             ? `Electron (${electronMetric.type})`
-            : ptyInfo?.command ?? `pid-${pid}`);
+            : (ptyInfo?.command ?? `pid-${pid}`));
 
       const classified = classifyOsProcessEntry(
         {
           pid,
           processName,
-          commandLine: osRow?.commandLine ?? ptyInfo?.command ?? null
+          commandLine: osRow?.commandLine ?? ptyInfo?.command ?? null,
         },
         {
           daemonPid: process.pid,
           mainPid,
           corePid,
           ...(electronMetric !== undefined ? { electronMetric } : {}),
-          ...(ptyEntry ? { ptyTitle: ptyEntry.title } : {})
-        }
+          ...(ptyEntry ? { ptyTitle: ptyEntry.title } : {}),
+        },
       );
 
       const cpuPercent: number | null = resolvedCpuByPid.get(pid) ?? null;
@@ -1836,7 +1832,7 @@ export class ResourceMonitorService {
             ? osPrivateWsBytes
             : electronMetric.workingSetBytes > 0
               ? electronMetric.workingSetBytes
-              : osRow?.memoryBytes ?? legacyRow?.memoryBytes ?? null;
+              : (osRow?.memoryBytes ?? legacyRow?.memoryBytes ?? null);
         privateMemoryBytes =
           electronMetric.privateMemoryBytes ??
           osRow?.privateMemoryBytes ??
@@ -1869,9 +1865,9 @@ export class ResourceMonitorService {
           ? {
               sessionId: ptyEntry.sessionId,
               workspace: ptyEntry.workspace,
-              stale: ptyEntry.stale
+              stale: ptyEntry.stale,
             }
-          : {})
+          : {}),
       });
     }
 
@@ -1880,7 +1876,7 @@ export class ResourceMonitorService {
       (a, b) =>
         (b.memoryBytes ?? -1) - (a.memoryBytes ?? -1) ||
         (b.cpuPercent ?? -1) - (a.cpuPercent ?? -1) ||
-        a.name.localeCompare(b.name)
+        a.name.localeCompare(b.name),
     );
 
     // Group PersistentPtyPool sessions by workspace (preserving existing contract & history).
@@ -1919,19 +1915,14 @@ export class ResourceMonitorService {
             memSum += pty.memoryBytes;
             hasMem = true;
           }
-          if (
-            pty.privateMemoryBytes !== undefined &&
-            pty.privateMemoryBytes !== null
-          ) {
+          if (pty.privateMemoryBytes !== undefined && pty.privateMemoryBytes !== null) {
             privSum += pty.privateMemoryBytes;
             hasPriv = true;
           }
         }
 
         const prevWsHistory = this.workspaceMemoryHistory.get(workspacePath) ?? [];
-        const nextWsHistory = hasMem
-          ? appendBoundedHistory(prevWsHistory, memSum)
-          : prevWsHistory;
+        const nextWsHistory = hasMem ? appendBoundedHistory(prevWsHistory, memSum) : prevWsHistory;
         this.workspaceMemoryHistory.set(workspacePath, nextWsHistory);
 
         return {
@@ -1945,7 +1936,7 @@ export class ResourceMonitorService {
           ptyCount: ptys.length,
           alivePtyCount: aliveCount,
           stalePtyCount: staleCount,
-          ptys
+          ptys,
         };
       })
       .sort((a, b) => a.workspace.localeCompare(b.workspace));
@@ -1991,7 +1982,7 @@ export class ResourceMonitorService {
             ? "mixed"
             : hasElectronSource
               ? "electron-app-metrics"
-              : "process-tree"
+              : "process-tree",
       };
     }
 
@@ -2020,16 +2011,11 @@ export class ResourceMonitorService {
       totalManagedMem = daemonMemBytes;
     }
 
-    this.appMemoryHistory = appendBoundedHistory(
-      this.appMemoryHistory,
-      totalManagedMem
-    );
+    this.appMemoryHistory = appendBoundedHistory(this.appMemoryHistory, totalManagedMem);
 
     const orphanCount = ptyEntries.filter((p) => p.stale).length;
     const activeAgentCount = processEntries.filter((p) => p.category === "agent").length;
-    const activeTerminalCount = processEntries.filter(
-      (p) => p.category === "terminal"
-    ).length;
+    const activeTerminalCount = processEntries.filter((p) => p.category === "terminal").length;
 
     const hostMetricsSource: ExtendedSystemResourcesResponse["hostMetricsSource"] =
       hostReport !== null && osTree.size > 0
@@ -2061,11 +2047,9 @@ export class ResourceMonitorService {
         freeMemoryBytes: hostFreeMem,
         availableMemoryBytes: hostFreeMem,
         memoryUsedPercent:
-          hostTotalMem > 0
-            ? roundOneDecimal((hostUsedMem / hostTotalMem) * 100)
-            : 0,
+          hostTotalMem > 0 ? roundOneDecimal((hostUsedMem / hostTotalMem) * 100) : 0,
         loadAvg: os.loadavg().map((n) => roundOneDecimal(n)),
-        uptimeSec: Math.round(os.uptime())
+        uptimeSec: Math.round(os.uptime()),
       },
       daemon: {
         pid: process.pid,
@@ -2073,7 +2057,7 @@ export class ResourceMonitorService {
         memoryBytes: daemonMemBytes,
         ...(daemonPrivateMemBytes !== undefined && daemonPrivateMemBytes !== null
           ? { privateMemoryBytes: daemonPrivateMemBytes }
-          : {})
+          : {}),
       },
       coreServer,
       desktop: desktopSummary,
@@ -2084,13 +2068,13 @@ export class ResourceMonitorService {
       hostMetricsSource,
       hostMetricsUpdatedAt: freshHost?.receivedAt ?? this.latestHostMetrics?.receivedAt ?? null,
       workspaces,
-      ptys: ptyEntries
+      ptys: ptyEntries,
     };
   }
 
   async killPtySession(
     rawSessionId: unknown,
-    signal?: string
+    signal?: string,
   ): Promise<{ statusCode: number; payload: KillSystemPtyResponse }> {
     if (typeof rawSessionId !== "string" || rawSessionId.trim().length === 0) {
       return {
@@ -2100,16 +2084,13 @@ export class ResourceMonitorService {
           sessionId: "",
           killed: false,
           removed: false,
-          message: "参数 sessionId 必须是非空字符串。"
-        }
+          message: "参数 sessionId 必须是非空字符串。",
+        },
       };
     }
 
     const sessionId = rawSessionId.trim();
-    const outcome = await this.ptyPool.killAndRemoveSession(
-      sessionId,
-      signal ?? "SIGTERM"
-    );
+    const outcome = await this.ptyPool.killAndRemoveSession(sessionId, signal ?? "SIGTERM");
     if (!outcome.existed) {
       return {
         statusCode: 404,
@@ -2118,8 +2099,8 @@ export class ResourceMonitorService {
           sessionId,
           killed: false,
           removed: false,
-          message: `未找到 PTY 会话「${sessionId}」。`
-        }
+          message: `未找到 PTY 会话「${sessionId}」。`,
+        },
       };
     }
 
@@ -2132,8 +2113,8 @@ export class ResourceMonitorService {
         removed: outcome.removed,
         message: outcome.killed
           ? `已终止并清理 PTY 会话「${sessionId}」。`
-          : `已清理僵死 PTY 会话记录「${sessionId}」。`
-      }
+          : `已清理僵死 PTY 会话记录「${sessionId}」。`,
+      },
     };
   }
 }

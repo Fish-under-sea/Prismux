@@ -80,4 +80,32 @@ describe("userFacingDispatchErrorMessage", () => {
     assert.include(message, "server logs");
     assert.notInclude(message, "private-query-data");
   });
+
+  it("formats capability rejection messages with canonical or configured provider display names", () => {
+    assert.equal(
+      userFacingDispatchErrorMessage({
+        _tag: "CommandPolicyCapabilityUnsupportedError",
+        providerInstanceId: "claude-code",
+        capability: "native_fork",
+      }),
+      "Claude cannot fork this thread natively.",
+    );
+    assert.equal(
+      userFacingDispatchErrorMessage({
+        _tag: "CommandPolicyCapabilityUnsupportedError",
+        providerInstanceId: "claudeAgent_work",
+        providerDisplayName: "主力 Claude",
+        capability: "native_fork",
+      }),
+      "主力 Claude cannot fork this thread natively.",
+    );
+    assert.equal(
+      userFacingDispatchErrorMessage({
+        _tag: "CommandPolicyCapabilityUnsupportedError",
+        providerInstanceId: "dsh",
+        capability: "interrupt",
+      }),
+      "DeepSeek Harness cannot stop a run once it has started.",
+    );
+  });
 });

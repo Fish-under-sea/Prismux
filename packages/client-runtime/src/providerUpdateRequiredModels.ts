@@ -2,9 +2,8 @@ import { PROVIDER_DISPLAY_NAMES, type ServerProvider } from "@prismux/core-contr
 import { compareSemverVersions, parseSemver } from "@prismux/core-shared/semver";
 import { mFallback, msg } from "gt-i18n";
 import { formatConjunctionList } from "./listFormat.ts";
+import { containsUuidNoise, stripUuidNoise } from "./state/providerInstanceDisplay.ts";
 import type { MFunctionType } from "gt-i18n/types";
-
-const CLAUDE_CODE_NAME = "Claude Code";
 
 function withV(version: string): string {
   return version.startsWith("v") ? version : `v${version}`;
@@ -18,7 +17,27 @@ const HOMEBREW_LATEST_CASK_SWITCH_COMMAND =
 type UpdateRequiredProvider = Pick<
   ServerProvider,
   "driver" | "updateRequiredModels" | "versionAdvisory"
->;
+> & {
+  readonly displayName?: string | undefined;
+};
+
+function resolveConfiguredProviderNoticeName(
+  provider: UpdateRequiredProvider,
+  providerDisplayName?: string | null,
+): { readonly providerName: string; readonly hasCustomName: boolean } {
+  const canonicalName = PROVIDER_DISPLAY_NAMES[provider.driver] ?? provider.driver;
+  const candidate = providerDisplayName?.trim() || provider.displayName?.trim() || "";
+  if (candidate.length > 0) {
+    const cleaned = containsUuidNoise(candidate) ? stripUuidNoise(candidate) : candidate;
+    if (cleaned.length > 0) {
+      return {
+        providerName: cleaned,
+        hasCustomName: cleaned.toLowerCase() !== canonicalName.toLowerCase(),
+      };
+    }
+  }
+  return { providerName: canonicalName, hasCustomName: false };
+}
 
 function matchingUpdateRequiredModels(provider: UpdateRequiredProvider, searchQuery: string) {
   const query = searchQuery.trim().toLocaleLowerCase();
@@ -67,21 +86,22 @@ export function formatProviderUpdateRequiredNotice(
   searchQuery = "",
   resolve: MFunctionType = mFallback,
   locale = "en",
+  providerDisplayName?: string | null,
 ): string | null {
   const models = matchingUpdateRequiredModels(provider, searchQuery);
   if (models.length === 0) return null;
   const minVersion = highestMinVersion(models);
-  const providerName =
-    provider.driver === "claudeAgent"
-      ? CLAUDE_CODE_NAME
-      : (PROVIDER_DISPLAY_NAMES[provider.driver] ?? provider.driver);
+  const { providerName, hasCustomName } = resolveConfiguredProviderNoticeName(
+    provider,
+    providerDisplayName,
+  );
   const version = withV(minVersion);
   const names = formatConjunctionList(
     models.map((model) => model.name),
     locale,
     resolve,
   );
-  const runtime = provider.driver === "codex" ? "codex" : "other";
+  const runtime = provider.driver === "codex" && !hasCustomName ? "codex" : "other";
   const latestVersion = channelLatestVersionBelow(provider, minVersion);
   if (
     latestVersion &&

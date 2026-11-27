@@ -67,17 +67,39 @@ const CAPABILITY_REJECTION_MESSAGES: Record<string, (provider: string) => string
     `${p} cannot confirm when its runs finish reliably enough for this.`,
 };
 
-function providerDisplayName(instanceId: string): string {
+const DRIVER_PREFIX_DISPLAY_ALIASES: ReadonlyArray<readonly [RegExp, ProviderDriverKind | string]> =
+  [
+    [/^(?:claude(?:[-_]?code|[-_]?agent|agent)?)(?:$|[-_:])/i, "claudeAgent"],
+    [/^(?:codex|openai[-_]?codex)(?:$|[-_:])/i, "codex"],
+    [/^(?:antigravity|agy)(?:$|[-_:])/i, "antigravity"],
+    [/^(?:opencode|open[-_]?code)(?:$|[-_:])/i, "opencode"],
+    [/^pi(?:$|[-_:])/i, "pi"],
+    [/^cursor(?:$|[-_:])/i, "cursor"],
+    [/^(?:dsh|deepseek[-_]?harness)(?:$|[-_:])/i, "DeepSeek Harness"],
+    [/^gemini(?:[-_]?cli)?(?:$|[-_:])/i, "Gemini CLI"],
+  ];
+
+function providerDisplayName(instanceId: string, configuredDisplayName?: string): string {
+  const custom = configuredDisplayName?.trim();
+  if (custom) return custom;
   const known = PROVIDER_DISPLAY_NAMES[instanceId as ProviderDriverKind];
   if (known !== undefined) return known;
-  const trimmed = instanceId.replace(/Agent$/i, "").trim();
+  const normalized = instanceId.trim();
+  for (const [pattern, target] of DRIVER_PREFIX_DISPLAY_ALIASES) {
+    if (pattern.test(normalized)) {
+      return PROVIDER_DISPLAY_NAMES[target as ProviderDriverKind] ?? target;
+    }
+  }
+  const trimmed = normalized.replace(/Agent$/i, "").trim();
   if (trimmed.length === 0) return instanceId;
   return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
 }
 
 function policyRejectionMessage(value: unknown): string | undefined {
   if (!Predicate.isObject(value) || typeof value.providerInstanceId !== "string") return undefined;
-  const provider = providerDisplayName(value.providerInstanceId);
+  const configuredDisplayName =
+    typeof value.providerDisplayName === "string" ? value.providerDisplayName : undefined;
+  const provider = providerDisplayName(value.providerInstanceId, configuredDisplayName);
   if (value._tag === "CommandPolicyCapabilityUnsupportedError") {
     const capability = typeof value.capability === "string" ? value.capability : "";
     return CAPABILITY_REJECTION_MESSAGES[capability]?.(provider);

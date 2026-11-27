@@ -50,6 +50,10 @@ import {
   type ReasoningTranslationRequestOptions,
   type ReasoningTranslationTestResult,
 } from "../../prismux/reasoningTranslation";
+import {
+  resolveConfiguredProviderDisplayName,
+  useConfiguredProviderEntries,
+} from "../../prismux/providerDisplayName";
 import type { ProviderInstanceEntry } from "../../providerInstances";
 import { useEnvironmentProviders } from "../../state/environments";
 import { EMPTY_SERVER_PROVIDERS } from "../../state/server";
@@ -443,6 +447,7 @@ export interface ReasoningTranslationSettingsCardViewProps {
   readonly id?: string | undefined;
   readonly title: ReactNode;
   readonly settings: ReasoningTranslationSettingsSlice;
+  readonly providerEntries?: ReadonlyArray<ProviderInstanceEntry> | undefined;
   readonly onUpdateSettings: (
     patch: Partial<Pick<UnifiedSettings, "reasoningTranslationProvider">> & ServerSettingsPatch,
   ) => void;
@@ -459,6 +464,7 @@ export function ReasoningTranslationSettingsCardView({
   id,
   title,
   settings,
+  providerEntries,
   onUpdateSettings,
   apiClient = DEFAULT_API_CLIENT,
   initialLocalStatus = null,
@@ -753,7 +759,11 @@ export function ReasoningTranslationSettingsCardView({
   );
   const progressPercent = Math.max(0, Math.min(100, Math.round(localStatus?.progressPercent ?? 0)));
   const usesDedicatedModel = settings.reasoningTranslationModelSelection !== null;
-  const globalModelSummary = `${settings.textGenerationModelSelection.instanceId} / ${settings.textGenerationModelSelection.model}`;
+  const globalProviderLabel = resolveConfiguredProviderDisplayName({
+    instanceId: settings.textGenerationModelSelection.instanceId,
+    providerInstances: providerEntries,
+  });
+  const globalModelSummary = `${globalProviderLabel} / ${settings.textGenerationModelSelection.model}`;
 
   return (
     <SettingsRow
@@ -1253,6 +1263,7 @@ export function ReasoningTranslationSettingsCard() {
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const scope = useOptionalSettingsScope();
+  const configuredProviderEntries = useConfiguredProviderEntries();
   const rowMeta = setting("reasoning-translation");
 
   return (
@@ -1260,6 +1271,7 @@ export function ReasoningTranslationSettingsCard() {
       id={rowMeta.id}
       title={rowMeta.title}
       settings={settings}
+      providerEntries={configuredProviderEntries}
       onUpdateSettings={(patch) => updateSettings(patch)}
       dedicatedModelPicker={
         scope !== null ? (

@@ -18,6 +18,9 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
+import type { ProviderInstanceEntry } from "../../providerInstances";
+import { resolveAgentBrandId } from "../agentBrand";
+import { resolveConfiguredProviderDisplayName } from "../providerDisplayName";
 import type {
   DaemonKillStalePtyResponse,
   DaemonPtyResourceDto,
@@ -45,9 +48,28 @@ export interface ResourcesStatusPopoverProps {
   readonly loading: boolean;
   readonly error: string | null;
   readonly daemonReady: boolean;
+  readonly configuredProviderEntries?: ReadonlyArray<ProviderInstanceEntry> | undefined;
   readonly onRefresh: () => Promise<void>;
   readonly onKillPty: (sessionId: string) => Promise<DaemonKillStalePtyResponse>;
   readonly embeddedInPopover?: boolean;
+}
+
+function resolveResourceProcessDisplayName(
+  proc: NormalizedProcessResource,
+  configuredProviderEntries?: ReadonlyArray<ProviderInstanceEntry>,
+): string {
+  if (proc.category !== "agent") {
+    return proc.name;
+  }
+  const matchedBrand = resolveAgentBrandId(proc.name);
+  if (matchedBrand === "custom" || matchedBrand === "acp") {
+    return proc.name;
+  }
+  return resolveConfiguredProviderDisplayName({
+    provider: proc.name,
+    providerInstances: configuredProviderEntries,
+    fallbackDisplayName: proc.name,
+  });
 }
 
 function roleBadgeMeta(proc: NormalizedProcessResource): {
@@ -107,17 +129,30 @@ function roleBadgeMeta(proc: NormalizedProcessResource): {
 function ProcessRoleIcon({ proc }: { readonly proc: NormalizedProcessResource }) {
   switch (proc.role) {
     case "electron-main":
-      return <AppWindowIcon aria-hidden className="size-3 shrink-0 text-sky-600 dark:text-sky-400" />;
+      return (
+        <AppWindowIcon aria-hidden className="size-3 shrink-0 text-sky-600 dark:text-sky-400" />
+      );
     case "electron-renderer":
-      return <MonitorIcon aria-hidden className="size-3 shrink-0 text-indigo-600 dark:text-indigo-400" />;
+      return (
+        <MonitorIcon aria-hidden className="size-3 shrink-0 text-indigo-600 dark:text-indigo-400" />
+      );
     case "electron-gpu":
-      return <LayersIcon aria-hidden className="size-3 shrink-0 text-purple-600 dark:text-purple-400" />;
+      return (
+        <LayersIcon aria-hidden className="size-3 shrink-0 text-purple-600 dark:text-purple-400" />
+      );
     case "core-server":
-      return <ServerIcon aria-hidden className="size-3 shrink-0 text-emerald-600 dark:text-emerald-400" />;
+      return (
+        <ServerIcon
+          aria-hidden
+          className="size-3 shrink-0 text-emerald-600 dark:text-emerald-400"
+        />
+      );
     case "daemon":
       return <CpuIcon aria-hidden className="size-3 shrink-0 text-amber-600 dark:text-amber-400" />;
     case "agent":
-      return <BotIcon aria-hidden className="size-3 shrink-0 text-emerald-600 dark:text-emerald-400" />;
+      return (
+        <BotIcon aria-hidden className="size-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
+      );
     default:
       return <TerminalSquareIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />;
   }
@@ -152,6 +187,7 @@ export function ResourcesStatusPopover({
   loading,
   error,
   daemonReady,
+  configuredProviderEntries,
   onRefresh,
   onKillPty,
   embeddedInPopover = false,
@@ -503,9 +539,15 @@ export function ResourcesStatusPopover({
                   className="inline-flex min-w-0 flex-1 cursor-pointer items-center gap-1 text-left font-semibold text-foreground transition-colors hover:text-foreground/80 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
                 >
                   {isCollapsed ? (
-                    <ChevronRightIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+                    <ChevronRightIcon
+                      aria-hidden
+                      className="size-3 shrink-0 text-muted-foreground"
+                    />
                   ) : (
-                    <ChevronDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+                    <ChevronDownIcon
+                      aria-hidden
+                      className="size-3 shrink-0 text-muted-foreground"
+                    />
                   )}
                   <FolderGit2Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
                   <span className="truncate" title={group.workspace}>
@@ -642,7 +684,10 @@ export function ResourcesStatusPopover({
                 ) : (
                   <ChevronDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
                 )}
-                <TerminalSquareIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                <TerminalSquareIcon
+                  aria-hidden
+                  className="size-3.5 shrink-0 text-muted-foreground"
+                />
                 <span className="truncate">
                   活跃 Agent 与终端进程（{sortedActiveChildren.length}）
                 </span>
@@ -657,6 +702,10 @@ export function ResourcesStatusPopover({
               <div className="flex flex-col gap-1 pl-2">
                 {sortedActiveChildren.map((proc) => {
                   const badge = roleBadgeMeta(proc);
+                  const displayName = resolveResourceProcessDisplayName(
+                    proc,
+                    configuredProviderEntries,
+                  );
                   return (
                     <div
                       key={proc.pid}
@@ -674,7 +723,7 @@ export function ResourcesStatusPopover({
                           {badge.label}
                         </span>
                         <span className="truncate text-[11px] font-medium text-foreground">
-                          {proc.name}
+                          {displayName}
                         </span>
                         <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
                           PID {proc.pid}
@@ -710,9 +759,7 @@ export function ResourcesStatusPopover({
                   <ChevronDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
                 )}
                 <MonitorIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-                <span className="truncate">
-                  工作台核心进程明细（{sortedCoreProcesses.length}）
-                </span>
+                <span className="truncate">工作台核心进程明细（{sortedCoreProcesses.length}）</span>
               </button>
               <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
                 {formatCpuPercent(coreProcessesAgg.cpuPercent)} ·{" "}
@@ -780,7 +827,11 @@ export function ResourcesStatusPopover({
           {summary.hostMemoryTotalBytes
             ? `主机总内存 ${formatBytesCompact(summary.hostMemoryTotalBytes)}`
             : ""}
-          {sampledTimeLabel ? (summary.hostMemoryTotalBytes ? ` · ${sampledTimeLabel}` : sampledTimeLabel) : ""}
+          {sampledTimeLabel
+            ? summary.hostMemoryTotalBytes
+              ? ` · ${sampledTimeLabel}`
+              : sampledTimeLabel
+            : ""}
         </span>
       </div>
     </div>

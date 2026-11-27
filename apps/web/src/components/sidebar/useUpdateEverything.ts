@@ -1,10 +1,10 @@
 import { msg, useMessages } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
-import { PROVIDER_DISPLAY_NAMES } from "@prismux/core-contracts";
 
 import { APP_VERSION } from "~/branding";
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import { isElectron } from "~/env";
+import { resolveConfiguredProviderDisplayName } from "~/prismux/providerDisplayName";
 import { useEnvironments } from "~/state/environments";
 import { environmentIdsKey } from "~/state/environmentAtomList";
 import { environmentUpdateStatesAtom, serverEnvironment } from "~/state/server";
@@ -92,8 +92,15 @@ export function useUpdateEverything(
       providerMachines: providers.machines.map((machine) => ({
         environmentId: machine.environmentId,
         label: machine.label,
-        providers: machine.candidates.map(
-          (candidate) => PROVIDER_DISPLAY_NAMES[candidate.driver] ?? candidate.driver,
+        providers: machine.candidates.map((candidate) =>
+          resolveConfiguredProviderDisplayName({
+            provider: candidate.instanceId,
+            instanceId: candidate.instanceId,
+            driverKind: candidate.driver,
+            providers: machine.providers,
+            settings: machine.settings,
+            fallbackDisplayName: candidate.displayName,
+          }),
         ),
       })),
     },

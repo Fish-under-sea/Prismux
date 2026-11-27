@@ -1,4 +1,5 @@
 /* oxlint-disable prismux/no-untranslated-copy -- Prismux v3 spec mandates verbatim Chinese AGY controlled-lock badges and risk disclaimer copy */
+import type { ServerProvider } from "@prismux/core-contracts";
 import { AlertTriangleIcon, LockIcon, ShieldAlertIcon, ShieldCheckIcon } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 
@@ -7,7 +8,9 @@ import { Button } from "../components/ui/button";
 import { Switch } from "../components/ui/switch";
 import { useStableCallback } from "../hooks/useStableCallback";
 import { cn } from "../lib/utils";
+import type { ProviderInstanceOrderSettings } from "../providerInstances";
 import { prismuxDaemonClient, type PrismuxDaemonClient } from "./daemonClient";
+import { useResolveConfiguredProviderDisplayName } from "./providerDisplayName";
 
 export const ANTIGRAVITY_CONTROLLED_DEFAULT_LOCKED = true;
 export const ANTIGRAVITY_CONTROLLED_DEFAULT_ENABLED = false;
@@ -26,6 +29,8 @@ export interface AntigravityControlledLockSectionProps {
   readonly readOnly?: boolean;
   readonly className?: string;
   readonly onPolicyChange?: (policy: AntigravityPolicyState) => void;
+  readonly serverProvidersOverride?: ReadonlyArray<ServerProvider>;
+  readonly settingsOverride?: ProviderInstanceOrderSettings | null;
 }
 
 const DEFAULT_POLICY_STATE: AntigravityPolicyState = {
@@ -55,7 +60,14 @@ export function AntigravityControlledLockSection({
   readOnly = false,
   className,
   onPolicyChange,
+  serverProvidersOverride,
+  settingsOverride,
 }: AntigravityControlledLockSectionProps) {
+  const { formatList } = useResolveConfiguredProviderDisplayName({
+    serverProvidersOverride,
+    settingsOverride,
+  });
+  const dispatchTargetNames = formatList(["codex", "claudeAgent", "opencode"]);
   const [policy, setPolicy] = useState<AntigravityPolicyState>(DEFAULT_POLICY_STATE);
   const [loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
@@ -223,7 +235,7 @@ export function AntigravityControlledLockSection({
           <p className="max-w-2xl text-xs leading-relaxed text-muted-foreground">
             {isUnlocked
               ? "已解除默认跨代理被控锁定。请注意：即使开启本项，24h 无人值守 Cron 与夜间工场仍永久禁止自动唤醒个人版 AGY，且远程 QQ / Gmail 请求个人版 AGY 仍强制草稿就位等待本人确认。"
-              : "为守护个人版 Antigravity（AGY）账号合规，默认严格锁定为「仅总控指挥官（Commander）」模式：您本人可直接驱动 AGY 统筹全栈并向外派发 Codex / Claude Code / OpenCode，但禁止其他 AI 代理或脚本反向操控个人版 AGY。"}
+              : `为守护个人版 Antigravity（AGY）账号合规，默认严格锁定为「仅总控指挥官（Commander）」模式：您本人可直接驱动 AGY 统筹全栈并向外派发 ${dispatchTargetNames}，但禁止其他 AI 代理或脚本反向操控个人版 AGY。`}
           </p>
 
           {isUnlocked && policy.disclaimerAcceptedAt ? (
@@ -289,8 +301,12 @@ export function AntigravityControlledLockSection({
                 封号风险，签署免责不免疫平台风控，仅建议企业版或付费 API Key 用户启用，后果自负！
               </p>
               <ul className="list-disc space-y-1 pl-4 text-muted-foreground">
-                <li>个人版订阅仅限您本人主动交互使用，禁止通过第三方脚本或子代理自动化轮询调用。</li>
-                <li>解锁后若触发上游 403 限流、账号冻结或订阅吊销，Prismux 无法为您豁免平台风控。</li>
+                <li>
+                  个人版订阅仅限您本人主动交互使用，禁止通过第三方脚本或子代理自动化轮询调用。
+                </li>
+                <li>
+                  解锁后若触发上游 403 限流、账号冻结或订阅吊销，Prismux 无法为您豁免平台风控。
+                </li>
                 <li>为守住底线，24h 无人值守 Cron / 夜间工场仍永久禁止自动唤醒个人版 AGY。</li>
               </ul>
             </div>

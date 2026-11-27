@@ -22,6 +22,7 @@ import {
 } from "../../../components/ui/dialog-styles";
 import { Textarea } from "../../../components/ui/textarea";
 import { cn } from "../../../lib/utils";
+import { useResolveConfiguredProviderDisplayName } from "../../providerDisplayName";
 
 export const PLUGIN_DEVELOPMENT_GUIDE_REPO_PATH = "docs/plugins/plugin-development-guide.md";
 export const PLUGIN_HOOKS_AND_THEME_REPO_PATH = "docs/plugins/official-hooks-and-theme-tokens.md";
@@ -47,7 +48,8 @@ export const PLUGIN_CREATOR_DOC_LINKS: readonly PluginCreatorDocLink[] = [
   {
     id: "dev-guide",
     title: "《Prismux 插件创作完全指南》",
-    subtitle: "Cordis 双域内核、engines.prismux、ctx.effect() 零残留、声明式 UI、0600 凭据与打包发布",
+    subtitle:
+      "Cordis 双域内核、engines.prismux、ctx.effect() 零残留、声明式 UI、0600 凭据与打包发布",
     repoPath: PLUGIN_DEVELOPMENT_GUIDE_REPO_PATH,
     url: PLUGIN_DEVELOPMENT_GUIDE_URL,
     badge: "创作指南",
@@ -69,9 +71,7 @@ export const PLUGIN_CREATOR_DOC_LINKS: readonly PluginCreatorDocLink[] = [
 export function buildPluginCreatorAgentPrompt(userRequirement: string): string {
   const trimmed = userRequirement.trim();
   const requirementSection =
-    trimmed.length > 0
-      ? `【我的插件创作需求】\n${trimmed}`
-      : PLUGIN_REQUIREMENT_PLACEHOLDER_BLOCK;
+    trimmed.length > 0 ? `【我的插件创作需求】\n${trimmed}` : PLUGIN_REQUIREMENT_PLACEHOLDER_BLOCK;
 
   return [
     "请为 Prismux 开发一个符合官方规范、可直接打包导入的高质量插件。动手前请先通读以下两份官方文档（若当前在 Prismux 仓库内可直接读取对应相对路径，否则请联网查阅 GitHub 文档）：",
@@ -82,8 +82,8 @@ export function buildPluginCreatorAgentPrompt(userRequirement: string): string {
     "必须严格遵守的 Prismux 插件工程契约：",
     '- 模块与版本兼容：package.json 必须设置 `"type": "module"`，并在顶层声明 `"engines": { "prismux": ">=0.1.0-0 <2.0.0" }`（严禁回退 peerDependencies）；社区插件包名使用 `prismux-plugin-<name>`，保持零外部运行时依赖（仅用 `node:*` 内置模块或打包至 `dist/`），严禁声明 `preinstall` / `install` / `postinstall` / `prepare` 安装脚本。',
     '- 清单与 0 Token 纯净：`plugin.manifest.json` 必填 `id`、`version`、非空 `realms`（`"daemon"` / `"ui"`）、`permissions` 与 `modelVisible`；非模型工具类插件默认 `"modelVisible": false`，严禁向大模型注入无关 Tool Schema 或 System Prompt；敏感密钥一律通过 `ctx.credentials` 读写独立 `0600` 加密凭据仓。',
-    "- Cordis 可逆生命周期与零残留：通过 `apply(ctx)` 注册路由（`/plugins/<id>/*`）、钩子与定时器，并将全部自定义连接/监听/缓存清理回调登记到 `ctx.effect()`，确保停用、卸载或异常回滚时 LIFO 零残留释放；服从 `distribution: \"managed\"` 单写锁，不实现运行期热自更。",
-    "- 官方 6 大生命周期 Hook：仅使用 `LifecycleHookBus` 真实事件名 `SessionStart`、`PreToolUse`、`PostToolUse`、`Notification`、`SubagentStop`、`Stop`（不存在 `SessionEnd`）；遵循退出码 `2` 拦截回传与安全钩子默认 `onFailure: \"block\"` 原则。",
+    '- Cordis 可逆生命周期与零残留：通过 `apply(ctx)` 注册路由（`/plugins/<id>/*`）、钩子与定时器，并将全部自定义连接/监听/缓存清理回调登记到 `ctx.effect()`，确保停用、卸载或异常回滚时 LIFO 零残留释放；服从 `distribution: "managed"` 单写锁，不实现运行期热自更。',
+    '- 官方 6 大生命周期 Hook：仅使用 `LifecycleHookBus` 真实事件名 `SessionStart`、`PreToolUse`、`PostToolUse`、`Notification`、`SubagentStop`、`Stop`（不存在 `SessionEnd`）；遵循退出码 `2` 拦截回传与安全钩子默认 `onFailure: "block"` 原则。',
     '- UI 与三态液态玻璃主题适配：UI 域优先使用受限声明式组件协议 `ui: "components"`（仅限 `Stack` / `Card` / `Text` / `Badge` / `Button` / `Switch` / `Input` / `Table` 8 原语，零原始 HTML/SVG/脚本注入）；若编写受管样式，必须基于宿主真实属性 `html[data-pmx-theme="light" | "dark"]`、`html[data-pmx-mode]`、`html[data-pmx-glass="0" | "1"]`、`html[data-pmx-gpu]` 与 `--pmx-*` / 语义变量（`--pmx-accent`、`--pmx-text-color`、`--pmx-muted-color`、`--pmx-glass-zone-*-bg`、`--foreground`、`--muted-foreground`、`--border`），禁止硬编码 `bg-black` / `bg-white` / `text-white` 或 `@media (prefers-color-scheme)`，保证 ≥ 4.5:1 对比度与无 GPU / 降透明 / 高对比度兜底。',
     "- 交付与打包自检：提供完整源码、单测与构建命令；使用 `pnpm plugin:pack -- --plugin <dir>` 生成确定性 `.wb-plugin` 与 `.sha256` 并通过 `gunzipSync` 回环校验，便于在 Prismux 插件中心直接导入验证。",
     "",
@@ -145,6 +145,8 @@ export function PluginCreatorGuideModal({
   const titleId = useId();
   const descId = useId();
   const reqInputId = useId();
+  const { formatList } = useResolveConfiguredProviderDisplayName();
+  const supportedAgentsLabel = formatList(["codex", "claudeAgent", "antigravity"]);
   const modalRef = useRef<HTMLDivElement>(null);
   const backdropGuardRef = useRef(createBackdropDismissGuardState());
   const copyTimerRef = useRef<number | null>(null);
@@ -155,10 +157,7 @@ export function PluginCreatorGuideModal({
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
 
-  const generatedPrompt = useMemo(
-    () => buildPluginCreatorAgentPrompt(requirement),
-    [requirement],
-  );
+  const generatedPrompt = useMemo(() => buildPluginCreatorAgentPrompt(requirement), [requirement]);
 
   useEffect(() => {
     setRequirement(initialRequirement);
@@ -274,7 +273,8 @@ export function PluginCreatorGuideModal({
               </Badge>
             </div>
             <p id={descId} className="text-xs leading-relaxed text-muted-foreground">
-              查阅官方源码级开发规范，或一键复制预置工程契约提示词直接交给 Coding Agent 自动创作合规插件。
+              查阅官方源码级开发规范，或一键复制预置工程契约提示词直接交给 Coding Agent
+              自动创作合规插件。
             </p>
           </div>
 
@@ -356,7 +356,8 @@ export function PluginCreatorGuideModal({
                 一键复制给 Coding Agent 的创作提示词
               </h3>
               <p className="text-[11px] text-muted-foreground">
-                已内嵌两份文档地址、Cordis 零残留、官方 6 大 Hook 与浅/深/玻璃样式规范，适配 Codex / Claude Code / Antigravity 等代理。
+                已内嵌两份文档地址、Cordis 零残留、官方 6 大 Hook 与浅/深/玻璃样式规范，适配{" "}
+                {supportedAgentsLabel} 等代理。
               </p>
             </div>
 

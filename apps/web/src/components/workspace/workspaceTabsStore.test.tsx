@@ -17,10 +17,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { useComposerDraftStore, type DraftId } from "../../composerDraftStore";
-import {
-  deriveProviderInstanceEntries,
-  providerInstanceEntriesFor,
-} from "../../providerInstances";
+import { deriveProviderInstanceEntries, providerInstanceEntriesFor } from "../../providerInstances";
 import {
   selectActiveRightPanelSurface,
   selectThreadRightPanelState,
@@ -350,7 +347,11 @@ describe("workspaceQuickLaunch.logic", () => {
       makeProvider({ instanceId: "claudeAgent", driver: "claudeAgent" }),
       makeProvider({ instanceId: "codex", driver: "codex" }),
       makeProvider({ instanceId: "antigravity", driver: "antigravity" }),
-      makeProvider({ instanceId: "dsh", driver: "acpRegistry", displayName: "DeepSeek Harness (dsh)" }),
+      makeProvider({
+        instanceId: "dsh",
+        driver: "acpRegistry",
+        displayName: "DeepSeek Harness (dsh)",
+      }),
       makeProvider({ instanceId: "disabled-one", driver: "cursor", enabled: false }),
     ]);
 
@@ -378,10 +379,10 @@ describe("workspaceQuickLaunch.logic", () => {
       historyThreads,
     });
     expect(agents.map((a) => a.displayName)).toEqual([
-      "Claude Code",
+      "Claude",
       "Codex",
       "Antigravity",
-      "DeepSeek Harness (dsh)",
+      "DeepSeek Harness",
     ]);
     expect(agents[3]?.brandId).toBe("dsh");
     expect(agents[0]?.recentThreads.map((t) => t.title)).toEqual(["优化液态玻璃模糊度"]);
@@ -407,7 +408,7 @@ describe("workspaceQuickLaunch.logic", () => {
       agents,
     });
     expect(filteredClaude.isSearching).toBe(true);
-    expect(filteredClaude.agents.map((a) => a.displayName)).toEqual(["Claude Code"]);
+    expect(filteredClaude.agents.map((a) => a.displayName)).toEqual(["Claude"]);
     expect(filteredClaude.historyThreads.map((t) => t.title)).toEqual(["优化液态玻璃模糊度"]);
 
     const filteredTool = filterQuickLaunchResults("终端", {
@@ -471,7 +472,10 @@ describe("workspaceQuickLaunch.logic", () => {
     ]);
 
     // 2. Fallback agents when instanceEntries is empty (blank workspace / offline before config load)
-    const fallbackAgents = buildQuickLaunchAgentOptions({ instanceEntries: [], historyThreads: [] });
+    const fallbackAgents = buildQuickLaunchAgentOptions({
+      instanceEntries: [],
+      historyThreads: [],
+    });
     const claudeFallback = resolveQuickLaunchAgentTarget(
       fallbackAgents.find((a) => a.brandId === "claude-code")!,
       [],
@@ -598,8 +602,8 @@ describe("WorkspaceTabBar markup", () => {
     expect(splitPaneHtml).toContain('data-workspace-pane-menu="pane-left"');
     expect(splitPaneHtml).toContain('data-workspace-close-pane="pane-left"');
     // Standalone outer 左右分屏 / 上下分屏 buttons must not clutter split pane tab bars
-    expect(splitPaneHtml).not.toContain('data-workspace-split-horizontal=');
-    expect(splitPaneHtml).not.toContain('data-workspace-split-vertical=');
+    expect(splitPaneHtml).not.toContain("data-workspace-split-horizontal=");
+    expect(splitPaneHtml).not.toContain("data-workspace-split-vertical=");
     expect(splitPaneHtml).not.toContain('aria-label="左右分屏"');
     expect(splitPaneHtml).not.toContain('aria-label="上下分屏"');
 
@@ -639,9 +643,9 @@ describe("WorkspaceTabBar markup", () => {
     );
 
     expect(singlePaneHtml).toContain('data-workspace-pane-menu="pane-main"');
-    expect(singlePaneHtml).not.toContain('data-workspace-split-horizontal=');
-    expect(singlePaneHtml).not.toContain('data-workspace-split-vertical=');
-    expect(singlePaneHtml).not.toContain('data-workspace-close-pane=');
+    expect(singlePaneHtml).not.toContain("data-workspace-split-horizontal=");
+    expect(singlePaneHtml).not.toContain("data-workspace-split-vertical=");
+    expect(singlePaneHtml).not.toContain("data-workspace-close-pane=");
     expect(singlePaneHtml).not.toContain('aria-label="左右分屏"');
     expect(singlePaneHtml).not.toContain('aria-label="上下分屏"');
 
@@ -765,21 +769,21 @@ describe("WorkspaceTabBar markup", () => {
     useRightPanelStore.getState().toggle(hostRef, "wallpaper");
     let state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, hostRef);
     expect(state.isOpen).toBe(true);
-    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, hostRef)?.kind).toBe(
-      "wallpaper",
-    );
+    expect(
+      selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, hostRef)?.kind,
+    ).toBe("wallpaper");
 
     // 2. Switch to another tab (diff) -> clicking wallpaper toggle switches back to wallpaper without collapsing
     useRightPanelStore.getState().open(hostRef, "diff");
-    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, hostRef)?.kind).toBe(
-      "diff",
-    );
+    expect(
+      selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, hostRef)?.kind,
+    ).toBe("diff");
     useRightPanelStore.getState().toggle(hostRef, "wallpaper");
     state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, hostRef);
     expect(state.isOpen).toBe(true);
-    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, hostRef)?.kind).toBe(
-      "wallpaper",
-    );
+    expect(
+      selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, hostRef)?.kind,
+    ).toBe("wallpaper");
 
     // 3. Already open and active on wallpaper -> clicking wallpaper toggle collapses right panel
     useRightPanelStore.getState().toggle(hostRef, "wallpaper");
@@ -1063,7 +1067,10 @@ describe("single unused draft tab invariant", () => {
     const handleNewThread = vi.fn(
       async (
         projectRef: typeof PROJECT_REF,
-        options?: { readonly forceNew?: boolean; readonly modelSelection?: { instanceId: ProviderInstanceId; model: string } | null },
+        options?: {
+          readonly forceNew?: boolean;
+          readonly modelSelection?: { instanceId: ProviderInstanceId; model: string } | null;
+        },
       ) => {
         expect(options?.forceNew).toBe(false);
         const idx = nextDraftCounter++;
@@ -1131,7 +1138,7 @@ describe("single unused draft tab invariant", () => {
       providerId: "claude-code",
       instanceId: "claudeAgent",
       model: "claudeAgent-default",
-      title: "Claude Code",
+      title: "Claude",
     });
     expect(useComposerDraftStore.getState().getComposerDraft(DRAFT_A)?.activeProvider).toBe(
       "claudeAgent",
@@ -1178,7 +1185,7 @@ describe("single unused draft tab invariant", () => {
       firstTabId,
       secondUnusedTabId,
     ]);
-    expect(useWorkspaceTabsStore.getState().tabs[secondUnusedTabId!]?.title).toBe("Claude Code");
+    expect(useWorkspaceTabsStore.getState().tabs[secondUnusedTabId!]?.title).toBe("Claude");
   });
 
   it("never creates new tabs when switching between existing server threads and an unused draft tab", () => {
@@ -1430,9 +1437,22 @@ describe("single unused draft tab invariant", () => {
 
     // Runtime store action pruneDuplicateDraftTabs collapses redundant empty drafts once emptied.
     const store = useWorkspaceTabsStore.getState();
-    const t1 = store.openTab({ kind: "draft", title: "Codex", providerId: "codex", draftId: DRAFT_A });
-    const t2 = store.openTab({ kind: "draft", title: "Claude Code", providerId: "claudeAgent", draftId: DRAFT_B });
-    expect(useWorkspaceTabsStore.getState().panes[DEFAULT_PRIMARY_PANE_ID]?.tabIds).toEqual([t1, t2]);
+    const t1 = store.openTab({
+      kind: "draft",
+      title: "Codex",
+      providerId: "codex",
+      draftId: DRAFT_A,
+    });
+    const t2 = store.openTab({
+      kind: "draft",
+      title: "Claude Code",
+      providerId: "claudeAgent",
+      draftId: DRAFT_B,
+    });
+    expect(useWorkspaceTabsStore.getState().panes[DEFAULT_PRIMARY_PANE_ID]?.tabIds).toEqual([
+      t1,
+      t2,
+    ]);
     useComposerDraftStore.getState().setPrompt(DRAFT_A, "");
     store.pruneDuplicateDraftTabs();
     expect(useWorkspaceTabsStore.getState().panes[DEFAULT_PRIMARY_PANE_ID]?.tabIds).toEqual([t2]);
@@ -1457,10 +1477,8 @@ describe("single unused draft tab invariant", () => {
       draftId: DRAFT_EXPIRED,
     });
     expect(
-      findPrimaryUnusedDraftTab(
-        useWorkspaceTabsStore.getState(),
-        getLiveComposerDraftStateLookup(),
-      )?.id,
+      findPrimaryUnusedDraftTab(useWorkspaceTabsStore.getState(), getLiveComposerDraftStateLookup())
+        ?.id,
     ).toBe(expiredTabId);
 
     let pendingBinding: PendingDraftTabBinding | null = null;
@@ -1512,7 +1530,7 @@ describe("single unused draft tab invariant", () => {
       providerId: "claude-code",
       instanceId: "claudeAgent",
       model: "claudeAgent-default",
-      title: "Claude Code",
+      title: "Claude",
     });
   });
 
@@ -1677,7 +1695,7 @@ describe("single unused draft tab invariant", () => {
       instanceId: CLAUDE_ID,
       providerId: "claudeAgent",
       model: "claude-sonnet-4-6",
-      title: "Claude Code",
+      title: "Claude",
     });
 
     store.syncRouteTarget({
@@ -1692,7 +1710,7 @@ describe("single unused draft tab invariant", () => {
       providerId: "claudeAgent",
       instanceId: CLAUDE_ID,
       model: "claude-sonnet-4-6",
-      title: "Claude Code",
+      title: "Claude",
     });
 
     // 3. When defaultModelSelection is unset and Codex is unhealthy/unavailable while Antigravity is ready,
@@ -1877,7 +1895,7 @@ describe("single unused draft tab invariant", () => {
       instanceId: CLAUDE_ID,
       providerId: "claudeAgent",
       model: "claude-sonnet-4-6",
-      title: "Claude Code",
+      title: "Claude",
     });
   });
 
@@ -1914,7 +1932,11 @@ describe("single unused draft tab invariant", () => {
 
     const entries = deriveProviderInstanceEntries([
       makeProvider({ instanceId: "codex", driver: "codex", displayName: "主力 Codex" }),
-      makeProvider({ instanceId: "claudeAgent", driver: "claudeAgent", displayName: "架构师 Claude" }),
+      makeProvider({
+        instanceId: "claudeAgent",
+        driver: "claudeAgent",
+        displayName: "架构师 Claude",
+      }),
       makeProvider({ instanceId: "antigravity", driver: "antigravity", displayName: "小反重" }),
       makeProvider({ instanceId: "dsh", driver: "acpRegistry", displayName: "深海鲸鱼" }),
     ]);

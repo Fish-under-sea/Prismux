@@ -51,6 +51,7 @@ import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { SettingsRow } from "./settingsLayout";
 import { AddCodexAccountDialog } from "./AddCodexAccountDialog";
 import { getOnboardingProviderState } from "../../onboarding/providerReadiness.logic";
+import { CANONICAL_PROVIDER_DISPLAY_NAMES } from "../../prismux/agentBrand";
 import { getProviderSummary } from "./providerStatus";
 import {
   settleAuthorizationPage,
@@ -127,7 +128,9 @@ export function CodexSetupSection(props: CodexSetupSectionProps) {
   const content =
     props.mode === "existing" && props.presentation === "onboarding" ? (
       <CodexWelcomeCard
-        title={props.displayName || props.provider?.displayName || "Codex"}
+        title={
+          props.displayName || props.provider?.displayName || CANONICAL_PROVIDER_DISPLAY_NAMES.codex
+        }
         description={
           existingReady ? (
             props.provider?.auth.email?.trim() ? (
@@ -198,7 +201,11 @@ export function CodexSetupSection(props: CodexSetupSectionProps) {
     ) : props.mode === "existing" ? null : !props.provider?.setup?.canAuthenticate ? (
       props.presentation === "onboarding" ? (
         <CodexWelcomeCard
-          title={props.displayName || props.provider?.displayName || "Codex"}
+          title={
+            props.displayName ||
+            props.provider?.displayName ||
+            CANONICAL_PROVIDER_DISPLAY_NAMES.codex
+          }
           description={<CodexSignInDescription />}
           control={
             <Button size="sm" variant="outline" className="min-w-44" disabled>
@@ -855,7 +862,7 @@ function ManagedCodexSetup({
       <>
         {accountPicker}
         <CodexWelcomeCard
-          title={displayName || provider?.displayName || "Codex"}
+          title={displayName || provider?.displayName || CANONICAL_PROVIDER_DISPLAY_NAMES.codex}
           description={
             installActive ? (
               runtimeDescription

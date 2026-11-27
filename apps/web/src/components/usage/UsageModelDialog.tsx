@@ -23,7 +23,7 @@ import {
   speedCostSegments,
   tokenTypeSegments,
 } from "./usageBreakdown";
-import { PROVIDER_PRESENTATION } from "./usageProviders";
+import { PROVIDER_PRESENTATION, useConfiguredUsageProviders } from "./usageProviders";
 
 export interface UsageChartWindow {
   readonly days: readonly string[];
@@ -57,6 +57,8 @@ export function UsageModelDialog({
   );
   const providers = [model.provider];
   const presentation = PROVIDER_PRESENTATION[model.provider];
+  const { getLabel } = useConfiguredUsageProviders();
+  const providerLabel = getLabel(model.provider);
   const costUnknown = isModelCostUnknown(model);
   const hitRate = cacheHitRate(model);
   const perMillion = costPerMillionTokens(model);
@@ -81,13 +83,13 @@ export function UsageModelDialog({
           <div className="flex items-center gap-2">
             <ProviderInstanceIcon
               driverKind={presentation.driverKind}
-              displayName={presentation.label}
+              displayName={providerLabel}
               iconClassName="size-5"
             />
             <DialogTitle>{model.model}</DialogTitle>
           </div>
           <DialogDescription>
-            {presentation.label}
+            {providerLabel}
             {costUnknown
               ? ""
               : ` · ${gt("{share} of cost", { share: formatPercent(model.costShare) })}`}

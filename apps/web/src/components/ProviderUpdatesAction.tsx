@@ -1,6 +1,6 @@
 import { m } from "../i18n/messages";
 import { thrownErrorMessage } from "@prismux/client-runtime/errors";
-import { AuthProvidersManageScope, PROVIDER_DISPLAY_NAMES } from "@prismux/core-contracts";
+import { AuthProvidersManageScope } from "@prismux/core-contracts";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -9,6 +9,7 @@ import {
 import { useRef, useState } from "react";
 import { T, useGT } from "gt-react";
 
+import { resolveConfiguredProviderDisplayName } from "~/prismux/providerDisplayName";
 import { useEnvironmentProviders, useEnvironments } from "~/state/environments";
 import { serverEnvironment } from "~/state/server";
 import { useEnvironmentsWithScope } from "~/state/session";
@@ -90,18 +91,34 @@ export function useProviderUpdates() {
       canOneClickUpdateProviderCandidate(candidate, providers),
     );
     return candidates.length > 0
-      ? [{ environmentId: environment.environmentId, label: environment.label, candidates }]
+      ? [
+          {
+            environmentId: environment.environmentId,
+            label: environment.label,
+            providers,
+            settings: environment.serverConfig?.settings,
+            candidates,
+          },
+        ]
       : [];
   });
 
   const updateAll = async ({ quiet = false }: { readonly quiet?: boolean } = {}) => {
     const runs = await Promise.all(
-      machines.flatMap(({ environmentId, label, candidates }) =>
+      machines.flatMap(({ environmentId, label, providers, settings, candidates }) =>
         candidates.map(async (candidate): Promise<ProviderUpdateRun> => ({
           environmentId,
           machineLabel: label,
           driver: candidate.driver,
           instanceId: candidate.instanceId,
+          displayName: resolveConfiguredProviderDisplayName({
+            provider: candidate.instanceId,
+            instanceId: candidate.instanceId,
+            driverKind: candidate.driver,
+            providers,
+            settings,
+            fallbackDisplayName: candidate.displayName,
+          }),
           result: await updateProvider({
             environmentId,
             input: { provider: candidate.driver, instanceId: candidate.instanceId },
@@ -160,7 +177,16 @@ export function ProviderUpdatesAction() {
           <div key={machine.environmentId}>
             {machine.label}:{" "}
             {machine.candidates
-              .map((candidate) => PROVIDER_DISPLAY_NAMES[candidate.driver] ?? candidate.driver)
+              .map((candidate) =>
+                resolveConfiguredProviderDisplayName({
+                  provider: candidate.instanceId,
+                  instanceId: candidate.instanceId,
+                  driverKind: candidate.driver,
+                  providers: machine.providers,
+                  settings: machine.settings,
+                  fallbackDisplayName: candidate.displayName,
+                }),
+              )
               .join(", ")}
           </div>
         ))}

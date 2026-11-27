@@ -3,17 +3,14 @@ import type { EnvironmentId, ProviderDriverKind } from "@prismux/core-contracts"
 import { T, Var } from "gt-react";
 import { InfoIcon } from "lucide-react";
 
+import { PRISMUX_REPOSITORY_URL } from "../../legalLinks";
+import { resolveConfiguredProviderDisplayName } from "../../prismux/providerDisplayName";
 import { serverEnvironment } from "../../state/server";
 import { Alert, AlertDescription } from "../ui/alert";
 
-import { PRISMUX_REPOSITORY_URL } from "../../legalLinks";
-
 const MULTIPLE_ACCOUNTS_FAQ_URL = `${PRISMUX_REPOSITORY_URL}#faq`;
 
-const PROVIDER_NAMES = new Map<string, string>([
-  ["codex", "Codex"],
-  ["claudeAgent", "Claude"],
-]);
+const MULTIPLE_ACCOUNTS_WARNED_DRIVERS = new Set<string>(["codex", "claudeAgent"]);
 
 /** Shown while adding a Claude or Codex account when the environment already has one signed in. */
 export function MultipleAccountsNote({
@@ -24,13 +21,18 @@ export function MultipleAccountsNote({
   readonly driver: ProviderDriverKind;
 }) {
   const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
-  const providerName = PROVIDER_NAMES.get(driver);
+  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const hasSignedInAccount =
-    providerName !== undefined &&
+    MULTIPLE_ACCOUNTS_WARNED_DRIVERS.has(driver) &&
     providers?.some(
       (provider) => provider.driver === driver && provider.auth.status === "authenticated",
     );
   if (!hasSignedInAccount) return null;
+  const providerName = resolveConfiguredProviderDisplayName({
+    driverKind: driver,
+    providers,
+    settings: serverConfig?.settings,
+  });
   return (
     <Alert variant="info" role="note">
       <InfoIcon aria-hidden />

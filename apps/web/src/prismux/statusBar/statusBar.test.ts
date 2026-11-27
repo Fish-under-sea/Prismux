@@ -389,7 +389,7 @@ describe("statusBarUsage compliance and urgency sorting", () => {
 
     // Compliant windows sorted most urgent first: 96% -> 86% -> 42%.
     expect(summary.windows.map((w) => `${w.providerName}:${w.usedPercent}`)).toEqual([
-      "Claude Code:96",
+      "Claude:96",
       "Codex:86",
       "Codex:42",
     ]);
@@ -1861,7 +1861,7 @@ describe("statusBarResources and PrismuxDaemonClient unified APIs", () => {
             },
             {
               pid: 2101,
-              name: "Claude Code",
+              name: "Claude",
               processName: "node.exe",
               role: "agent",
               category: "agent",
@@ -1899,7 +1899,7 @@ describe("statusBarResources and PrismuxDaemonClient unified APIs", () => {
     expect(resourcesHtml).toContain("PID 2000");
     expect(resourcesHtml).toContain("512 MB");
     expect(resourcesHtml).toContain("GPU 合成 / 壁纸渲染");
-    expect(resourcesHtml).toContain("Claude Code");
+    expect(resourcesHtml).toContain("Claude");
     expect(resourcesHtml).toContain("pnpm dev");
     expect(resourcesHtml).toContain("僵死");
     expect(resourcesHtml).toContain('data-pmx-glass-zone="overlays"');

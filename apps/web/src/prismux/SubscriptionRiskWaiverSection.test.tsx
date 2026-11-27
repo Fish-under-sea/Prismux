@@ -11,7 +11,10 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { PrismuxDaemonClient } from "./daemonClient";
 
-const switchHandlers = new Map<string, { onChange: (checked: boolean) => void; disabled: boolean; checked: boolean }>();
+const switchHandlers = new Map<
+  string,
+  { onChange: (checked: boolean) => void; disabled: boolean; checked: boolean }
+>();
 const buttonHandlers = new Map<string, { onClick: () => void; disabled: boolean }>();
 
 vi.mock("../components/ui/switch", () => ({
@@ -26,9 +29,10 @@ vi.mock("../components/ui/switch", () => ({
     onCheckedChange?: (checked: boolean) => void;
     [key: string]: unknown;
   }) => {
-    const key = typeof props["data-pmx-waiver-switch"] === "string"
-      ? (props["data-pmx-waiver-switch"] as string)
-      : null;
+    const key =
+      typeof props["data-pmx-waiver-switch"] === "string"
+        ? (props["data-pmx-waiver-switch"] as string)
+        : null;
     if (key && onCheckedChange) {
       switchHandlers.set(key, {
         disabled: Boolean(disabled),
@@ -450,7 +454,7 @@ describe("SubscriptionRiskWaiverSection", () => {
     expect(html).toContain("个人订阅跨代理编排与自动化风险免责");
     expect(html).toContain("允许个人订阅态 Antigravity (AGY) 作为被控端/接受自动化调用");
     expect(html).toContain(
-      "允许将官方个人订阅态外部 Agent（Codex / Claude Code 等）拉入蜂群与跨代理指挥",
+      "允许将官方个人订阅态外部 Agent（Codex / Claude 等）拉入蜂群与跨代理指挥",
     );
     expect(html).toContain('data-pmx-waiver-signed="false"');
     expect(html).toContain('data-pmx-waiver-switches-locked="true"');
@@ -548,9 +552,7 @@ describe("SubscriptionRiskWaiverSection", () => {
       expect(container.textContent).toContain("官方个人订阅 OAuth（默认锁定）");
       expect(container.textContent).toContain("https://ccs.local/v1");
       expect(container.findByAttr("data-pmx-probe-auth-mode", "api_or_custom")).not.toBeNull();
-      expect(
-        container.findByAttr("data-pmx-probe-auth-mode", "subscription_oauth"),
-      ).not.toBeNull();
+      expect(container.findByAttr("data-pmx-probe-auth-mode", "subscription_oauth")).not.toBeNull();
 
       // 2. Both granular switches are strictly disabled/locked grey before signing
       expect(switchHandlers.get("agy-controlled")?.disabled).toBe(true);
@@ -572,7 +574,9 @@ describe("SubscriptionRiskWaiverSection", () => {
       expect(modal?.textContent).toContain(
         "Prismux 仅作为纯本地开源编排工具，不介入账号鉴权且不承担任何平台风控或订阅损失连带责任",
       );
-      expect(container.findByAttr("data-waiver-countdown", String(WAIVER_READ_WAIT_SECONDS))).not.toBeNull();
+      expect(
+        container.findByAttr("data-waiver-countdown", String(WAIVER_READ_WAIT_SECONDS)),
+      ).not.toBeNull();
       expect(container.findByAttr("data-waiver-confirm-input", "1")).toBeNull();
       expect(buttonHandlers.get("confirm")?.disabled).toBe(true);
 
@@ -750,7 +754,9 @@ describe("SubscriptionRiskWaiverSection", () => {
     const root = createRoot(container as unknown as Element);
     try {
       await act(async () => {
-        root.render(<SubscriptionRiskWaiverSection daemon={{ requestJson: requestJson as never }} />);
+        root.render(
+          <SubscriptionRiskWaiverSection daemon={{ requestJson: requestJson as never }} />,
+        );
       });
       await flushMicrotasks();
 

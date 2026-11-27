@@ -612,7 +612,7 @@ export const BUILTIN_SKILL_ZH_DESCRIPTIONS: Readonly<Record<string, string>> = {
   "mcp-app-development":
     "构建、打包与调试 Antigravity MCP 应用，为 MCP 工具提供交互式侧边栏或内联界面",
   "migrate-agent-settings":
-    "将 Claude Code、Codex、Cursor 或 Gemini CLI 的 MCP、技能与配置迁移为 Antigravity 插件",
+    "将 Claude、Codex、Cursor 或 Gemini CLI 的 MCP、技能与配置迁移为 Antigravity 插件",
   "migrate-workflows": "自动扫描并把旧版工作流配置迁移为现代技能目录（SKILL.md）并安全归档旧文件",
   plugin: "管理或创建功能插件包，统一封装技能、代理、规则、MCP 服务与钩子",
   automation: "交互式设计并创建按周期执行的后台自动化任务",
@@ -657,7 +657,7 @@ export const BUILTIN_SKILL_ZH_DESCRIPTIONS: Readonly<Record<string, string>> = {
   design: "授权或撤销 Claude 智能体访问你的 Claude Design 设计项目",
   "design-sync": "打包 React 组件代码（Storybook 或独立包）并同步至 Claude Design 设计系统",
   dataviz: "面向图表、仪表盘与交互式数据可视化的专业设计与绘制技能",
-  "update-config": "通过 settings.json 配置 Claude Code 运行参数与自动化规则",
+  "update-config": "通过 settings.json 配置 Claude 运行参数与自动化规则",
   verify: "通过真实运行、操作与观测端到端验证代码改动是否真正符合预期",
   "fewer-permission-prompts":
     "扫描历史记录中高频只读 Bash 与 MCP 调用，为项目生成优先白名单减少审批弹窗",
@@ -666,8 +666,8 @@ export const BUILTIN_SKILL_ZH_DESCRIPTIONS: Readonly<Record<string, string>> = {
   "run-skill-generator": "为项目生成或优化专属的 run-<unit> 构建、启动与驱动技能",
   "plugin-authoring": "开发界面主题、侧边栏面板等自定义扩展以定制交互行为",
   "auto-mode-setup": "向自动模式说明当前环境特征并微调自动化执行规则",
-  "team-onboarding": "结合历史使用习惯为团队成员生成 Claude Code 快速上手指南",
-  insights: "分析历史 Claude Code 会话记录并生成效率与使用习惯洞察报告",
+  "team-onboarding": "结合历史使用习惯为团队成员生成 Claude 快速上手指南",
+  insights: "分析历史 Claude 会话记录并生成效率与使用习惯洞察报告",
   // Codex built-in system skills
   "create-statusline": "为 Codex CLI 构建并启用自定义 MCP 状态栏展示",
   "review-agent": "针对代码改动执行专项审查，定位可落地的真实缺陷与回归风险",

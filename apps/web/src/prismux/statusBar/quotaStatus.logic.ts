@@ -1,9 +1,8 @@
 import type { ServerProvider, ServerProviderUsageWindow } from "@prismux/core-contracts";
 
-import {
-  orderItemsByConfiguredProviderOrder,
-  resolveConfiguredProviderLabel,
-} from "../../providerInstances";
+import { orderItemsByConfiguredProviderOrder } from "../../providerInstances";
+import { CANONICAL_PROVIDER_DISPLAY_NAMES } from "../agentBrand";
+import { resolveConfiguredProviderDisplayName } from "../providerDisplayName";
 import type {
   DaemonOfficialQuotaProviderStatus,
   DaemonOfficialQuotaSummaryResponse,
@@ -685,14 +684,12 @@ export function aggregateQuotaSummary(
               ? agy.remainingCredits
               : null;
 
-    const agyDisplayName =
-      configuredEntries.length > 0
-        ? resolveConfiguredProviderLabel(
-            "antigravity",
-            configuredEntries,
-            agy.displayName || "Antigravity",
-          )
-        : agy.displayName || "Antigravity";
+    const agyDisplayName = resolveConfiguredProviderDisplayName({
+      provider: "antigravity",
+      driverKind: "antigravity",
+      providerInstances: configuredEntries,
+      fallbackDisplayName: agy.displayName || CANONICAL_PROVIDER_DISPLAY_NAMES.antigravity,
+    });
 
     agents.push({
       id: "antigravity",
@@ -718,14 +715,13 @@ export function aggregateQuotaSummary(
     const rawWindows = provider.usageLimits?.windows;
     if (!Array.isArray(rawWindows) || rawWindows.length === 0) continue;
 
-    const providerDisplayName =
-      configuredEntries.length > 0
-        ? resolveConfiguredProviderLabel(
-            provider.instanceId,
-            configuredEntries,
-            canonicalProviderDisplayName(provider.displayName, provider.driver),
-          )
-        : canonicalProviderDisplayName(provider.displayName, provider.driver);
+    const providerDisplayName = resolveConfiguredProviderDisplayName({
+      provider: provider.instanceId,
+      instanceId: provider.instanceId,
+      driverKind: provider.driver,
+      providerInstances: configuredEntries,
+      fallbackDisplayName: canonicalProviderDisplayName(provider.displayName, provider.driver),
+    });
 
     const windows: QuotaWindowItem[] = [];
     for (const rawWin of rawWindows) {

@@ -4,6 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeReadlinePromises from "node:readline/promises";
 
+import { PROVIDER_DISPLAY_NAMES, ProviderDriverKind } from "@prismux/core-contracts";
 import { isCommandAvailable, resolveSpawnCommand } from "@prismux/core-shared/shell";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
@@ -30,25 +31,31 @@ interface TriageAgent {
   readonly promptArgs?: ReadonlyArray<string>;
 }
 
+const TRIAGE_CLAUDE_LABEL =
+  PROVIDER_DISPLAY_NAMES[ProviderDriverKind.make("claudeAgent")] ?? "Claude";
+const TRIAGE_CODEX_LABEL = PROVIDER_DISPLAY_NAMES[ProviderDriverKind.make("codex")] ?? "Codex";
+const TRIAGE_ANTIGRAVITY_LABEL =
+  PROVIDER_DISPLAY_NAMES[ProviderDriverKind.make("antigravity")] ?? "Antigravity";
+
 const TRIAGE_AGENTS: ReadonlyArray<TriageAgent> = [
   {
     id: "claude",
     command: "claude",
-    label: "Claude Code",
+    label: TRIAGE_CLAUDE_LABEL,
     stateDirEnv: "CLAUDE_CONFIG_DIR",
     defaultStateDir: ".claude",
   },
   {
     id: "codex",
     command: "codex",
-    label: "Codex",
+    label: TRIAGE_CODEX_LABEL,
     stateDirEnv: "CODEX_HOME",
     defaultStateDir: ".codex",
   },
   {
     id: "antigravity",
     command: "agy",
-    label: "Antigravity",
+    label: TRIAGE_ANTIGRAVITY_LABEL,
     stateDirEnv: "GEMINI_HOME",
     defaultStateDir: ".gemini",
     promptArgs: ["--prompt-interactive"],
@@ -155,7 +162,7 @@ export const triageCommand = Command.make("triage", {
   model: modelFlag,
 }).pipe(
   Command.withDescription(
-    "Investigate a Prismux problem on this machine with Claude Code, Codex, or Antigravity, and help file a good issue.",
+    `Investigate a Prismux problem on this machine with ${TRIAGE_CLAUDE_LABEL}, ${TRIAGE_CODEX_LABEL}, or ${TRIAGE_ANTIGRAVITY_LABEL}, and help file a good issue.`,
   ),
   Command.withHandler((flags) =>
     Effect.gen(function* () {

@@ -13,7 +13,12 @@ import {
 
 import { getI18nSnapshot, subscribeI18n } from "../i18n/runtime";
 import { cn } from "../lib/utils";
-import { AgentBrandLogo, resolveAgentBrandId, type AgentBrandId } from "./agentBrand";
+import {
+  AgentBrandLogo,
+  formatAgentBrandName,
+  resolveAgentBrandId,
+  type AgentBrandId,
+} from "./agentBrand";
 
 const SYSTEM_USER_FOLDER_NAMES = new Set([
   "public",
@@ -77,13 +82,7 @@ export const WELCOME_GREETING_POOLS: Readonly<
   // 12:00–13:59
   midday: {
     zh: ["中午好", "干饭时间到", "午间摸鱼时刻", "能量补给中", "记得好好吃饭呀"],
-    en: [
-      "Happy midday",
-      "Lunch break check-in",
-      "Midday recharge",
-      "Fueling up",
-      "Good afternoon",
-    ],
+    en: ["Happy midday", "Lunch break check-in", "Midday recharge", "Fueling up", "Good afternoon"],
   },
   // 14:00–17:59
   afternoon: {
@@ -184,11 +183,7 @@ export function extractUsernameFromPath(filePath: string | null | undefined): st
   const trimmed = filePath.trim();
   if (!trimmed) return null;
 
-  const patterns = [
-    /^[A-Za-z]:[\\/]Users[\\/]([^\\/]+)/i,
-    /^\/Users\/([^/]+)/,
-    /^\/home\/([^/]+)/,
-  ];
+  const patterns = [/^[A-Za-z]:[\\/]Users[\\/]([^\\/]+)/i, /^\/Users\/([^/]+)/, /^\/home\/([^/]+)/];
   for (const pattern of patterns) {
     const match = pattern.exec(trimmed);
     const candidate = match?.[1]?.trim();
@@ -581,11 +576,7 @@ function PrismuxPrismWatermarkSvg({ size }: { readonly size: number }) {
         strokeLinejoin="round"
         opacity="0.86"
       />
-      <polygon
-        points="32,16 44,23 32,30 20,23"
-        fill="currentColor"
-        opacity="0.26"
-      />
+      <polygon points="32,16 44,23 32,30 20,23" fill="currentColor" opacity="0.26" />
     </svg>
   );
 }
@@ -671,7 +662,9 @@ export const AgyWelcomeGreeting = memo(function AgyWelcomeGreeting({
   }, []);
 
   const watermarkLabel =
-    watermarkBrand === "prismux" ? "Prismux" : watermarkBrand;
+    watermarkBrand === "prismux"
+      ? "Prismux"
+      : providerDisplayName?.trim() || formatAgentBrandName(watermarkBrand);
 
   return (
     <div
@@ -767,10 +760,7 @@ export const AgyWelcomeSuggestions = memo(function AgyWelcomeSuggestions({
       data-pmx-welcome-suggestions="1"
       role="list"
       aria-label={language === "zh" ? "快捷提问建议" : "Quick prompt suggestions"}
-      className={cn(
-        "pointer-events-auto mb-3 flex flex-col items-start gap-1.5 px-1",
-        className,
-      )}
+      className={cn("pointer-events-auto mb-3 flex flex-col items-start gap-1.5 px-1", className)}
     >
       {visible.map((item) => (
         <button

@@ -2,12 +2,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
-import type {
-  PrismuxProviderProbeResponse,
-  PrismuxProviderProbeSnapshot,
-  ProviderAuthMode,
-  ProviderAuthSource,
-  ProviderProbeStatus
+import {
+  CANONICAL_PROVIDER_DISPLAY_NAMES,
+  type PrismuxProviderProbeResponse,
+  type PrismuxProviderProbeSnapshot,
+  type ProviderAuthMode,
+  type ProviderAuthSource,
+  type ProviderProbeStatus,
 } from "@prismux/protocol";
 import type { CoreRpcClient, CoreProviderSummary } from "../core/CoreRpcClient.js";
 import {
@@ -24,12 +25,12 @@ import {
   isPlaceholderDshVersion,
   locateCliBinaryFastSync,
   resolveDshInstalledVersionFastSync,
-  type CliProbeResult
+  type CliProbeResult,
 } from "./ServiceDiagnosticsService.js";
 import {
   findExecutableOnPath,
   refreshWindowsEnvironmentFromRegistry,
-  type WindowsEnvRefreshResult
+  type WindowsEnvRefreshResult,
 } from "./WindowsEnvRefresh.js";
 
 const SERVER_AUTH_RPC_TIMEOUT_MS = 350;
@@ -43,8 +44,7 @@ export const AUTH_LABEL_CCS_MAGPIE = AUTH_LABEL_API_CUSTOM;
 export const AUTH_LABEL_API_KEY = "API Key（已放行）" as const;
 export const AUTH_LABEL_CLOUD_IAM = "云厂商 API / IAM（已放行）" as const;
 export const AUTH_LABEL_LOCAL_RUNTIME = "本地运行时（已放行）" as const;
-export const AUTH_LABEL_SUBSCRIPTION_OAUTH =
-  "官方个人订阅 OAuth（默认锁定）" as const;
+export const AUTH_LABEL_SUBSCRIPTION_OAUTH = "官方个人订阅 OAuth（默认锁定）" as const;
 export const AUTH_LABEL_UNAUTHENTICATED = "未登录 / 未配置鉴权" as const;
 export const AUTH_LABEL_NOT_INSTALLED = "未安装 CLI" as const;
 export const AUTH_LABEL_UNKNOWN_ALLOWED = "未检测到个人订阅态（已放行）" as const;
@@ -63,64 +63,64 @@ export interface ProviderProbeSpec {
 export const PRISMUX_PROBE_PROVIDER_SPECS: readonly ProviderProbeSpec[] = [
   {
     providerId: "antigravity",
-    displayName: "Antigravity (agy)",
+    displayName: `${CANONICAL_PROVIDER_DISPLAY_NAMES.antigravity} (agy)`,
     command: "agy",
     args: ["--version"],
     diagId: "provider.agy",
-    diagName: "Antigravity CLI (agy · 纯 ACP)",
+    diagName: `${CANONICAL_PROVIDER_DISPLAY_NAMES.antigravity} CLI (agy · 纯 ACP)`,
     fixAction: "安装本机 agy CLI 并运行 ACP 登录",
-    fixCommand: "agy acp --login"
+    fixCommand: "agy acp --login",
   },
   {
     providerId: "claudeAgent",
-    displayName: "Claude Code (claude)",
+    displayName: `${CANONICAL_PROVIDER_DISPLAY_NAMES.claudeAgent} (claude)`,
     command: "claude",
     args: ["--version"],
     diagId: "provider.claude",
-    diagName: "Claude Code CLI (claude)",
-    fixAction: "安装官方 Claude Code CLI",
-    fixCommand: "npm install -g @anthropic-ai/claude-code"
+    diagName: `${CANONICAL_PROVIDER_DISPLAY_NAMES.claudeAgent} CLI (claude)`,
+    fixAction: `安装官方 ${CANONICAL_PROVIDER_DISPLAY_NAMES.claudeAgent} CLI`,
+    fixCommand: "npm install -g @anthropic-ai/claude-code",
   },
   {
     providerId: "codex",
-    displayName: "Codex (codex)",
+    displayName: `${CANONICAL_PROVIDER_DISPLAY_NAMES.codex} (codex)`,
     command: "codex",
     args: ["--version"],
     diagId: "provider.codex",
-    diagName: "Codex CLI (codex)",
-    fixAction: "安装官方 Codex CLI",
-    fixCommand: "npm install -g @openai/codex"
+    diagName: `${CANONICAL_PROVIDER_DISPLAY_NAMES.codex} CLI (codex)`,
+    fixAction: `安装官方 ${CANONICAL_PROVIDER_DISPLAY_NAMES.codex} CLI`,
+    fixCommand: "npm install -g @openai/codex",
   },
   {
     providerId: "dsh",
-    displayName: "DeepSeek Harness (dsh)",
+    displayName: `${CANONICAL_PROVIDER_DISPLAY_NAMES.dsh} (dsh)`,
     command: "dsh",
     args: ["--version"],
     diagId: "provider.dsh",
-    diagName: "DeepSeek Harness CLI (dsh · ACP)",
-    fixAction: "检查本机 DeepSeek Harness (DSH NEXT) 或 dsh CLI 安装",
-    fixCommand: "dsh --version"
+    diagName: `${CANONICAL_PROVIDER_DISPLAY_NAMES.dsh} CLI (dsh · ACP)`,
+    fixAction: `检查本机 ${CANONICAL_PROVIDER_DISPLAY_NAMES.dsh} (DSH NEXT) 或 dsh CLI 安装`,
+    fixCommand: "dsh --version",
   },
   {
     providerId: "gemini",
-    displayName: "Gemini CLI (gemini)",
+    displayName: `${CANONICAL_PROVIDER_DISPLAY_NAMES.gemini} (gemini)`,
     command: "gemini",
     args: ["--version"],
     diagId: "provider.gemini",
-    diagName: "Gemini CLI (gemini)",
-    fixAction: "安装官方 Gemini CLI",
-    fixCommand: "npm install -g @google/gemini-cli"
+    diagName: `${CANONICAL_PROVIDER_DISPLAY_NAMES.gemini} (gemini)`,
+    fixAction: `安装官方 ${CANONICAL_PROVIDER_DISPLAY_NAMES.gemini}`,
+    fixCommand: "npm install -g @google/gemini-cli",
   },
   {
     providerId: "opencode",
-    displayName: "OpenCode (opencode)",
+    displayName: `${CANONICAL_PROVIDER_DISPLAY_NAMES.opencode} (opencode)`,
     command: "opencode",
     args: ["--version"],
     diagId: "provider.opencode",
-    diagName: "OpenCode CLI (opencode)",
-    fixAction: "安装 OpenCode CLI",
-    fixCommand: "npm install -g opencode-ai"
-  }
+    diagName: `${CANONICAL_PROVIDER_DISPLAY_NAMES.opencode} CLI (opencode)`,
+    fixAction: `安装 ${CANONICAL_PROVIDER_DISPLAY_NAMES.opencode} CLI`,
+    fixCommand: "npm install -g opencode-ai",
+  },
 ] as const;
 
 export interface ServerProviderAuthMetadata {
@@ -170,23 +170,15 @@ export interface PrismuxProviderProbeServiceOptions {
   platform?: NodeJS.Platform;
   now?: () => number;
   /** Optional configured/enabled provider IDs to scope probes unless `includeAll: true`. */
-  configuredProviders?:
-    | readonly string[]
-    | (() => readonly string[] | null | undefined);
+  configuredProviders?: readonly string[] | (() => readonly string[] | null | undefined);
   refreshEnv?: () => Promise<WindowsEnvRefreshResult | void> | void;
-  cliProbe?: (
-    command: string,
-    args: string[],
-    timeoutMs: number
-  ) => Promise<CliProbeResult>;
+  cliProbe?: (command: string, args: string[], timeoutMs: number) => Promise<CliProbeResult>;
   locateExecutable?: (
     command: string,
     env: Record<string, string | undefined>,
-    platform: NodeJS.Platform
+    platform: NodeJS.Platform,
   ) => string | null;
-  serverAuthResolver?: () => Promise<
-    Partial<Record<string, ServerProviderAuthMetadata>>
-  >;
+  serverAuthResolver?: () => Promise<Partial<Record<string, ServerProviderAuthMetadata>>>;
 }
 
 const PROVIDER_ALIAS_MAP: Readonly<Record<string, string>> = {
@@ -226,7 +218,7 @@ const PROVIDER_ALIAS_MAP: Readonly<Record<string, string>> = {
   lmstudio: "local",
   "lm-studio": "local",
   vllm: "local",
-  llamacpp: "local"
+  llamacpp: "local",
 };
 
 export function canonicalizeProbeProviderId(raw: string): string {
@@ -247,7 +239,7 @@ export function canonicalizeProbeProviderId(raw: string): string {
 function getEnvValue(
   env: Record<string, string | undefined>,
   key: string,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
 ): string | undefined {
   const direct = env[key];
   if (typeof direct === "string" && direct.trim().length > 0) {
@@ -267,7 +259,7 @@ function getEnvValue(
 function hasEnvValue(
   env: Record<string, string | undefined>,
   key: string,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
 ): boolean {
   return getEnvValue(env, key, platform) !== undefined;
 }
@@ -275,7 +267,7 @@ function hasEnvValue(
 function isTruthyEnvValue(
   env: Record<string, string | undefined>,
   key: string,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
 ): boolean {
   const val = getEnvValue(env, key, platform)?.toLowerCase();
   return val === "1" || val === "true" || val === "yes" || val === "on";
@@ -345,10 +337,7 @@ function isOfficialOpenAiHost(endpoint: string): boolean {
 function isOfficialGoogleGeminiHost(endpoint: string): boolean {
   try {
     const host = new URL(endpoint).hostname.toLowerCase();
-    return (
-      host === "generativelanguage.googleapis.com" ||
-      host === "aiplatform.googleapis.com"
-    );
+    return host === "generativelanguage.googleapis.com" || host === "aiplatform.googleapis.com";
   } catch {
     return false;
   }
@@ -423,9 +412,9 @@ function readClaudeSettingsSignals(options: {
     ...(options.workspacePath
       ? [
           join(options.workspacePath, ".claude", "settings.json"),
-          join(options.workspacePath, ".claude", "settings.local.json")
+          join(options.workspacePath, ".claude", "settings.local.json"),
         ]
-      : [])
+      : []),
   ];
 
   let baseUrl: string | null = null;
@@ -444,10 +433,7 @@ function readClaudeSettingsSignals(options: {
       if (!isPlainRecord(parsed)) {
         continue;
       }
-      if (
-        typeof parsed["apiKeyHelper"] === "string" &&
-        parsed["apiKeyHelper"].trim().length > 0
-      ) {
+      if (typeof parsed["apiKeyHelper"] === "string" && parsed["apiKeyHelper"].trim().length > 0) {
         hasApiKeyHelper = true;
         if (mentionsCcsOrMagpie(parsed["apiKeyHelper"])) {
           hasCcsOrMagpieMarker = true;
@@ -483,7 +469,7 @@ function readClaudeSettingsSignals(options: {
         for (const cloudKey of [
           "CLAUDE_CODE_USE_BEDROCK",
           "CLAUDE_CODE_USE_VERTEX",
-          "CLAUDE_CODE_USE_FOUNDRY"
+          "CLAUDE_CODE_USE_FOUNDRY",
         ]) {
           const val = String(settingsEnv[cloudKey] ?? "")
             .trim()
@@ -496,8 +482,7 @@ function readClaudeSettingsSignals(options: {
           if (
             typeof v === "string" &&
             v.trim().length > 0 &&
-            (k.toUpperCase().startsWith("CCS_") ||
-              k.toUpperCase().startsWith("MAGPIE_"))
+            (k.toUpperCase().startsWith("CCS_") || k.toUpperCase().startsWith("MAGPIE_"))
           ) {
             hasCcsOrMagpieMarker = true;
           }
@@ -514,7 +499,7 @@ function readClaudeSettingsSignals(options: {
     hasAuthToken,
     hasApiKeyHelper,
     usesCloudIam,
-    hasCcsOrMagpieMarker
+    hasCcsOrMagpieMarker,
   };
 }
 
@@ -603,7 +588,10 @@ export function parseCodexRoutingConfigToml(content: string): CodexConfigTomlSig
     if (eqIdx <= 0) {
       continue;
     }
-    const key = trimmed.slice(0, eqIdx).trim().replace(/^['"]|['"]$/g, "");
+    const key = trimmed
+      .slice(0, eqIdx)
+      .trim()
+      .replace(/^['"]|['"]$/g, "");
     const rawVal = trimmed.slice(eqIdx + 1).trim();
 
     if (currentSection === "") {
@@ -620,14 +608,14 @@ export function parseCodexRoutingConfigToml(content: string): CodexConfigTomlSig
     }
 
     const mpMatch = /^model_providers\.(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_-]+))$/.exec(
-      currentSection
+      currentSection,
     );
     if (mpMatch !== null) {
       const providerKey = mpMatch[1] ?? mpMatch[2] ?? mpMatch[3] ?? "";
       if (!providerKey) continue;
       const entry = providerTables.get(providerKey) ?? {
         baseUrl: null,
-        requiresOpenaiAuth: null
+        requiresOpenaiAuth: null,
       };
       if (key === "base_url") {
         const val = parseTomlScalarString(rawVal);
@@ -640,15 +628,11 @@ export function parseCodexRoutingConfigToml(content: string): CodexConfigTomlSig
   }
 
   const normalizedProvider = modelProvider?.trim() || null;
-  const selectedTable = normalizedProvider
-    ? providerTables.get(normalizedProvider)
-    : undefined;
+  const selectedTable = normalizedProvider ? providerTables.get(normalizedProvider) : undefined;
   const hasCustomProvider =
-    normalizedProvider !== null &&
-    normalizedProvider.toLowerCase() !== "openai";
+    normalizedProvider !== null && normalizedProvider.toLowerCase() !== "openai";
   const providerBaseUrl = selectedTable?.baseUrl ?? null;
-  const requiresOpenaiAuth =
-    selectedTable?.requiresOpenaiAuth ?? rootRequiresOpenaiAuth;
+  const requiresOpenaiAuth = selectedTable?.requiresOpenaiAuth ?? rootRequiresOpenaiAuth;
 
   const hasCcsOrMagpieMarker =
     mentionsCcsOrMagpie(normalizedProvider) ||
@@ -661,7 +645,7 @@ export function parseCodexRoutingConfigToml(content: string): CodexConfigTomlSig
     providerBaseUrl,
     requiresOpenaiAuth,
     hasCustomProvider,
-    hasCcsOrMagpieMarker
+    hasCcsOrMagpieMarker,
   };
 }
 
@@ -671,8 +655,7 @@ function readCodexConfigSignals(options: {
   platform: NodeJS.Platform;
 }): CodexConfigTomlSignals {
   const codexHome =
-    getEnvValue(options.env, "CODEX_HOME", options.platform) ??
-    join(options.homeDir, ".codex");
+    getEnvValue(options.env, "CODEX_HOME", options.platform) ?? join(options.homeDir, ".codex");
   const configPath = join(codexHome, "config.toml");
   if (!existsSync(configPath)) {
     return {
@@ -681,7 +664,7 @@ function readCodexConfigSignals(options: {
       providerBaseUrl: null,
       requiresOpenaiAuth: null,
       hasCustomProvider: false,
-      hasCcsOrMagpieMarker: false
+      hasCcsOrMagpieMarker: false,
     };
   }
   try {
@@ -693,7 +676,7 @@ function readCodexConfigSignals(options: {
       providerBaseUrl: null,
       requiresOpenaiAuth: null,
       hasCustomProvider: false,
-      hasCcsOrMagpieMarker: false
+      hasCcsOrMagpieMarker: false,
     };
   }
 }
@@ -702,9 +685,10 @@ function normalizeToken(value: string | null | undefined): string {
   return (value ?? "").toLowerCase().replace(/[\s_-]+/g, "");
 }
 
-function isClaudeApiOrCloudServerAuth(
-  serverAuth: ServerProviderAuthMetadata | null | undefined
-): { kind: "cloud_iam" | "custom_endpoint" | "api_key" | null; endpoint: string | null } {
+function isClaudeApiOrCloudServerAuth(serverAuth: ServerProviderAuthMetadata | null | undefined): {
+  kind: "cloud_iam" | "custom_endpoint" | "api_key" | null;
+  endpoint: string | null;
+} {
   if (!serverAuth) {
     return { kind: null, endpoint: null };
   }
@@ -750,7 +734,7 @@ function isClaudeApiOrCloudServerAuth(
 }
 
 function isClaudeExplicitSubscription(
-  serverAuth: ServerProviderAuthMetadata | null | undefined
+  serverAuth: ServerProviderAuthMetadata | null | undefined,
 ): boolean {
   if (!serverAuth) {
     return false;
@@ -786,7 +770,7 @@ function isClaudeExplicitSubscription(
 }
 
 function isCodexExplicitChatGptSubscription(
-  serverAuth: ServerProviderAuthMetadata | null | undefined
+  serverAuth: ServerProviderAuthMetadata | null | undefined,
 ): boolean {
   if (!serverAuth) {
     return false;
@@ -824,15 +808,14 @@ function isCodexExplicitChatGptSubscription(
  * - Never maps `auth.status === "unknown"` to `subscription_oauth`.
  */
 export function classifyProviderAuth(
-  input: ProviderAuthClassificationInput
+  input: ProviderAuthClassificationInput,
 ): ProviderAuthClassificationResult {
   const providerId = canonicalizeProbeProviderId(input.providerId);
   const env = input.env ?? process.env;
   const homeDir = input.homeDir ?? homedir();
   const platform = input.platform ?? process.platform;
   const serverAuth = input.serverAuth ?? null;
-  const explicitlyUnauthenticated =
-    normalizeToken(serverAuth?.status) === "unauthenticated";
+  const explicitlyUnauthenticated = normalizeToken(serverAuth?.status) === "unauthenticated";
 
   const wrapperIsCcsOrMagpie =
     mentionsCcsOrMagpie(input.launchCommand) ||
@@ -846,15 +829,14 @@ export function classifyProviderAuth(
       homeDir,
       env,
       workspacePath: input.workspacePath,
-      platform
+      platform,
     });
     const envBaseUrl = sanitizeEndpointUrl(
       getEnvValue(env, "ANTHROPIC_BASE_URL", platform) ??
-        getEnvValue(env, "ANTHROPIC_API_URL", platform)
+        getEnvValue(env, "ANTHROPIC_API_URL", platform),
     );
     const serverSignal = isClaudeApiOrCloudServerAuth(serverAuth);
-    const effectiveEndpoint =
-      envBaseUrl ?? settings.baseUrl ?? serverSignal.endpoint ?? null;
+    const effectiveEndpoint = envBaseUrl ?? settings.baseUrl ?? serverSignal.endpoint ?? null;
 
     const envCloudIam =
       isTruthyEnvValue(env, "CLAUDE_CODE_USE_BEDROCK", platform) ||
@@ -868,7 +850,7 @@ export function classifyProviderAuth(
         authSource: "cloud_iam",
         endpoint: effectiveEndpoint,
         authLabel: AUTH_LABEL_CLOUD_IAM,
-        explicitlyUnauthenticated: false
+        explicitlyUnauthenticated: false,
       };
     }
 
@@ -894,7 +876,7 @@ export function classifyProviderAuth(
         authSource: "ccs_or_magpie",
         endpoint: effectiveEndpoint,
         authLabel: AUTH_LABEL_CCS_MAGPIE,
-        explicitlyUnauthenticated: false
+        explicitlyUnauthenticated: false,
       };
     }
 
@@ -904,7 +886,7 @@ export function classifyProviderAuth(
         authSource: "custom_endpoint",
         endpoint: effectiveEndpoint,
         authLabel: AUTH_LABEL_API_CUSTOM,
-        explicitlyUnauthenticated: false
+        explicitlyUnauthenticated: false,
       };
     }
 
@@ -923,10 +905,8 @@ export function classifyProviderAuth(
         authMode: "api_or_custom",
         authSource: envHasApiKey ? "env" : "cli_config",
         endpoint: effectiveEndpoint,
-        authLabel: settings.hasApiKeyHelper
-          ? AUTH_LABEL_API_CUSTOM
-          : AUTH_LABEL_API_KEY,
-        explicitlyUnauthenticated: false
+        authLabel: settings.hasApiKeyHelper ? AUTH_LABEL_API_CUSTOM : AUTH_LABEL_API_KEY,
+        explicitlyUnauthenticated: false,
       };
     }
 
@@ -938,7 +918,7 @@ export function classifyProviderAuth(
         authSource: "official_oauth",
         endpoint: null,
         authLabel: AUTH_LABEL_SUBSCRIPTION_OAUTH,
-        explicitlyUnauthenticated: false
+        explicitlyUnauthenticated: false,
       };
     }
 
@@ -948,7 +928,7 @@ export function classifyProviderAuth(
         authSource: "none",
         endpoint: null,
         authLabel: AUTH_LABEL_NOT_INSTALLED,
-        explicitlyUnauthenticated: false
+        explicitlyUnauthenticated: false,
       };
     }
 
@@ -959,7 +939,7 @@ export function classifyProviderAuth(
       authLabel: explicitlyUnauthenticated
         ? AUTH_LABEL_UNAUTHENTICATED
         : AUTH_LABEL_UNKNOWN_ALLOWED,
-      explicitlyUnauthenticated
+      explicitlyUnauthenticated,
     };
   }
 
@@ -968,7 +948,7 @@ export function classifyProviderAuth(
     const toml = readCodexConfigSignals({ homeDir, env, platform });
     const envBaseUrl = sanitizeEndpointUrl(
       getEnvValue(env, "OPENAI_BASE_URL", platform) ??
-        getEnvValue(env, "OPENAI_API_BASE", platform)
+        getEnvValue(env, "OPENAI_API_BASE", platform),
     );
     const serverEndpoint = sanitizeEndpointUrl(serverAuth?.endpoint);
     const effectiveEndpoint =
@@ -983,8 +963,7 @@ export function classifyProviderAuth(
     const requiresOpenaiAuthFalse =
       serverAuth?.requiresOpenaiAuth === false || toml.requiresOpenaiAuth === false;
     const envHasOpenAiKey = hasEnvValue(env, "OPENAI_API_KEY", platform);
-    const serverIsApiKey =
-      serverTypeNorm === "apikey" || serverAccountNorm === "apikey";
+    const serverIsApiKey = serverTypeNorm === "apikey" || serverAccountNorm === "apikey";
 
     const isCcsOrMagpie =
       wrapperIsCcsOrMagpie ||
@@ -998,21 +977,19 @@ export function classifyProviderAuth(
         authSource: "ccs_or_magpie",
         endpoint: effectiveEndpoint,
         authLabel: AUTH_LABEL_CCS_MAGPIE,
-        explicitlyUnauthenticated: false
+        explicitlyUnauthenticated: false,
       };
     }
 
     if (hasCustomEndpoint) {
       return {
         authMode: "api_or_custom",
-        authSource: isLocalhostEndpoint(effectiveEndpoint)
-          ? "ccs_or_magpie"
-          : "custom_endpoint",
+        authSource: isLocalhostEndpoint(effectiveEndpoint) ? "ccs_or_magpie" : "custom_endpoint",
         endpoint: effectiveEndpoint,
         authLabel: isLocalhostEndpoint(effectiveEndpoint)
           ? AUTH_LABEL_CCS_MAGPIE
           : AUTH_LABEL_API_CUSTOM,
-        explicitlyUnauthenticated: false
+        explicitlyUnauthenticated: false,
       };
     }
 
@@ -1023,7 +1000,7 @@ export function classifyProviderAuth(
         authSource: "custom_endpoint",
         endpoint: effectiveEndpoint,
         authLabel: AUTH_LABEL_API_CUSTOM,
-        explicitlyUnauthenticated: false
+        explicitlyUnauthenticated: false,
       };
     }
 
@@ -1033,7 +1010,7 @@ export function classifyProviderAuth(
         authSource: envHasOpenAiKey ? "env" : "cli_config",
         endpoint: effectiveEndpoint,
         authLabel: AUTH_LABEL_API_KEY,
-        explicitlyUnauthenticated: false
+        explicitlyUnauthenticated: false,
       };
     }
 
@@ -1045,7 +1022,7 @@ export function classifyProviderAuth(
         authSource: "official_oauth",
         endpoint: null,
         authLabel: AUTH_LABEL_SUBSCRIPTION_OAUTH,
-        explicitlyUnauthenticated: false
+        explicitlyUnauthenticated: false,
       };
     }
 
@@ -1055,7 +1032,7 @@ export function classifyProviderAuth(
         authSource: "none",
         endpoint: null,
         authLabel: AUTH_LABEL_NOT_INSTALLED,
-        explicitlyUnauthenticated: false
+        explicitlyUnauthenticated: false,
       };
     }
 
@@ -1066,7 +1043,7 @@ export function classifyProviderAuth(
       authLabel: explicitlyUnauthenticated
         ? AUTH_LABEL_UNAUTHENTICATED
         : AUTH_LABEL_UNKNOWN_ALLOWED,
-      explicitlyUnauthenticated
+      explicitlyUnauthenticated,
     };
   }
 
@@ -1089,8 +1066,7 @@ export function classifyProviderAuth(
         hasEnvValue(env, "VERTEX_API_KEY", platform) ||
         isTruthyEnvValue(env, "GOOGLE_GENAI_USE_VERTEXAI", platform);
       const hasGeminiApiKey =
-        serverTypeNorm === "apikey" ||
-        hasEnvValue(env, "GEMINI_API_KEY", platform);
+        serverTypeNorm === "apikey" || hasEnvValue(env, "GEMINI_API_KEY", platform);
 
       if (hasVertex) {
         return {
@@ -1098,7 +1074,7 @@ export function classifyProviderAuth(
           authSource: "cloud_iam",
           endpoint: sanitizeEndpointUrl(serverAuth?.endpoint),
           authLabel: AUTH_LABEL_CLOUD_IAM,
-          explicitlyUnauthenticated: false
+          explicitlyUnauthenticated: false,
         };
       }
       if (hasGeminiApiKey) {
@@ -1107,7 +1083,7 @@ export function classifyProviderAuth(
           authSource: "env",
           endpoint: sanitizeEndpointUrl(serverAuth?.endpoint),
           authLabel: AUTH_LABEL_API_KEY,
-          explicitlyUnauthenticated: false
+          explicitlyUnauthenticated: false,
         };
       }
     }
@@ -1118,7 +1094,7 @@ export function classifyProviderAuth(
         authSource: "none",
         endpoint: null,
         authLabel: AUTH_LABEL_NOT_INSTALLED,
-        explicitlyUnauthenticated: false
+        explicitlyUnauthenticated: false,
       };
     }
 
@@ -1128,7 +1104,7 @@ export function classifyProviderAuth(
         authSource: "none",
         endpoint: null,
         authLabel: AUTH_LABEL_UNAUTHENTICATED,
-        explicitlyUnauthenticated: true
+        explicitlyUnauthenticated: true,
       };
     }
 
@@ -1138,7 +1114,7 @@ export function classifyProviderAuth(
       authSource: "official_oauth",
       endpoint: null,
       authLabel: AUTH_LABEL_SUBSCRIPTION_OAUTH,
-      explicitlyUnauthenticated: false
+      explicitlyUnauthenticated: false,
     };
   }
 
@@ -1149,7 +1125,7 @@ export function classifyProviderAuth(
       authSource: "local_runtime",
       endpoint: sanitizeEndpointUrl(serverAuth?.endpoint),
       authLabel: AUTH_LABEL_LOCAL_RUNTIME,
-      explicitlyUnauthenticated: false
+      explicitlyUnauthenticated: false,
     };
   }
 
@@ -1159,7 +1135,7 @@ export function classifyProviderAuth(
       serverAuth?.endpoint ??
         (providerId === "dsh"
           ? getEnvValue(env, "DEEPSEEK_BASE_URL", platform)
-          : getEnvValue(env, "OPENCODE_BASE_URL", platform))
+          : getEnvValue(env, "OPENCODE_BASE_URL", platform)),
     );
     if (!input.installed) {
       return {
@@ -1167,7 +1143,7 @@ export function classifyProviderAuth(
         authSource: "none",
         endpoint,
         authLabel: AUTH_LABEL_NOT_INSTALLED,
-        explicitlyUnauthenticated: false
+        explicitlyUnauthenticated: false,
       };
     }
     if (isLocalRuntimeEndpoint(endpoint)) {
@@ -1176,7 +1152,7 @@ export function classifyProviderAuth(
         authSource: "local_runtime",
         endpoint,
         authLabel: AUTH_LABEL_LOCAL_RUNTIME,
-        explicitlyUnauthenticated: false
+        explicitlyUnauthenticated: false,
       };
     }
     if (wrapperIsCcsOrMagpie || mentionsCcsOrMagpie(endpoint)) {
@@ -1185,7 +1161,7 @@ export function classifyProviderAuth(
         authSource: "ccs_or_magpie",
         endpoint,
         authLabel: AUTH_LABEL_CCS_MAGPIE,
-        explicitlyUnauthenticated: false
+        explicitlyUnauthenticated: false,
       };
     }
     const hasKey =
@@ -1196,21 +1172,17 @@ export function classifyProviderAuth(
           hasEnvValue(env, "ANTHROPIC_API_KEY", platform);
     return {
       authMode: "api_or_custom",
-      authSource: endpoint
-        ? "custom_endpoint"
-        : hasKey
-          ? "env"
-          : "cli_config",
+      authSource: endpoint ? "custom_endpoint" : hasKey ? "env" : "cli_config",
       endpoint,
       authLabel: endpoint ? AUTH_LABEL_API_CUSTOM : AUTH_LABEL_API_CUSTOM,
-      explicitlyUnauthenticated: false
+      explicitlyUnauthenticated: false,
     };
   }
 
   // ── 6. Gemini CLI (`gemini`) ──────────────────────────────────────────────
   if (providerId === "gemini") {
     const endpoint = sanitizeEndpointUrl(
-      getEnvValue(env, "GEMINI_BASE_URL", platform) ?? serverAuth?.endpoint
+      getEnvValue(env, "GEMINI_BASE_URL", platform) ?? serverAuth?.endpoint,
     );
     const hasVertex =
       normalizeToken(serverAuth?.type) === "vertex" ||
@@ -1228,20 +1200,16 @@ export function classifyProviderAuth(
         authSource: "cloud_iam",
         endpoint,
         authLabel: AUTH_LABEL_CLOUD_IAM,
-        explicitlyUnauthenticated: false
+        explicitlyUnauthenticated: false,
       };
     }
     if (endpoint !== null && !isOfficialGoogleGeminiHost(endpoint)) {
       return {
         authMode: "api_or_custom",
-        authSource: mentionsCcsOrMagpie(endpoint)
-          ? "ccs_or_magpie"
-          : "custom_endpoint",
+        authSource: mentionsCcsOrMagpie(endpoint) ? "ccs_or_magpie" : "custom_endpoint",
         endpoint,
-        authLabel: mentionsCcsOrMagpie(endpoint)
-          ? AUTH_LABEL_CCS_MAGPIE
-          : AUTH_LABEL_API_CUSTOM,
-        explicitlyUnauthenticated: false
+        authLabel: mentionsCcsOrMagpie(endpoint) ? AUTH_LABEL_CCS_MAGPIE : AUTH_LABEL_API_CUSTOM,
+        explicitlyUnauthenticated: false,
       };
     }
     if (hasGeminiKey) {
@@ -1250,7 +1218,7 @@ export function classifyProviderAuth(
         authSource: "env",
         endpoint,
         authLabel: AUTH_LABEL_API_KEY,
-        explicitlyUnauthenticated: false
+        explicitlyUnauthenticated: false,
       };
     }
     const typeNorm = normalizeToken(serverAuth?.type);
@@ -1266,7 +1234,7 @@ export function classifyProviderAuth(
         authSource: "official_oauth",
         endpoint: null,
         authLabel: AUTH_LABEL_SUBSCRIPTION_OAUTH,
-        explicitlyUnauthenticated: false
+        explicitlyUnauthenticated: false,
       };
     }
     if (!input.installed) {
@@ -1275,7 +1243,7 @@ export function classifyProviderAuth(
         authSource: "none",
         endpoint: null,
         authLabel: AUTH_LABEL_NOT_INSTALLED,
-        explicitlyUnauthenticated: false
+        explicitlyUnauthenticated: false,
       };
     }
     return {
@@ -1285,7 +1253,7 @@ export function classifyProviderAuth(
       authLabel: explicitlyUnauthenticated
         ? AUTH_LABEL_UNAUTHENTICATED
         : AUTH_LABEL_UNKNOWN_ALLOWED,
-      explicitlyUnauthenticated
+      explicitlyUnauthenticated,
     };
   }
 
@@ -1294,15 +1262,13 @@ export function classifyProviderAuth(
     authMode: input.installed ? "api_or_custom" : "unauthenticated",
     authSource: input.installed ? "cli_config" : "none",
     endpoint: sanitizeEndpointUrl(serverAuth?.endpoint),
-    authLabel: input.installed
-      ? AUTH_LABEL_API_CUSTOM
-      : AUTH_LABEL_NOT_INSTALLED,
-    explicitlyUnauthenticated: false
+    authLabel: input.installed ? AUTH_LABEL_API_CUSTOM : AUTH_LABEL_NOT_INSTALLED,
+    explicitlyUnauthenticated: false,
   };
 }
 
 function extractServerAuthFromSummary(
-  summary: CoreProviderSummary
+  summary: CoreProviderSummary,
 ): ServerProviderAuthMetadata | null {
   const auth = isPlainRecord(summary["auth"]) ? summary["auth"] : null;
   const account = isPlainRecord(summary["account"]) ? summary["account"] : null;
@@ -1331,15 +1297,9 @@ function extractServerAuthFromSummary(
       : typeof summary["subscriptionType"] === "string"
         ? { subscriptionType: summary["subscriptionType"] }
         : {}),
-    ...(typeof auth?.["apiProvider"] === "string"
-      ? { apiProvider: auth["apiProvider"] }
-      : {}),
-    ...(typeof auth?.["apiKeySource"] === "string"
-      ? { apiKeySource: auth["apiKeySource"] }
-      : {}),
-    ...(typeof auth?.["authMethod"] === "string"
-      ? { authMethod: auth["authMethod"] }
-      : {}),
+    ...(typeof auth?.["apiProvider"] === "string" ? { apiProvider: auth["apiProvider"] } : {}),
+    ...(typeof auth?.["apiKeySource"] === "string" ? { apiKeySource: auth["apiKeySource"] } : {}),
+    ...(typeof auth?.["authMethod"] === "string" ? { authMethod: auth["authMethod"] } : {}),
     ...(requiresOpenaiAuth !== null ? { requiresOpenaiAuth } : {}),
     ...(typeof account?.["type"] === "string"
       ? { accountType: account["type"] }
@@ -1348,7 +1308,7 @@ function extractServerAuthFromSummary(
         : {}),
     ...(typeof summary["launchCommand"] === "string"
       ? { launchCommand: summary["launchCommand"] }
-      : {})
+      : {}),
   };
 
   return Object.keys(meta).length > 0 ? meta : null;
@@ -1378,12 +1338,12 @@ export class PrismuxProviderProbeService {
     command: string,
     args: string[],
     timeoutMs: number,
-    options?: { refresh?: boolean; deepScan?: boolean }
+    options?: { refresh?: boolean; deepScan?: boolean },
   ) => Promise<CliProbeResult>;
   private readonly locateExecutableFn: (
     command: string,
     env: Record<string, string | undefined>,
-    platform: NodeJS.Platform
+    platform: NodeJS.Platform,
   ) => string | null;
   private readonly serverAuthResolver:
     | (() => Promise<Partial<Record<string, ServerProviderAuthMetadata>>>)
@@ -1398,8 +1358,7 @@ export class PrismuxProviderProbeService {
     { snapshot: PrismuxProviderProbeSnapshot; expiresAt: number }
   >();
   private lastServerAuthByProvider = new Map<string, ServerProviderAuthMetadata>();
-  private inflightServerAuthFetch: Promise<Map<string, ServerProviderAuthMetadata>> | null =
-    null;
+  private inflightServerAuthFetch: Promise<Map<string, ServerProviderAuthMetadata>> | null = null;
   private serverAuthFetchedAt = 0;
   private serverAuthBackoffUntil = 0;
 
@@ -1412,17 +1371,14 @@ export class PrismuxProviderProbeService {
     } else {
       this.positiveCacheTtlMs = Math.max(
         0,
-        options.positiveCacheTtlMs ?? CLI_DISCOVERY_POSITIVE_TTL_MS
+        options.positiveCacheTtlMs ?? CLI_DISCOVERY_POSITIVE_TTL_MS,
       );
       this.negativeCacheTtlMs = Math.max(
         0,
-        options.negativeCacheTtlMs ?? CLI_DISCOVERY_NEGATIVE_TTL_MS
+        options.negativeCacheTtlMs ?? CLI_DISCOVERY_NEGATIVE_TTL_MS,
       );
     }
-    this.cliTimeoutMs = Math.max(
-      200,
-      options.cliTimeoutMs ?? DEFAULT_DIAGNOSTICS_CLI_TIMEOUT_MS
-    );
+    this.cliTimeoutMs = Math.max(200, options.cliTimeoutMs ?? DEFAULT_DIAGNOSTICS_CLI_TIMEOUT_MS);
     this.env = options.env ?? process.env;
     this.homeDir = options.homeDir ?? homedir();
     this.workspacePath = options.workspacePath;
@@ -1436,7 +1392,7 @@ export class PrismuxProviderProbeService {
       (() =>
         refreshWindowsEnvironmentFromRegistry({
           targetEnv: this.env,
-          platform: this.platform
+          platform: this.platform,
         }));
     this.cliProbeFn = options.cliProbe
       ? (command, args, timeoutMs) => options.cliProbe!(command, args, timeoutMs)
@@ -1445,7 +1401,7 @@ export class PrismuxProviderProbeService {
             env: this.env,
             platform: this.platform,
             refresh: probeOpts?.refresh === true,
-            deepScan: probeOpts?.deepScan === true
+            deepScan: probeOpts?.deepScan === true,
           });
     this.locateExecutableFn =
       options.locateExecutable ??
@@ -1453,17 +1409,14 @@ export class PrismuxProviderProbeService {
         const direct = findExecutableOnPath([command], {
           env,
           platform,
-          extraDirs: getDefaultCliExtraDirs(env, platform, this.homeDir)
+          extraDirs: getDefaultCliExtraDirs(env, platform, this.homeDir),
         });
         if (direct) {
           return direct;
         }
         const normalizedCommand = command.trim().toLowerCase();
         if (normalizedCommand === "dsh") {
-          return (
-            findPackagedDshDesktopCli(env, platform, this.homeDir)?.executablePath ??
-            null
-          );
+          return findPackagedDshDesktopCli(env, platform, this.homeDir)?.executablePath ?? null;
         }
         if (normalizedCommand === "agy") {
           return findPackagedAntigravityCli(env, platform, this.homeDir);
@@ -1533,7 +1486,7 @@ export class PrismuxProviderProbeService {
   locateProviderExecutableFast(
     providerId: string,
     overrideEnv?: Record<string, string | undefined>,
-    overridePlatform?: NodeJS.Platform
+    overridePlatform?: NodeJS.Platform,
   ): string | null {
     const spec = this.getProviderSpec(providerId);
     if (!spec) {
@@ -1543,13 +1496,13 @@ export class PrismuxProviderProbeService {
       return this.locateExecutableFn(
         spec.command,
         overrideEnv ?? this.env,
-        overridePlatform ?? this.platform
+        overridePlatform ?? this.platform,
       );
     }
     return locateCliBinaryFastSync(spec.command, {
       env: overrideEnv ?? this.env,
       platform: overridePlatform ?? this.platform,
-      homeDir: this.homeDir
+      homeDir: this.homeDir,
     });
   }
 
@@ -1572,7 +1525,7 @@ export class PrismuxProviderProbeService {
             binaryPath,
             env: this.env,
             platform: this.platform,
-            homeDir: this.homeDir
+            homeDir: this.homeDir,
           })
         : null;
     const serverAuth = this.lastServerAuthByProvider.get(canonical) ?? null;
@@ -1584,7 +1537,7 @@ export class PrismuxProviderProbeService {
       homeDir: this.homeDir,
       workspacePath: this.workspacePath,
       platform: this.platform,
-      serverAuth
+      serverAuth,
     });
     const status: ProviderProbeStatus = !installed
       ? "not_installed"
@@ -1603,7 +1556,7 @@ export class PrismuxProviderProbeService {
       authSource: classification.authSource,
       endpoint: classification.endpoint,
       authLabel: classification.authLabel,
-      checkedAt: new Date(this.now()).toISOString()
+      checkedAt: new Date(this.now()).toISOString(),
     };
   }
 
@@ -1613,7 +1566,7 @@ export class PrismuxProviderProbeService {
   locateProviderExecutable(
     providerId: string,
     overrideEnv?: Record<string, string | undefined>,
-    overridePlatform?: NodeJS.Platform
+    overridePlatform?: NodeJS.Platform,
   ): string | null {
     const spec = this.getProviderSpec(providerId);
     if (!spec) {
@@ -1622,7 +1575,7 @@ export class PrismuxProviderProbeService {
     return this.locateExecutableFn(
       spec.command,
       overrideEnv ?? this.env,
-      overridePlatform ?? this.platform
+      overridePlatform ?? this.platform,
     );
   }
 
@@ -1634,7 +1587,7 @@ export class PrismuxProviderProbeService {
     overrides?: {
       serverAuth?: ServerProviderAuthMetadata | null;
       launchCommand?: string | null;
-    }
+    },
   ): PrismuxProviderProbeSnapshot {
     const canonical = canonicalizeProbeProviderId(providerId);
     if (!overrides) {
@@ -1659,7 +1612,7 @@ export class PrismuxProviderProbeService {
       homeDir: this.homeDir,
       workspacePath: this.workspacePath,
       platform: this.platform,
-      serverAuth
+      serverAuth,
     });
     const status: ProviderProbeStatus = !installed
       ? "not_installed"
@@ -1678,7 +1631,7 @@ export class PrismuxProviderProbeService {
       authSource: classification.authSource,
       endpoint: classification.endpoint,
       authLabel: classification.authLabel,
-      checkedAt: new Date(this.now()).toISOString()
+      checkedAt: new Date(this.now()).toISOString(),
     };
   }
 
@@ -1690,7 +1643,7 @@ export class PrismuxProviderProbeService {
       serverAuth?: ServerProviderAuthMetadata | null;
       skipEnvRefresh?: boolean;
       deepScan?: boolean;
-    } = {}
+    } = {},
   ): Promise<PrismuxProviderProbeSnapshot> {
     const canonical = canonicalizeProbeProviderId(providerId);
     if (!options.refresh && !options.deepScan && options.serverAuth === undefined) {
@@ -1721,7 +1674,7 @@ export class PrismuxProviderProbeService {
       const precheckStarted = performance.now();
       const installedPath = await this.locateBinaryBeforeProbeAsync(spec, {
         refresh: options.refresh === true,
-        deepScan: options.deepScan === true
+        deepScan: options.deepScan === true,
       });
       if (installedPath === null) {
         const latencyMs = Math.max(0, Math.round(performance.now() - precheckStarted));
@@ -1729,7 +1682,7 @@ export class PrismuxProviderProbeService {
           options.serverAuth !== undefined
             ? options.serverAuth
             : this.serverAuthResolver
-              ? (await this.fetchServerAuthMap(effectiveTimeoutMs)).get(canonical) ?? null
+              ? ((await this.fetchServerAuthMap(effectiveTimeoutMs)).get(canonical) ?? null)
               : null;
         return this.finalizeProbeSnapshot(
           spec,
@@ -1738,9 +1691,9 @@ export class PrismuxProviderProbeService {
             path: null,
             version: null,
             latencyMs,
-            error: `PATH 中未找到 ${spec.command}`
+            error: `PATH 中未找到 ${spec.command}`,
           },
-          serverAuth
+          serverAuth,
         );
       }
     }
@@ -1748,7 +1701,7 @@ export class PrismuxProviderProbeService {
     const serverAuthMap =
       options.serverAuth !== undefined
         ? new Map<string, ServerProviderAuthMetadata>(
-            options.serverAuth ? [[canonical, options.serverAuth]] : []
+            options.serverAuth ? [[canonical, options.serverAuth]] : [],
           )
         : await this.fetchServerAuthMap(effectiveTimeoutMs);
 
@@ -1758,28 +1711,28 @@ export class PrismuxProviderProbeService {
       effectiveTimeoutMs,
       {
         refresh: options.refresh === true,
-        deepScan: options.deepScan === true
-      }
+        deepScan: options.deepScan === true,
+      },
     );
   }
 
-  async probeAll(options: {
-    provider?: string | null;
-    providers?: readonly string[] | null;
-    includeAll?: boolean;
-    refresh?: boolean;
-    deepScan?: boolean;
-    timeoutMs?: number;
-  } = {}): Promise<PrismuxProviderProbeResponse> {
+  async probeAll(
+    options: {
+      provider?: string | null;
+      providers?: readonly string[] | null;
+      includeAll?: boolean;
+      refresh?: boolean;
+      deepScan?: boolean;
+      timeoutMs?: number;
+    } = {},
+  ): Promise<PrismuxProviderProbeResponse> {
     const refresh = options.refresh === true;
     const deepScan = options.deepScan === true;
     const providerFilter = options.provider?.trim();
     const targetSpecs: readonly ProviderProbeSpec[] = providerFilter
       ? (() => {
           const canonical = canonicalizeProbeProviderId(providerFilter);
-          const matched = PRISMUX_PROBE_PROVIDER_SPECS.find(
-            (s) => s.providerId === canonical
-          );
+          const matched = PRISMUX_PROBE_PROVIDER_SPECS.find((s) => s.providerId === canonical);
           return matched ? [matched] : [];
         })()
       : options.includeAll === true
@@ -1793,27 +1746,23 @@ export class PrismuxProviderProbeService {
               return PRISMUX_PROBE_PROVIDER_SPECS;
             }
             const allowed = new Set(scoped);
-            return PRISMUX_PROBE_PROVIDER_SPECS.filter((s) =>
-              allowed.has(s.providerId)
-            );
+            return PRISMUX_PROBE_PROVIDER_SPECS.filter((s) => allowed.has(s.providerId));
           })();
 
     if (targetSpecs.length === 0) {
-      const canonical = providerFilter
-        ? canonicalizeProbeProviderId(providerFilter)
-        : "";
+      const canonical = providerFilter ? canonicalizeProbeProviderId(providerFilter) : "";
       if (canonical === "local") {
         const localSnap = this.getCachedOrClassifySync("local");
         return {
           ok: true,
           generatedAt: new Date(this.now()).toISOString(),
-          providers: [localSnap]
+          providers: [localSnap],
         };
       }
       return {
         ok: true,
         generatedAt: new Date(this.now()).toISOString(),
-        providers: []
+        providers: [],
       };
     }
 
@@ -1840,10 +1789,10 @@ export class PrismuxProviderProbeService {
           }
           const foundPath = await this.locateBinaryBeforeProbeAsync(spec, {
             refresh,
-            deepScan
+            deepScan,
           });
           precheckedBinaryById.set(spec.providerId, foundPath);
-        })
+        }),
       );
     }
 
@@ -1888,9 +1837,9 @@ export class PrismuxProviderProbeService {
               path: null,
               version: null,
               latencyMs: 0,
-              error: `PATH 中未找到 ${spec.command}`
+              error: `PATH 中未找到 ${spec.command}`,
             },
-            serverAuthMap.get(spec.providerId) ?? null
+            serverAuthMap.get(spec.providerId) ?? null,
           );
           continue;
         }
@@ -1898,7 +1847,7 @@ export class PrismuxProviderProbeService {
           spec.providerId,
           serverAuthMap.get(spec.providerId) ?? null,
           timeoutMs,
-          { refresh, deepScan }
+          { refresh, deepScan },
         );
       }
     });
@@ -1907,13 +1856,13 @@ export class PrismuxProviderProbeService {
     return {
       ok: true,
       generatedAt: new Date(this.now()).toISOString(),
-      providers: results
+      providers: results,
     };
   }
 
   private async locateBinaryBeforeProbeAsync(
     spec: ProviderProbeSpec,
-    options: { refresh?: boolean; deepScan?: boolean }
+    options: { refresh?: boolean; deepScan?: boolean },
   ): Promise<string | null> {
     const fast = this.locateProviderExecutableFast(spec.providerId);
     if (fast !== null) {
@@ -1925,26 +1874,21 @@ export class PrismuxProviderProbeService {
     if (spec.providerId === "antigravity") {
       return findPackagedAntigravityCliAsync(this.env, this.platform, this.homeDir, {
         deepScan: options.deepScan === true,
-        bypassCache: options.refresh === true
+        bypassCache: options.refresh === true,
       });
     }
     if (spec.providerId === "dsh") {
-      const packaged = await findPackagedDshDesktopCliAsync(
-        this.env,
-        this.platform,
-        this.homeDir,
-        {
-          deepScan: options.deepScan === true,
-          bypassCache: options.refresh === true
-        }
-      );
+      const packaged = await findPackagedDshDesktopCliAsync(this.env, this.platform, this.homeDir, {
+        deepScan: options.deepScan === true,
+        bypassCache: options.refresh === true,
+      });
       return packaged?.executablePath ?? null;
     }
     return null;
   }
 
   private async fetchServerAuthMap(
-    timeoutMs: number = this.cliTimeoutMs
+    timeoutMs: number = this.cliTimeoutMs,
   ): Promise<Map<string, ServerProviderAuthMetadata>> {
     if (this.serverAuthResolver) {
       const map = new Map<string, ServerProviderAuthMetadata>();
@@ -1982,7 +1926,7 @@ export class PrismuxProviderProbeService {
 
     const rpcTimeoutMs = Math.min(
       SERVER_AUTH_RPC_TIMEOUT_MS,
-      Math.max(150, Math.floor(timeoutMs / 4))
+      Math.max(150, Math.floor(timeoutMs / 4)),
     );
     const coreRpc = this.coreRpcClient;
 
@@ -1997,7 +1941,7 @@ export class PrismuxProviderProbeService {
           listPromise,
           new Promise<null>((resolveTimeout) => {
             timer = setTimeout(() => resolveTimeout(null), rpcTimeoutMs);
-          })
+          }),
         ]);
         if (list === null) {
           this.serverAuthBackoffUntil = this.now() + SERVER_AUTH_FAILURE_BACKOFF_MS;
@@ -2036,41 +1980,32 @@ export class PrismuxProviderProbeService {
     canonicalProviderId: string,
     serverAuth: ServerProviderAuthMetadata | null,
     timeoutMs: number,
-    probeOpts?: { refresh?: boolean; deepScan?: boolean }
+    probeOpts?: { refresh?: boolean; deepScan?: boolean },
   ): Promise<PrismuxProviderProbeSnapshot> {
     const spec = this.getProviderSpec(canonicalProviderId);
     if (!spec) {
       return this.getCachedOrClassifySync(canonicalProviderId, { serverAuth });
     }
 
-    const cliResult = await this.cliProbeFn(
-      spec.command,
-      [...spec.args],
-      timeoutMs,
-      probeOpts
-    );
+    const cliResult = await this.cliProbeFn(spec.command, [...spec.args], timeoutMs, probeOpts);
     return this.finalizeProbeSnapshot(spec, cliResult, serverAuth);
   }
 
   private finalizeProbeSnapshot(
     spec: ProviderProbeSpec,
     cliResult: CliProbeResult,
-    serverAuth: ServerProviderAuthMetadata | null
+    serverAuth: ServerProviderAuthMetadata | null,
   ): PrismuxProviderProbeSnapshot {
     const installed = cliResult.found;
     const binaryPath = cliResult.path ?? null;
     let version = cliResult.version ?? null;
     let cliError = cliResult.error ?? null;
-    if (
-      spec.providerId === "dsh" &&
-      installed &&
-      (!version || isPlaceholderDshVersion(version))
-    ) {
+    if (spec.providerId === "dsh" && installed && (!version || isPlaceholderDshVersion(version))) {
       const resolvedDshVersion = resolveDshInstalledVersionFastSync({
         binaryPath,
         env: this.env,
         platform: this.platform,
-        homeDir: this.homeDir
+        homeDir: this.homeDir,
       });
       if (resolvedDshVersion) {
         version = resolvedDshVersion;
@@ -2088,7 +2023,7 @@ export class PrismuxProviderProbeService {
       homeDir: this.homeDir,
       workspacePath: this.workspacePath,
       platform: this.platform,
-      serverAuth
+      serverAuth,
     });
 
     // Rule B: If the CLI binary is confirmed present on disk and auth mode is resolved,
@@ -2125,7 +2060,7 @@ export class PrismuxProviderProbeService {
       authLabel: classification.authLabel,
       checkedAt: new Date(checkedAtMs).toISOString(),
       ...(cliError ? { error: cliError } : {}),
-      latencyMs: cliResult.latencyMs
+      latencyMs: cliResult.latencyMs,
     };
 
     const ttlMs = gracefulSlowVersion
@@ -2136,7 +2071,7 @@ export class PrismuxProviderProbeService {
     if (ttlMs > 0) {
       this.cache.set(spec.providerId, {
         snapshot,
-        expiresAt: checkedAtMs + ttlMs
+        expiresAt: checkedAtMs + ttlMs,
       });
     }
 

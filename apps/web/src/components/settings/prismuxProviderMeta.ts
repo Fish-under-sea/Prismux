@@ -3,6 +3,10 @@
  * official CLI update guidance (no silent closed-source binary downloads), and one-click `dsh` preset.
  */
 
+import { CANONICAL_PROVIDER_DISPLAY_NAMES } from "../../prismux/agentBrand";
+import { resolveConfiguredProviderDisplayName } from "../../prismux/providerDisplayName";
+import type { ProviderInstanceEntry } from "../../providerInstances";
+
 export interface PrismuxAgentCliMeta {
   readonly id: string;
   readonly displayName: string;
@@ -20,7 +24,7 @@ export interface PrismuxAgentCliMeta {
 
 export const DSH_LOCAL_ACP_PRESET = {
   id: "dsh",
-  label: "DeepSeek Harness (dsh)",
+  label: `${CANONICAL_PROVIDER_DISPLAY_NAMES.dsh} (dsh)`,
   instanceId: "dsh",
   command: "dsh",
   args: ["acp"] as readonly string[],
@@ -139,7 +143,7 @@ export function sanitizeResumeSessionId(raw: string | null | undefined): string 
 export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliMeta>> = {
   antigravity: {
     id: "antigravity",
-    displayName: "Google Antigravity",
+    displayName: CANONICAL_PROVIDER_DISPLAY_NAMES.antigravity,
     cliCommand: "agy",
     homepageUrl: "https://antigravity.google/",
     updateCommandHint: "agy update",
@@ -150,7 +154,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
   },
   agy: {
     id: "agy",
-    displayName: "Google Antigravity",
+    displayName: CANONICAL_PROVIDER_DISPLAY_NAMES.antigravity,
     cliCommand: "agy",
     homepageUrl: "https://antigravity.google/",
     updateCommandHint: "agy update",
@@ -161,7 +165,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
   },
   claudeAgent: {
     id: "claudeAgent",
-    displayName: "Claude Code",
+    displayName: CANONICAL_PROVIDER_DISPLAY_NAMES.claudeAgent,
     cliCommand: "claude",
     homepageUrl: "https://docs.anthropic.com/en/docs/claude-code/overview",
     updateCommandHint: "claude update",
@@ -175,7 +179,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
   },
   claude: {
     id: "claude",
-    displayName: "Claude Code",
+    displayName: CANONICAL_PROVIDER_DISPLAY_NAMES.claude,
     cliCommand: "claude",
     homepageUrl: "https://docs.anthropic.com/en/docs/claude-code/overview",
     updateCommandHint: "claude update",
@@ -189,7 +193,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
   },
   codex: {
     id: "codex",
-    displayName: "Codex",
+    displayName: CANONICAL_PROVIDER_DISPLAY_NAMES.codex,
     cliCommand: "codex",
     homepageUrl: "https://github.com/openai/codex",
     updateCommandHint: "npm install -g @openai/codex@latest",
@@ -203,7 +207,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
   },
   dsh: {
     id: "dsh",
-    displayName: "DeepSeek Harness (dsh)",
+    displayName: `${CANONICAL_PROVIDER_DISPLAY_NAMES.dsh} (dsh)`,
     cliCommand: "dsh",
     homepageUrl: "https://github.com/deepseek-ai/deepseek-harness",
     updateCommandHint: "npm install -g @deepseek-ai/dsh@latest",
@@ -213,7 +217,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
   },
   opencode: {
     id: "opencode",
-    displayName: "OpenCode",
+    displayName: CANONICAL_PROVIDER_DISPLAY_NAMES.opencode,
     cliCommand: "opencode",
     homepageUrl: "https://opencode.ai",
     updateCommandHint: "opencode upgrade",
@@ -227,7 +231,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
   },
   gemini: {
     id: "gemini",
-    displayName: "Gemini CLI",
+    displayName: CANONICAL_PROVIDER_DISPLAY_NAMES.gemini,
     cliCommand: "gemini",
     homepageUrl: "https://github.com/google-gemini/gemini-cli",
     updateCommandHint: "npm install -g @google/gemini-cli@latest",
@@ -241,7 +245,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
   },
   pi: {
     id: "pi",
-    displayName: "Pi",
+    displayName: CANONICAL_PROVIDER_DISPLAY_NAMES.pi,
     cliCommand: "pi",
     homepageUrl: "https://github.com/badlogic/pi-mono",
     updateCommandHint: "npm install -g @mariozechner/pi-coding-agent@latest",
@@ -255,7 +259,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
   },
   cursor: {
     id: "cursor",
-    displayName: "Cursor",
+    displayName: CANONICAL_PROVIDER_DISPLAY_NAMES.cursor,
     cliCommand: "cursor-agent",
     homepageUrl: "https://cursor.com/cli",
     updateCommandHint: "cursor-agent update",
@@ -265,7 +269,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
   },
   kiro: {
     id: "kiro",
-    displayName: "Kiro",
+    displayName: CANONICAL_PROVIDER_DISPLAY_NAMES.kiro,
     cliCommand: "kiro-cli",
     homepageUrl: "https://kiro.dev",
     updateCommandHint: "kiro-cli update",
@@ -275,7 +279,7 @@ export const PRISMUX_AGENT_CLI_CATALOG: Readonly<Record<string, PrismuxAgentCliM
   },
   grok: {
     id: "grok",
-    displayName: "Grok CLI",
+    displayName: CANONICAL_PROVIDER_DISPLAY_NAMES.grok,
     cliCommand: "grok",
     homepageUrl: "https://x.ai",
     updateCommandHint: "npm install -g @vibe-kit/grok-cli@latest",
@@ -384,6 +388,7 @@ export function buildContinueInTerminalCommand(input: {
   readonly displayName?: string | null;
   readonly sessionId?: string | null;
   readonly binaryPath?: string | null;
+  readonly providerInstances?: ReadonlyArray<ProviderInstanceEntry> | null;
 }): {
   readonly command: string;
   readonly cliCommand: string;
@@ -395,12 +400,23 @@ export function buildContinueInTerminalCommand(input: {
     input.binaryPath?.trim() ||
     readConfigField(input.config, "binaryPath") ||
     readConfigField(input.config, "commandPath");
+  const resolvedLabel =
+    input.displayName?.trim() ||
+    resolveConfiguredProviderDisplayName({
+      provider: input.driver,
+      instanceId: input.instanceId,
+      driverKind: input.driver,
+      providerInstances: input.providerInstances,
+      fallbackDisplayName: meta?.displayName ?? configuredBinary ?? input.driver,
+    });
   if (!meta) {
     const fallbackExe = configuredBinary || input.driver || "sh";
     return {
       command: quoteShellExecutable(fallbackExe),
       cliCommand: fallbackExe,
-      label: input.displayName?.trim() || fallbackExe,
+      label:
+        input.displayName?.trim() ||
+        (input.providerInstances?.length ? resolvedLabel : fallbackExe),
       supportsResume: false,
     };
   }
@@ -411,7 +427,7 @@ export function buildContinueInTerminalCommand(input: {
       sessionId: input.sessionId ?? null,
     }),
     cliCommand: executable,
-    label: input.displayName?.trim() || meta.displayName,
+    label: resolvedLabel,
     supportsResume: meta.supportsResume && sanitizeResumeSessionId(input.sessionId) !== null,
   };
 }

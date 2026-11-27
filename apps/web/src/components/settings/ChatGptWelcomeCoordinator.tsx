@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { usesChatGptSharing } from "@prismux/core-shared/usageLimits";
 import { T, Var } from "gt-react";
 import { useState } from "react";
+import { resolveConfiguredProviderDisplayName } from "../../prismux/providerDisplayName";
 import { environmentPresentations } from "../../state/presentation";
 import { OpenAI } from "../Icons";
 import { Button } from "../ui/button";
@@ -43,7 +44,14 @@ export function ChatGptWelcomeCoordinator() {
               provider.auth.profileId ?? provider.auth.email ?? "default",
             ]),
             environmentLabel: presentation.entry.target.label,
-            providerName: provider.displayName ?? "Codex",
+            providerName: resolveConfiguredProviderDisplayName({
+              provider: provider.instanceId,
+              instanceId: provider.instanceId,
+              driverKind: provider.driver,
+              providers: providersByEnvironment.get(environmentId),
+              settings: presentation.serverConfig?.settings,
+              fallbackDisplayName: provider.displayName,
+            }),
           })),
   );
   const next = profiles.find((profile) => !acknowledged.includes(profile.key));

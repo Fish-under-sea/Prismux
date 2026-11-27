@@ -506,13 +506,12 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   );
   // In agent-scoped mode, never drift into mixed cross-vendor favorites.
   const effectiveSelectedInstanceId: ProviderInstanceId | "favorites" =
-    agentScoped && selectedInstanceId === "favorites"
-      ? props.activeInstanceId
-      : selectedInstanceId;
+    agentScoped && selectedInstanceId === "favorites" ? props.activeInstanceId : selectedInstanceId;
   const { scanning: workspaceModelsScanning } = useProviderWorkspaceSnapshotRefresh({
     environmentId: props.environmentId,
     gitCwd: props.workspaceCwd ?? null,
-    instanceId: effectiveSelectedInstanceId === "favorites" ? undefined : effectiveSelectedInstanceId,
+    instanceId:
+      effectiveSelectedInstanceId === "favorites" ? undefined : effectiveSelectedInstanceId,
   });
   const favoritesSet = new Set(favorites.map((fav) => providerModelKey(fav.provider, fav.model)));
   const [expandedLegacyInstances, setExpandedLegacyInstances] = useState(
@@ -927,7 +926,13 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       ? matchesLockedProvider(entry)
       : entry.instanceId === selectedEntry?.instanceId;
     const notice = shown
-      ? formatProviderUpdateRequiredNotice(entry.snapshot, searchQuery, messages, locale)
+      ? formatProviderUpdateRequiredNotice(
+          entry.snapshot,
+          searchQuery,
+          messages,
+          locale,
+          resolveProviderEntryDisplayName(entry),
+        )
       : null;
     return notice
       ? [
@@ -1105,9 +1110,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
             instanceEntries={sidebarInstanceEntries}
             showFavorites
             {...(selectableUnavailableInstanceIds ? { selectableUnavailableInstanceIds } : {})}
-            {...(getProviderComplianceBlock
-              ? { getProviderComplianceBlock }
-              : {})}
+            {...(getProviderComplianceBlock ? { getProviderComplianceBlock } : {})}
             {...(lockedDisabledInstanceIds
               ? {
                   disabledInstanceIds: lockedDisabledInstanceIds,
@@ -1281,7 +1284,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                   {switchableScopedEntries.map((entry) => {
                     const active = entry.instanceId === effectiveSelectedInstanceId;
                     const brandLabel = resolveProviderEntryDisplayName(entry);
-                    const chipComplianceBlock = complianceBlockByInstance.get(entry.instanceId) ?? null;
+                    const chipComplianceBlock =
+                      complianceBlockByInstance.get(entry.instanceId) ?? null;
                     return (
                       <Tooltip key={entry.instanceId}>
                         <TooltipTrigger
@@ -1570,7 +1574,9 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                         ? selectedModelKeySet.has(modelKey)
                         : modelKey === activeModelKey
                     }
-                    favoriteStarOnHover={effectiveSelectedInstanceId === "favorites" && !isSearching}
+                    favoriteStarOnHover={
+                      effectiveSelectedInstanceId === "favorites" && !isSearching
+                    }
                     showInstanceBadge={badgedInstanceIds.has(model.instanceId)}
                     showNewBadge={model.badge === "new"}
                     unavailable={model.isUnavailable === true}

@@ -253,7 +253,7 @@ describe("SubscriptionOrchestrationBlockedDialog", () => {
     };
 
     expect(formatSubscriptionBlockedCopy(detail)).toBe(
-      "当前 Claude Code 运行在官方个人订阅模式（官方个人订阅 OAuth（默认锁定）），为避免违反厂商服务条款导致封号，默认禁止参与蜂群或跨代理自动化调用；若你使用 API Key 或 CCS / Magpie 注入 API 模式则不受限制",
+      "当前 Claude 运行在官方个人订阅模式（官方个人订阅 OAuth（默认锁定）），为避免违反厂商服务条款导致封号，默认禁止参与蜂群或跨代理自动化调用；若你使用 API Key 或 CCS / Magpie 注入 API 模式则不受限制",
     );
 
     // Direct JSON payload

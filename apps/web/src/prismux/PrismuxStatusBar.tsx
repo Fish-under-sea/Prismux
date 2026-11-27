@@ -1627,6 +1627,7 @@ export function PrismuxStatusBar({ initialDaemonQuota = null }: PrismuxStatusBar
                   loading={effectiveResourcesLoading}
                   error={effectiveResourcesError}
                   daemonReady={Boolean(runtime?.daemonInfo.ready)}
+                  configuredProviderEntries={statusBarProviderDisplayOptions.entries}
                   onRefresh={() => fetchLiveResources({ forceRefresh: true, showSpinner: true })}
                   onKillPty={async (sessionId) => {
                     const target = telemetry ?? runtime;

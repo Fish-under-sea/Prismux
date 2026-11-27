@@ -1,7 +1,9 @@
 import {
+  CANONICAL_PROVIDER_DISPLAY_NAMES,
   SUBSCRIPTION_ORCHESTRATION_BLOCKED_CODE,
   SUBSCRIPTION_WAIVER_SETTINGS_ROUTE,
   isAntigravityProvider,
+  resolveCanonicalProviderDisplayName,
   type AntigravityGuardDecision,
   type AntigravityGuardErrorCode,
   type AntigravityPolicyResponse,
@@ -10,14 +12,14 @@ import {
   type ProviderAuthMode,
   type SubscriptionOrchestrationBlockedPayload,
   type SubscriptionOrchestrationBlockedReasonCode,
-  type SubscriptionWaiverResponse
+  type SubscriptionWaiverResponse,
 } from "@prismux/protocol";
 import {
   AUTH_LABEL_API_CUSTOM,
   AUTH_LABEL_LOCAL_RUNTIME,
   AUTH_LABEL_SUBSCRIPTION_OAUTH,
   canonicalizeProbeProviderId,
-  type PrismuxProviderProbeService
+  type PrismuxProviderProbeService,
 } from "../system/PrismuxProviderProbeService.js";
 import { SubscriptionWaiverStore } from "./AntigravityPolicyStore.js";
 
@@ -59,7 +61,7 @@ export class AntigravityGuardDeniedError extends Error {
   constructor(
     code: AntigravityGuardErrorCode,
     message: string,
-    decision?: AntigravityGuardDecision
+    decision?: AntigravityGuardDecision,
   ) {
     super(message);
     this.name = "AntigravityGuardDeniedError";
@@ -88,9 +90,8 @@ export class AntigravityGuardDeniedError extends Error {
       providerId: this.providerId,
       authMode: "subscription_oauth",
       authLabel: this.authLabel ?? AUTH_LABEL_SUBSCRIPTION_OAUTH,
-      settingsRoute:
-        this.settingsRoute ?? SUBSCRIPTION_WAIVER_SETTINGS_ROUTE,
-      message: this.message
+      settingsRoute: this.settingsRoute ?? SUBSCRIPTION_WAIVER_SETTINGS_ROUTE,
+      message: this.message,
     };
   }
 }
@@ -104,35 +105,33 @@ export class SubscriptionOrchestrationBlockedError extends AntigravityGuardDenie
 
 const UNATTENDED_CALLER_KINDS: ReadonlySet<DispatchCallerKind> = new Set([
   "cron",
-  "overnight_factory"
+  "overnight_factory",
 ]);
 
 const REMOTE_SECRETARY_CALLER_KINDS: ReadonlySet<DispatchCallerKind> = new Set([
   "secretary_qq",
-  "secretary_gmail"
+  "secretary_gmail",
 ]);
 
-const CONTROLLED_AUTOMATION_CALLER_KINDS: ReadonlySet<DispatchCallerKind> =
-  new Set([
-    "agent_subtask",
-    "swarm",
-    "internal_script",
-    "post_stop_loop",
-    "antigravity_commander"
-  ]);
+const CONTROLLED_AUTOMATION_CALLER_KINDS: ReadonlySet<DispatchCallerKind> = new Set([
+  "agent_subtask",
+  "swarm",
+  "internal_script",
+  "post_stop_loop",
+  "antigravity_commander",
+]);
 
-const EXTERNAL_SWARM_OR_CROSS_AGENT_CALLERS: ReadonlySet<DispatchCallerKind> =
-  new Set([
-    "agent_subtask",
-    "swarm",
-    "internal_script",
-    "secretary_qq",
-    "secretary_gmail",
-    "cron",
-    "overnight_factory",
-    "post_stop_loop",
-    "antigravity_commander"
-  ]);
+const EXTERNAL_SWARM_OR_CROSS_AGENT_CALLERS: ReadonlySet<DispatchCallerKind> = new Set([
+  "agent_subtask",
+  "swarm",
+  "internal_script",
+  "secretary_qq",
+  "secretary_gmail",
+  "cron",
+  "overnight_factory",
+  "post_stop_loop",
+  "antigravity_commander",
+]);
 
 function isWaiverStore(value: unknown): value is SubscriptionWaiverStore {
   return (
@@ -169,18 +168,15 @@ export class SubscriptionOrchestrationGuard {
   private readonly probeService: PrismuxProviderProbeService | undefined;
 
   constructor(
-    storeOrOptions?:
-      | SubscriptionWaiverStore
-      | SubscriptionOrchestrationGuardOptions,
-    options?: { probeService?: PrismuxProviderProbeService }
+    storeOrOptions?: SubscriptionWaiverStore | SubscriptionOrchestrationGuardOptions,
+    options?: { probeService?: PrismuxProviderProbeService },
   ) {
     if (isWaiverStore(storeOrOptions)) {
       this.store = storeOrOptions;
       this.probeService = options?.probeService;
     } else {
       this.store = storeOrOptions?.store ?? new SubscriptionWaiverStore();
-      this.probeService =
-        storeOrOptions?.probeService ?? options?.probeService;
+      this.probeService = storeOrOptions?.probeService ?? options?.probeService;
     }
   }
 
@@ -193,23 +189,19 @@ export class SubscriptionOrchestrationGuard {
   }
 
   async evaluateDispatchAsync(
-    input: AntigravityGuardEvaluationInput
+    input: AntigravityGuardEvaluationInput,
   ): Promise<AntigravityGuardDecision> {
     let resolvedProbe = input.probeSnapshot;
     if (resolvedProbe === undefined && this.probeService !== undefined) {
-      resolvedProbe = await this.probeService.probeProvider(
-        input.targetProvider
-      );
+      resolvedProbe = await this.probeService.probeProvider(input.targetProvider);
     }
     return this.evaluateDispatch({
       ...input,
-      probeSnapshot: resolvedProbe
+      probeSnapshot: resolvedProbe,
     });
   }
 
-  evaluateDispatch(
-    input: AntigravityGuardEvaluationInput
-  ): AntigravityGuardDecision {
+  evaluateDispatch(input: AntigravityGuardEvaluationInput): AntigravityGuardDecision {
     const canonicalProvider = canonicalizeProbeProviderId(input.targetProvider);
     const targetIsAntigravity = isAntigravityProvider(canonicalProvider);
 
@@ -221,7 +213,7 @@ export class SubscriptionOrchestrationGuard {
     const authMode = this.resolveEffectiveAuthMode(
       canonicalProvider,
       targetIsAntigravity,
-      resolvedProbe
+      resolvedProbe,
     );
     const authLabel =
       resolvedProbe?.authLabel ??
@@ -244,7 +236,7 @@ export class SubscriptionOrchestrationGuard {
         authMode,
         authLabel,
         reason: `Provider "${canonicalProvider}" runs in "${authMode}" (${authLabel}); allowed without waiver.`,
-        targetIsAntigravity
+        targetIsAntigravity,
       };
     }
 
@@ -261,7 +253,7 @@ export class SubscriptionOrchestrationGuard {
         authMode,
         authLabel,
         reason: `Dispatch from "${input.callerKind}" to worker "${canonicalProvider}" (${authMode}) is allowed.`,
-        targetIsAntigravity: false
+        targetIsAntigravity: false,
       };
     }
 
@@ -284,16 +276,14 @@ export class SubscriptionOrchestrationGuard {
           authMode: "subscription_oauth",
           authLabel,
           settingsRoute: SUBSCRIPTION_WAIVER_SETTINGS_ROUTE,
-          reason:
-            "24h 无人值守任务（Cron / OvernightFactory）严禁自动唤醒个人版 Antigravity（AGY），即使受控开关已解锁也强制拦截；请改用 API 模式或 Codex / Claude Code / OpenCode。",
-          targetIsAntigravity: true
+          reason: `24h 无人值守任务（Cron / OvernightFactory）严禁自动唤醒个人版 Antigravity（AGY），即使受控开关已解锁也强制拦截；请改用 API 模式或 ${CANONICAL_PROVIDER_DISPLAY_NAMES.codex} / ${CANONICAL_PROVIDER_DISPLAY_NAMES.claudeAgent} / ${CANONICAL_PROVIDER_DISPLAY_NAMES.opencode}。`,
+          targetIsAntigravity: true,
         };
       }
 
       // 3b. Stop-hook auto-callback guard: NEVER auto-re-invoke personal AGY without human confirmation.
       if (
-        (input.isStopHookCallback === true ||
-          input.callerKind === "post_stop_loop") &&
+        (input.isStopHookCallback === true || input.callerKind === "post_stop_loop") &&
         input.humanConfirmed !== true
       ) {
         const reasonCode: SubscriptionOrchestrationBlockedReasonCode =
@@ -315,7 +305,7 @@ export class SubscriptionOrchestrationGuard {
           settingsRoute: SUBSCRIPTION_WAIVER_SETTINGS_ROUTE,
           reason:
             "禁止在子任务 Stop 钩子或跨代理自动闭环中未经人工确认回调个人版 Antigravity（AGY）。",
-          targetIsAntigravity: true
+          targetIsAntigravity: true,
         };
       }
 
@@ -333,7 +323,7 @@ export class SubscriptionOrchestrationGuard {
           authLabel,
           reason:
             "远程秘书请求调用个人版 Antigravity（AGY）：已允许召回记忆并准备隔离 Worktree 草稿，硬锁定为 Draft-Only，必须由本人在桌面端手动点击确认放行。",
-          targetIsAntigravity: true
+          targetIsAntigravity: true,
         };
       }
 
@@ -355,7 +345,7 @@ export class SubscriptionOrchestrationGuard {
             settingsRoute: SUBSCRIPTION_WAIVER_SETTINGS_ROUTE,
             reason:
               "当前 Antigravity (AGY) 运行在官方个人订阅模式，默认锁定为「仅总控模式」，禁止其他 AI 代理、蜂群或脚本作为受控节点自动调用；如需解锁请在设置中签署风险免责声明并开启受控开关。",
-            targetIsAntigravity: true
+            targetIsAntigravity: true,
           };
         }
         return {
@@ -369,7 +359,7 @@ export class SubscriptionOrchestrationGuard {
           authMode: "subscription_oauth",
           authLabel,
           reason: `Unified risk waiver (${waiver.waiverVersion ?? "signed"}) + Switch A active; allowing controlled Antigravity dispatch from "${input.callerKind}".`,
-          targetIsAntigravity: true
+          targetIsAntigravity: true,
         };
       }
 
@@ -385,9 +375,8 @@ export class SubscriptionOrchestrationGuard {
           providerId: "antigravity",
           authMode: "subscription_oauth",
           authLabel,
-          reason:
-            "Human desktop commander invocation of Antigravity (AGY) is allowed.",
-          targetIsAntigravity: true
+          reason: "Human desktop commander invocation of Antigravity (AGY) is allowed.",
+          targetIsAntigravity: true,
         };
       }
 
@@ -406,7 +395,7 @@ export class SubscriptionOrchestrationGuard {
         authLabel,
         settingsRoute: SUBSCRIPTION_WAIVER_SETTINGS_ROUTE,
         reason: `Unrecognized callerKind "${String(input.callerKind)}" is blocked from targeting Antigravity.`,
-        targetIsAntigravity: true
+        targetIsAntigravity: true,
       };
     }
 
@@ -423,7 +412,7 @@ export class SubscriptionOrchestrationGuard {
         authMode: "subscription_oauth",
         authLabel,
         reason: `Direct human desktop session for "${canonicalProvider}" is allowed.`,
-        targetIsAntigravity: false
+        targetIsAntigravity: false,
       };
     }
 
@@ -444,8 +433,8 @@ export class SubscriptionOrchestrationGuard {
         authMode: "subscription_oauth",
         authLabel,
         settingsRoute: SUBSCRIPTION_WAIVER_SETTINGS_ROUTE,
-        reason: `当前 ${canonicalProvider} 运行在官方个人订阅模式（${authLabel}），为避免违反厂商服务条款导致封号，默认禁止参与蜂群或跨代理自动化调用；若你使用 API Key 或 CCS / Magpie 注入 API 模式则不受限制，或前往设置签署风险免责声明并开启对应开关。`,
-        targetIsAntigravity: false
+        reason: `当前 ${resolveCanonicalProviderDisplayName(canonicalProvider)} 运行在官方个人订阅模式（${authLabel}），为避免违反厂商服务条款导致封号，默认禁止参与蜂群或跨代理自动化调用；若你使用 API Key 或 CCS / Magpie 注入 API 模式则不受限制，或前往设置签署风险免责声明并开启对应开关。`,
+        targetIsAntigravity: false,
       };
     }
 
@@ -460,7 +449,7 @@ export class SubscriptionOrchestrationGuard {
       authMode: "subscription_oauth",
       authLabel,
       reason: `Unified risk waiver (${waiver.waiverVersion ?? "signed"}) + Switch B active; allowing swarm/cross-agent dispatch to "${canonicalProvider}".`,
-      targetIsAntigravity: false
+      targetIsAntigravity: false,
     };
   }
 
@@ -472,7 +461,7 @@ export class SubscriptionOrchestrationGuard {
     if (confirmedBy !== "human_desktop") {
       throw new AntigravityGuardDeniedError(
         "AGY_HUMAN_CONFIRMATION_REQUIRED",
-        `仅允许桌面端本人确认放行（confirmedBy 必须为 "human_desktop"，收到 "${String(confirmedBy ?? "")}"）。`
+        `仅允许桌面端本人确认放行（confirmedBy 必须为 "human_desktop"，收到 "${String(confirmedBy ?? "")}"）。`,
       );
     }
     return "human_desktop";
@@ -487,23 +476,21 @@ export class SubscriptionOrchestrationGuard {
     options?: {
       humanConfirmed?: boolean;
       probeSnapshot?: GuardProbeSnapshotOverride | null;
-    }
+    },
   ): AntigravityGuardDecision {
     return this.evaluateDispatch({
       callerKind: "post_stop_loop",
       targetProvider,
       isStopHookCallback: true,
       humanConfirmed: options?.humanConfirmed === true,
-      ...(options?.probeSnapshot !== undefined
-        ? { probeSnapshot: options.probeSnapshot }
-        : {})
+      ...(options?.probeSnapshot !== undefined ? { probeSnapshot: options.probeSnapshot } : {}),
     });
   }
 
   private resolveEffectiveAuthMode(
     _canonicalProvider: string,
     targetIsAntigravity: boolean,
-    probeSnapshot: GuardProbeSnapshotOverride | null | undefined
+    probeSnapshot: GuardProbeSnapshotOverride | null | undefined,
   ): ProviderAuthMode {
     if (probeSnapshot?.authMode === "api_or_custom") {
       return "api_or_custom";

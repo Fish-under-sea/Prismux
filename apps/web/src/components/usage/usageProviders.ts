@@ -6,24 +6,22 @@ import {
 } from "@prismux/core-contracts";
 
 import {
+  CANONICAL_PROVIDER_DISPLAY_NAMES,
   formatAgentBrandName,
   resolveAgentBrandId,
   resolveProviderEntryDisplayName,
 } from "../../prismux/agentBrand";
+import { resolveConfiguredProviderDisplayName } from "../../prismux/providerDisplayName";
 import {
   brandProviderInstanceEntries,
   deriveProviderInstanceEntries,
   disambiguateProviderInstanceDisplayNames,
   orderItemsByConfiguredProviderOrder,
   orderProviderInstanceEntries,
-  resolveConfiguredProviderLabel,
   type ProviderInstanceEntry,
 } from "../../providerInstances";
 import { primaryServerProvidersAtom, primaryServerSettingsAtom } from "../../state/server";
-import {
-  formatUsageModelDisplayName,
-  unwrapUsageModelSlug,
-} from "./usageCallTelemetryStore";
+import { formatUsageModelDisplayName, unwrapUsageModelSlug } from "./usageCallTelemetryStore";
 import type { UsageMetric } from "./usageShortcuts";
 
 export { formatUsageModelDisplayName, unwrapUsageModelSlug };
@@ -43,52 +41,55 @@ export interface UsageProviderDisplayInfo {
   readonly instanceId?: ProviderInstanceId | undefined;
 }
 
-export const PROVIDER_PRESENTATION: Readonly<
-  Record<UsageProviderKind, UsageProviderPresentation>
-> = {
-  codex: {
-    label: "Codex",
-    color: "var(--contrast-foreground)",
-    driverKind: ProviderDriverKind.make("codex"),
-  },
-  claude: {
-    label: "Claude Code",
-    color: "#d97757",
-    driverKind: ProviderDriverKind.make("claudeAgent"),
-  },
-  grok: {
-    label: "Grok Build",
-    color: "color-mix(in oklab, var(--contrast-foreground) 72%, var(--background))",
-    driverKind: ProviderDriverKind.make("grok"),
-  },
-  cursor: { label: "Cursor", color: "#8b8b8b", driverKind: ProviderDriverKind.make("cursor") },
-  opencode: {
-    label: "OpenCode",
-    color: "#5b9bbd",
-    driverKind: ProviderDriverKind.make("opencode"),
-  },
-  antigravity: {
-    label: "Antigravity",
-    color: "#8c7bd1",
-    driverKind: ProviderDriverKind.make("antigravity"),
-  },
-  pi: {
-    label: "Pi",
-    color: "#4d9f8a",
-    driverKind: ProviderDriverKind.make("pi"),
-  },
-  muse: {
-    label: "Muse Code",
-    color: "#0866ff",
-    driverKind: ProviderDriverKind.make("muse"),
-  },
-  dsh: {
-    label: "DeepSeek Harness",
-    color: "#4d6bfe",
-    driverKind: ProviderDriverKind.make("acpRegistry"),
-    acpRegistryAgentId: "dsh",
-  },
-};
+export const PROVIDER_PRESENTATION: Readonly<Record<UsageProviderKind, UsageProviderPresentation>> =
+  {
+    codex: {
+      label: CANONICAL_PROVIDER_DISPLAY_NAMES.codex,
+      color: "var(--contrast-foreground)",
+      driverKind: ProviderDriverKind.make("codex"),
+    },
+    claude: {
+      label: CANONICAL_PROVIDER_DISPLAY_NAMES.claude,
+      color: "#d97757",
+      driverKind: ProviderDriverKind.make("claudeAgent"),
+    },
+    grok: {
+      label: CANONICAL_PROVIDER_DISPLAY_NAMES.grok,
+      color: "color-mix(in oklab, var(--contrast-foreground) 72%, var(--background))",
+      driverKind: ProviderDriverKind.make("grok"),
+    },
+    cursor: {
+      label: CANONICAL_PROVIDER_DISPLAY_NAMES.cursor,
+      color: "#8b8b8b",
+      driverKind: ProviderDriverKind.make("cursor"),
+    },
+    opencode: {
+      label: CANONICAL_PROVIDER_DISPLAY_NAMES.opencode,
+      color: "#5b9bbd",
+      driverKind: ProviderDriverKind.make("opencode"),
+    },
+    antigravity: {
+      label: CANONICAL_PROVIDER_DISPLAY_NAMES.antigravity,
+      color: "#8c7bd1",
+      driverKind: ProviderDriverKind.make("antigravity"),
+    },
+    pi: {
+      label: CANONICAL_PROVIDER_DISPLAY_NAMES.pi,
+      color: "#4d9f8a",
+      driverKind: ProviderDriverKind.make("pi"),
+    },
+    muse: {
+      label: CANONICAL_PROVIDER_DISPLAY_NAMES.muse,
+      color: "#0866ff",
+      driverKind: ProviderDriverKind.make("muse"),
+    },
+    dsh: {
+      label: CANONICAL_PROVIDER_DISPLAY_NAMES.dsh,
+      color: "#4d6bfe",
+      driverKind: ProviderDriverKind.make("acpRegistry"),
+      acpRegistryAgentId: "dsh",
+    },
+  };
 
 export const PROVIDER_ORDER = Object.keys(PROVIDER_PRESENTATION) as UsageProviderKind[];
 
@@ -139,9 +140,7 @@ export function resolveUsageProviderDisplay(
   if (lowered === "dsh" || resolveAgentBrandId(trimmed) === "dsh") {
     const dshEntry = findConfiguredDshEntry(entries);
     return {
-      label: dshEntry
-        ? resolveProviderEntryDisplayName(dshEntry)
-        : PROVIDER_PRESENTATION.dsh.label,
+      label: dshEntry ? resolveProviderEntryDisplayName(dshEntry) : PROVIDER_PRESENTATION.dsh.label,
       driverKind: dshEntry?.driverKind ?? PROVIDER_PRESENTATION.dsh.driverKind,
       acpRegistryAgentId: "dsh",
       ...(dshEntry ? { instanceId: dshEntry.instanceId } : {}),
@@ -169,10 +168,13 @@ export function resolveUsageProviderDisplay(
   if (trimmed in PROVIDER_PRESENTATION) {
     const info = PROVIDER_PRESENTATION[trimmed as UsageProviderKind];
     const lookupKey = info.acpRegistryAgentId ?? info.driverKind;
-    const label =
-      entries && entries.length > 0
-        ? resolveConfiguredProviderLabel(lookupKey, entries, info.label)
-        : info.label;
+    const label = resolveConfiguredProviderDisplayName({
+      provider: lookupKey,
+      driverKind: info.driverKind,
+      acpRegistryAgentId: info.acpRegistryAgentId,
+      providerInstances: entries,
+      fallbackDisplayName: info.label,
+    });
     return {
       label,
       driverKind: info.driverKind,
@@ -201,7 +203,10 @@ export function resolveUsageProviderDisplay(
       };
     }
     return {
-      label: resolveConfiguredProviderLabel(trimmed, entries),
+      label: resolveConfiguredProviderDisplayName({
+        provider: trimmed,
+        providerInstances: entries,
+      }),
       driverKind: null,
     };
   }
@@ -225,10 +230,7 @@ export function orderUsageProviders<T extends string>(
   entries?: ReadonlyArray<ProviderInstanceEntry>,
   providerOrder?: ReadonlyArray<ProviderInstanceId> | null,
 ): readonly T[] {
-  if (
-    providers.length <= 1 ||
-    (!providerOrder?.length && (!entries || entries.length === 0))
-  ) {
+  if (providers.length <= 1 || (!providerOrder?.length && (!entries || entries.length === 0))) {
     return providers;
   }
   return orderItemsByConfiguredProviderOrder(
@@ -252,9 +254,7 @@ export function useConfiguredUsageProviders(overrides?: {
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
   const serverSettings = useAtomValue(primaryServerSettingsAtom);
   const effectiveProviderOrder =
-    overrides?.providerOrder !== undefined
-      ? overrides.providerOrder
-      : serverSettings.providerOrder;
+    overrides?.providerOrder !== undefined ? overrides.providerOrder : serverSettings.providerOrder;
   const entries: ReadonlyArray<ProviderInstanceEntry> =
     overrides?.providerEntries !== undefined
       ? overrides.providerEntries

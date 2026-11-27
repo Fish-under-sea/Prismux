@@ -22,7 +22,6 @@ import {
   defaultInstanceIdForDriver,
   type EnvironmentId,
   type AcpRegistryUrlAuthAction,
-  PROVIDER_DISPLAY_NAMES,
   ProviderDriverKind,
   type ProjectId,
   type ProviderInstanceConfig,
@@ -110,10 +109,7 @@ import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
-import {
-  ProviderDeleteDialog,
-  type PendingProviderDeletion,
-} from "./ProviderDeleteDialog";
+import { ProviderDeleteDialog, type PendingProviderDeletion } from "./ProviderDeleteDialog";
 import { useManagedPolicy } from "~/state/managedPolicy";
 import { ExpandableText } from "./ExpandableText";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
@@ -168,6 +164,7 @@ import {
   useSubscriptionWaiverState,
 } from "../../prismux/SubscriptionRiskWaiverSection";
 import { formatAgentBrandName } from "../../prismux/agentBrand";
+import { resolveConfiguredProviderDisplayName } from "../../prismux/providerDisplayName";
 import {
   resolveEffectiveLaunchMode,
   useProviderLaunchModePreferences,
@@ -678,9 +675,9 @@ export function EnvironmentProviderSettings({
   const [isAddInstanceDialogOpen, setIsAddInstanceDialogOpen] = useState(false);
   const [pendingDeletion, setPendingDeletion] = useState<PendingProviderDeletion | null>(null);
   const [isDeletingProvider, setIsDeletingProvider] = useState(false);
-  const [dismissedInstanceIds, setDismissedInstanceIds] = useState<
-    ReadonlySet<ProviderInstanceId>
-  >(() => new Set());
+  const [dismissedInstanceIds, setDismissedInstanceIds] = useState<ReadonlySet<ProviderInstanceId>>(
+    () => new Set(),
+  );
   const [selectedInstanceId, setSelectedInstanceId] = useState<ProviderInstanceId | null>(
     targetInstanceId ?? null,
   );
@@ -791,7 +788,13 @@ export function EnvironmentProviderSettings({
           stackedThreadToast({
             type: "error",
             title: gt("Could not update {provider}", {
-              provider: PROVIDER_DISPLAY_NAMES[candidate.driver] ?? candidate.driver,
+              provider: resolveConfiguredProviderDisplayName({
+                provider: candidate.instanceId,
+                instanceId: candidate.instanceId,
+                driverKind: candidate.driver,
+                providers: serverProviders,
+                settings,
+              }),
             }),
             description:
               error instanceof Error
@@ -1251,7 +1254,9 @@ export function EnvironmentProviderSettings({
                   className="@min-[48rem]/providers:min-h-0 @min-[48rem]/providers:flex-1"
                 >
                   <div className="divide-y divide-border/50">
-                    {allProvidersProbed && installedProviderCount === 0 && !isRefreshingProviders ? (
+                    {allProvidersProbed &&
+                    installedProviderCount === 0 &&
+                    !isRefreshingProviders ? (
                       <div
                         data-slot="empty-agent-detection-banner"
                         className="flex items-center justify-between gap-2 bg-muted/20 px-3 py-2.5 text-xs text-muted-foreground sm:px-4"

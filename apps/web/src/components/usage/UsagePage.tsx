@@ -55,7 +55,10 @@ import {
   formatUsd,
   makeWindow,
 } from "@prismux/core-shared/usageFormat";
-import { formatUsageContractMismatch, usageSourceMessages } from "@prismux/core-shared/usageFormatCopy";
+import {
+  formatUsageContractMismatch,
+  usageSourceMessages,
+} from "@prismux/core-shared/usageFormatCopy";
 import { Button, InlineButton } from "../ui/button";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import {
@@ -111,10 +114,7 @@ import {
   saveUsagePagePreferences,
   type UsagePagePreferences,
 } from "./usagePagePreferences";
-import {
-  USAGE_CALL_LOG_MESSAGES,
-  UsageCallLogsSection,
-} from "./UsageCallLogsSection";
+import { USAGE_CALL_LOG_MESSAGES, UsageCallLogsSection } from "./UsageCallLogsSection";
 import {
   computeUsageCallSummaryMetrics,
   formatCacheHitRate,
@@ -169,8 +169,6 @@ function isUsageMetric(value: string | null | undefined): value is UsageMetric {
 function isUsageWindowDays(value: number): value is UsagePagePreferences["windowDays"] {
   return WINDOW_OPTIONS.some((option) => option.days === value);
 }
-
-const providerLabel = (provider: UsageProviderKind) => PROVIDER_PRESENTATION[provider].label;
 
 function usageLoading(
   showingKept: boolean,
@@ -1330,6 +1328,7 @@ function UsageEnvironmentFilter({
 }) {
   const gt = useGT();
   const m = useMessages();
+  const { getLabel: getConfiguredProviderLabel } = useConfiguredUsageProviders();
   const allSelected = selectedEnvironmentIds === null;
   const label = allSelected
     ? gt("All environments")
@@ -1390,7 +1389,7 @@ function UsageEnvironmentFilter({
                     : progress.phase === "stale"
                       ? gt("Refreshing…")
                       : progress.phase === "partway"
-                        ? updatingProvidersLabel(progress.providers, providerLabel, m)
+                        ? updatingProvidersLabel(progress.providers, getConfiguredProviderLabel, m)
                         : gt("Ready", { $context: "environment usage status" });
           return (
             <MenuCheckboxItem
