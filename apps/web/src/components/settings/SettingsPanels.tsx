@@ -18,7 +18,6 @@ import {
   type EffortDisplay,
   MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
-  ReasoningTranslationProvider,
   type ResponseStreamingMode,
   type QuitConfirmationMode,
   SidebarProjectSortOrder,
@@ -102,18 +101,12 @@ import { AdvancedSettings } from "./AdvancedSettings";
 import { PullRequestLinksOpenInAppSetting } from "./IntegrationsSettings";
 import { StorageCleanupSections } from "./StorageSettings";
 import { DiagnosticsSettingsSections } from "./DiagnosticsSettings";
+import { ReasoningTranslationSettingsCard } from "./ReasoningTranslationSettingsCard";
 import { PrismuxUpdatesSettingsPage } from "../../prismux/settings/PrismuxUpdatesSettingsPage";
 
 const EFFORT_DISPLAY_LABELS: Record<EffortDisplay, string> = {
   label: msg("Word", { $context: "show effort as a word" }),
   bars: msg("Bars", { $context: "show effort as bars" }),
-};
-
-const REASONING_TRANSLATION_PROVIDER_LABELS: Record<ReasoningTranslationProvider, string> = {
-  off: msg("Off (default)", { $context: "reasoning translation provider" }),
-  text_model: msg("Use configured text model", {
-    $context: "reasoning translation provider",
-  }),
 };
 
 const WORK_STEPS_DISPLAY_LABELS: Record<WorkStepsDisplay, string> = {
@@ -136,7 +129,6 @@ const COLLAPSED_ASSISTANT_REPLY_MODE_LABELS: Record<CollapsedAssistantReplyMode,
 const isWorkStepsDisplay = Schema.is(WorkStepsDisplay);
 const isWorkStepsCollapseTiming = Schema.is(WorkStepsCollapseTiming);
 const isCollapsedAssistantReplyMode = Schema.is(CollapsedAssistantReplyMode);
-const isReasoningTranslationProvider = Schema.is(ReasoningTranslationProvider);
 
 export const CHAT_TAB_IDS = {
   composer: "composer",
@@ -784,11 +776,7 @@ export function GeneralSettingsPanel() {
                 }
               }}
             >
-              <SelectTrigger
-                size="sm"
-                className="w-full sm:w-48"
-                aria-label={gt("Project order")}
-              >
+              <SelectTrigger size="sm" className="w-full sm:w-48" aria-label={gt("Project order")}>
                 <SelectValue>
                   {m(SIDEBAR_PROJECT_SORT_ORDER_LABELS[settings.sidebarProjectSortOrder])}
                 </SelectValue>
@@ -1158,7 +1146,8 @@ export function ChatSettingsPanel() {
                 "Also include skills in the / command menu. Skills always appear when you type $.",
               )}
               resetAction={
-                settings.showSkillsInSlashMenu !== DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu ? (
+                settings.showSkillsInSlashMenu !==
+                DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu ? (
                   <SettingResetButton
                     ariaLabel={gt("Reset skills in slash menu to default")}
                     onClick={() =>
@@ -1293,7 +1282,9 @@ export function ChatSettingsPanel() {
                     aria-label={gt("Work steps collapse timing")}
                   >
                     <SelectValue>
-                      {messages(WORK_STEPS_COLLAPSE_TIMING_LABELS[settings.workStepsCollapseTiming])}
+                      {messages(
+                        WORK_STEPS_COLLAPSE_TIMING_LABELS[settings.workStepsCollapseTiming],
+                      )}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectPopup align="end" alignItemWithTrigger={false}>
@@ -1398,74 +1389,7 @@ export function ChatSettingsPanel() {
                 </Select>
               }
             />
-            <SettingsRow
-              {...setting("reasoning-translation")}
-              description={
-                settings.reasoningTranslationProvider === "off" ? (
-                  gt(
-                    "Off by default so reasoning stays strictly local with zero outbound translation requests. Opt in with your own configured text generation model whenever needed.",
-                  )
-                ) : (
-                  <>
-                    {gt(
-                      "Reasoning text is sent only to your own configured text generation model endpoint (follows the subscription risk waiver guard).",
-                    )}{" "}
-                    <Link
-                      to="/settings/providers"
-                      hash="text-generation-model"
-                      className="inline-flex items-center font-medium text-primary underline-offset-4 hover:underline"
-                    >
-                      {gt("Configure text generation model →")}
-                    </Link>
-                  </>
-                )
-              }
-              resetAction={
-                settings.reasoningTranslationProvider !==
-                DEFAULT_UNIFIED_SETTINGS.reasoningTranslationProvider ? (
-                  <SettingResetButton
-                    ariaLabel={gt("Reset reasoning translation to default")}
-                    onClick={() =>
-                      updateSettings({
-                        reasoningTranslationProvider:
-                          DEFAULT_UNIFIED_SETTINGS.reasoningTranslationProvider,
-                      })
-                    }
-                  />
-                ) : null
-              }
-              control={
-                <Select
-                  value={settings.reasoningTranslationProvider}
-                  onValueChange={(value) => {
-                    if (isReasoningTranslationProvider(value)) {
-                      updateSettings({ reasoningTranslationProvider: value });
-                    }
-                  }}
-                >
-                  <SelectTrigger
-                    size="sm"
-                    className="w-full sm:w-52"
-                    aria-label={gt("Reasoning translation")}
-                  >
-                    <SelectValue>
-                      {messages(
-                        REASONING_TRANSLATION_PROVIDER_LABELS[
-                          settings.reasoningTranslationProvider
-                        ],
-                      )}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectPopup align="end" alignItemWithTrigger={false}>
-                    {ReasoningTranslationProvider.literals.map((value) => (
-                      <SelectItem key={value} value={value}>
-                        {messages(REASONING_TRANSLATION_PROVIDER_LABELS[value])}
-                      </SelectItem>
-                    ))}
-                  </SelectPopup>
-                </Select>
-              }
-            />
+            <ReasoningTranslationSettingsCard />
             <SettingsRow
               {...setting("math-rendering")}
               description={gt(
@@ -1563,7 +1487,8 @@ export function ChatSettingsPanel() {
                   : messages(RESPONSE_STREAMING_MODE_DESCRIPTIONS[settings.responseStreamingMode])
               }
               resetAction={
-                settings.responseStreamingMode !== DEFAULT_UNIFIED_SETTINGS.responseStreamingMode ? (
+                settings.responseStreamingMode !==
+                DEFAULT_UNIFIED_SETTINGS.responseStreamingMode ? (
                   <SettingResetButton
                     ariaLabel={gt("Reset response streaming to default")}
                     onClick={() =>
@@ -1613,7 +1538,8 @@ export function ChatSettingsPanel() {
                 "Open linked pull requests first. Otherwise, open Changes for edits to at least 3 files or 50 lines.",
               )}
               resetAction={
-                settings.proactivePanelsEnabled !== DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled ? (
+                settings.proactivePanelsEnabled !==
+                DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled ? (
                   <SettingResetButton
                     ariaLabel={gt("Reset proactive panels to default")}
                     onClick={() =>
@@ -1813,9 +1739,7 @@ function DiffColorsSettingsRow() {
               <span className="size-2 rounded-full bg-diff-addition" />
             </span>
             <SelectValue>
-              {settings.diffColorScheme === "blue-orange"
-                ? gt("Blue & orange")
-                : gt("Red & green")}
+              {settings.diffColorScheme === "blue-orange" ? gt("Blue & orange") : gt("Red & green")}
             </SelectValue>
           </SelectTrigger>
           <SelectPopup align="end" alignItemWithTrigger={false}>
@@ -2425,7 +2349,9 @@ export function ThreadsSettingsSections() {
               serverScoped
               settingKeys={["sidebarAutoSettleAfterDays"]}
               {...setting("auto-settle-inactive-threads")}
-              description={gt("Sidebar threads with no activity for this long settle automatically.")}
+              description={gt(
+                "Sidebar threads with no activity for this long settle automatically.",
+              )}
               resetAction={
                 settings.sidebarAutoSettleAfterDays !==
                 DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays ? (
@@ -2719,9 +2645,7 @@ export function AboutSettingsPanel() {
           description={gt("Prismux source code, releases, and issue tracker on GitHub.")}
           control={
             <Button
-              render={
-                <a href={PRISMUX_REPOSITORY_URL} target="_blank" rel="noreferrer noopener" />
-              }
+              render={<a href={PRISMUX_REPOSITORY_URL} target="_blank" rel="noreferrer noopener" />}
               size="sm"
               variant="outline"
             >

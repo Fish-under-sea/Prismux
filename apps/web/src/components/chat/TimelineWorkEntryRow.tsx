@@ -607,6 +607,27 @@ export function ReasoningTraceContent({ entries }: { entries: ReadonlyArray<Time
   const { isWorking, latestRunId } = use(TimelineRowActivityCtx);
   const isStreaming = (entry: TimelineWorkEntry) =>
     isWorking && entry.runId === latestRunId && entry.toolLifecycleStatus === "inProgress";
+  const renderSettingsLink = ({
+    target,
+    label,
+    className,
+    dataSlot,
+  }: {
+    readonly target: "reasoning" | "waiver";
+    readonly label: ReactNode;
+    readonly className: string;
+    readonly dataSlot: string;
+  }) => (
+    <Link
+      to={target === "waiver" ? "/settings/providers" : "/settings/chat"}
+      hash={target === "waiver" ? "subscription-risk-waiver" : "reasoning-translation"}
+      data-slot={dataSlot}
+      className={className}
+      onClick={stopRowToggle}
+    >
+      {label}
+    </Link>
+  );
   return (
     <div
       data-reasoning-trace-content="true"
@@ -619,6 +640,8 @@ export function ReasoningTraceContent({ entries }: { entries: ReadonlyArray<Time
             key={entry.id}
             text={entry.detail ?? ""}
             running={streaming}
+            showQuickToggle
+            renderSettingsLink={renderSettingsLink}
             renderContent={(displayText) => (
               <ChatMarkdown
                 className="text-foreground/85"
@@ -1542,6 +1565,18 @@ function FrostedV2StepInspector({
       <ReasoningTranslationBody
         text={item.text}
         running={isRunning}
+        showQuickToggle
+        renderSettingsLink={({ target, label, className, dataSlot }) => (
+          <Link
+            to={target === "waiver" ? "/settings/providers" : "/settings/chat"}
+            hash={target === "waiver" ? "subscription-risk-waiver" : "reasoning-translation"}
+            data-slot={dataSlot}
+            className={className}
+            onClick={stopRowToggle}
+          >
+            {label}
+          </Link>
+        )}
         renderContent={(displayText) => (
           <ChatMarkdown
             text={displayText}
