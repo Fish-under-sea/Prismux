@@ -1241,3 +1241,50 @@ it("lets a one-line placeholder's button take clicks and passes the rest to the 
   await userEvent.click(screen.getByRole("button", { name: "Tab" }));
   expect(onClick).toHaveBeenCalledOnce();
 });
+
+it("forwards Shift+Enter inside a code block and non-Enter custom shortcuts to onCommandKeyDown", async () => {
+  let running = true;
+  const handledChords: string[] = [];
+  const onCommandKeyDown = vi.fn((key: string, event: KeyboardEvent) => {
+    if (running && key === "Enter" && event.shiftKey) {
+      handledChords.push("shift+enter");
+      return true;
+    }
+    if (running && key.toLowerCase() === "s" && event.altKey) {
+      handledChords.push("alt+s");
+      return true;
+    }
+    return false;
+  });
+
+  await using screen = await mountEditor(
+    "```ts\nconst a = 1\n```",
+    true,
+    [],
+    undefined,
+    onCommandKeyDown,
+  );
+  const { editor } = screen;
+  await act(async () => {
+    editor.commands.focus("end");
+  });
+  await vi.waitFor(() => expect(document.activeElement).toBe(editor.view.dom));
+  expect(editor.state.selection.$from.parent.type.spec.code).toBe(true);
+
+  // While running, Shift+Enter inside a code block triggers onCommandKeyDown instead of inserting a newline.
+  await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+  expect(handledChords).toEqual(["shift+enter"]);
+  expect(serializeEditorDoc(editor.state.doc).value).toBe("```ts\nconst a = 1\n```");
+
+  // Non-Enter custom shortcut (Alt+S) also reaches onCommandKeyDown and does not insert text.
+  await userEvent.keyboard("{Alt>}s{/Alt}");
+  expect(handledChords).toEqual(["shift+enter", "alt+s"]);
+  expect(serializeEditorDoc(editor.state.doc).value).toBe("```ts\nconst a = 1\n```");
+
+  // Once idle, Shift+Enter inside a code block falls back to inserting a code-block newline.
+  running = false;
+  await userEvent.keyboard("{Shift>}{Enter}{/Shift}const b = 2");
+  await vi.waitFor(() =>
+    expect(serializeEditorDoc(editor.state.doc).value).toBe("```ts\nconst a = 1\nconst b = 2\n```"),
+  );
+});

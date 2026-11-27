@@ -276,6 +276,73 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(layerKeybindings())),
   );
 
+  it.effect(
+    "adds shift+enter late default alongside mod+enter for composer.sendAlternate once",
+    () =>
+      Effect.gen(function* () {
+        const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+        const keybindings = yield* Keybindings.Keybindings;
+        const when = "composerFocus && turnRunning";
+        const existing = { key: "mod+enter", command: "composer.sendAlternate", when } as const;
+        const alternateRules = Effect.map(readKeybindingsConfig(keybindingsConfigPath), (rules) =>
+          rules.filter((entry) => entry.command === "composer.sendAlternate"),
+        );
+        yield* writeKeybindingsConfig(keybindingsConfigPath, [existing]);
+
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+        assert.deepStrictEqual(yield* alternateRules, [
+          { key: "shift+enter", command: "composer.sendAlternate", when },
+          existing,
+        ]);
+
+        // Respect subsequent removal of shift+enter without re-adding it on restart.
+        yield* writeKeybindingsConfig(keybindingsConfigPath, [existing]);
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+        assert.deepStrictEqual(yield* alternateRules, [existing]);
+      }).pipe(Effect.provide(layerKeybindings())),
+  );
+
+  it.effect(
+    "migrates legacy composer.host mod+shift+h once so sidebar.collapseAllProjects backfills cleanly",
+    () =>
+      Effect.gen(function* () {
+        const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+        const keybindings = yield* Keybindings.Keybindings;
+        const legacyHost = {
+          key: "mod+shift+h",
+          command: "composer.host",
+          when: "!terminalFocus",
+        } as const;
+        yield* writeKeybindingsConfig(keybindingsConfigPath, [legacyHost]);
+
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+        const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+        assert.deepStrictEqual(
+          persisted.filter((entry) => entry.command === "composer.host"),
+          [{ key: "mod+alt+h", command: "composer.host", when: "!terminalFocus" }],
+        );
+        assert.deepStrictEqual(
+          persisted.filter((entry) => entry.command === "sidebar.collapseAllProjects"),
+          [
+            {
+              key: "mod+shift+h",
+              command: "sidebar.collapseAllProjects",
+              when: "!terminalFocus",
+            },
+          ],
+        );
+
+        // Once migrated, user rebinding composer.host back to mod+shift+h is preserved.
+        yield* writeKeybindingsConfig(keybindingsConfigPath, [legacyHost]);
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+        const persistedAfterRebind = yield* readKeybindingsConfig(keybindingsConfigPath);
+        assert.deepStrictEqual(
+          persistedAfterRebind.filter((entry) => entry.command === "composer.host"),
+          [legacyHost],
+        );
+      }).pipe(Effect.provide(layerKeybindings())),
+  );
+
   it.effect("leaves a customized command without the late default", () =>
     Effect.gen(function* () {
       const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;

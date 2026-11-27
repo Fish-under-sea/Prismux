@@ -56,6 +56,11 @@ type WhenToken =
 
 export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+b", command: "sidebar.toggle" },
+  {
+    key: "mod+shift+h",
+    command: "sidebar.collapseAllProjects",
+    when: "!terminalFocus",
+  },
   { key: "f6", command: "workspace.focusNext" },
   { key: "shift+f6", command: "workspace.focusPrevious" },
   // Some browsers keep plain F6 for their own toolbars; mod+F6 reaches the page in all of them.
@@ -78,6 +83,8 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+j", command: "preview.toggle" },
   { key: "mod+r", command: "preview.refresh", when: "previewFocus" },
   { key: "mod+l", command: "preview.focusUrl", when: "previewFocus" },
+  { key: "mod+l", command: "chat.citeSelection", when: "!terminalFocus && !previewFocus" },
+  { key: "mod+e", command: "chat.sideAskSelection", when: "!terminalFocus && !previewFocus" },
   { key: "mod+=", command: "preview.zoomIn", when: "previewFocus" },
   { key: "mod++", command: "preview.zoomIn", when: "previewFocus" },
   { key: "mod+-", command: "preview.zoomOut", when: "previewFocus" },
@@ -93,6 +100,7 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+s", command: "composer.stash", when: "!terminalFocus" },
   { key: "mod+shift+enter", command: "thread.steerQueuedMessage", when: "!terminalFocus" },
   { key: "alt+arrowup", command: "thread.editQueuedMessage", when: "composerFocus" },
+  { key: "shift+enter", command: "composer.sendAlternate", when: "composerFocus && turnRunning" },
   { key: "mod+enter", command: "composer.sendAlternate", when: "composerFocus && turnRunning" },
   {
     key: "mod+enter",
@@ -115,7 +123,7 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+alt+n", command: "chat.newWithoutProject", when: "!terminalFocus" },
   { key: "mod+f", command: "chat.find", when: "!terminalFocus && !previewFocus" },
   { key: "mod+shift+m", command: "modelPicker.toggle", when: "!terminalFocus" },
-  { key: "mod+shift+h", command: "composer.host", when: "!terminalFocus" },
+  { key: "mod+alt+h", command: "composer.host", when: "!terminalFocus" },
   { key: "mod+shift+e", command: "composer.effort", when: "!terminalFocus" },
   { key: "mod+shift+a", command: "composer.mode", when: "!terminalFocus" },
   { key: "mod+shift+x", command: "composer.workspace", when: "!terminalFocus" },

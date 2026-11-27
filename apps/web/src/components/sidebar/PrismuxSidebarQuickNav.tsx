@@ -1,18 +1,13 @@
 import type { ScopedThreadRef } from "@prismux/core-contracts";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { T, useGT } from "gt-react";
-import {
-  ActivityIcon,
-  CalendarClockIcon,
-  MoonStarIcon,
-  SearchIcon,
-} from "lucide-react";
+import { ActivityIcon, CalendarClockIcon, MoonStarIcon, SearchIcon } from "lucide-react";
 import { memo } from "react";
 
 import { useAtomValue } from "@effect/atom-react";
 import { openCommandPalette } from "../../commandPaletteBus";
 import { shortcutLabelForCommand } from "../../keybindings";
-import { cn, isMacPlatform } from "~/lib/utils";
+import { cn } from "~/lib/utils";
 import { useOptionalPrismuxRuntime } from "../../prismux/PrismuxRuntimeProvider";
 import { useLiveDiagnosticsBadgeTone } from "../../prismux/settings/useLiveDiagnosticsBadgeTone";
 import { primaryServerKeybindingsAtom } from "../../state/server";
@@ -72,9 +67,7 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
     ? `/${encodeURIComponent(routeThreadRef.environmentId)}/${encodeURIComponent(routeThreadRef.threadId)}`
     : "/";
 
-  const searchShortcutLabel =
-    shortcutLabelForCommand(keybindings, "commandPalette.toggle") ??
-    (typeof navigator !== "undefined" && isMacPlatform(navigator.platform) ? "⌘K" : "Ctrl+K");
+  const searchShortcutLabel = shortcutLabelForCommand(keybindings, "commandPalette.toggle");
 
   const diagnosticsActive = isSidebarPanelPathActive(
     pathname,
@@ -94,10 +87,7 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
     openCommandPalette({ query: "" });
   };
 
-  const handleToggleWorkPanel = (
-    panelPathnames: readonly string[],
-    targetHref: string,
-  ) => {
+  const handleToggleWorkPanel = (panelPathnames: readonly string[], targetHref: string) => {
     closeMobileSidebar();
     const decision = resolveSidebarPanelToggleNavigation({
       currentPathname: pathname,
@@ -196,10 +186,16 @@ export const PrismuxSidebarQuickNav = memo(function PrismuxSidebarQuickNav({
                 />
               }
             >
-              <SearchIcon aria-hidden className="size-3.5 text-(--sidebar-icon-color) group-hover:text-sidebar-foreground" />
+              <SearchIcon
+                aria-hidden
+                className="size-3.5 text-(--sidebar-icon-color) group-hover:text-sidebar-foreground"
+              />
             </TooltipTrigger>
             <TooltipPopup side="right" sideOffset={8}>
-              {searchRailTooltip}
+              <span className="inline-flex items-center gap-1.5">
+                <span>{searchRailTooltip}</span>
+                {searchShortcutLabel ? <Kbd>{searchShortcutLabel}</Kbd> : null}
+              </span>
             </TooltipPopup>
           </Tooltip>
         ) : null}

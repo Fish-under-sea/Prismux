@@ -2,7 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 
-import { ResolvedKeybindingsConfig } from "./keybindings.ts";
+import { KeybindingCommand, ResolvedKeybindingsConfig } from "./keybindings.ts";
 
 const decode = <S extends Schema.Top>(
   schema: S,
@@ -64,4 +64,20 @@ it.effect("drops malformed resolved rule entries", () =>
       ["terminal.toggle"],
     );
   }),
+);
+
+it.effect(
+  "accepts selection citation, side-ask, sidebar collapse-all, and thread.stop commands",
+  () =>
+    Effect.gen(function* () {
+      for (const command of [
+        "chat.citeSelection",
+        "chat.sideAskSelection",
+        "sidebar.collapseAllProjects",
+        "thread.stop",
+      ]) {
+        const parsed = yield* decode(KeybindingCommand, command);
+        assert.strictEqual(parsed, command);
+      }
+    }),
 );

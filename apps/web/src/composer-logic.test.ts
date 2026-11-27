@@ -1,6 +1,11 @@
 import { threadPullRequestKeyOf } from "@prismux/client-runtime/thread-pull-requests";
 import { filterComposerPullRequestMatches } from "@prismux/core-shared/composerPullRequestMatches";
-import { EnvironmentId, MessageId, ThreadId, type AssistantCitation } from "@prismux/core-contracts";
+import {
+  EnvironmentId,
+  MessageId,
+  ThreadId,
+  type AssistantCitation,
+} from "@prismux/core-contracts";
 import {
   collectAssistantCitations,
   expandAssistantCitationsForProvider,
@@ -161,6 +166,103 @@ describe("composerSubmissionIntentForKey", () => {
       composerSubmissionIntentForKey({
         ...running,
         event: { ...enter, ctrlKey: true, shiftKey: true },
+      }),
+    ).toBe("alternate");
+  });
+
+  it("supports both Ctrl+Enter and Shift+Enter for composer.sendAlternate while running, and keeps Shift+Enter as newline when idle", () => {
+    const shiftEnter = { ...enter, shiftKey: true };
+    const ctrlEnter = { ...enter, ctrlKey: true };
+    const ctrlShiftEnter = { ...enter, ctrlKey: true, shiftKey: true };
+
+    // Idle: Shift+Enter always inserts a newline across all sendShortcut modes.
+    for (const sendShortcut of ["enter", "mod-enter", "mod-enter-multiline"] as const) {
+      expect(
+        composerSubmissionIntentForKey({
+          ...input,
+          isRunning: false,
+          sendShortcut,
+          prompt: "hello",
+          event: shiftEnter,
+        }),
+      ).toBeNull();
+    }
+
+    // Running in enter mode: both Ctrl+Enter and Shift+Enter trigger alternate send.
+    expect(
+      composerSubmissionIntentForKey({
+        ...input,
+        isRunning: true,
+        sendShortcut: "enter",
+        event: ctrlEnter,
+      }),
+    ).toBe("alternate");
+    expect(
+      composerSubmissionIntentForKey({
+        ...input,
+        isRunning: true,
+        sendShortcut: "enter",
+        event: shiftEnter,
+      }),
+    ).toBe("alternate");
+
+    // Running in mod-enter mode: Ctrl+Enter stays foreground; Ctrl+Shift+Enter and Shift+Enter trigger alternate.
+    expect(
+      composerSubmissionIntentForKey({
+        ...input,
+        isRunning: true,
+        sendShortcut: "mod-enter",
+        event: ctrlEnter,
+      }),
+    ).toBe("foreground");
+    expect(
+      composerSubmissionIntentForKey({
+        ...input,
+        isRunning: true,
+        sendShortcut: "mod-enter",
+        event: ctrlShiftEnter,
+      }),
+    ).toBe("alternate");
+    expect(
+      composerSubmissionIntentForKey({
+        ...input,
+        isRunning: true,
+        sendShortcut: "mod-enter",
+        event: shiftEnter,
+      }),
+    ).toBe("alternate");
+
+    // Unassigning shift+enter restores Shift+Enter newline even while running.
+    const onlyCtrlEnter = mergeWithDefaultKeybindings(
+      compileResolvedKeybindingsConfig([
+        {
+          key: "mod+enter",
+          command: "composer.sendAlternate",
+          when: "composerFocus && turnRunning",
+        },
+        {
+          key: "shift+enter",
+          command: "composer.sendAlternate",
+          when: "false",
+        },
+      ]),
+    );
+    expect(
+      composerSubmissionIntentForKey({
+        ...input,
+        keybindings: onlyCtrlEnter,
+        isRunning: true,
+        sendShortcut: "enter",
+        event: shiftEnter,
+      }),
+    ).toBeNull();
+    expect(
+      composerSubmissionIntentForKey({
+        ...input,
+        keybindings: onlyCtrlEnter,
+        isRunning: true,
+        sendShortcut: "enter",
+        event: ctrlEnter,
       }),
     ).toBe("alternate");
   });

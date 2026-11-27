@@ -59,7 +59,7 @@ export interface KeybindingRow {
   readonly isUnassigned: boolean;
   readonly defaultKey: string | null;
   readonly defaultWhen: string;
-  readonly binding: ResolvedKeybindingRule;
+  readonly binding: ResolvedKeybindingRule | null;
   readonly conflicts: ReadonlyArray<string>;
   readonly previewLabels: ReadonlyArray<string>;
 }
@@ -171,32 +171,72 @@ function sourceForBinding(binding: ResolvedKeybindingRule): KeybindingSource {
   return source;
 }
 
-function defaultBindingForBinding(
-  binding: ResolvedKeybindingRule,
-): ResolvedKeybindingRule | undefined {
-  const bindingKey = shortcutToKeybindingInput(binding.shortcut);
-  const bindingWhen = whenAstToExpression(binding.whenAst);
+interface DeduplicatedKeybindingEntry {
+  readonly id: string;
+  readonly command: KeybindingCommand;
+  readonly key: string;
+  readonly when: string;
+  readonly binding: ResolvedKeybindingRule;
+  readonly previewLabels: ReadonlyArray<string>;
+}
 
-  return (
-    DEFAULT_RESOLVED_KEYBINDINGS.find(
-      (entry) =>
-        entry.command === binding.command &&
-        shortcutToKeybindingInput(entry.shortcut) === bindingKey &&
-        whenAstToExpression(entry.whenAst) === bindingWhen,
-    ) ??
-    (bindingWhen === "false"
-      ? DEFAULT_RESOLVED_KEYBINDINGS.find(
-          (entry) =>
-            entry.command === binding.command &&
-            shortcutToKeybindingInput(entry.shortcut) === bindingKey,
-        )
-      : undefined) ??
-    DEFAULT_RESOLVED_KEYBINDINGS.find(
-      (entry) =>
-        entry.command === binding.command && whenAstToExpression(entry.whenAst) === bindingWhen,
-    ) ??
-    DEFAULT_RESOLVED_KEYBINDINGS.find((entry) => entry.command === binding.command)
-  );
+function assignDefaultBindingsForEntries(
+  entries: ReadonlyArray<DeduplicatedKeybindingEntry>,
+): ReadonlyMap<string, ResolvedKeybindingRule> {
+  const matchedDefaults = new Map<string, ResolvedKeybindingRule>();
+  const entriesByCommand = new Map<KeybindingCommand, Array<DeduplicatedKeybindingEntry>>();
+  for (const entry of entries) {
+    const bucket = entriesByCommand.get(entry.command);
+    if (bucket) bucket.push(entry);
+    else entriesByCommand.set(entry.command, [entry]);
+  }
+
+  for (const [command, commandEntries] of entriesByCommand) {
+    const defaults = DEFAULT_RESOLVED_KEYBINDINGS.filter((entry) => entry.command === command);
+    if (defaults.length === 0) continue;
+
+    const claimed = new Set<number>();
+    const claimFirst = (
+      entry: DeduplicatedKeybindingEntry,
+      predicate: (candidate: ResolvedKeybindingRule) => boolean,
+    ) => {
+      if (matchedDefaults.has(entry.id)) return;
+      for (const [index, candidate] of defaults.entries()) {
+        if (claimed.has(index) || !predicate(candidate)) continue;
+        claimed.add(index);
+        matchedDefaults.set(entry.id, candidate);
+        return;
+      }
+    };
+
+    // Pass 1: exact match on both key and when (preserves untouched default rows).
+    for (const entry of commandEntries) {
+      claimFirst(
+        entry,
+        (candidate) =>
+          shortcutToKeybindingInput(candidate.shortcut) === entry.key &&
+          whenAstToExpression(candidate.whenAst) === entry.when,
+      );
+    }
+
+    // Pass 2: unassigned default rows (when === "false") match their exact default key.
+    for (const entry of commandEntries) {
+      if (entry.when !== "false") continue;
+      claimFirst(entry, (candidate) => shortcutToKeybindingInput(candidate.shortcut) === entry.key);
+    }
+
+    // Pass 3: customized rows with the same when expression claim remaining unclaimed defaults.
+    for (const entry of commandEntries) {
+      claimFirst(entry, (candidate) => whenAstToExpression(candidate.whenAst) === entry.when);
+    }
+
+    // Pass 4: customized rows with changed when expressions claim any remaining unclaimed default.
+    for (const entry of commandEntries) {
+      claimFirst(entry, () => true);
+    }
+  }
+
+  return matchedDefaults;
 }
 
 function keybindingRowId(command: KeybindingCommand, key: string, when: string): string {
@@ -223,6 +263,8 @@ export function keybindingConflictLabels(
   for (const candidate of rows) {
     if (
       candidate.id !== input.rowId &&
+      candidate.binding !== null &&
+      !candidate.isUnassigned &&
       shortcutConflictKey(candidate.binding.shortcut, platform) === conflictKey &&
       conflictsWithWhen(candidate.when, input.when)
     ) {
@@ -310,30 +352,41 @@ export function buildKeybindingRows(
       laterBindings.add(conditionKey);
     }
   }
-  const rowsById = new Map<string, KeybindingRow>();
+  const entriesById = new Map<string, DeduplicatedKeybindingEntry>();
   for (const [index, binding] of keybindings.entries()) {
-    const defaultBinding = defaultBindingForBinding(binding);
     const key = shortcutToKeybindingInput(binding.shortcut);
     const when = whenAstToExpression(binding.whenAst);
     const id = keybindingRowId(binding.command, key, when);
-    rowsById.set(id, {
+    entriesById.set(id, {
       id,
       command: binding.command,
       key,
       when,
-      source: sourceForBinding(binding),
-      isUnassigned:
-        when === "false" &&
-        defaultBinding !== undefined &&
-        key === shortcutToKeybindingInput(defaultBinding.shortcut),
-      defaultKey: defaultBinding ? shortcutToKeybindingInput(defaultBinding.shortcut) : null,
-      defaultWhen: whenAstToExpression(defaultBinding?.whenAst),
       binding,
-      conflicts: [],
       previewLabels: [...previewLabels[index]!],
     });
   }
-  const rows = [...rowsById.values()];
+  const deduplicatedEntries = [...entriesById.values()];
+  const defaultBindingsByRowId = assignDefaultBindingsForEntries(deduplicatedEntries);
+  const rows: KeybindingRow[] = deduplicatedEntries.map((entry) => {
+    const defaultBinding = defaultBindingsByRowId.get(entry.id);
+    return {
+      id: entry.id,
+      command: entry.command,
+      key: entry.key,
+      when: entry.when,
+      source: sourceForBinding(entry.binding),
+      isUnassigned:
+        entry.when === "false" &&
+        defaultBinding !== undefined &&
+        entry.key === shortcutToKeybindingInput(defaultBinding.shortcut),
+      defaultKey: defaultBinding ? shortcutToKeybindingInput(defaultBinding.shortcut) : null,
+      defaultWhen: whenAstToExpression(defaultBinding?.whenAst),
+      binding: entry.binding,
+      conflicts: [],
+      previewLabels: entry.previewLabels,
+    };
+  });
 
   const rowsWithConflicts = rows.map((row) => {
     const conflicts = keybindingConflictLabels(
@@ -351,13 +404,45 @@ export function buildKeybindingRows(
       : row;
   });
 
-  rowsWithConflicts.sort((left, right) => {
+  return sortKeybindingRows(rowsWithConflicts);
+}
+
+function sortKeybindingRows(rows: ReadonlyArray<KeybindingRow>): ReadonlyArray<KeybindingRow> {
+  return rows.toSorted((left, right) => {
     const commandCompare = compareCommands(left.command, right.command, (command) => command);
     if (commandCompare !== 0) return commandCompare;
     return left.key.localeCompare(right.key);
   });
+}
 
-  return rowsWithConflicts;
+/**
+ * Ensures static commands without default rules (such as `thread.stop`) appear in Settings as
+ * searchable, directly assignable Unassigned rows without altering `buildKeybindingRows`.
+ */
+export function withUnboundStaticKeybindingRows(
+  rows: ReadonlyArray<KeybindingRow>,
+  commands: ReadonlyArray<KeybindingCommand> = STATIC_KEYBINDING_COMMANDS,
+): ReadonlyArray<KeybindingRow> {
+  const presentCommands = new Set(rows.map((row) => row.command));
+  const unboundRows: KeybindingRow[] = [];
+  for (const command of commands) {
+    if (presentCommands.has(command)) continue;
+    unboundRows.push({
+      id: keybindingRowId(command, "", ""),
+      command,
+      key: "",
+      when: "",
+      source: "Default",
+      isUnassigned: true,
+      defaultKey: null,
+      defaultWhen: "",
+      binding: null,
+      conflicts: [],
+      previewLabels: [],
+    });
+  }
+  if (unboundRows.length === 0) return rows;
+  return sortKeybindingRows([...rows, ...unboundRows]);
 }
 
 export function filterKeybindingRows(
@@ -448,6 +533,7 @@ const COMMAND_LABELS: Partial<Record<KeybindingCommand, string>> = {
   "thread.editQueuedMessage": msg("Queue: Edit Last Queued Message"),
   "thread.copyReference": msg("Pull Request: Copy Link or Thread"),
   "sidebar.toggle": msg("Sidebar: Toggle"),
+  "sidebar.collapseAllProjects": msg("Sidebar: Collapse or Expand All Projects"),
   "navigation.back": msg("Navigation: Back"),
   "navigation.forward": msg("Navigation: Forward"),
   "terminal.toggle": msg("Terminal: Toggle"),
@@ -488,6 +574,8 @@ const COMMAND_LABELS: Partial<Record<KeybindingCommand, string>> = {
   "chat.newLocal": msg("Chat: New Local"),
   "chat.newWithoutProject": msg("Chat: New Without Project"),
   "chat.find": msg("Chat: Find"),
+  "chat.citeSelection": msg("Chat: Cite Selection"),
+  "chat.sideAskSelection": msg("Chat: Side Ask Selection"),
   "editor.openFavorite": msg("Editor: Open Favorite"),
   "modelPicker.toggle": msg("Model Picker: Toggle"),
   "modelPicker.previousProvider": msg("Model Picker: Previous Provider"),

@@ -227,3 +227,54 @@ it("filters actions and allows additional shortcuts for assigned commands", asyn
     .element(screen.getByRole("combobox", { name: "Command", exact: true }))
     .toHaveTextContent("Composer: Cycle Host");
 });
+
+it("lists dual composer.sendAlternate rows, new selection/sidebar commands, and allows binding unassigned thread.stop", async () => {
+  const mutate = vi.fn(async () => ({ _tag: "Success", value: [] }));
+  await vi.mocked(atomCommands.useAtomCommand).withImplementation(
+    () => mutate as never,
+    async () => {
+      await using screen = await render(<KeybindingsSettingsPanel />);
+      const search = screen.getByRole("searchbox", { name: "Search keybindings" });
+
+      await search.fill("composer.sendAlternate");
+      await vi.waitFor(() =>
+        expect(
+          screen
+            .getByRole("button", {
+              name: /^Edit shortcut for Composer: Opposite Queue or Steer Action:/,
+            })
+            .elements(),
+        ).toHaveLength(2),
+      );
+
+      for (const command of [
+        "chat.citeSelection",
+        "chat.sideAskSelection",
+        "sidebar.collapseAllProjects",
+      ]) {
+        await search.fill(command);
+        await expect
+          .element(screen.getByRole("button", { name: /^Edit shortcut for / }).first())
+          .toBeVisible();
+      }
+
+      await search.fill("thread.stop");
+      const unassignedStop = screen.getByRole("button", {
+        name: "Edit shortcut for Thread: Stop: Unassigned",
+      });
+      await expect.element(unassignedStop).toBeVisible();
+      await unassignedStop.click();
+      await userEvent.keyboard("{Control>}.{/Control}");
+      const save = screen.getByRole("button", { name: "Save" });
+      await expect.element(save).toBeVisible();
+      await save.click();
+      expect(mutate).toHaveBeenLastCalledWith({
+        environmentId: "env",
+        input: {
+          command: "thread.stop",
+          key: "mod+.",
+        },
+      });
+    },
+  );
+});

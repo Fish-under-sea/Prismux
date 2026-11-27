@@ -3686,9 +3686,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     },
   );
 
-  // Global Orca sidebar shortcuts: `Ctrl+Shift+H` (collapse/expand all projects) & `Ctrl+N` (Create workspace).
-  // Registered in the capture phase ahead of bubble-phase global commands (such as `chat.new` / `composer.host`)
-  // so `Ctrl+N` deterministically opens `OrcaCreateWorkspaceDialog` instead of T3's command-dialog,
+  // Global Orca sidebar shortcuts: `sidebar.collapseAllProjects` & `chat.new` (Create workspace),
+  // dynamically resolved from live keybindings in the capture phase ahead of bubble-phase global commands
+  // so `chat.new` deterministically opens `OrcaCreateWorkspaceDialog` instead of T3's command-dialog,
   // while still yielding when focus is in an editable field or when the command palette / model picker is open.
   // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- subscribes to capture-phase shortcut dispatcher for Orca sidebar shortcuts
   useEffect(() => {
@@ -3697,6 +3697,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       isModelPickerOpen,
       onToggleCollapseAllProjects: handleToggleCollapseAllProjects,
       onOpenCreateWorkspace: handleOpenCreateWorkspace,
+      getKeybindings: () => appAtomRegistry.get(primaryServerKeybindingsAtom),
     });
     return registerCommands(
       {},

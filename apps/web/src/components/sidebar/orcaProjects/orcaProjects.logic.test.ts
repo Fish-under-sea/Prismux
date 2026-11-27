@@ -7,6 +7,10 @@ import {
   ThreadId,
   type OrchestrationV2ThreadShell,
 } from "@prismux/core-contracts";
+import {
+  compileResolvedKeybindingsConfig,
+  mergeWithDefaultKeybindings,
+} from "@prismux/core-shared/keybindings";
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -263,9 +267,9 @@ describe("Orca sidebar global keyboard shortcuts", () => {
     expect(
       computeCollapseAllProjectsNextExpanded([{ collapsed: false }, { collapsed: false }]),
     ).toBe(false);
-    expect(
-      computeCollapseAllProjectsNextExpanded([{ collapsed: true }, { collapsed: true }]),
-    ).toBe(true);
+    expect(computeCollapseAllProjectsNextExpanded([{ collapsed: true }, { collapsed: true }])).toBe(
+      true,
+    );
   });
 
   it("preempts global Ctrl+N and Ctrl+Shift+H in capture phase while yielding to editable fields and open palettes", () => {
@@ -385,6 +389,93 @@ describe("Orca sidebar global keyboard shortcuts", () => {
     const ctrlK = makeEvent({ key: "k", ctrlKey: true });
     expect(handler(ctrlK.event)).toBe(false);
     expect(ctrlK.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("follows live rebound and unassigned keybindings for collapse-all and create-workspace", () => {
+    const onToggleCollapseAllProjects = vi.fn();
+    const onOpenCreateWorkspace = vi.fn();
+    let liveKeybindings = mergeWithDefaultKeybindings(
+      compileResolvedKeybindingsConfig([
+        {
+          key: "alt+c",
+          command: "sidebar.collapseAllProjects",
+          when: "!terminalFocus",
+        },
+        {
+          key: "alt+w",
+          command: "chat.new",
+          when: "!terminalFocus",
+        },
+      ]),
+    );
+
+    const handler = createOrcaSidebarShortcutHandler({
+      isCommandPaletteOpen: () => false,
+      isModelPickerOpen: () => false,
+      onToggleCollapseAllProjects,
+      onOpenCreateWorkspace,
+      getKeybindings: () => liveKeybindings,
+      platform: "Win32",
+    });
+
+    const fire = (overrides: {
+      readonly key: string;
+      readonly ctrlKey?: boolean;
+      readonly shiftKey?: boolean;
+      readonly altKey?: boolean;
+      readonly target?: EventTarget | null;
+    }) =>
+      handler({
+        key: overrides.key,
+        ctrlKey: overrides.ctrlKey ?? false,
+        metaKey: false,
+        shiftKey: overrides.shiftKey ?? false,
+        altKey: overrides.altKey ?? false,
+        repeat: false,
+        defaultPrevented: false,
+        target: overrides.target ?? ({ tagName: "BODY" } as unknown as EventTarget),
+        preventDefault: vi.fn(),
+        stopPropagation: vi.fn(),
+        stopImmediatePropagation: vi.fn(),
+      });
+
+    // Old defaults no longer fire after rebinding
+    expect(fire({ key: "H", ctrlKey: true, shiftKey: true })).toBe(false);
+    expect(fire({ key: "n", ctrlKey: true })).toBe(false);
+    expect(onToggleCollapseAllProjects).not.toHaveBeenCalled();
+    expect(onOpenCreateWorkspace).not.toHaveBeenCalled();
+
+    // New rebound shortcuts fire immediately
+    expect(fire({ key: "c", altKey: true })).toBe(true);
+    expect(fire({ key: "w", altKey: true })).toBe(true);
+    expect(onToggleCollapseAllProjects).toHaveBeenCalledTimes(1);
+    expect(onOpenCreateWorkspace).toHaveBeenCalledTimes(1);
+
+    // Keybinding recorder input yields
+    expect(
+      fire({
+        key: "c",
+        altKey: true,
+        target: {
+          tagName: "DIV",
+          closest: (selector: string) =>
+            selector.includes("data-keybinding-capture") ? ({} as Element) : null,
+        } as unknown as EventTarget,
+      }),
+    ).toBe(false);
+
+    // Unassigned commands stop firing
+    liveKeybindings = mergeWithDefaultKeybindings(
+      compileResolvedKeybindingsConfig([
+        { key: "mod+shift+h", command: "sidebar.collapseAllProjects", when: "false" },
+        { key: "mod+n", command: "chat.new", when: "false" },
+        { key: "mod+shift+o", command: "chat.new", when: "false" },
+      ]),
+    );
+    expect(fire({ key: "c", altKey: true })).toBe(false);
+    expect(fire({ key: "w", altKey: true })).toBe(false);
+    expect(fire({ key: "H", ctrlKey: true, shiftKey: true })).toBe(false);
+    expect(fire({ key: "n", ctrlKey: true })).toBe(false);
   });
 });
 
@@ -552,7 +643,9 @@ describe("Orca thread provenance, activity badge, filtering & grouping", () => {
     expect(unreadOnly.map((item) => item.thread.id)).toEqual(["t-unread"]);
 
     // Live query search
-    expect(filterOrcaActivityItems(items, DEFAULT_ORCA_PROJECTS_PREFS, "wallpaper")).toHaveLength(1);
+    expect(filterOrcaActivityItems(items, DEFAULT_ORCA_PROJECTS_PREFS, "wallpaper")).toHaveLength(
+      1,
+    );
     expect(filterOrcaActivityItems(items, DEFAULT_ORCA_PROJECTS_PREFS, "nonexistent")).toEqual([]);
 
     // Project tree filter helper respects unreadOnly + hideAutomation + hideCli

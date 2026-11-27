@@ -1397,39 +1397,44 @@ function ComposerPromptEditorTiptapInner(
               view.dispatch(tr),
             );
           }
-          if (
-            event.key === "Enter" &&
-            richText &&
-            !event.metaKey &&
-            !event.ctrlKey &&
-            !event.isComposing
-          ) {
-            if (selectionInOneCodeBlock(view.state)) {
-              event.preventDefault();
-              event.stopPropagation();
-              const dispatch = (tr: typeof view.state.tr) => view.dispatch(tr.scrollIntoView());
-              return (
-                exitCodeBlockOnClosingFence(view.state, dispatch) ||
-                exitCodeBlockOnTrailingBlankLines(view) ||
-                indentedNewlineInCodeBlock(view.state, dispatch) ||
-                newlineInCode(view.state, dispatch)
-              );
-            }
-            if (convertCodeFenceOnEnter(view.state, (tr) => view.dispatch(tr))) {
-              event.preventDefault();
-              event.stopPropagation();
-              return true;
-            }
-          }
           const handler = readCallbacks().onCommandKeyDown;
           if (event.key === "Enter") {
             const instance = (view.dom as TiptapEditorHTMLElement).editor;
             const isTaskItem = richText && (instance?.isActive("taskItem") ?? false);
             const isListItem = richText && (instance?.isActive("listItem") ?? false);
+            const isRichTextCodeBlockEnter =
+              richText && !event.metaKey && !event.ctrlKey && !event.isComposing;
+            const handleRichTextCodeBlockEnter = () => {
+              if (selectionInOneCodeBlock(view.state)) {
+                event.preventDefault();
+                event.stopPropagation();
+                const dispatch = (tr: typeof view.state.tr) => view.dispatch(tr.scrollIntoView());
+                return (
+                  exitCodeBlockOnClosingFence(view.state, dispatch) ||
+                  exitCodeBlockOnTrailingBlankLines(view) ||
+                  indentedNewlineInCodeBlock(view.state, dispatch) ||
+                  newlineInCode(view.state, dispatch)
+                );
+              }
+              if (convertCodeFenceOnEnter(view.state, (tr) => view.dispatch(tr))) {
+                event.preventDefault();
+                event.stopPropagation();
+                return true;
+              }
+              return false;
+            };
+            // Plain Enter stays inside rich-text code blocks; Shift+Enter checks composer commands first
+            // so Shift+Enter alternate send works while running and still inserts a code newline when idle.
+            if (isRichTextCodeBlockEnter && !event.shiftKey && handleRichTextCodeBlockEnter()) {
+              return true;
+            }
             const handled = handler?.("Enter", event, isTaskItem || isListItem) ?? false;
             if (handled) {
               event.preventDefault();
               event.stopPropagation();
+              return true;
+            }
+            if (isRichTextCodeBlockEnter && event.shiftKey && handleRichTextCodeBlockEnter()) {
               return true;
             }
             event.preventDefault();

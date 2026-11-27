@@ -1,6 +1,9 @@
 import type { EnvironmentThreadShell } from "@prismux/client-runtime/state/models";
 import { scopeThreadRef, scopedThreadKey } from "@prismux/client-runtime/environment";
+import type { ResolvedKeybindingsConfig } from "@prismux/core-contracts";
+import { DEFAULT_RESOLVED_KEYBINDINGS } from "@prismux/core-shared/keybindings";
 import type { DraftThreadEnvMode } from "../../../composerDraftStore";
+import { resolveShortcutCommand } from "../../../keybindings";
 import {
   hasUnseenCompletion,
   resolveSidebarRowStatus,
@@ -167,37 +170,39 @@ function isMacOSPlatform(platform: string): boolean {
 }
 
 /**
- * Matches `Ctrl+Shift+H` (or `Cmd+Shift+H` / `Ctrl+Shift+H` on macOS)
- * to expand/collapse all project folders (Orca `sidebar.projects.toggleCollapse`).
+ * Matches the active keybinding for `sidebar.collapseAllProjects`
+ * (defaults to `Ctrl+Shift+H` on Windows/Linux and `Cmd+Shift+H` on macOS).
  */
 export function matchCollapseAllProjectsShortcut(
   event: ShortcutKeyEventLike,
   platform = typeof navigator !== "undefined" ? navigator.platform : "Win32",
+  keybindings: ResolvedKeybindingsConfig = DEFAULT_RESOLVED_KEYBINDINGS,
 ): boolean {
   if (event.defaultPrevented || event.repeat) return false;
-  if (!event.shiftKey || event.altKey) return false;
-  if (event.key.toLowerCase() !== "h") return false;
-  if (isMacOSPlatform(platform)) {
-    return event.metaKey || event.ctrlKey;
-  }
-  return event.ctrlKey && !event.metaKey;
+  return (
+    resolveShortcutCommand(event, keybindings, {
+      platform,
+      context: { terminalFocus: false, previewFocus: false },
+    }) === "sidebar.collapseAllProjects"
+  );
 }
 
 /**
- * Matches `Ctrl+N` (or `Cmd+N` on macOS) to open the Create Workspace dialog
- * (Orca `workspace.create`).
+ * Matches the active keybinding for `chat.new` to open the Create Workspace dialog
+ * (defaults to `Ctrl+N` / `Ctrl+Shift+O` on Windows/Linux and `Cmd+N` / `Cmd+Shift+O` on macOS).
  */
 export function matchCreateWorkspaceShortcut(
   event: ShortcutKeyEventLike,
   platform = typeof navigator !== "undefined" ? navigator.platform : "Win32",
+  keybindings: ResolvedKeybindingsConfig = DEFAULT_RESOLVED_KEYBINDINGS,
 ): boolean {
   if (event.defaultPrevented || event.repeat) return false;
-  if (event.shiftKey || event.altKey) return false;
-  if (event.key.toLowerCase() !== "n") return false;
-  if (isMacOSPlatform(platform)) {
-    return event.metaKey && !event.ctrlKey;
-  }
-  return event.ctrlKey && !event.metaKey;
+  return (
+    resolveShortcutCommand(event, keybindings, {
+      platform,
+      context: { terminalFocus: false, previewFocus: false },
+    }) === "chat.new"
+  );
 }
 
 /**
@@ -227,6 +232,7 @@ export interface OrcaSidebarShortcutHandlerOptions {
   readonly isModelPickerOpen: () => boolean;
   readonly onToggleCollapseAllProjects: () => void;
   readonly onOpenCreateWorkspace: () => void;
+  readonly getKeybindings?: () => ResolvedKeybindingsConfig;
   readonly platform?: string;
 }
 
@@ -234,7 +240,9 @@ function isInsideTerminalOrModalDialog(target: EventTarget | null): boolean {
   if (!target || typeof target !== "object") return false;
   const el = target as { readonly closest?: (selector: string) => Element | null };
   return Boolean(
-    el.closest?.('[data-terminal-owner], [role="dialog"], [role="alertdialog"]'),
+    el.closest?.(
+      '[data-terminal-owner], [data-keybinding-capture], [role="dialog"], [role="alertdialog"]',
+    ),
   );
 }
 
@@ -276,14 +284,15 @@ export function createOrcaSidebarShortcutHandler(
     if (isEditableKeyboardTarget(event.target) && !isMainComposerEditorTarget(event.target)) {
       return false;
     }
-    if (matchCollapseAllProjectsShortcut(event, options.platform)) {
+    const keybindings = options.getKeybindings?.() ?? DEFAULT_RESOLVED_KEYBINDINGS;
+    if (matchCollapseAllProjectsShortcut(event, options.platform, keybindings)) {
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation?.();
       options.onToggleCollapseAllProjects();
       return true;
     }
-    if (matchCreateWorkspaceShortcut(event, options.platform)) {
+    if (matchCreateWorkspaceShortcut(event, options.platform, keybindings)) {
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation?.();
@@ -326,7 +335,9 @@ export type OrcaThreadProvenanceInput = Pick<
   } | null;
 };
 
-export function isSubagentThread(thread: Pick<OrcaThreadProvenanceInput, "lineage" | "delegatedFrom">): boolean {
+export function isSubagentThread(
+  thread: Pick<OrcaThreadProvenanceInput, "lineage" | "delegatedFrom">,
+): boolean {
   return thread.lineage?.relationshipToParent === "subagent" || thread.delegatedFrom != null;
 }
 
@@ -388,7 +399,9 @@ export interface OrcaActivityItem {
   readonly activityTimestampMs: number;
 }
 
-export function resolveThreadActivityIso(thread: Pick<EnvironmentThreadShell, "latestRun" | "updatedAt" | "createdAt">): string {
+export function resolveThreadActivityIso(
+  thread: Pick<EnvironmentThreadShell, "latestRun" | "updatedAt" | "createdAt">,
+): string {
   return thread.latestRun?.completedAt ?? thread.updatedAt ?? thread.createdAt;
 }
 
@@ -458,7 +471,8 @@ export function buildOrcaActivityItem(input: {
     isCompleted,
     projectKey: `${thread.environmentId}:${thread.projectId}`,
     projectName,
-    providerId: providerDriverKind ?? thread.modelSelection?.instanceId ?? thread.providerInstanceId,
+    providerId:
+      providerDriverKind ?? thread.modelSelection?.instanceId ?? thread.providerInstanceId,
     providerLabel,
     activityTimestamp,
     activityTimestampMs,
@@ -714,7 +728,10 @@ export function inferRepoFolderNameFromUrl(url: string): string {
 }
 
 export function validateAndNormalizeGitCloneUrl(rawInput: string): GitCloneUrlValidationResult {
-  const trimmed = rawInput.trim().replace(/^git\s+clone\s+/i, "").trim();
+  const trimmed = rawInput
+    .trim()
+    .replace(/^git\s+clone\s+/i, "")
+    .trim();
   if (trimmed.length === 0) {
     return { ok: false, reason: "empty" };
   }
@@ -743,7 +760,12 @@ export function validateAndNormalizeGitCloneUrl(rawInput: string): GitCloneUrlVa
   try {
     const parsed = new URL(trimmed);
     const protocol = parsed.protocol.toLowerCase();
-    if (protocol !== "https:" && protocol !== "http:" && protocol !== "ssh:" && protocol !== "git:") {
+    if (
+      protocol !== "https:" &&
+      protocol !== "http:" &&
+      protocol !== "ssh:" &&
+      protocol !== "git:"
+    ) {
       return { ok: false, reason: "invalid" };
     }
     const pathParts = parsed.pathname.split("/").filter(Boolean);
@@ -946,8 +968,7 @@ export function formatLocalEnvironmentDisplayLabel(input: {
     return input.rawLabel;
   }
   const os = (
-    input.platformOs ??
-    (typeof navigator !== "undefined" ? navigator.platform : "")
+    input.platformOs ?? (typeof navigator !== "undefined" ? navigator.platform : "")
   ).toLowerCase();
   if (os.includes("darwin") || os.includes("mac")) {
     return input.isZh ? "本地 macOS" : "Local macOS";

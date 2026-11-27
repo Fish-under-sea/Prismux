@@ -14,6 +14,7 @@ import {
 import {
   effectiveShortcutsForCommand,
   formatShortcutLabel,
+  formatShortcutLabelsForCommand,
   isRichTextBoldShortcut,
   isSidebarToggleShortcut,
   isTerminalNewShortcut,
@@ -22,6 +23,7 @@ import {
   resolveShortcutCommand,
   shouldShowThreadJumpHintsForModifiers,
   shortcutLabelForCommand,
+  shortcutLabelsForCommand,
   terminalNavigationShortcutData,
   type ShortcutEventLike,
 } from "./keybindings";
@@ -343,6 +345,147 @@ describe("shortcutLabelForCommand", () => {
       }),
       "Ctrl+D",
     );
+  });
+});
+
+describe("shortcutLabelsForCommand & formatShortcutLabelsForCommand", () => {
+  it("returns all effective deduplicated labels for dual composer.sendAlternate defaults across platforms and send modes", () => {
+    assert.deepEqual(
+      shortcutLabelsForCommand(DEFAULT_RESOLVED_KEYBINDINGS, "composer.sendAlternate", {
+        platform: "Win32",
+        context: { composerFocus: true, turnRunning: true },
+      }),
+      ["Ctrl+Enter", "Shift+Enter"],
+    );
+    assert.strictEqual(
+      formatShortcutLabelsForCommand(DEFAULT_RESOLVED_KEYBINDINGS, "composer.sendAlternate", {
+        platform: "Win32",
+        context: { composerFocus: true, turnRunning: true },
+      }),
+      "Ctrl+Enter / Shift+Enter",
+    );
+    assert.deepEqual(
+      shortcutLabelsForCommand(DEFAULT_RESOLVED_KEYBINDINGS, "composer.sendAlternate", {
+        platform: "MacIntel",
+        context: { composerFocus: true, turnRunning: true },
+      }),
+      ["⌘Enter", "⇧Enter"],
+    );
+    assert.strictEqual(
+      formatShortcutLabelsForCommand(DEFAULT_RESOLVED_KEYBINDINGS, "composer.sendAlternate", {
+        platform: "MacIntel",
+        context: { composerFocus: true, turnRunning: true, composerRequiresModifier: true },
+        separator: " · ",
+      }),
+      "⇧⌘Enter · ⇧Enter",
+    );
+  });
+
+  it("updates dynamically on partial rebind, partial unassign, and full unassign", () => {
+    const rebound = mergeWithDefaultKeybindings(
+      compileResolvedKeybindingsConfig([
+        {
+          key: "shift+enter",
+          command: "composer.sendAlternate",
+          when: "composerFocus && turnRunning",
+        },
+        { key: "alt+s", command: "composer.sendAlternate", when: "composerFocus && turnRunning" },
+      ]),
+    );
+    assert.deepEqual(
+      shortcutLabelsForCommand(rebound, "composer.sendAlternate", {
+        platform: "Win32",
+        context: { composerFocus: true, turnRunning: true },
+      }),
+      ["Alt+S", "Shift+Enter"],
+    );
+
+    const partiallyUnassigned = mergeWithDefaultKeybindings(
+      compileResolvedKeybindingsConfig([
+        {
+          key: "mod+enter",
+          command: "composer.sendAlternate",
+          when: "composerFocus && turnRunning",
+        },
+        { key: "shift+enter", command: "composer.sendAlternate", when: "false" },
+      ]),
+    );
+    assert.deepEqual(
+      shortcutLabelsForCommand(partiallyUnassigned, "composer.sendAlternate", {
+        platform: "Win32",
+        context: { composerFocus: true, turnRunning: true },
+      }),
+      ["Ctrl+Enter"],
+    );
+
+    const fullyUnassigned = mergeWithDefaultKeybindings(
+      compileResolvedKeybindingsConfig([
+        { key: "mod+enter", command: "composer.sendAlternate", when: "false" },
+        { key: "shift+enter", command: "composer.sendAlternate", when: "false" },
+      ]),
+    );
+    assert.deepEqual(
+      shortcutLabelsForCommand(fullyUnassigned, "composer.sendAlternate", {
+        platform: "Win32",
+        context: { composerFocus: true, turnRunning: true },
+      }),
+      [],
+    );
+    assert.isNull(
+      formatShortcutLabelsForCommand(fullyUnassigned, "composer.sendAlternate", {
+        platform: "Win32",
+        context: { composerFocus: true, turnRunning: true },
+      }),
+    );
+    assert.deepEqual(shortcutLabelsForCommand(DEFAULT_RESOLVED_KEYBINDINGS, null), []);
+    assert.isNull(formatShortcutLabelsForCommand(DEFAULT_RESOLVED_KEYBINDINGS, null));
+  });
+
+  it("resolves chat.citeSelection, chat.sideAskSelection, sidebar.collapseAllProjects, composer.host, and custom thread.stop", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "l", ctrlKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "Win32",
+        context: { terminalFocus: false, previewFocus: false },
+      }),
+      "chat.citeSelection",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "l", ctrlKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "Win32",
+        context: { terminalFocus: false, previewFocus: true },
+      }),
+      "preview.focusUrl",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "e", ctrlKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "Win32",
+        context: { terminalFocus: false, previewFocus: false },
+      }),
+      "chat.sideAskSelection",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "h", ctrlKey: true, shiftKey: true }),
+        DEFAULT_RESOLVED_KEYBINDINGS,
+        { platform: "Win32", context: { terminalFocus: false } },
+      ),
+      "sidebar.collapseAllProjects",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "h", ctrlKey: true, altKey: true }),
+        DEFAULT_RESOLVED_KEYBINDINGS,
+        { platform: "Win32", context: { terminalFocus: false } },
+      ),
+      "composer.host",
+    );
+
+    assert.isNull(shortcutLabelForCommand(DEFAULT_RESOLVED_KEYBINDINGS, "thread.stop", "Win32"));
+    const withStopBinding = mergeWithDefaultKeybindings(
+      compileResolvedKeybindingsConfig([{ key: "mod+.", command: "thread.stop" }]),
+    );
+    assert.strictEqual(shortcutLabelForCommand(withStopBinding, "thread.stop", "Win32"), "Ctrl+.");
+    assert.strictEqual(shortcutLabelForCommand(withStopBinding, "thread.stop", "MacIntel"), "⌘.");
   });
 });
 

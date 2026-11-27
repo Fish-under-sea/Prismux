@@ -10,6 +10,8 @@ import { resolveShortcutCommand } from "../../keybindings";
 import {
   buildKeybindingRows,
   buildWhenVariableOptions,
+  commandLabel,
+  filterKeybindingRows,
   keybindingConflictLabels,
   keybindingFromKeyboardEvent,
   parseWhenExpressionDraft,
@@ -17,6 +19,7 @@ import {
   shortcutToKeybindingParts,
   unknownWhenVariables,
   whenAstToExpression,
+  withUnboundStaticKeybindingRows,
 } from "./KeybindingsSettings.logic";
 
 describe("KeybindingsSettings.logic", () => {
@@ -356,8 +359,8 @@ describe("KeybindingsSettings.logic", () => {
 
     expect(rows[0]?.conflicts).toEqual(["Chat: New Local"]);
     const disabledRows = buildKeybindingRows([
-      rows[0]!.binding,
-      { ...rows[1]!.binding, whenAst: { type: "identifier", name: "false" } },
+      rows[0]!.binding!,
+      { ...rows[1]!.binding!, whenAst: { type: "identifier", name: "false" } },
     ]);
     expect(disabledRows.find((row) => row.when === "false")?.previewLabels).toEqual([]);
     expect(disabledRows.map((row) => row.conflicts)).toEqual([[], []]);
@@ -403,5 +406,152 @@ describe("KeybindingsSettings.logic", () => {
     );
 
     expect(rows.map((row) => row.conflicts)).toEqual([[], []]);
+  });
+
+  it("maps each customized or unassigned row of a multi-default command to its own unclaimed default", () => {
+    const editedShift = buildKeybindingRows(
+      compileResolvedKeybindingsConfig([
+        {
+          command: "composer.sendAlternate",
+          key: "mod+enter",
+          when: "composerFocus && turnRunning",
+        },
+        {
+          command: "composer.sendAlternate",
+          key: "alt+s",
+          when: "composerFocus && turnRunning",
+        },
+      ]),
+      "Win32",
+    );
+    expect(editedShift.find((row) => row.key === "mod+enter")).toMatchObject({
+      source: "Default",
+      defaultKey: "mod+enter",
+      defaultWhen: "composerFocus && turnRunning",
+    });
+    expect(editedShift.find((row) => row.key === "alt+s")).toMatchObject({
+      source: "Custom",
+      defaultKey: "shift+enter",
+      defaultWhen: "composerFocus && turnRunning",
+    });
+
+    const editedMod = buildKeybindingRows(
+      compileResolvedKeybindingsConfig([
+        {
+          command: "composer.sendAlternate",
+          key: "shift+enter",
+          when: "composerFocus && turnRunning",
+        },
+        {
+          command: "composer.sendAlternate",
+          key: "alt+s",
+          when: "composerFocus && turnRunning",
+        },
+      ]),
+      "Win32",
+    );
+    expect(editedMod.find((row) => row.key === "alt+s")).toMatchObject({
+      source: "Custom",
+      defaultKey: "mod+enter",
+      defaultWhen: "composerFocus && turnRunning",
+    });
+
+    const withThirdExtra = buildKeybindingRows(
+      compileResolvedKeybindingsConfig([
+        {
+          command: "composer.sendAlternate",
+          key: "shift+enter",
+          when: "composerFocus && turnRunning",
+        },
+        {
+          command: "composer.sendAlternate",
+          key: "mod+enter",
+          when: "composerFocus && turnRunning",
+        },
+        {
+          command: "composer.sendAlternate",
+          key: "alt+s",
+          when: "composerFocus && turnRunning",
+        },
+      ]),
+      "Win32",
+    );
+    expect(withThirdExtra.find((row) => row.key === "alt+s")).toMatchObject({
+      source: "Custom",
+      defaultKey: null,
+      defaultWhen: "",
+    });
+  });
+
+  it("provides explicit labels for selection citation, side-ask, sidebar collapse-all, and thread.stop commands", () => {
+    expect(commandLabel("chat.citeSelection")).toBe("Chat: Cite Selection");
+    expect(commandLabel("chat.sideAskSelection")).toBe("Chat: Side Ask Selection");
+    expect(commandLabel("sidebar.collapseAllProjects")).toBe(
+      "Sidebar: Collapse or Expand All Projects",
+    );
+    expect(commandLabel("thread.stop")).toBe("Thread: Stop");
+  });
+
+  it("includes unbound static commands such as thread.stop as searchable unassigned rows until bound", () => {
+    const baseRows = buildKeybindingRows(
+      compileResolvedKeybindingsConfig([{ command: "sidebar.toggle", key: "mod+b" }]),
+      "Win32",
+    );
+    const catalogRows = withUnboundStaticKeybindingRows(baseRows);
+    const stopMatches = filterKeybindingRows(catalogRows, "thread.stop");
+    expect(stopMatches).toHaveLength(1);
+    expect(stopMatches[0]).toMatchObject({
+      command: "thread.stop",
+      key: "",
+      when: "",
+      source: "Default",
+      isUnassigned: true,
+      defaultKey: null,
+      binding: null,
+    });
+
+    const boundRows = withUnboundStaticKeybindingRows(
+      buildKeybindingRows(
+        compileResolvedKeybindingsConfig([{ command: "thread.stop", key: "mod+." }]),
+        "Win32",
+      ),
+    );
+    const boundStopRows = boundRows.filter((row) => row.command === "thread.stop");
+    expect(boundStopRows).toHaveLength(1);
+    expect(boundStopRows[0]).toMatchObject({
+      command: "thread.stop",
+      key: "mod+.",
+      source: "Custom",
+      isUnassigned: false,
+    });
+  });
+
+  it("preserves independent unassigned state for one default row of composer.sendAlternate", () => {
+    const rows = buildKeybindingRows(
+      compileResolvedKeybindingsConfig([
+        {
+          command: "composer.sendAlternate",
+          key: "mod+enter",
+          when: "composerFocus && turnRunning",
+        },
+        {
+          command: "composer.sendAlternate",
+          key: "shift+enter",
+          when: "false",
+        },
+      ]),
+      "Win32",
+    );
+    expect(rows.find((row) => row.key === "mod+enter")).toMatchObject({
+      source: "Default",
+      isUnassigned: false,
+      defaultKey: "mod+enter",
+    });
+    expect(rows.find((row) => row.key === "shift+enter")).toMatchObject({
+      source: "Custom",
+      isUnassigned: true,
+      defaultKey: "shift+enter",
+      defaultWhen: "composerFocus && turnRunning",
+    });
   });
 });

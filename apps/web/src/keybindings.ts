@@ -49,6 +49,10 @@ interface ResolvedShortcutLabelOptions extends ShortcutMatchOptions {
   platform?: string;
 }
 
+export interface FormatShortcutLabelsOptions extends ResolvedShortcutLabelOptions {
+  readonly separator?: string;
+}
+
 const TERMINAL_WORD_BACKWARD = "\u001bb";
 const TERMINAL_WORD_FORWARD = "\u001bf";
 const TERMINAL_LINE_START = "\u0001";
@@ -267,6 +271,42 @@ export function shortcutLabelForCommand(
   const platform = resolvePlatform(resolvedOptions);
   const shortcut = findEffectiveShortcutForCommand(keybindings, command, resolvedOptions);
   return shortcut ? formatShortcutLabel(shortcut, platform) : null;
+}
+
+export function shortcutLabelsForCommand(
+  keybindings: ResolvedKeybindingsConfig,
+  command: KeybindingCommand | null,
+  options?: string | ResolvedShortcutLabelOptions,
+): string[] {
+  if (command === null) return [];
+  const resolvedOptions =
+    typeof options === "string"
+      ? ({ platform: options } satisfies ResolvedShortcutLabelOptions)
+      : options;
+  const platform = resolvePlatform(resolvedOptions);
+  const labels: string[] = [];
+  const seen = new Set<string>();
+  for (const shortcut of effectiveShortcutsForCommand(keybindings, command, resolvedOptions)) {
+    const label = formatShortcutLabel(shortcut, platform);
+    if (seen.has(label)) continue;
+    seen.add(label);
+    labels.push(label);
+  }
+  return labels;
+}
+
+export function formatShortcutLabelsForCommand(
+  keybindings: ResolvedKeybindingsConfig,
+  command: KeybindingCommand | null,
+  options?: string | FormatShortcutLabelsOptions,
+): string | null {
+  const resolvedOptions =
+    typeof options === "string"
+      ? ({ platform: options } satisfies FormatShortcutLabelsOptions)
+      : options;
+  const labels = shortcutLabelsForCommand(keybindings, command, resolvedOptions);
+  if (labels.length === 0) return null;
+  return labels.join(resolvedOptions?.separator ?? " / ");
 }
 
 export function threadJumpCommandForIndex(index: number): ThreadJumpKeybindingCommand | null {

@@ -95,6 +95,7 @@ import {
   unknownWhenVariables,
   whenAstToExpression,
   whenNodeRemoveLabel,
+  withUnboundStaticKeybindingRows,
 } from "./KeybindingsSettings.logic";
 import { SettingsGroup } from "./SettingsGroup";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
@@ -731,7 +732,7 @@ type KeybindingRowDraftState = {
 function createKeybindingRowDraft(row: KeybindingRow): KeybindingRowDraftState {
   return {
     keyDraft: row.key,
-    whenDraft: row.binding.whenAst,
+    whenDraft: row.binding?.whenAst,
     isRecording: false,
     isWhenDraftValid: true,
   };
@@ -793,7 +794,7 @@ function useKeybindingRowEditor({
       command: row.command,
       key: keyDraft,
       when: whenDraftExpression.trim().length > 0 ? whenDraftExpression : undefined,
-      replace: rowKeybindingTarget(row),
+      ...(row.key.length > 0 ? { replace: rowKeybindingTarget(row) } : {}),
     });
   };
 
@@ -882,7 +883,8 @@ function KeybindingKeyControl({
   } = editor;
   const gt = useGT();
   const m = useMessages();
-  const showPill = !isRecording && keyDraft === row.key && row.key.length > 0 && !isDirty;
+  const showPill =
+    !isRecording && keyDraft === row.key && (row.key.length > 0 || row.isUnassigned) && !isDirty;
 
   return (
     <>
@@ -902,16 +904,17 @@ function KeybindingKeyControl({
           onClick={() => setDraft({ isRecording: true })}
           aria-label={gt("Edit shortcut for {command}: {shortcut}", {
             command: commandLabel(row.command, m),
-            shortcut: row.isUnassigned
-              ? gt("Unassigned", { $context: "keyboard shortcut with no key assigned" })
-              : formatShortcutLabel(row.binding.shortcut),
+            shortcut:
+              row.isUnassigned || !row.binding
+                ? gt("Unassigned", { $context: "keyboard shortcut with no key assigned" })
+                : formatShortcutLabel(row.binding.shortcut),
           })}
           className={cn(
             "inline-flex h-8 cursor-pointer items-center rounded-md border border-transparent px-1.5 sm:h-7 outline-none transition-colors hover:border-border/70 hover:bg-accent focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/24",
             pillClassName,
           )}
         >
-          {row.isUnassigned ? (
+          {row.isUnassigned || !row.binding ? (
             <span className="text-sm text-muted-foreground">
               <T context="keyboard shortcut with no key assigned">Unassigned</T>
             </span>
@@ -1003,9 +1006,11 @@ function KeybindingRowMenu({
   const gt = useGT();
   const m = useMessages();
   const canReset = row.source === "Custom" && row.defaultKey !== null;
-  const canUnassign = row.source === "Default";
+  const canUnassign = row.source === "Default" && !row.isUnassigned;
   // Reset to default is the way back; removing would drop the default for good.
   const canRemove = row.source !== "Default" && !row.isUnassigned;
+
+  if (!canReset && !canUnassign && !canRemove) return null;
 
   return (
     <Menu>
@@ -1497,7 +1502,9 @@ function useKeybindingCatalog() {
   const m = useMessages();
   return {
     commandOptions: buildKeybindingCommandOptions(merged, m),
-    allRows: buildKeybindingRows(merged, navigator.platform, sendShortcut, m),
+    allRows: withUnboundStaticKeybindingRows(
+      buildKeybindingRows(merged, navigator.platform, sendShortcut, m),
+    ),
   };
 }
 

@@ -112,6 +112,41 @@ const LATE_DEFAULT_KEYBINDINGS: ReadonlyArray<{
       when: "composerFocus && draftThreadRoute",
     },
   },
+  {
+    id: "composer.sendAlternate:shift+enter",
+    alongside: {
+      key: "mod+enter",
+      command: "composer.sendAlternate",
+      when: "composerFocus && turnRunning",
+    },
+    rule: {
+      key: "shift+enter",
+      command: "composer.sendAlternate",
+      when: "composerFocus && turnRunning",
+    },
+  },
+];
+
+const LEGACY_DEFAULT_REBIND_MIGRATIONS: ReadonlyArray<{
+  readonly id: string;
+  readonly from: KeybindingRule;
+  readonly to: KeybindingRule;
+  readonly unlessCommandPresent: KeybindingRule["command"];
+}> = [
+  {
+    id: "composer.host:mod+shift+h->mod+alt+h",
+    from: {
+      key: "mod+shift+h",
+      command: "composer.host",
+      when: "!terminalFocus",
+    },
+    to: {
+      key: "mod+alt+h",
+      command: "composer.host",
+      when: "!terminalFocus",
+    },
+    unlessCommandPresent: "sidebar.collapseAllProjects",
+  },
 ];
 
 function keybindingShortcutContext(rule: KeybindingRule): string | null {
@@ -475,13 +510,17 @@ const make = Effect.gen(function* () {
       const pendingLateDefaults = LATE_DEFAULT_KEYBINDINGS.filter(
         (late) => !appliedMigrationIds.has(late.id),
       );
+      const pendingLegacyRebinds = LEGACY_DEFAULT_REBIND_MIGRATIONS.filter(
+        (migration) => !appliedMigrationIds.has(migration.id),
+      );
       const configExists = yield* readConfigExists;
       if (!configExists) {
         yield* writeConfigAtomically(DEFAULT_KEYBINDINGS);
-        if (pendingLateDefaults.length > 0) {
+        if (pendingLateDefaults.length > 0 || pendingLegacyRebinds.length > 0) {
           yield* recordAppliedMigrations([
             ...appliedMigrationIds,
             ...LATE_DEFAULT_KEYBINDINGS.map((late) => late.id),
+            ...LEGACY_DEFAULT_REBIND_MIGRATIONS.map((migration) => migration.id),
           ]);
         }
         yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
@@ -500,8 +539,23 @@ const make = Effect.gen(function* () {
         yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
         return;
       }
-      const customConfig = runtimeConfig.keybindings;
+      let customConfig = runtimeConfig.keybindings;
       const existingCommands = new Set(customConfig.map((entry) => entry.command));
+      let didLegacyRebind = false;
+      for (const migration of pendingLegacyRebinds) {
+        if (existingCommands.has(migration.unlessCommandPresent)) {
+          continue;
+        }
+        if (
+          customConfig.some((entry) => isSameKeybindingRule(entry, migration.from)) &&
+          !customConfig.some((entry) => hasSameShortcutContext(entry, migration.to))
+        ) {
+          customConfig = customConfig.map((entry) =>
+            isSameKeybindingRule(entry, migration.from) ? migration.to : entry,
+          );
+          didLegacyRebind = true;
+        }
+      }
       const missingDefaults: KeybindingRule[] = [];
       const shortcutConflictWarnings: Array<{
         defaultCommand: KeybindingRule["command"];
@@ -574,16 +628,17 @@ const make = Effect.gen(function* () {
           commands: skippedDefaults.map((rule) => rule.command),
         });
       }
-      if (defaultsToAppend.length > 0) {
+      if (defaultsToAppend.length > 0 || didLegacyRebind) {
         yield* writeConfigAtomically([...defaultsToAppend, ...customConfig]);
       }
       const settledLateDefaults = pendingLateDefaults.filter(
         (late) => !skippedDefaults.includes(late.rule),
       );
-      if (settledLateDefaults.length > 0) {
+      if (settledLateDefaults.length > 0 || pendingLegacyRebinds.length > 0) {
         yield* recordAppliedMigrations([
           ...appliedMigrationIds,
           ...settledLateDefaults.map((late) => late.id),
+          ...pendingLegacyRebinds.map((migration) => migration.id),
         ]);
       }
       yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);

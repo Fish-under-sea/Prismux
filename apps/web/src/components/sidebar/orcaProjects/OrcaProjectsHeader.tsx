@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@prismux/core-contracts";
 import {
   BellIcon,
@@ -8,16 +9,15 @@ import {
 } from "lucide-react";
 import { memo } from "react";
 
-import { cn, isMacPlatform } from "~/lib/utils";
+import { shortcutLabelsForCommand } from "../../../keybindings";
+import { cn } from "~/lib/utils";
+import { primaryServerKeybindingsAtom } from "../../../state/server";
 import { Kbd } from "../../ui/kbd";
 import { SidebarMenuButton, useSidebar } from "../../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../../ui/tooltip";
 import { OrcaAddProjectMenu, type OrcaEnvironmentOption } from "./OrcaAddProjectMenu";
 import { OrcaFilterViewMenu } from "./OrcaFilterViewMenu";
-import type {
-  OrcaActivityBadgeSummary,
-  OrcaProjectsPrefs,
-} from "./orcaProjects.logic";
+import type { OrcaActivityBadgeSummary, OrcaProjectsPrefs } from "./orcaProjects.logic";
 import { useOrcaProjectsCopy } from "./orcaProjectsCopy";
 
 export interface OrcaProjectsHeaderProps {
@@ -49,6 +49,24 @@ const BADGE_DOT_CLASS = {
   idle: "bg-sidebar-muted-foreground/65",
 } as const;
 
+function OrcaShortcutBadges({ labels }: { readonly labels: ReadonlyArray<string> }) {
+  if (labels.length === 0) return null;
+  return (
+    <span className="inline-flex items-center gap-1">
+      {labels.map((label, index) => (
+        <span key={label} className="inline-flex items-center gap-1">
+          {index > 0 ? (
+            <span aria-hidden className="text-3xs opacity-60">
+              /
+            </span>
+          ) : null}
+          <Kbd>{label}</Kbd>
+        </span>
+      ))}
+    </span>
+  );
+}
+
 /**
  * 1:1 Orca Projects section header row (Figures 3, 4, 5, 6, 7, 8), modeled after
  * `stablyai/orca` `SidebarSectionHeader.tsx`, `SidebarHeader.tsx`, `sidebar-header-actions.tsx`,
@@ -77,18 +95,23 @@ export const OrcaProjectsHeader = memo(function OrcaProjectsHeader({
 }: OrcaProjectsHeaderProps) {
   const copy = useOrcaProjectsCopy();
   const { isMobile, isIconRail, isTextHidden } = useSidebar();
-  const isMac = typeof navigator !== "undefined" && isMacPlatform(navigator.platform);
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
 
-  const collapseAllLabel = allProjectsCollapsed
-    ? copy.expandAllProjects
-    : copy.collapseAllProjects;
+  const collapseAllLabel = allProjectsCollapsed ? copy.expandAllProjects : copy.collapseAllProjects;
   const CollapseAllIcon = allProjectsCollapsed ? ChevronsUpDownIcon : ChevronsDownUpIcon;
 
   const bellTooltip = activityViewActive ? copy.closeActivityView : copy.openActivityView;
   const railBellTooltip = activityViewActive
     ? copy.railCloseNotificationsTooltip
     : copy.railNotificationsTooltip;
-  const newWorkspaceShortcutText = isMac ? "⌘N" : "Ctrl+N";
+  const collapseAllShortcutLabels = shortcutLabelsForCommand(
+    keybindings,
+    "sidebar.collapseAllProjects",
+    { context: { terminalFocus: false, previewFocus: false } },
+  );
+  const newWorkspaceShortcutLabels = shortcutLabelsForCommand(keybindings, "chat.new", {
+    context: { terminalFocus: false, previewFocus: false },
+  });
 
   const labelFadeClass = cn(
     "transition-opacity duration-[90ms] ease-out motion-reduce:transition-none",
@@ -155,10 +178,17 @@ export const OrcaProjectsHeader = memo(function OrcaProjectsHeader({
               />
             }
           >
-            <PlusIcon aria-hidden className="size-4 text-(--sidebar-icon-color)" strokeWidth={2.25} />
+            <PlusIcon
+              aria-hidden
+              className="size-4 text-(--sidebar-icon-color)"
+              strokeWidth={2.25}
+            />
           </TooltipTrigger>
           <TooltipPopup side="right" sideOffset={8}>
-            {copy.newWorkspaceTooltip}
+            <span className="inline-flex items-center gap-1.5">
+              <span>{copy.newWorkspaceTooltip}</span>
+              <OrcaShortcutBadges labels={newWorkspaceShortcutLabels} />
+            </span>
           </TooltipPopup>
         </Tooltip>
       </div>
@@ -230,17 +260,7 @@ export const OrcaProjectsHeader = memo(function OrcaProjectsHeader({
           <TooltipPopup side="top" sideOffset={6}>
             <span className="inline-flex items-center gap-1.5">
               <span>{collapseAllLabel}</span>
-              <span className="inline-flex items-center gap-0.5">
-                <Kbd className="px-1 py-0 text-[10px]">{isMac ? "⌘" : "Ctrl"}</Kbd>
-                <span aria-hidden className="text-[10px] opacity-60">
-                  +
-                </span>
-                <Kbd className="px-1 py-0 text-[10px]">⇧</Kbd>
-                <span aria-hidden className="text-[10px] opacity-60">
-                  +
-                </span>
-                <Kbd className="px-1 py-0 text-[10px]">H</Kbd>
-              </span>
+              <OrcaShortcutBadges labels={collapseAllShortcutLabels} />
             </span>
           </TooltipPopup>
         </Tooltip>
@@ -277,9 +297,7 @@ export const OrcaProjectsHeader = memo(function OrcaProjectsHeader({
               data-tone={activityBadge.tone}
               className="pointer-events-none flex flex-col items-center justify-center gap-0.5 leading-none"
             >
-              <span
-                className={cn("size-1.5 rounded-full", BADGE_DOT_CLASS[activityBadge.tone])}
-              />
+              <span className={cn("size-1.5 rounded-full", BADGE_DOT_CLASS[activityBadge.tone])} />
               <span
                 data-testid="prismux-sidebar-inbox-badge"
                 className="text-[9px] leading-none font-semibold tracking-tight tabular-nums"
@@ -336,7 +354,7 @@ export const OrcaProjectsHeader = memo(function OrcaProjectsHeader({
           <TooltipPopup side="bottom" sideOffset={6}>
             <span className="inline-flex items-center gap-1.5">
               <span>{copy.newWorkspaceTooltip}</span>
-              <Kbd className="px-1 py-0 text-[10px]">{newWorkspaceShortcutText}</Kbd>
+              <OrcaShortcutBadges labels={newWorkspaceShortcutLabels} />
             </span>
           </TooltipPopup>
         </Tooltip>
