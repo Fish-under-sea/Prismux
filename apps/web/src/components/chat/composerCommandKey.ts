@@ -42,6 +42,121 @@ export const DOUBLE_ESCAPE_STOP_WINDOW_MS = 500;
 
 export type EscapeStopPressResult = "armed" | "stop";
 
+export type WindowEscapeStopDisposition = "ignore" | "reset" | "handle";
+
+const EDITABLE_ESCAPE_TARGET_SELECTOR =
+  'input, textarea, select, [contenteditable="true"], [contenteditable=""], [contenteditable="plaintext-only"], [data-testid="composer-editor"]';
+
+const BLOCKED_ESCAPE_CONTAINER_SELECTOR = ".xterm, iframe, [inert]";
+
+/**
+ * Filters queued runs down to entries eligible to be promoted to steer against
+ * the current active run (fresh-context runs are excluded unless promotion skips compaction).
+ */
+export function filterSteerableQueuedRuns<
+  T extends { readonly run: { readonly freshContext?: boolean | undefined } },
+>(queuedRuns: ReadonlyArray<T>, promoteSkipsCompaction: boolean | undefined): ReadonlyArray<T> {
+  return queuedRuns.filter(
+    ({ run }) => run.freshContext !== true || promoteSkipsCompaction === true,
+  );
+}
+
+/**
+ * Gates empty-draft queue steering UI, placeholder, and callback so the action
+ * is only surfaced when promoting at least one queued run can actually succeed.
+ */
+export function canSteerEmptyQueuedRuns(input: {
+  readonly routeKind: ChatComposerProps["routeKind"];
+  readonly isTurnRunning: boolean;
+  readonly canSteer: boolean;
+  readonly canPromoteToSteer: boolean;
+  readonly hasActiveRun: boolean;
+  readonly steerableQueuedCount: number;
+  readonly isEditingQueuedMessage: boolean;
+  readonly isSendBusy: boolean;
+  readonly isSendHeld: boolean;
+  readonly hasPendingProgress: boolean;
+  readonly isComposerApprovalState: boolean;
+  readonly hasMessageToSend: boolean;
+}): boolean {
+  return (
+    input.routeKind === "server" &&
+    input.isTurnRunning &&
+    input.canSteer &&
+    input.canPromoteToSteer &&
+    input.hasActiveRun &&
+    input.steerableQueuedCount > 0 &&
+    !input.isEditingQueuedMessage &&
+    !input.isSendBusy &&
+    !input.isSendHeld &&
+    !input.hasPendingProgress &&
+    !input.isComposerApprovalState &&
+    !input.hasMessageToSend
+  );
+}
+
+/**
+ * Classifies a window Escape event for one composer: `"ignore"` for own editor,
+ * `"reset"` for other inputs/panes/overlays, or `"handle"` to advance double-Esc stop.
+ */
+export function classifyWindowEscapeStopTarget(input: {
+  readonly target: Element | null;
+  readonly composerForm: Element | null;
+  readonly hasOpenOverlay: boolean;
+  readonly isBlockedByComposerState: boolean;
+}): WindowEscapeStopDisposition {
+  const { target, composerForm, hasOpenOverlay, isBlockedByComposerState } = input;
+  if (composerForm === null) {
+    return "reset";
+  }
+  // 1. Own composer's editor is handled directly by onComposerCommandKey.
+  if (
+    target !== null &&
+    composerForm.contains(target) &&
+    target.closest('[data-testid="composer-editor"]') !== null
+  ) {
+    return "ignore";
+  }
+  // 2. Any other editable field (sidebar search, thread rename, find box, another composer editor)
+  //    owns Escape and must never interrupt a background run.
+  if (
+    target !== null &&
+    (target.closest(EDITABLE_ESCAPE_TARGET_SELECTOR) !== null ||
+      ("isContentEditable" in target && (target as HTMLElement).isContentEditable === true))
+  ) {
+    return "reset";
+  }
+  // 3. Overlays, terminals, iframes, inert regions, or composer busy/menu states yield Escape.
+  if (
+    isBlockedByComposerState ||
+    hasOpenOverlay ||
+    (target !== null && target.closest(BLOCKED_ESCAPE_CONTAINER_SELECTOR) !== null)
+  ) {
+    return "reset";
+  }
+  // 4. Split-pane & multi-ChatView isolation: never preempt Escape targeted at another pane or
+  //    another thread view, and never steal body-level Escape from a focused sibling split pane.
+  const ownChatView = composerForm.closest("[data-chat-view-thread-id]");
+  const targetChatView = target?.closest("[data-chat-view-thread-id]") ?? null;
+  if (targetChatView !== null && targetChatView !== ownChatView) {
+    return "reset";
+  }
+  const ownWorkspacePane = composerForm.closest("[data-workspace-pane]");
+  const targetWorkspacePane = target?.closest("[data-workspace-pane]") ?? null;
+  if (targetWorkspacePane !== null && targetWorkspacePane !== ownWorkspacePane) {
+    return "reset";
+  }
+  if (
+    targetChatView === null &&
+    targetWorkspacePane === null &&
+    ownWorkspacePane !== null &&
+    ownWorkspacePane.getAttribute("data-focused-pane") === "false"
+  ) {
+    return "reset";
+  }
+  return "handle";
+}
+
 export interface EscapeStopSequence {
   press: (input: { readonly runKey: string; readonly nowMs?: number }) => EscapeStopPressResult;
   reset: () => void;

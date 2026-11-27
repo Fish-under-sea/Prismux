@@ -14,6 +14,7 @@ vi.mock("../SidebarStageBackdrop", () => ({
 }));
 
 import { CollapsedComposerStopAction, ComposerPrimaryActions } from "./ComposerPrimaryActions";
+import { classifyWindowEscapeStopTarget } from "./composerCommandKey";
 
 function setup() {
   return {
@@ -259,4 +260,118 @@ it("surfaces double-Esc confirmation chip and empty-draft steer-queue pill when 
     />,
   );
   await expect.element(screen.getByText(/again to stop/)).toBeVisible();
+
+  // When empty-queue steering is gated off (e.g. connecting/no activeRun/freshContext-only/approval),
+  // no dead steer-queue pill should be rendered.
+  await screen.rerender(
+    <ComposerPrimaryActions
+      {...props}
+      compact={false}
+      isRunning
+      canInterrupt
+      canSteer
+      hasSendableContent={false}
+      queuedCount={0}
+      alternateShortcutLabel="Ctrl+Enter"
+      onSteerQueuedMessages={undefined}
+    />,
+  );
+  expect(document.querySelector('[data-composer-steer-queue-action="true"]')).toBeNull();
+});
+
+it("isolates window double-Escape from other editable controls and sibling split panes", async () => {
+  await render(
+    <div>
+      <aside>
+        <input data-testid="sidebar-search" />
+        <textarea data-testid="rename-textarea" />
+        <select data-testid="filter-select" />
+        <div data-testid="rich-editable" contentEditable suppressContentEditableWarning>
+          <span data-testid="rich-editable-child">editing</span>
+        </div>
+        <div data-testid="bare-editable" />
+      </aside>
+      <section data-workspace-pane="pane-left" data-focused-pane="false">
+        <div data-testid="left-tabbar">Left tab</div>
+        <div data-chat-view-thread-id="thread-left">
+          <div data-testid="left-timeline">Left timeline</div>
+          <form data-testid="left-form">
+            <div data-testid="composer-editor">
+              <span data-testid="left-editor-text">left draft</span>
+            </div>
+            <button type="button" data-testid="left-toolbar-btn">
+              Stop
+            </button>
+          </form>
+        </div>
+      </section>
+      <section data-workspace-pane="pane-right" data-focused-pane="true">
+        <div data-testid="right-tabbar">Right tab</div>
+        <div data-chat-view-thread-id="thread-right">
+          <div data-testid="right-timeline">Right timeline</div>
+          <form data-testid="right-form">
+            <div data-testid="composer-editor">
+              <span data-testid="right-editor-text">right draft</span>
+            </div>
+          </form>
+        </div>
+      </section>
+    </div>,
+  );
+
+  const leftForm = document.querySelector('[data-testid="left-form"]')!;
+  const rightForm = document.querySelector('[data-testid="right-form"]')!;
+  document.querySelector('[data-testid="bare-editable"]')!.setAttribute("contenteditable", "");
+  const classify = (composerForm: Element | null, target: Element | null) =>
+    classifyWindowEscapeStopTarget({
+      target,
+      composerForm,
+      hasOpenOverlay: false,
+      isBlockedByComposerState: false,
+    });
+
+  // 1. Editable controls outside the composer always reset without claiming Escape.
+  for (const testId of [
+    "sidebar-search",
+    "rename-textarea",
+    "filter-select",
+    "rich-editable",
+    "rich-editable-child",
+    "bare-editable",
+  ]) {
+    const el = document.querySelector(`[data-testid="${testId}"]`)!;
+    expect(classify(leftForm, el)).toBe("reset");
+    expect(classify(rightForm, el)).toBe("reset");
+  }
+
+  // 2. Own composer editor returns "ignore" (handled by onComposerCommandKey); sibling editor resets.
+  const leftEditorText = document.querySelector('[data-testid="left-editor-text"]')!;
+  const rightEditorText = document.querySelector('[data-testid="right-editor-text"]')!;
+  expect(classify(leftForm, leftEditorText)).toBe("ignore");
+  expect(classify(rightForm, leftEditorText)).toBe("reset");
+  expect(classify(rightForm, rightEditorText)).toBe("ignore");
+  expect(classify(leftForm, rightEditorText)).toBe("reset");
+
+  // 3. Double-Escape on right pane timeline/tabbar only triggers right pane, never left pane.
+  const rightTimeline = document.querySelector('[data-testid="right-timeline"]')!;
+  const rightTabbar = document.querySelector('[data-testid="right-tabbar"]')!;
+  expect(classify(leftForm, rightTimeline)).toBe("reset");
+  expect(classify(rightForm, rightTimeline)).toBe("handle");
+  expect(classify(leftForm, rightTabbar)).toBe("reset");
+  expect(classify(rightForm, rightTabbar)).toBe("handle");
+
+  // 4. Double-Escape on left pane timeline/button only triggers left pane, never right pane.
+  const leftTimeline = document.querySelector('[data-testid="left-timeline"]')!;
+  const leftToolbarBtn = document.querySelector('[data-testid="left-toolbar-btn"]')!;
+  expect(classify(leftForm, leftTimeline)).toBe("handle");
+  expect(classify(rightForm, leftTimeline)).toBe("reset");
+  expect(classify(leftForm, leftToolbarBtn)).toBe("handle");
+  expect(classify(rightForm, leftToolbarBtn)).toBe("reset");
+
+  // 5. Body-level Escape in split view only handles the focused pane.
+  expect(classify(leftForm, document.body)).toBe("reset");
+  expect(classify(rightForm, document.body)).toBe("handle");
+
+  // 6. Detached composer never claims Escape.
+  expect(classify(null, rightTimeline)).toBe("reset");
 });

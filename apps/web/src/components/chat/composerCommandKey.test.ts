@@ -3,9 +3,11 @@ import { EnvironmentId, ThreadId } from "@prismux/core-contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  canSteerEmptyQueuedRuns,
   composerCommandKeyHandler,
   createEscapeStopSequence,
   DOUBLE_ESCAPE_STOP_WINDOW_MS,
+  filterSteerableQueuedRuns,
 } from "./composerCommandKey";
 
 function makeKeyEvent(key: string, overrides: Partial<KeyboardEvent> = {}): KeyboardEvent {
@@ -254,5 +256,61 @@ describe("createEscapeStopSequence (DSH Esc-Esc 500ms window parity)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("filterSteerableQueuedRuns & canSteerEmptyQueuedRuns", () => {
+  it("excludes freshContext runs unless promoteSkipsCompaction is true", () => {
+    const queuedRuns = [
+      { id: "r1", run: { freshContext: true } },
+      { id: "r2", run: { freshContext: false } },
+      { id: "r3", run: {} },
+    ];
+
+    expect(filterSteerableQueuedRuns(queuedRuns, false).map((item) => item.id)).toEqual([
+      "r2",
+      "r3",
+    ]);
+    expect(filterSteerableQueuedRuns(queuedRuns, undefined).map((item) => item.id)).toEqual([
+      "r2",
+      "r3",
+    ]);
+    expect(filterSteerableQueuedRuns(queuedRuns, true).map((item) => item.id)).toEqual([
+      "r1",
+      "r2",
+      "r3",
+    ]);
+    expect(filterSteerableQueuedRuns([queuedRuns[0]!], false)).toEqual([]);
+  });
+
+  it("gates empty-queue steering on activeRun, canPromoteToSteer, steerable count, and idle composer state", () => {
+    const base = {
+      routeKind: "server" as const,
+      isTurnRunning: true,
+      canSteer: true,
+      canPromoteToSteer: true,
+      hasActiveRun: true,
+      steerableQueuedCount: 2,
+      isEditingQueuedMessage: false,
+      isSendBusy: false,
+      isSendHeld: false,
+      hasPendingProgress: false,
+      isComposerApprovalState: false,
+      hasMessageToSend: false,
+    };
+
+    expect(canSteerEmptyQueuedRuns(base)).toBe(true);
+    // Connecting phase without an activeRun or non-promotable workflow must not expose steer-queue.
+    expect(canSteerEmptyQueuedRuns({ ...base, hasActiveRun: false })).toBe(false);
+    expect(canSteerEmptyQueuedRuns({ ...base, canPromoteToSteer: false })).toBe(false);
+    // Queue with only freshContext items (0 steerable) must not expose steer-queue.
+    expect(canSteerEmptyQueuedRuns({ ...base, steerableQueuedCount: 0 })).toBe(false);
+    // Approval, pending question, busy/held send, editing, or non-empty draft must gate off.
+    expect(canSteerEmptyQueuedRuns({ ...base, isComposerApprovalState: true })).toBe(false);
+    expect(canSteerEmptyQueuedRuns({ ...base, hasPendingProgress: true })).toBe(false);
+    expect(canSteerEmptyQueuedRuns({ ...base, isSendBusy: true })).toBe(false);
+    expect(canSteerEmptyQueuedRuns({ ...base, isSendHeld: true })).toBe(false);
+    expect(canSteerEmptyQueuedRuns({ ...base, isEditingQueuedMessage: true })).toBe(false);
+    expect(canSteerEmptyQueuedRuns({ ...base, hasMessageToSend: true })).toBe(false);
   });
 });

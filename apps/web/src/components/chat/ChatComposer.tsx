@@ -307,9 +307,12 @@ import { ComposerCollaboratorsPopover } from "./ComposerCollaboratorsPopover";
 import type { ComposerCollaboratorSelection } from "./composerCollaborators.logic";
 import { useComposerDraftCollaborators } from "../../composerDraftStore";
 import {
+  canSteerEmptyQueuedRuns,
+  classifyWindowEscapeStopTarget,
   composerCommandKeyHandler,
   createEscapeStopSequence,
   DOUBLE_ESCAPE_STOP_WINDOW_MS,
+  filterSteerableQueuedRuns,
 } from "./composerCommandKey";
 import { promptSuggestionToAccept, usePromptSuggestion } from "./usePromptSuggestion";
 import { useFreshSessionArmed } from "./freshSessionArms";
@@ -2519,7 +2522,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     ? deriveThreadQueueWorkflowState(activeThreadProjection, m)
     : null;
   const queuedRuns = queueWorkflow?.queuedRuns ?? [];
-  const queuedCount = queuedRuns.length;
+  const steerableQueuedRuns = filterSteerableQueuedRuns(
+    queuedRuns,
+    queueWorkflow?.promoteSkipsCompaction,
+  );
+  const steerableQueuedCount = steerableQueuedRuns.length;
   const steerQueueInFlightRef = useRef(false);
   const steerQueuedMessages = () => {
     if (
@@ -2528,14 +2535,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       !canSteer ||
       !queueWorkflow?.canPromoteToSteer ||
       queueWorkflow.activeRun === null ||
+      isEditingQueuedMessage ||
+      isSendBusy ||
+      composerSendHeld ||
+      Boolean(activePendingProgress) ||
+      isComposerApprovalState ||
+      steerableQueuedRuns.length === 0 ||
       steerQueueInFlightRef.current
     ) {
       return false;
     }
-    const steerable = queuedRuns.filter(
-      ({ run }) => run.freshContext !== true || queueWorkflow.promoteSkipsCompaction === true,
-    );
-    if (steerable.length === 0) return false;
     const targetRunId = queueWorkflow.activeRun.id;
     const activeProviderThreadId =
       queueWorkflow.activeRun.providerThreadId ??
@@ -2547,7 +2556,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const supportsActiveSteering =
       activeThreadProjection?.providerSessions.find((session) => session.id === activeSessionId)
         ?.capabilities.turns.supportsActiveSteering === true;
-    const batch = supportsActiveSteering ? steerable : steerable.slice(0, 1);
+    const batch = supportsActiveSteering ? steerableQueuedRuns : steerableQueuedRuns.slice(0, 1);
     steerQueueInFlightRef.current = true;
     void (async () => {
       try {
@@ -3375,22 +3384,24 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return;
       }
       const target = event.target instanceof Element ? event.target : null;
-      // Editor Escape presses are handled directly by onComposerCommandKey.
-      if (target !== null && target.closest('[data-testid="composer-editor"]') !== null) {
-        return;
-      }
       const hasOpenOverlay =
         document.querySelector(
           '[role="dialog"], [role="alertdialog"], [data-slot="dialog-popup"], [data-slot="menu-popup"], [data-slot="popover-popup"], [data-slot="select-popup"]',
         ) !== null;
-      if (
-        composerSendHeld ||
-        composerMenuOpen ||
-        isStashMenuOpen ||
-        hasOpenOverlay ||
-        getShortcutContext(event.target).terminalFocus ||
-        (target !== null && target.closest(".xterm, iframe, [inert]") !== null)
-      ) {
+      const disposition = classifyWindowEscapeStopTarget({
+        target,
+        composerForm: composerFormRef.current,
+        hasOpenOverlay,
+        isBlockedByComposerState:
+          composerSendHeld ||
+          composerMenuOpen ||
+          isStashMenuOpen ||
+          getShortcutContext(event.target).terminalFocus,
+      });
+      if (disposition === "ignore") {
+        return;
+      }
+      if (disposition === "reset") {
         resetEscapeStopStable();
         return;
       }
@@ -3816,24 +3827,26 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   });
   const isTurnRunningForComposer =
     (phase === "running" || phase === "connecting") && !draftRunsLocally;
-  const canSteerEmptyQueue =
-    routeKind === "server" &&
-    isTurnRunningForComposer &&
-    canSteer &&
-    !isEditingQueuedMessage &&
-    !isSendBusy &&
-    !composerSendHeld &&
-    !activePendingProgress &&
-    !isComposerApprovalState &&
-    !hasMessageToSend &&
-    queuedCount > 0 &&
-    queueWorkflow?.canPromoteToSteer === true;
+  const canSteerEmptyQueue = canSteerEmptyQueuedRuns({
+    routeKind,
+    isTurnRunning: isTurnRunningForComposer,
+    canSteer,
+    canPromoteToSteer: queueWorkflow?.canPromoteToSteer === true,
+    hasActiveRun: queueWorkflow?.activeRun != null,
+    steerableQueuedCount,
+    isEditingQueuedMessage,
+    isSendBusy,
+    isSendHeld: composerSendHeld,
+    hasPendingProgress: Boolean(activePendingProgress),
+    isComposerApprovalState,
+    hasMessageToSend,
+  });
   const runningIdlePlaceholder =
     isTurnRunningForComposer && !isEditingQueuedMessage
       ? canSteerEmptyQueue && alternateShortcutLabel
         ? isZh
-          ? `按 ${alternateShortcutLabel} 立即插话发送排队消息（${queuedCount} 条）`
-          : `Press ${alternateShortcutLabel} to steer queued messages (${queuedCount})`
+          ? `按 ${alternateShortcutLabel} 立即插话发送排队消息（${steerableQueuedCount} 条）`
+          : `Press ${alternateShortcutLabel} to steer queued messages (${steerableQueuedCount})`
         : followUpBehavior === "queue"
           ? alternateShortcutLabel && canSteer
             ? isZh
@@ -4366,7 +4379,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         canSteer={canSteer}
                         alternateShortcutLabel={alternateShortcutLabel}
                         escStopArmed={escStopArmed}
-                        queuedCount={queuedCount}
+                        queuedCount={canSteerEmptyQueue ? steerableQueuedCount : 0}
                         voiceInputActive={voiceInputActive}
                         isSendBusy={isSendBusy}
                         isSendHeld={composerSendHeld}
@@ -4379,7 +4392,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         isEditingQueuedMessage={isEditingQueuedMessage}
                         onSubmitMessage={handleSubmitMessageStable}
                         onAlternateSubmitMessage={handleAlternateSubmitMessageStable}
-                        onSteerQueuedMessages={steerQueuedMessagesStable}
+                        onSteerQueuedMessages={
+                          canSteerEmptyQueue ? steerQueuedMessagesStable : undefined
+                        }
                         onResume={onResume}
                         onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                         onInterrupt={handleInterruptPrimaryActionStable}
