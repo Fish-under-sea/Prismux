@@ -1678,6 +1678,39 @@ describe("CoreRpcClient Effect RPC / non-responsive peer fast degradation", () =
       assert.equal(profileRes.status, 200);
       const profileBody = (await profileRes.json()) as { dialMode: string };
       assert.equal(profileBody.dialMode, "oracle");
+
+      // Switching provider without passing dialMode preserves persisted "oracle" and keeps handoffEngine synced.
+      const switchNoDialRes = await fetch(`${ready2.httpUrl}/v1/chief/switch`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${daemonAuthToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ provider: "dsh" }),
+      });
+      assert.equal(switchNoDialRes.status, 200);
+      const switchNoDialBody = (await switchNoDialRes.json()) as { dialMode: string };
+      assert.equal(switchNoDialBody.dialMode, "oracle");
+      assert.equal(daemon2.handoffEngine.getDialMode(chiefBody.slot.threadId), "oracle");
+
+      // RPC dial.setMode on the Chief threadId persists to chief-slot.json and survives reload.
+      const rpcDialRes = await fetch(`${ready2.httpUrl}/v1/rpc`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${daemonAuthToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          id: "dial-chief-persist",
+          method: "dial.setMode",
+          params: { threadId: chiefBody.slot.threadId, mode: "review" },
+        }),
+      });
+      assert.equal(rpcDialRes.status, 200);
+      assert.equal(daemon2.chiefManager.getDialMode(), "review");
+      const reloadedAfterRpc = new ChiefThreadManager({ dataDir });
+      await reloadedAfterRpc.init();
+      assert.equal(reloadedAfterRpc.getDialMode(), "review");
     } finally {
       await daemon1.stop();
       if (daemon2 !== undefined) {

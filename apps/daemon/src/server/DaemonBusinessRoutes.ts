@@ -722,8 +722,7 @@ export class DaemonBusinessService {
       );
     }
     const slot = this.ctx.chiefManager.getSlot();
-    const dialMode =
-      this.ctx.handoffEngine?.getDialMode(slot.threadId) ?? this.ctx.chiefManager.getDialMode();
+    const dialMode = this.ctx.chiefManager.getDialMode();
     return {
       ok: true,
       slot: {
@@ -785,8 +784,8 @@ export class DaemonBusinessService {
       Object.keys(switchOptions).length > 0 ? switchOptions : undefined,
     );
     const effectiveDialMode = this.ctx.chiefManager.getDialMode();
-    if (dialMode !== undefined && this.ctx.handoffEngine) {
-      this.ctx.handoffEngine.setDialMode(slot.threadId, dialMode);
+    if (this.ctx.handoffEngine) {
+      this.ctx.handoffEngine.setDialMode(slot.threadId, effectiveDialMode);
     }
 
     return {
@@ -800,7 +799,7 @@ export class DaemonBusinessService {
       },
       secretaryName: slot.secretaryName ?? DEFAULT_CHIEF_SECRETARY_NAME,
       agentsMdPath: slot.agentsMdPath,
-      dialMode: this.ctx.handoffEngine?.getDialMode(slot.threadId) ?? effectiveDialMode,
+      dialMode: effectiveDialMode,
     };
   }
 
@@ -831,8 +830,7 @@ export class DaemonBusinessService {
       },
       secretaryName: slot.secretaryName ?? DEFAULT_CHIEF_SECRETARY_NAME,
       agentsMdPath: slot.agentsMdPath,
-      dialMode:
-        this.ctx.handoffEngine?.getDialMode(slot.threadId) ?? this.ctx.chiefManager.getDialMode(),
+      dialMode: this.ctx.chiefManager.getDialMode(),
     };
   }
 

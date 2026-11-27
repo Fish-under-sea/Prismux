@@ -3325,6 +3325,13 @@ export class DaemonRpcServer {
             throw new RpcDispatchError("invalid_params", `Invalid dial mode: "${modeRaw}".`);
           }
           const mode = this.handoffEngine.setDialMode(threadId, modeRaw as DialMode);
+          try {
+            if (this.chiefManager.getSlot().threadId === threadId) {
+              this.chiefManager.setDialMode(mode);
+            }
+          } catch {
+            // Chief slot not initialized; skip disk persistence.
+          }
           return {
             response: {
               id: envelope.id,
