@@ -593,6 +593,11 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
     ).toBe("同时永久删除 2 个委派子代理会话。");
     expect(zhCatalog["98f2af6b5589c1cd"]).toBe("归档会话");
     expect(zhCatalog["cf830288356fff6a"]).toBe("删除");
+
+    // Track G keybinding command labels (v0.2.4-rc.4)
+    expect(m(msg("Sidebar: Collapse or Expand All Projects"))).toBe("侧边栏：折叠或展开全部项目");
+    expect(m(msg("Chat: Cite Selection"))).toBe("聊天：引用选中文本");
+    expect(m(msg("Chat: Side Ask Selection"))).toBe("聊天：旁路提问选中文本");
   });
 
   it("enforces Prismux brand cleanup across zh.json while preserving T3 Connect relay copy", () => {

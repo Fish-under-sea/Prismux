@@ -107,6 +107,11 @@ vi.mock(import("../../assets/assetUrls"), async (importOriginal) => ({
 import "~/index.css";
 import { EMPTY_ENVIRONMENT_THREAD_STATE } from "@prismux/client-runtime/state/threads";
 
+import {
+  compileResolvedKeybindingsConfig,
+  mergeWithDefaultKeybindings,
+} from "@prismux/core-shared/keybindings";
+import { formatShortcutLabelsForCommand } from "../../keybindings";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { act, render as renderUi } from "../../../test/render";
 import { makeStreamingTimelineFixture, makeThreadProjectionFixture } from "../../test-fixtures";
@@ -642,4 +647,68 @@ it("renders 1:1 bilingual single-item header, 3 icon buttons with type=button (n
     screen.container.querySelector<HTMLButtonElement>('[data-queue-dock-toggle="true"]')?.click();
   });
   expect(onFormSubmit).not.toHaveBeenCalled();
+});
+
+it("displays multi-binding steer and edit shortcuts from live keybindings and hides them when unbound", async () => {
+  setup();
+  setWorkflow({
+    activeRun: { id: "run:active" },
+    canPromoteToSteer: true,
+    isHeld: false,
+    queuedRuns: [
+      {
+        run: { id: "run:only", userMessageId: "message:only" },
+        text: "Sync queue shortcuts",
+        attachments: [],
+      },
+    ],
+  });
+
+  const multiBindings = mergeWithDefaultKeybindings(
+    compileResolvedKeybindingsConfig([
+      { key: "mod+shift+enter", command: "thread.steerQueuedMessage", when: "!terminalFocus" },
+      { key: "alt+enter", command: "thread.steerQueuedMessage", when: "!terminalFocus" },
+      { key: "alt+arrowup", command: "thread.editQueuedMessage", when: "composerFocus" },
+      { key: "ctrl+alt+e", command: "thread.editQueuedMessage", when: "composerFocus" },
+    ]),
+  );
+  const steerLabel = formatShortcutLabelsForCommand(multiBindings, "thread.steerQueuedMessage", {
+    platform: "Win32",
+    context: { terminalFocus: false },
+  });
+  const editLabel = formatShortcutLabelsForCommand(multiBindings, "thread.editQueuedMessage", {
+    platform: "Win32",
+    context: { composerFocus: true },
+  });
+  expect(steerLabel).toBe("Alt+Enter / Ctrl+Shift+Enter");
+  expect(editLabel).toBe("Ctrl+Alt+E / Alt+Up");
+
+  await using screen = await renderWithRegistry(
+    <GTProvider locale="en" translations={{}}>
+      <QueuedRunsControl
+        {...baseProps}
+        steerShortcutLabel={steerLabel}
+        editShortcutLabel={editLabel}
+      />
+    </GTProvider>,
+  );
+
+  await page.getByRole("button", { name: "Send now", exact: true }).hover();
+  await expect
+    .element(page.getByText("Send into the current turn (Alt+Enter / Ctrl+Shift+Enter)"))
+    .toBeVisible();
+
+  await page.getByRole("button", { name: "Edit queued message", exact: true }).hover();
+  await expect.element(page.getByText("Edit in the composer (Ctrl+Alt+E / Alt+Up)")).toBeVisible();
+
+  await screen.rerender(
+    <RegistryContext.Provider value={appAtomRegistry}>
+      <GTProvider locale="en" translations={{}}>
+        <QueuedRunsControl {...baseProps} steerShortcutLabel={null} editShortcutLabel={null} />
+      </GTProvider>
+    </RegistryContext.Provider>,
+  );
+
+  await page.getByRole("button", { name: "Send now", exact: true }).hover();
+  await expect.element(page.getByText("Send into the current turn", { exact: true })).toBeVisible();
 });

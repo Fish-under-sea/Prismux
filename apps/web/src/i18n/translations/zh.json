@@ -13232,5 +13232,8 @@
   "2feaf2d805c9d0a8": "{count, plural, other {展开 {count} 个委派子代理}}",
   "04f0d93f16660fa3": "{count, plural, other {同时归档 {count} 个委派子代理会话。}}",
   "b4c7b5f07c15a259": "归档委派子代理会话失败",
-  "5ad9bdfad2589c6b": "{count, plural, other {同时永久删除 {count} 个委派子代理会话。}}"
+  "5ad9bdfad2589c6b": "{count, plural, other {同时永久删除 {count} 个委派子代理会话。}}",
+  "b0854a924c0ba25c": "侧边栏：折叠或展开全部项目",
+  "655a73ffb1607680": "聊天：引用选中文本",
+  "56040f4fff045571": "聊天：旁路提问选中文本"
 }

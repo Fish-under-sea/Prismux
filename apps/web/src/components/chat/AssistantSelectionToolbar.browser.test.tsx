@@ -7,6 +7,11 @@ import {
   type AssistantCitation,
 } from "@prismux/core-contracts";
 import { serializeAssistantCitation } from "@prismux/core-shared/assistantCitations";
+import {
+  compileResolvedKeybindingsConfig,
+  DEFAULT_RESOLVED_KEYBINDINGS,
+  mergeWithDefaultKeybindings,
+} from "@prismux/core-shared/keybindings";
 import { GTProvider } from "gt-react";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -29,6 +34,7 @@ import {
 } from "../overview/sessionOverview.logic";
 import {
   AssistantSelectionToolbar,
+  createSelectionToolbarShortcutConfig,
   type SelectionToolbarShortcutConfig,
 } from "./AssistantSelectionToolbar";
 import { BackgroundThreadContext } from "./backgroundThread";
@@ -306,6 +312,108 @@ describe("AssistantSelectionToolbar (browser)", () => {
     expect(customSideAsk.defaultPrevented).toBe(true);
     expect(onSideAsk).toHaveBeenCalledTimes(1);
     await expect.element(page.getByTestId("assistant-selection-toolbar")).not.toBeInTheDocument();
+  });
+
+  it("wires live resolved keybindings end-to-end across default, rebind, and unbind transitions", async () => {
+    using _scope = acquireSelectionTestScope();
+    const onCite = vi.fn(() => true);
+    const onSideAsk = vi.fn(() => true);
+    const mac = isMacPlatform(navigator.platform);
+
+    // 1. Default resolved keybindings render Ctrl/⌘+L & Ctrl/⌘+E and dispatch normally.
+    await using screen = await render(
+      <SelectionToolbarHarness
+        locale="zh"
+        onCite={onCite}
+        onSideAsk={onSideAsk}
+        shortcuts={createSelectionToolbarShortcutConfig(DEFAULT_RESOLVED_KEYBINDINGS)}
+      />,
+    );
+
+    await selectMessageSubstring(0, 8);
+    await expect
+      .element(page.getByTestId("selection-action-cite"))
+      .toHaveTextContent(mac ? "引用⌘L" : "引用Ctrl+L");
+    await expect
+      .element(page.getByTestId("selection-action-side-ask"))
+      .toHaveTextContent(mac ? "旁路提问⌘E" : "旁路提问Ctrl+E");
+
+    // 2. Rebind both commands -> badges and keyboard matching update immediately.
+    const reboundKeybindings = mergeWithDefaultKeybindings(
+      compileResolvedKeybindingsConfig([
+        { key: "alt+q", command: "chat.citeSelection", when: "!terminalFocus && !previewFocus" },
+        {
+          key: "alt+w",
+          command: "chat.sideAskSelection",
+          when: "!terminalFocus && !previewFocus",
+        },
+      ]),
+    );
+    await screen.rerender(
+      <SelectionToolbarHarness
+        locale="zh"
+        onCite={onCite}
+        onSideAsk={onSideAsk}
+        shortcuts={createSelectionToolbarShortcutConfig(reboundKeybindings)}
+      />,
+    );
+
+    await expect
+      .element(page.getByTestId("selection-action-cite"))
+      .toHaveTextContent(mac ? "引用⌥Q" : "引用Alt+Q");
+    await expect
+      .element(page.getByTestId("selection-action-side-ask"))
+      .toHaveTextContent(mac ? "旁路提问⌥W" : "旁路提问Alt+W");
+
+    const staleDefault = new KeyboardEvent("keydown", primaryModKeyEventInit("l"));
+    await act(() => {
+      document.dispatchEvent(staleDefault);
+    });
+    expect(staleDefault.defaultPrevented).toBe(false);
+    expect(onCite).not.toHaveBeenCalled();
+
+    const reboundCite = new KeyboardEvent("keydown", {
+      key: "q",
+      code: "KeyQ",
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(() => {
+      document.dispatchEvent(reboundCite);
+    });
+    expect(reboundCite.defaultPrevented).toBe(true);
+    expect(onCite).toHaveBeenCalledTimes(1);
+
+    // 3. Unbind both commands -> badges hide cleanly with zero hardcoded fallback and keys do not trigger.
+    const unboundKeybindings = mergeWithDefaultKeybindings(
+      compileResolvedKeybindingsConfig([
+        { key: "mod+l", command: "chat.citeSelection", when: "false" },
+        { key: "mod+e", command: "chat.sideAskSelection", when: "false" },
+      ]),
+    );
+    await screen.rerender(
+      <SelectionToolbarHarness
+        locale="zh"
+        onCite={onCite}
+        onSideAsk={onSideAsk}
+        shortcuts={createSelectionToolbarShortcutConfig(unboundKeybindings)}
+      />,
+    );
+
+    await selectMessageSubstring(0, 8);
+    await expect.element(page.getByTestId("selection-action-cite")).toHaveTextContent("引用");
+    await expect
+      .element(page.getByTestId("selection-action-side-ask"))
+      .toHaveTextContent("旁路提问");
+    expect(document.querySelectorAll('[data-selection-shortcut="true"]')).toHaveLength(0);
+
+    const unboundE = new KeyboardEvent("keydown", primaryModKeyEventInit("e"));
+    await act(() => {
+      document.dispatchEvent(unboundE);
+    });
+    expect(unboundE.defaultPrevented).toBe(false);
+    expect(onSideAsk).not.toHaveBeenCalled();
   });
 
   it("cites on button click and Ctrl/Cmd+L, clearing selection and dismissing toolbar without hijacking idle shortcuts", async () => {

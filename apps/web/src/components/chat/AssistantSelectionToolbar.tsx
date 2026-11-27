@@ -3,11 +3,13 @@ import {
   ASSISTANT_CITATION_MAX_TEXT_LENGTH,
   MessageId,
   type AssistantCitation,
+  type ResolvedKeybindingsConfig,
   type ScopedThreadRef,
 } from "@prismux/core-contracts";
 import { useLocale } from "gt-react";
 import { type CSSProperties, use, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { formatShortcutLabelsForCommand, resolveShortcutCommand } from "../../keybindings";
 import {
   captureAssistantTextSelection,
   type AssistantCitationSourceAnchor,
@@ -67,14 +69,44 @@ export const SELECTION_SIDE_ASK_COMMAND = "chat.sideAskSelection" as const;
 export type SelectionToolbarShortcutAction = "cite" | "side-ask";
 
 export interface SelectionToolbarShortcutConfig {
-  /** Formatted shortcut label for Cite (e.g. from `shortcutLabelForCommand(keybindings, "chat.citeSelection")`); `null` hides the badge when unbound. */
+  /** Formatted shortcut label for Cite (e.g. from `formatShortcutLabelsForCommand(keybindings, "chat.citeSelection")`); `null` hides the badge when unbound. */
   readonly citeLabel: string | null;
-  /** Formatted shortcut label for Side Ask (e.g. from `shortcutLabelForCommand(keybindings, "chat.sideAskSelection")`); `null` hides the badge when unbound. */
+  /** Formatted shortcut label for Side Ask (e.g. from `formatShortcutLabelsForCommand(keybindings, "chat.sideAskSelection")`); `null` hides the badge when unbound. */
   readonly sideAskLabel: string | null;
   /** Single-point matcher for foreground selection shortcuts; omit to fall back to default `Ctrl/Cmd+L` & `Ctrl/Cmd+E`. */
   readonly matchEvent?:
     | ((event: KeyboardEvent, canSideAsk: boolean) => SelectionToolbarShortcutAction | null)
     | undefined;
+}
+
+const SELECTION_TOOLBAR_SHORTCUT_CONTEXT = {
+  terminalFocus: false,
+  previewFocus: false,
+} as const;
+
+export function createSelectionToolbarShortcutConfig(
+  keybindings: ResolvedKeybindingsConfig,
+  options?: { readonly platform?: string },
+): SelectionToolbarShortcutConfig {
+  const matchOptions =
+    options?.platform !== undefined
+      ? { platform: options.platform, context: SELECTION_TOOLBAR_SHORTCUT_CONTEXT }
+      : { context: SELECTION_TOOLBAR_SHORTCUT_CONTEXT };
+  return {
+    citeLabel: formatShortcutLabelsForCommand(keybindings, SELECTION_CITE_COMMAND, matchOptions),
+    sideAskLabel: formatShortcutLabelsForCommand(
+      keybindings,
+      SELECTION_SIDE_ASK_COMMAND,
+      matchOptions,
+    ),
+    matchEvent: (event, canSideAsk) => {
+      if (event.isComposing || event.defaultPrevented) return null;
+      const command = resolveShortcutCommand(event, keybindings, matchOptions);
+      if (command === SELECTION_CITE_COMMAND) return "cite";
+      if (command === SELECTION_SIDE_ASK_COMMAND && canSideAsk) return "side-ask";
+      return null;
+    },
+  };
 }
 
 export function resolveSelectionToolbarShortcuts(platform: string): {

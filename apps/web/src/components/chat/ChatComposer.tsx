@@ -151,8 +151,8 @@ import { useEnvironmentSpeechInput } from "../../speech/useEnvironmentSpeechInpu
 import { ComposerSpeechButton, ComposerSpeechRecordingPill } from "./ComposerSpeechButton";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
 import {
-  effectiveShortcutsForCommand,
   formatShortcutLabel,
+  formatShortcutLabelsForCommand,
   shortcutLabelForCommand,
   type ShortcutMatchContext,
 } from "../../keybindings";
@@ -338,23 +338,6 @@ const ACTIVE_RUN_STATUSES = new Set<OrchestrationV2Run["status"]>([
   "running",
   "waiting",
 ]);
-
-function formatUniqueShortcutLabels(
-  keybindings: ResolvedKeybindingsConfig,
-  command: KeybindingCommand,
-  options?: Parameters<typeof effectiveShortcutsForCommand>[2],
-): string | null {
-  const seen = new Set<string>();
-  const labels: string[] = [];
-  for (const shortcut of effectiveShortcutsForCommand(keybindings, command, options)) {
-    const label = formatShortcutLabel(shortcut);
-    if (!seen.has(label)) {
-      seen.add(label);
-      labels.push(label);
-    }
-  }
-  return labels.length > 0 ? labels.join(" / ") : null;
-}
 
 function consumePasteAsTextShortcut(deadline: { current: number }): boolean {
   const armed = Date.now() <= deadline.current;
@@ -3869,15 +3852,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         altKey: false,
         shiftKey: false,
       });
-  const alternateShortcutLabel = formatUniqueShortcutLabels(keybindings, "composer.sendAlternate", {
-    context: {
-      composerFocus: true,
-      draftThreadRoute: routeKind === "draft",
-      turnRunning: true,
-      composerRequiresModifier: requiresModifierToSend,
+  const alternateShortcutLabel = formatShortcutLabelsForCommand(
+    keybindings,
+    "composer.sendAlternate",
+    {
+      context: {
+        composerFocus: true,
+        draftThreadRoute: routeKind === "draft",
+        turnRunning: true,
+        composerRequiresModifier: requiresModifierToSend,
+      },
     },
-  });
-  const stopShortcutLabel = formatUniqueShortcutLabels(keybindings, "thread.stop", {
+  );
+  const stopShortcutLabel = formatShortcutLabelsForCommand(keybindings, "thread.stop", {
     context: {
       composerFocus: true,
       draftThreadRoute: routeKind === "draft",

@@ -38,11 +38,13 @@ import {
   resolveComposerDispatchMode,
 } from "@prismux/client-runtime/state/composer-dispatch";
 
-function compactShortcutKeyLabel(shortcut: string | null | undefined): string | null {
+export function compactShortcutKeyLabel(shortcut: string | null | undefined): string | null {
   if (!shortcut) return null;
-  const primary = shortcut.split(/\s*\/\s*/u)[0]?.trim();
-  if (!primary) return null;
-  return primary.replace(/Enter$/i, "↵");
+  const compacted = shortcut
+    .split(/\s*\/\s*/u)
+    .map((entry) => entry.trim().replace(/Enter$/i, "↵"))
+    .filter((entry) => entry.length > 0);
+  return compacted.length > 0 ? compacted.join(" / ") : null;
 }
 
 let alternateModifierDown = false;

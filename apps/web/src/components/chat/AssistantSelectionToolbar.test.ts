@@ -6,6 +6,11 @@ import {
   type AssistantCitation,
 } from "@prismux/core-contracts";
 import { serializeAssistantCitation } from "@prismux/core-shared/assistantCitations";
+import {
+  compileResolvedKeybindingsConfig,
+  DEFAULT_RESOLVED_KEYBINDINGS,
+  mergeWithDefaultKeybindings,
+} from "@prismux/core-shared/keybindings";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -21,6 +26,7 @@ vi.mock("gt-react", async (importOriginal) => {
 
 import { clearPendingSideAskCitations, enqueueSideAskCitation } from "../../lib/sideChatPane";
 import {
+  createSelectionToolbarShortcutConfig,
   matchSelectionToolbarShortcut,
   resolveSelectionToolbarCopy,
   resolveSelectionToolbarShortcutConfig,
@@ -197,5 +203,124 @@ describe("AssistantSelectionToolbar helpers", () => {
     // Submit button should be enabled even before extra text is typed when a citation is attached
     expect(html).not.toContain('data-btw-empty-submit="1" disabled=""');
     expect(serializeAssistantCitation(citation)).toContain("prismux-citation://v1/");
+  });
+
+  it("builds live selection toolbar shortcut config from resolved keybindings across default, rebound, multi-bound, and unbound states", () => {
+    const makeKeyEvent = (
+      init: Partial<{
+        key: string;
+        code: string;
+        ctrlKey: boolean;
+        metaKey: boolean;
+        altKey: boolean;
+        shiftKey: boolean;
+        isComposing: boolean;
+        defaultPrevented: boolean;
+      }>,
+    ) =>
+      ({
+        key: "",
+        code: "",
+        ctrlKey: false,
+        metaKey: false,
+        altKey: false,
+        shiftKey: false,
+        isComposing: false,
+        defaultPrevented: false,
+        ...init,
+      }) as KeyboardEvent;
+
+    // Default bindings on Win32 & macOS
+    const winDefault = createSelectionToolbarShortcutConfig(DEFAULT_RESOLVED_KEYBINDINGS, {
+      platform: "Win32",
+    });
+    expect(winDefault.citeLabel).toBe("Ctrl+L");
+    expect(winDefault.sideAskLabel).toBe("Ctrl+E");
+    expect(
+      winDefault.matchEvent?.(makeKeyEvent({ key: "l", code: "KeyL", ctrlKey: true }), true),
+    ).toBe("cite");
+    expect(
+      winDefault.matchEvent?.(makeKeyEvent({ key: "e", code: "KeyE", ctrlKey: true }), true),
+    ).toBe("side-ask");
+    expect(
+      winDefault.matchEvent?.(makeKeyEvent({ key: "e", code: "KeyE", ctrlKey: true }), false),
+    ).toBeNull();
+    expect(
+      winDefault.matchEvent?.(
+        makeKeyEvent({ key: "l", code: "KeyL", ctrlKey: true, isComposing: true }),
+        true,
+      ),
+    ).toBeNull();
+    expect(
+      winDefault.matchEvent?.(
+        makeKeyEvent({ key: "l", code: "KeyL", ctrlKey: true, defaultPrevented: true }),
+        true,
+      ),
+    ).toBeNull();
+
+    const macDefault = createSelectionToolbarShortcutConfig(DEFAULT_RESOLVED_KEYBINDINGS, {
+      platform: "MacIntel",
+    });
+    expect(macDefault.citeLabel).toBe("⌘L");
+    expect(macDefault.sideAskLabel).toBe("⌘E");
+
+    // Rebound + multi-bound
+    const reboundKeybindings = mergeWithDefaultKeybindings(
+      compileResolvedKeybindingsConfig([
+        {
+          key: "alt+q",
+          command: "chat.citeSelection",
+          when: "!terminalFocus && !previewFocus",
+        },
+        {
+          key: "mod+shift+l",
+          command: "chat.citeSelection",
+          when: "!terminalFocus && !previewFocus",
+        },
+        {
+          key: "alt+w",
+          command: "chat.sideAskSelection",
+          when: "!terminalFocus && !previewFocus",
+        },
+      ]),
+    );
+    const rebound = createSelectionToolbarShortcutConfig(reboundKeybindings, { platform: "Win32" });
+    expect(rebound.citeLabel).toBe("Ctrl+Shift+L / Alt+Q");
+    expect(rebound.sideAskLabel).toBe("Alt+W");
+    expect(
+      rebound.matchEvent?.(makeKeyEvent({ key: "l", code: "KeyL", ctrlKey: true }), true),
+    ).toBeNull();
+    expect(rebound.matchEvent?.(makeKeyEvent({ key: "q", code: "KeyQ", altKey: true }), true)).toBe(
+      "cite",
+    );
+    expect(
+      rebound.matchEvent?.(
+        makeKeyEvent({ key: "l", code: "KeyL", ctrlKey: true, shiftKey: true }),
+        true,
+      ),
+    ).toBe("cite");
+    expect(rebound.matchEvent?.(makeKeyEvent({ key: "w", code: "KeyW", altKey: true }), true)).toBe(
+      "side-ask",
+    );
+
+    // Unbound hides labels with null (no hardcoded Ctrl+L / Ctrl+E fallback)
+    const unboundKeybindings = mergeWithDefaultKeybindings(
+      compileResolvedKeybindingsConfig([
+        { key: "mod+l", command: "chat.citeSelection", when: "false" },
+        { key: "mod+e", command: "chat.sideAskSelection", when: "false" },
+      ]),
+    );
+    const unbound = createSelectionToolbarShortcutConfig(unboundKeybindings, { platform: "Win32" });
+    expect(unbound.citeLabel).toBeNull();
+    expect(unbound.sideAskLabel).toBeNull();
+    const resolvedUnbound = resolveSelectionToolbarShortcutConfig("Win32", unbound);
+    expect(resolvedUnbound.citeLabel).toBeNull();
+    expect(resolvedUnbound.sideAskLabel).toBeNull();
+    expect(
+      resolvedUnbound.matchEvent(makeKeyEvent({ key: "l", code: "KeyL", ctrlKey: true }), true),
+    ).toBeNull();
+    expect(
+      resolvedUnbound.matchEvent(makeKeyEvent({ key: "e", code: "KeyE", ctrlKey: true }), true),
+    ).toBeNull();
   });
 });

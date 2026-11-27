@@ -1,9 +1,16 @@
 import "~/index.css";
 
+import {
+  compileResolvedKeybindingsConfig,
+  DEFAULT_RESOLVED_KEYBINDINGS,
+  mergeWithDefaultKeybindings,
+} from "@prismux/core-shared/keybindings";
 import { GTProvider, initializeGT } from "gt-react";
 import { Profiler, type ComponentProps } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
+import { formatShortcutLabelsForCommand } from "../../keybindings";
+import { isMacPlatform } from "../../lib/utils";
 import { act, fakeTimers, render } from "../../../test/render";
 
 vi.mock("~/hooks/useSettings", () => ({
@@ -15,7 +22,11 @@ vi.mock("../SidebarStageBackdrop", () => ({
   useSidebarStageBackdropVariant: () => null,
 }));
 
-import { CollapsedComposerStopAction, ComposerPrimaryActions } from "./ComposerPrimaryActions";
+import {
+  CollapsedComposerStopAction,
+  compactShortcutKeyLabel,
+  ComposerPrimaryActions,
+} from "./ComposerPrimaryActions";
 import { classifyWindowEscapeStopTarget } from "./composerCommandKey";
 
 function setup() {
@@ -553,4 +564,184 @@ it("does not re-render ComposerPrimaryActions on Shift key presses while typing 
     window.dispatchEvent(new KeyboardEvent("keyup", { key: "Shift", shiftKey: false }));
   });
   expect(renders).toBe(settled);
+});
+
+it("syncs dual composer.sendAlternate and custom thread.stop keybindings across pills, compact badges, and tooltips", async () => {
+  initializeGT({ defaultLocale: "en", locales: ["en", "zh"] });
+  const mac = isMacPlatform(navigator.platform);
+  const props = setup();
+  const alternateContext = {
+    context: {
+      composerFocus: true,
+      draftThreadRoute: false,
+      turnRunning: true,
+      composerRequiresModifier: false,
+    },
+  };
+  const stopContext = {
+    context: {
+      composerFocus: true,
+      draftThreadRoute: false,
+      turnRunning: true,
+    },
+  };
+
+  // Helper unit checks for multi-shortcut Enter compression
+  expect(compactShortcutKeyLabel("Ctrl+Enter / Shift+Enter")).toBe("Ctrl+↵ / Shift+↵");
+  expect(compactShortcutKeyLabel("⌘Enter / ⇧Enter")).toBe("⌘↵ / ⇧↵");
+  expect(compactShortcutKeyLabel("Alt+S")).toBe("Alt+S");
+  expect(compactShortcutKeyLabel(null)).toBeNull();
+
+  // 1. Default resolved keybindings -> dual alternate shortcut ("Ctrl+Enter / Shift+Enter" or "⌘Enter / ⇧Enter")
+  const defaultAlternate = formatShortcutLabelsForCommand(
+    DEFAULT_RESOLVED_KEYBINDINGS,
+    "composer.sendAlternate",
+    alternateContext,
+  );
+  const defaultStop = formatShortcutLabelsForCommand(
+    DEFAULT_RESOLVED_KEYBINDINGS,
+    "thread.stop",
+    stopContext,
+  );
+  expect(defaultAlternate).toBe(mac ? "⌘Enter / ⇧Enter" : "Ctrl+Enter / Shift+Enter");
+  expect(defaultStop).toBeNull();
+
+  await using screen = await render(
+    <GTProvider locale="zh" translations={{}}>
+      <ComposerPrimaryActions
+        {...props}
+        compact={false}
+        isRunning
+        canInterrupt
+        canSteer
+        hasSendableContent
+        sendShortcutLabel="Enter"
+        alternateShortcutLabel={defaultAlternate}
+        stopShortcutLabel={defaultStop}
+        onAlternateSubmitMessage={vi.fn()}
+      />
+    </GTProvider>,
+  );
+
+  const steerPill = screen.container.querySelector<HTMLButtonElement>(
+    '[data-composer-alternate-action="steer"]',
+  )!;
+  expect(steerPill).not.toBeNull();
+  expect(steerPill.querySelector('[data-slot="kbd"]')?.textContent).toBe(
+    mac ? "⌘↵ / ⇧↵" : "Ctrl+↵ / Shift+↵",
+  );
+
+  await page.getByRole("button", { name: "Queue message" }).hover();
+  await expect
+    .element(
+      page.getByText(mac ? "立即发送 (⌘Enter / ⇧Enter)" : "立即发送 (Ctrl+Enter / Shift+Enter)", {
+        exact: true,
+      }),
+    )
+    .toBeVisible();
+
+  // 2. Rebind composer.sendAlternate to single Alt+Enter and bind thread.stop to mod+.
+  const reboundKeybindings = mergeWithDefaultKeybindings(
+    compileResolvedKeybindingsConfig([
+      {
+        key: "alt+enter",
+        command: "composer.sendAlternate",
+        when: "composerFocus && turnRunning",
+      },
+      { key: "shift+enter", command: "composer.sendAlternate", when: "false" },
+      { key: "mod+.", command: "thread.stop" },
+    ]),
+  );
+  const reboundAlternate = formatShortcutLabelsForCommand(
+    reboundKeybindings,
+    "composer.sendAlternate",
+    alternateContext,
+  );
+  const reboundStop = formatShortcutLabelsForCommand(
+    reboundKeybindings,
+    "thread.stop",
+    stopContext,
+  );
+  expect(reboundAlternate).toBe(mac ? "⌥Enter" : "Alt+Enter");
+  expect(reboundStop).toBe(mac ? "⌘." : "Ctrl+.");
+
+  await screen.rerender(
+    <GTProvider locale="zh" translations={{}}>
+      <ComposerPrimaryActions
+        {...props}
+        compact={false}
+        isRunning
+        canInterrupt
+        canSteer
+        hasSendableContent
+        sendShortcutLabel="Enter"
+        alternateShortcutLabel={reboundAlternate}
+        stopShortcutLabel={reboundStop}
+        onAlternateSubmitMessage={vi.fn()}
+      />
+    </GTProvider>,
+  );
+  expect(
+    screen.container.querySelector('[data-composer-alternate-action="steer"] [data-slot="kbd"]')
+      ?.textContent,
+  ).toBe(mac ? "⌥↵" : "Alt+↵");
+
+  // Empty running composer shows live custom thread.stop label on Stop tooltip + empty steer-queue pill
+  await screen.rerender(
+    <GTProvider locale="zh" translations={{}}>
+      <ComposerPrimaryActions
+        {...props}
+        compact={false}
+        isRunning
+        canInterrupt
+        canSteer
+        hasSendableContent={false}
+        queuedCount={2}
+        sendShortcutLabel="Enter"
+        alternateShortcutLabel={reboundAlternate}
+        stopShortcutLabel={reboundStop}
+        onSteerQueuedMessages={vi.fn()}
+      />
+    </GTProvider>,
+  );
+  expect(
+    screen.container.querySelector('[data-composer-steer-queue-action="true"] [data-slot="kbd"]')
+      ?.textContent,
+  ).toBe(mac ? "⌥↵" : "Alt+↵");
+  await page.getByRole("button", { name: "Stop generation" }).hover();
+  await expect.element(page.getByText(mac ? "⌘." : "Ctrl+.", { exact: true })).toBeVisible();
+
+  // 3. Fully unbind composer.sendAlternate -> kbd badge disappears cleanly without hardcoded fallback.
+  const unboundKeybindings = mergeWithDefaultKeybindings(
+    compileResolvedKeybindingsConfig([
+      { key: "mod+enter", command: "composer.sendAlternate", when: "false" },
+      { key: "shift+enter", command: "composer.sendAlternate", when: "false" },
+    ]),
+  );
+  const unboundAlternate = formatShortcutLabelsForCommand(
+    unboundKeybindings,
+    "composer.sendAlternate",
+    alternateContext,
+  );
+  expect(unboundAlternate).toBeNull();
+
+  await screen.rerender(
+    <GTProvider locale="zh" translations={{}}>
+      <ComposerPrimaryActions
+        {...props}
+        compact={false}
+        isRunning
+        canInterrupt
+        canSteer
+        hasSendableContent
+        sendShortcutLabel="Enter"
+        alternateShortcutLabel={unboundAlternate}
+        stopShortcutLabel={null}
+        onAlternateSubmitMessage={vi.fn()}
+      />
+    </GTProvider>,
+  );
+  expect(
+    screen.container.querySelector('[data-composer-alternate-action="steer"] [data-slot="kbd"]'),
+  ).toBeNull();
 });

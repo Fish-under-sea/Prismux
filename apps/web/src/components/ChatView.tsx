@@ -242,7 +242,7 @@ import { BranchToolbar, type BranchToolbarHandle } from "./BranchToolbar";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
 import { isEditableFocused } from "../lib/editableFocus";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@prismux/core-shared/keybindings";
-import { shortcutLabelForCommand } from "../keybindings";
+import { formatShortcutLabelsForCommand, shortcutLabelForCommand } from "../keybindings";
 import { cn } from "~/lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { toastManager } from "./ui/toast";
@@ -346,6 +346,7 @@ import {
   RevertConfirmHost,
 } from "./chat/ChatOverlayHosts";
 import type { AssistantCitationRequest } from "./chat/AssistantCitationSource";
+import { createSelectionToolbarShortcutConfig } from "./chat/AssistantSelectionToolbar";
 import { useCitedHistory } from "./chat/citationProcedure";
 import type { MessagesTimelineHistoryControls } from "./chat/MessagesTimeline";
 import { ThreadTimeline } from "./chat/ThreadTimeline";
@@ -3464,10 +3465,14 @@ export default function ChatView(props: ChatViewProps) {
       <>
         <QueuedRunsControl
           ref={queuedRunsControlRef}
-          steerShortcutLabel={shortcutLabelForCommand(keybindings, "thread.steerQueuedMessage", {
-            context: { terminalFocus: false },
-          })}
-          editShortcutLabel={shortcutLabelForCommand(keybindings, "thread.editQueuedMessage", {
+          steerShortcutLabel={formatShortcutLabelsForCommand(
+            keybindings,
+            "thread.steerQueuedMessage",
+            {
+              context: { terminalFocus: false },
+            },
+          )}
+          editShortcutLabel={formatShortcutLabelsForCommand(keybindings, "thread.editQueuedMessage", {
             context: { composerFocus: true },
           })}
           environmentId={activeThread.environmentId}
@@ -4223,6 +4228,7 @@ export default function ChatView(props: ChatViewProps) {
                   onCiteAssistantText={citeAssistantTextStable}
                   onSideAskAssistantText={sideAskAssistantTextStable}
                   canSideAskAssistantText={canSideAskFromSelection}
+                  selectionShortcuts={createSelectionToolbarShortcutConfig(keybindings)}
                   onReplyToResponse={replyToResponseStable}
                   {...(activeProject && !runsOutsideHostCheckout
                     ? { onRunShellCommand: parentPanel?.runShellCommand ?? runShellCommandStable }
