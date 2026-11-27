@@ -428,6 +428,52 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
     expect(claudeOnlyHtml).not.toContain("Claude Code");
   });
 
+  it("emits Daemon-safe ASCII provider IDs for local custom ACP agents with spaces or Chinese display names", () => {
+    const safeDaemonProviderPattern = /^[a-z0-9][a-z0-9._:-]{0,127}$/;
+    const options = buildChiefProviderOptions({
+      serverProviders: [
+        makeMockProvider({
+          instanceId: "acpRegistry_local_bot",
+          driver: "acpRegistry",
+          displayName: "My Local Bot",
+          models: [{ slug: "local-1", name: "Local 1", isCustom: false } as ServerProvider["models"][number]],
+        }),
+        makeMockProvider({
+          instanceId: "acpRegistry_cn_helper",
+          driver: "acpRegistry",
+          displayName: "我的自定义助手",
+          models: [{ slug: "cn-1", name: "CN 1", isCustom: false } as ServerProvider["models"][number]],
+        }),
+        makeMockProvider({
+          instanceId: "acpRegistry",
+          driver: "acpRegistry",
+          displayName: "通用本地代理",
+          models: [{ slug: "gen-1", name: "Gen 1", isCustom: false } as ServerProvider["models"][number]],
+        }),
+        // Retired ACP omp must still be excluded
+        makeMockProvider({
+          instanceId: "acpRegistry_omp",
+          driver: "acpRegistry",
+          displayName: "oh-my-pi",
+          models: [],
+        }),
+      ],
+      settings: null,
+    });
+
+    const localBot = options.find((o) => o.label === "My Local Bot");
+    const cnHelper = options.find((o) => o.label === "我的自定义助手");
+    const genericAcp = options.find((o) => o.label === "通用本地代理");
+
+    expect(localBot?.value).toBe("acpregistry_local_bot");
+    expect(cnHelper?.value).toBe("acpregistry_cn_helper");
+    expect(genericAcp?.value).toBe("acp");
+    expect(options).toHaveLength(3);
+    for (const opt of options) {
+      expect(opt.value).toMatch(safeDaemonProviderPattern);
+    }
+  });
+
   it("falls back gracefully ONLY to currentProvider during cold start (never dumps dead unconfigured providers) and renders empty hint when none are configured", () => {
     expect(
       buildChiefProviderOptions({

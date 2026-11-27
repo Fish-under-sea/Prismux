@@ -78,6 +78,7 @@ import { primaryServerProvidersAtom } from "../../state/server";
 import {
   AgentBrandLogo,
   formatAgentBrandName,
+  resolveAgentBrandId,
   toCanonicalChiefProviderId,
 } from "../agentBrand";
 import { DEFAULT_CHIEF_DISPLAY_NAME, normalizeChiefDisplayName } from "../chiefMention";
@@ -225,25 +226,66 @@ function isPlaceholderModelSlug(slug: string): boolean {
   );
 }
 
+const SAFE_CHIEF_PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9._:-]{0,127}$/;
+const GENERIC_ACP_IDENTIFIERS = new Set([
+  "acp",
+  "acpregistry",
+  "acp-registry",
+  "acp_registry",
+  "acp registry",
+]);
+const DISALLOWED_CHIEF_PROVIDER_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 function isRetiredChiefProviderId(raw: string | null | undefined): boolean {
   if (typeof raw !== "string") return false;
   const normalized = raw.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!normalized) return false;
+  const stripped = normalized.replace(/^(?:acp[-_]?registry|local)[:/_-]+/, "");
+  const candidates = stripped && stripped !== normalized ? [normalized, stripped] : [normalized];
+  return candidates.some(
+    (candidate) =>
+      candidate === "omp" ||
+      candidate === "oh-my-pi" ||
+      candidate === "oh_my_pi" ||
+      candidate === "oh my pi" ||
+      candidate.startsWith("omp:") ||
+      candidate.startsWith("omp-") ||
+      candidate.startsWith("omp_") ||
+      candidate.startsWith("oh-my-pi") ||
+      candidate.startsWith("oh_my_pi") ||
+      candidate.startsWith("oh my pi"),
+  );
+}
+
+function isSafeChiefProviderIdentifier(raw: string | null | undefined): boolean {
+  if (typeof raw !== "string") return false;
+  const key = raw.trim().toLowerCase();
   return (
-    normalized === "omp" ||
-    normalized === "oh-my-pi" ||
-    normalized === "oh_my_pi" ||
-    normalized === "oh my pi" ||
-    normalized.startsWith("omp:") ||
-    normalized.startsWith("omp-") ||
-    normalized.startsWith("omp_") ||
-    normalized.startsWith("oh-my-pi") ||
-    normalized.startsWith("oh_my_pi") ||
-    normalized.startsWith("oh my pi")
+    key.length > 0 &&
+    !key.includes("..") &&
+    !DISALLOWED_CHIEF_PROVIDER_KEYS.has(key) &&
+    !isRetiredChiefProviderId(key) &&
+    SAFE_CHIEF_PROVIDER_ID_PATTERN.test(key)
   );
 }
 
 function normalizeChiefOptionProviderId(raw: string | null | undefined): string {
-  return toCanonicalChiefProviderId(raw).toLowerCase();
+  const trimmed = typeof raw === "string" ? raw.trim() : "";
+  if (!trimmed) {
+    return "codex";
+  }
+  const brand = resolveAgentBrandId(trimmed);
+  if (brand !== "custom" && brand !== "acp") {
+    return toCanonicalChiefProviderId(trimmed).toLowerCase();
+  }
+  const lower = trimmed.toLowerCase();
+  if (GENERIC_ACP_IDENTIFIERS.has(lower)) {
+    return "acp";
+  }
+  if (isSafeChiefProviderIdentifier(lower)) {
+    return lower;
+  }
+  return brand === "acp" ? "acp" : "codex";
 }
 
 const RAW_CLAUDE_IDENTIFIERS = new Set([
@@ -353,24 +395,25 @@ function resolveCanonicalChiefProviderInput(entry: {
   if (entry.driverKind !== "acpRegistry") {
     return entry.driverKind;
   }
-  const candidates = [
-    entry.acpRegistryAgentId,
-    entry.instanceId,
-    entry.displayName,
-    entry.driverKind,
-  ];
-  return (
-    candidates.find(
-      (candidate) =>
-        typeof candidate === "string" &&
-        candidate.trim().length > 0 &&
-        toCanonicalChiefProviderId(candidate) !== "acp",
-    ) ??
-    entry.acpRegistryAgentId ??
-    entry.instanceId ??
-    entry.displayName ??
-    entry.driverKind
-  );
+  for (const candidate of [entry.acpRegistryAgentId, entry.instanceId, entry.displayName]) {
+    if (typeof candidate !== "string" || candidate.trim().length === 0) {
+      continue;
+    }
+    const brand = resolveAgentBrandId(candidate);
+    if (brand !== "custom" && brand !== "acp") {
+      return candidate;
+    }
+  }
+  for (const safeCandidate of [entry.acpRegistryAgentId, entry.instanceId]) {
+    if (
+      typeof safeCandidate === "string" &&
+      isSafeChiefProviderIdentifier(safeCandidate) &&
+      !GENERIC_ACP_IDENTIFIERS.has(safeCandidate.trim().toLowerCase())
+    ) {
+      return safeCandidate.trim().toLowerCase();
+    }
+  }
+  return "acp";
 }
 
 function createInitialChiefState(
@@ -468,6 +511,14 @@ export function buildChiefProviderOptions(input: {
 
   for (const entry of brandedEntries) {
     if (!entry.enabled || !entry.isAvailable) {
+      continue;
+    }
+    if (
+      isRetiredChiefProviderId(entry.driverKind) ||
+      isRetiredChiefProviderId(entry.acpRegistryAgentId) ||
+      isRetiredChiefProviderId(entry.instanceId) ||
+      isRetiredChiefProviderId(entry.displayName)
+    ) {
       continue;
     }
     const rawCanonicalInput = resolveCanonicalChiefProviderInput(entry);
