@@ -61,6 +61,22 @@ export function resolveSelectionToolbarCopy(
   };
 }
 
+export const SELECTION_CITE_COMMAND = "chat.citeSelection" as const;
+export const SELECTION_SIDE_ASK_COMMAND = "chat.sideAskSelection" as const;
+
+export type SelectionToolbarShortcutAction = "cite" | "side-ask";
+
+export interface SelectionToolbarShortcutConfig {
+  /** Formatted shortcut label for Cite (e.g. from `shortcutLabelForCommand(keybindings, "chat.citeSelection")`); `null` hides the badge when unbound. */
+  readonly citeLabel: string | null;
+  /** Formatted shortcut label for Side Ask (e.g. from `shortcutLabelForCommand(keybindings, "chat.sideAskSelection")`); `null` hides the badge when unbound. */
+  readonly sideAskLabel: string | null;
+  /** Single-point matcher for foreground selection shortcuts; omit to fall back to default `Ctrl/Cmd+L` & `Ctrl/Cmd+E`. */
+  readonly matchEvent?:
+    | ((event: KeyboardEvent, canSideAsk: boolean) => SelectionToolbarShortcutAction | null)
+    | undefined;
+}
+
 export function resolveSelectionToolbarShortcuts(platform: string): {
   readonly cite: string;
   readonly sideAsk: string;
@@ -69,8 +85,6 @@ export function resolveSelectionToolbarShortcuts(platform: string): {
     ? { cite: "⌘L", sideAsk: "⌘E" }
     : { cite: "Ctrl+L", sideAsk: "Ctrl+E" };
 }
-
-export type SelectionToolbarShortcutAction = "cite" | "side-ask";
 
 export function matchSelectionToolbarShortcut(
   event: Pick<
@@ -102,6 +116,29 @@ export function matchSelectionToolbarShortcut(
     return "side-ask";
   }
   return null;
+}
+
+export interface ResolvedSelectionToolbarShortcutConfig {
+  readonly citeLabel: string | null;
+  readonly sideAskLabel: string | null;
+  readonly matchEvent: (
+    event: KeyboardEvent,
+    canSideAsk: boolean,
+  ) => SelectionToolbarShortcutAction | null;
+}
+
+export function resolveSelectionToolbarShortcutConfig(
+  platform: string,
+  overrides?: SelectionToolbarShortcutConfig,
+): ResolvedSelectionToolbarShortcutConfig {
+  const defaults = resolveSelectionToolbarShortcuts(platform);
+  return {
+    citeLabel: overrides ? overrides.citeLabel : defaults.cite,
+    sideAskLabel: overrides ? overrides.sideAskLabel : defaults.sideAsk,
+    matchEvent:
+      overrides?.matchEvent ??
+      ((event, canSideAsk) => matchSelectionToolbarShortcut(event, platform, canSideAsk)),
+  };
 }
 
 const CAPSULE_SURFACE_CLASSNAME = cn(
@@ -158,6 +195,7 @@ export function AssistantSelectionToolbar({
   onCite,
   onSideAsk,
   canSideAsk = true,
+  shortcuts: shortcutOverrides,
 }: {
   viewport: HTMLElement | null;
   threadRef: ScopedThreadRef;
@@ -166,6 +204,7 @@ export function AssistantSelectionToolbar({
     | ((citation: AssistantCitation, sourceAnchor: AssistantCitationSourceAnchor) => boolean)
     | undefined;
   canSideAsk?: boolean | undefined;
+  shortcuts?: SelectionToolbarShortcutConfig | undefined;
 }) {
   const [selection, setSelection] = useState<{
     citation: AssistantCitation;
@@ -181,7 +220,7 @@ export function AssistantSelectionToolbar({
   const locale = useLocale();
   const platform = typeof navigator === "undefined" ? "" : navigator.platform;
   const copy = resolveSelectionToolbarCopy(locale);
-  const shortcuts = resolveSelectionToolbarShortcuts(platform);
+  const resolvedShortcuts = resolveSelectionToolbarShortcutConfig(platform, shortcutOverrides);
   const canShowSideAsk = Boolean(onSideAsk) && canSideAsk && !isInSideChatPane(viewport);
   const tooLong =
     selection !== null && selection.citation.text.length > ASSISTANT_CITATION_MAX_TEXT_LENGTH;
@@ -218,6 +257,7 @@ export function AssistantSelectionToolbar({
     hasSelection: false,
     tooLong: false,
     canShowSideAsk: false,
+    matchShortcut: resolvedShortcuts.matchEvent,
     cite,
     sideAsk,
   });
@@ -227,6 +267,7 @@ export function AssistantSelectionToolbar({
       hasSelection: selection !== null,
       tooLong,
       canShowSideAsk,
+      matchShortcut: resolvedShortcuts.matchEvent,
       cite,
       sideAsk,
     };
@@ -348,12 +389,7 @@ export function AssistantSelectionToolbar({
       const current = latestRef.current;
       if (!current.hasSelection || !toolbar) return;
 
-      const activePlatform = typeof navigator === "undefined" ? "" : navigator.platform;
-      const matchedShortcut = matchSelectionToolbarShortcut(
-        event,
-        activePlatform,
-        current.canShowSideAsk,
-      );
+      const matchedShortcut = current.matchShortcut(event, current.canShowSideAsk);
       if (matchedShortcut === "cite") {
         event.preventDefault();
         event.stopPropagation();
@@ -479,14 +515,16 @@ export function AssistantSelectionToolbar({
             onClick={cite}
           >
             <span>{copy.citeLabel}</span>
-            <kbd
-              aria-hidden="true"
-              data-selection-shortcut="true"
-              className={SHORTCUT_HINT_CLASSNAME}
-              style={citeGlassHover ? GLASS_HOVER_SHORTCUT_STYLE : undefined}
-            >
-              {shortcuts.cite}
-            </kbd>
+            {resolvedShortcuts.citeLabel ? (
+              <kbd
+                aria-hidden="true"
+                data-selection-shortcut="true"
+                className={SHORTCUT_HINT_CLASSNAME}
+                style={citeGlassHover ? GLASS_HOVER_SHORTCUT_STYLE : undefined}
+              >
+                {resolvedShortcuts.citeLabel}
+              </kbd>
+            ) : null}
           </button>
           {canShowSideAsk ? (
             <>
@@ -510,14 +548,16 @@ export function AssistantSelectionToolbar({
                 onClick={sideAsk}
               >
                 <span>{copy.sideAskLabel}</span>
-                <kbd
-                  aria-hidden="true"
-                  data-selection-shortcut="true"
-                  className={SHORTCUT_HINT_CLASSNAME}
-                  style={sideAskGlassHover ? GLASS_HOVER_SHORTCUT_STYLE : undefined}
-                >
-                  {shortcuts.sideAsk}
-                </kbd>
+                {resolvedShortcuts.sideAskLabel ? (
+                  <kbd
+                    aria-hidden="true"
+                    data-selection-shortcut="true"
+                    className={SHORTCUT_HINT_CLASSNAME}
+                    style={sideAskGlassHover ? GLASS_HOVER_SHORTCUT_STYLE : undefined}
+                  >
+                    {resolvedShortcuts.sideAskLabel}
+                  </kbd>
+                ) : null}
               </button>
             </>
           ) : null}

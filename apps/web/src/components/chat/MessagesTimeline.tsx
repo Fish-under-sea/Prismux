@@ -77,7 +77,10 @@ import {
   rememberTimelinePosition,
   resolveDisclosureRevealScrollDelta,
 } from "./timelineScrollAnchoring";
-import { AssistantSelectionToolbar } from "./AssistantSelectionToolbar";
+import {
+  AssistantSelectionToolbar,
+  type SelectionToolbarShortcutConfig,
+} from "./AssistantSelectionToolbar";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
 import { type AssistantCitationRequest } from "./AssistantCitationSource";
 import { useAssistantCitationTarget } from "./useAssistantCitationTarget";
@@ -243,6 +246,7 @@ interface MessagesTimelineProps {
     sourceAnchor: AssistantCitationSourceAnchor,
   ) => boolean;
   canSideAskAssistantText?: boolean;
+  selectionShortcuts?: SelectionToolbarShortcutConfig | undefined;
   onReplyToResponse?: TimelineRowSharedState["onReplyToResponse"];
   isWorking: boolean;
   /** The thread is catching up from a cached copy, whose working state may be stale. */
@@ -371,6 +375,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   onCiteAssistantText,
   onSideAskAssistantText,
   canSideAskAssistantText,
+  selectionShortcuts,
   onReplyToResponse,
   isWorking,
   syncing = false,
@@ -1734,6 +1739,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
                 onCite={onCiteAssistantText}
                 onSideAsk={onSideAskAssistantText}
                 canSideAsk={canSideAskAssistantText}
+                shortcuts={selectionShortcuts}
               />
             ) : null}
             <LegendList<MessagesTimelineRow>

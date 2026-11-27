@@ -23,7 +23,10 @@ import { clearPendingSideAskCitations, enqueueSideAskCitation } from "../../lib/
 import {
   matchSelectionToolbarShortcut,
   resolveSelectionToolbarCopy,
+  resolveSelectionToolbarShortcutConfig,
   resolveSelectionToolbarShortcuts,
+  SELECTION_CITE_COMMAND,
+  SELECTION_SIDE_ASK_COMMAND,
 } from "./AssistantSelectionToolbar";
 import { SideChatEmptySurface } from "./RightPanelEmptySurfaces";
 
@@ -94,6 +97,19 @@ describe("AssistantSelectionToolbar helpers", () => {
       cite: "⌘L",
       sideAsk: "⌘E",
     });
+
+    expect(SELECTION_CITE_COMMAND).toBe("chat.citeSelection");
+    expect(SELECTION_SIDE_ASK_COMMAND).toBe("chat.sideAskSelection");
+
+    const customMatcher = vi.fn(() => "side-ask" as const);
+    const custom = resolveSelectionToolbarShortcutConfig("Win32", {
+      citeLabel: "Alt+Q",
+      sideAskLabel: null,
+      matchEvent: customMatcher,
+    });
+    expect(custom.citeLabel).toBe("Alt+Q");
+    expect(custom.sideAskLabel).toBeNull();
+    expect(custom.matchEvent).toBe(customMatcher);
   });
 
   it("matches Ctrl/Cmd+L and Ctrl/Cmd+E cleanly and respects canSideAsk & modifier guards", () => {

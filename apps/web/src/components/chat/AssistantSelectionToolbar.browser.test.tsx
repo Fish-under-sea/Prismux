@@ -27,7 +27,10 @@ import {
   loadPersistedSideQuestions,
   savePersistedSideQuestions,
 } from "../overview/sessionOverview.logic";
-import { AssistantSelectionToolbar } from "./AssistantSelectionToolbar";
+import {
+  AssistantSelectionToolbar,
+  type SelectionToolbarShortcutConfig,
+} from "./AssistantSelectionToolbar";
 import { BackgroundThreadContext } from "./backgroundThread";
 import { SideChatEmptySurface } from "./RightPanelEmptySurfaces";
 
@@ -106,6 +109,7 @@ function SelectionToolbarHarness({
   canSideAsk = true,
   insideSideChatPane = false,
   backgroundThread = false,
+  shortcuts,
 }: {
   text?: string;
   locale?: string;
@@ -114,6 +118,7 @@ function SelectionToolbarHarness({
   canSideAsk?: boolean;
   insideSideChatPane?: boolean;
   backgroundThread?: boolean;
+  shortcuts?: SelectionToolbarShortcutConfig | undefined;
 }) {
   const [viewport, setViewport] = useState<HTMLDivElement | null>(null);
 
@@ -137,6 +142,7 @@ function SelectionToolbarHarness({
         onCite={(citation) => onCite(citation)}
         onSideAsk={onSideAsk ? (citation) => onSideAsk(citation) : undefined}
         canSideAsk={canSideAsk}
+        shortcuts={shortcuts}
       />
     </div>
   );
@@ -241,6 +247,65 @@ describe("AssistantSelectionToolbar (browser)", () => {
     );
     await expect.element(citeButton).toHaveTextContent(mac ? "Cite⌘L" : "CiteCtrl+L");
     await expect.element(sideAskButton).toHaveTextContent(mac ? "Side ask⌘E" : "Side askCtrl+E");
+  });
+
+  it("syncs injected custom keybinding labels, hides unbound badges, and dispatches via injected matcher", async () => {
+    using _scope = acquireSelectionTestScope();
+    const onCite = vi.fn(() => true);
+    const onSideAsk = vi.fn(() => true);
+
+    const customShortcuts: SelectionToolbarShortcutConfig = {
+      citeLabel: "Alt+Q",
+      sideAskLabel: null,
+      matchEvent: (event, canSideAsk) => {
+        if (event.altKey && event.key.toLowerCase() === "q") return "cite";
+        if (canSideAsk && event.altKey && event.key.toLowerCase() === "b") return "side-ask";
+        return null;
+      },
+    };
+
+    await using _screen = await render(
+      <SelectionToolbarHarness
+        locale="zh"
+        onCite={onCite}
+        onSideAsk={onSideAsk}
+        shortcuts={customShortcuts}
+      />,
+    );
+
+    await selectMessageSubstring(0, 8);
+    const citeButton = page.getByTestId("selection-action-cite");
+    const sideAskButton = page.getByTestId("selection-action-side-ask");
+    await expect.element(citeButton).toHaveTextContent("引用Alt+Q");
+    await expect.element(sideAskButton).toHaveTextContent("旁路提问");
+    expect(
+      document
+        .querySelector('[data-testid="selection-action-side-ask"]')
+        ?.querySelector('[data-selection-shortcut="true"]'),
+    ).toBeNull();
+
+    // Old default Ctrl+L should NOT trigger when custom matcher overrides it
+    const oldDefaultL = new KeyboardEvent("keydown", primaryModKeyEventInit("l"));
+    await act(() => {
+      document.dispatchEvent(oldDefaultL);
+    });
+    expect(oldDefaultL.defaultPrevented).toBe(false);
+    expect(onCite).not.toHaveBeenCalled();
+
+    // Custom Alt+B triggers side-ask cleanly
+    const customSideAsk = new KeyboardEvent("keydown", {
+      key: "b",
+      code: "KeyB",
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(() => {
+      document.dispatchEvent(customSideAsk);
+    });
+    expect(customSideAsk.defaultPrevented).toBe(true);
+    expect(onSideAsk).toHaveBeenCalledTimes(1);
+    await expect.element(page.getByTestId("assistant-selection-toolbar")).not.toBeInTheDocument();
   });
 
   it("cites on button click and Ctrl/Cmd+L, clearing selection and dismissing toolbar without hijacking idle shortcuts", async () => {
