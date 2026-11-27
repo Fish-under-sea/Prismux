@@ -117,6 +117,7 @@ export interface DaemonChiefStatusResponse {
   dialMode: "agent" | "oracle" | "review";
   availableProviders?: string[];
   availableDialModes?: Array<"agent" | "oracle" | "review">;
+  coreConnected?: boolean;
   t3Connected?: boolean;
 }
 
@@ -147,6 +148,7 @@ export interface DaemonMemoryStatsResponse {
   byNamespace: Record<string, number>;
   byKind: Record<string, number>;
   latestUpdatedAt: number | null;
+  dbSizeBytes?: number | null;
   dbPath?: string;
 }
 
@@ -157,7 +159,9 @@ export interface DaemonMemorySearchItemDto {
   title?: string;
   content: string;
   tags?: string[];
+  source?: string;
   score?: number;
+  createdAt?: number;
   updatedAt?: number;
   [key: string]: unknown;
 }
@@ -166,9 +170,38 @@ export interface DaemonMemorySearchResponse {
   ok: boolean;
   callerScope?: string;
   query?: string;
+  hits?: DaemonMemorySearchItemDto[];
   results: DaemonMemorySearchItemDto[];
   items?: DaemonMemorySearchItemDto[];
   total?: number;
+  totalCandidates?: number;
+  degradedToFtsOnly?: boolean;
+}
+
+export interface DaemonMemoryUpsertRequest {
+  id?: string;
+  namespace: string;
+  kind: DaemonObsidianCuratedKind | string;
+  title?: string;
+  content: string;
+  tags?: string[];
+  source?: string;
+  callerScope?: string;
+}
+
+export interface DaemonMemoryUpsertResponse {
+  ok: boolean;
+  entry?: DaemonMemorySearchItemDto;
+  id?: string;
+  [key: string]: unknown;
+}
+
+export interface DaemonMemoryDeleteResponse {
+  ok: boolean;
+  deleted?: boolean;
+  id?: string;
+  deletedAt?: number;
+  [key: string]: unknown;
 }
 
 export interface DaemonObsidianImportResponse {
@@ -200,12 +233,15 @@ export interface DaemonObsidianCuratedItemDto {
   selected: boolean;
   curationSource: DaemonObsidianCurationSource;
   redactedSecrets?: number;
+  redactedSecretCount?: number;
 }
 
 export interface DaemonObsidianImportPlanStatsDto {
   scannedFiles: number;
   curatedCount: number;
-  dedupedCount: number;
+  dedupedCount?: number;
+  deduplicatedCount?: number;
+  skippedFiles?: number;
   filteredNoiseCount: number;
   redactedSecretCount: number;
 }
@@ -213,10 +249,12 @@ export interface DaemonObsidianImportPlanStatsDto {
 export interface DaemonObsidianImportPlanResponse {
   ok: boolean;
   vaultPath: string;
-  namespace: string;
+  namespace?: string;
+  defaultNamespace?: string;
   curationSource: DaemonObsidianCurationSource;
   curatorLabel?: string;
   fallbackReason?: string;
+  warnings?: string[];
   items: DaemonObsidianCuratedItemDto[];
   stats: DaemonObsidianImportPlanStatsDto;
 }
@@ -225,8 +263,11 @@ export interface DaemonObsidianImportCommitResponse {
   ok: boolean;
   committedCount: number;
   skippedCount: number;
+  redactedSecretCount?: number;
   entryIds: string[];
-  namespace: string;
+  namespace?: string;
+  namespaces?: string[];
+  warnings?: string[];
 }
 
 export interface DaemonSyncStatusResponse {
@@ -1595,25 +1636,79 @@ export class PrismuxDaemonClient {
     return this.requestJson<DaemonMemoryStatsResponse>("/v1/memory/stats");
   }
 
-  searchMemory(payload: {
+  async searchMemory(payload: {
     query: string;
     limit?: number;
     namespace?: string;
+    namespaces?: string[];
+    kinds?: string[];
+    callerScope?: string;
   }): Promise<DaemonMemorySearchResponse> {
-    return this.requestJson<DaemonMemorySearchResponse>("/v1/memory/search", {
+    const normalizedNamespaces =
+      Array.isArray(payload.namespaces) && payload.namespaces.length > 0
+        ? payload.namespaces.map((ns) => ns.trim()).filter((ns) => ns.length > 0)
+        : typeof payload.namespace === "string" && payload.namespace.trim().length > 0
+          ? [payload.namespace.trim()]
+          : undefined;
+    const body: Record<string, unknown> = {
+      query: payload.query,
+      ...(payload.limit !== undefined ? { limit: payload.limit } : {}),
+      ...(normalizedNamespaces && normalizedNamespaces.length > 0
+        ? { namespaces: normalizedNamespaces }
+        : {}),
+      ...(Array.isArray(payload.kinds) && payload.kinds.length > 0 ? { kinds: payload.kinds } : {}),
+      ...(payload.callerScope ? { callerScope: payload.callerScope } : {}),
+    };
+    const raw = await this.requestJson<DaemonMemorySearchResponse>("/v1/memory/search", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    const list = Array.isArray(raw?.hits)
+      ? raw.hits
+      : Array.isArray(raw?.results)
+        ? raw.results
+        : Array.isArray(raw?.items)
+          ? raw.items
+          : [];
+    return {
+      ...raw,
+      hits: list,
+      results: list,
+      items: list,
+      total: typeof raw?.total === "number" ? raw.total : list.length,
+    };
+  }
+
+  upsertMemory(payload: DaemonMemoryUpsertRequest): Promise<DaemonMemoryUpsertResponse> {
+    return this.requestJson<DaemonMemoryUpsertResponse>("/v1/memory/upsert", {
       method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
+  deleteMemory(id: string): Promise<DaemonMemoryDeleteResponse> {
+    return this.requestJson<DaemonMemoryDeleteResponse>(
+      `/v1/memory/entries/${encodeURIComponent(id.trim())}`,
+      {
+        method: "DELETE",
+      },
+    );
+  }
+
   importObsidian(payload: {
     vaultPath: string;
+    targetNamespace?: string;
     namespace?: string;
     dryRun?: boolean;
   }): Promise<DaemonObsidianImportResponse> {
+    const targetNamespace = (payload.targetNamespace ?? payload.namespace)?.trim();
     return this.requestJson<DaemonObsidianImportResponse>("/v1/memory/import-obsidian", {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        vaultPath: payload.vaultPath,
+        ...(targetNamespace ? { targetNamespace } : {}),
+        ...(payload.dryRun !== undefined ? { dryRun: payload.dryRun } : {}),
+      }),
     });
   }
 

@@ -49,6 +49,10 @@ import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { toastManager } from "../components/ui/toast";
+import {
+  formatUsageModelDisplayName,
+  unwrapUsageModelSlug,
+} from "../components/usage/usageCallTelemetryStore";
 import { useWorkspaceTabsStore } from "../components/workspace/workspaceTabsStore";
 import { getClientSettings } from "../hooks/useSettings";
 import { useStableCallback } from "../hooks/useStableCallback";
@@ -58,7 +62,6 @@ import {
   deriveProviderInstanceEntries,
   disambiguateProviderInstanceDisplayNames,
   orderProviderInstanceEntries,
-  resolveConfiguredProviderLabel,
   type ProviderInstanceEntry,
 } from "../providerInstances";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -73,8 +76,12 @@ import {
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../types";
-import { resolveAgentBrandId } from "./agentBrand";
+import { resolveAcpAgentBrandKey, resolveAgentBrandId } from "./agentBrand";
 import { prismuxDaemonClient } from "./daemonClient";
+import {
+  resolveConfiguredProviderDisplayName,
+  type ConfiguredProviderSettingsSlice,
+} from "./providerDisplayName";
 import {
   PRISMUX_SUBSCRIPTION_BLOCKED_EVENT,
   SubscriptionOrchestrationBlockedDialog,
@@ -104,9 +111,7 @@ export function isAntigravityDispatchProvider(provider: string | null | undefine
   if (typeof provider !== "string") return false;
   const trimmed = provider.trim();
   if (trimmed.length === 0) return false;
-  return (
-    ANTIGRAVITY_PROVIDER_RE.test(trimmed) || resolveAgentBrandId(trimmed) === "antigravity"
-  );
+  return ANTIGRAVITY_PROVIDER_RE.test(trimmed) || resolveAgentBrandId(trimmed) === "antigravity";
 }
 
 export function isRemoteOrNonHumanCaller(callerKind: string | null | undefined): boolean {
@@ -167,6 +172,186 @@ export function formatDispatchReplyChannelDetail(
   return replyChannel.kind?.trim() || null;
 }
 
+export interface ChiefDispatchContext {
+  readonly provider?: string | null;
+  readonly model?: string | null;
+  readonly reasoningEffort?: string | null;
+  readonly workspacePath?: string | null;
+  readonly agentsMdContent?: string | null;
+  readonly agentsMdPath?: string | null;
+}
+
+const CHIEF_PROVIDER_ALIAS_RE = /^(?:chief(?:[-_:\s]slot)?|secretary|主秘书)$/i;
+const CHIEF_AGENTS_MD_MARKER = "<!-- prismux:chief-agents-md -->";
+
+function normalizeWorkspacePathForCompare(raw: string | null | undefined): string {
+  if (typeof raw !== "string") return "";
+  return raw.trim().replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+function isChiefWorkspacePathLike(raw: string | null | undefined): boolean {
+  const normalized = normalizeWorkspacePathForCompare(raw);
+  return (
+    normalized.endsWith("/.prismux/chief") ||
+    normalized.endsWith("/prismux/chief") ||
+    normalized === "~/.prismux/chief"
+  );
+}
+
+/**
+ * Returns true when an incoming IPC dispatch envelope targets the Chief Secretary slot
+ * (either via provider alias `"chief"` / `"secretary"` / empty, or via the Chief's workspace path).
+ */
+export function isChiefDispatchEnvelope(
+  envelope: Pick<PrismuxDispatchEnvelope, "provider" | "workspacePath" | "worktreePath">,
+  chiefWorkspacePath?: string | null,
+): boolean {
+  const rawProvider = envelope.provider.trim();
+  if (rawProvider.length === 0 || CHIEF_PROVIDER_ALIAS_RE.test(rawProvider)) {
+    return true;
+  }
+  const envPath = normalizeWorkspacePathForCompare(
+    envelope.worktreePath?.trim() || envelope.workspacePath,
+  );
+  if (!envPath) return false;
+  if (isChiefWorkspacePathLike(envPath)) {
+    return true;
+  }
+  const normalizedChiefPath = normalizeWorkspacePathForCompare(chiefWorkspacePath);
+  return normalizedChiefPath.length > 0 && envPath === normalizedChiefPath;
+}
+
+/**
+ * Prepends the independent Chief `AGENTS.md` persona & rules into a Chief-routed prompt
+ * idempotently (never injects visual/appearance data, preserving the 0-Token visual layer rule).
+ */
+export function buildChiefDispatchPrompt(
+  prompt: string,
+  agentsMdContent: string | null | undefined,
+): string {
+  const trimmedAgentsMd = typeof agentsMdContent === "string" ? agentsMdContent.trim() : "";
+  if (trimmedAgentsMd.length === 0) {
+    return prompt;
+  }
+  if (
+    prompt.includes(CHIEF_AGENTS_MD_MARKER) ||
+    prompt.includes("<!-- prismux:chief-identity:begin -->")
+  ) {
+    return prompt;
+  }
+  return `${CHIEF_AGENTS_MD_MARKER}\n[主秘书独立指令（~/.prismux/chief/AGENTS.md）]\n${trimmedAgentsMd}\n\n---\n\n${prompt}`;
+}
+
+function isSyntheticDefaultModelId(
+  modelId: string,
+  providerModels: ReadonlyArray<ServerProvider["models"][number]>,
+): boolean {
+  const trimmed = modelId.trim();
+  if (trimmed.length === 0) return true;
+  if (providerModels.some((item) => item.slug === trimmed)) {
+    return false;
+  }
+  const lower = trimmed.toLowerCase();
+  return (
+    lower === "default" ||
+    lower === "auto" ||
+    lower.endsWith("-default") ||
+    lower.endsWith("_default")
+  );
+}
+
+function extractAcpCandidateHints(candidate: ServerProvider): {
+  readonly agentId?: string;
+  readonly commandPath?: string;
+} {
+  const rec = candidate as unknown as Record<string, unknown>;
+  const config =
+    rec.config !== null && typeof rec.config === "object" && !Array.isArray(rec.config)
+      ? (rec.config as Record<string, unknown>)
+      : null;
+  const agentId =
+    typeof rec.acpRegistryAgentId === "string" && rec.acpRegistryAgentId.trim().length > 0
+      ? rec.acpRegistryAgentId.trim()
+      : typeof config?.agentId === "string" && config.agentId.trim().length > 0
+        ? config.agentId.trim()
+        : undefined;
+  const commandPath =
+    typeof rec.acpCommandPath === "string" && rec.acpCommandPath.trim().length > 0
+      ? rec.acpCommandPath.trim()
+      : typeof config?.commandPath === "string" && config.commandPath.trim().length > 0
+        ? config.commandPath.trim()
+        : undefined;
+  return {
+    ...(agentId ? { agentId } : {}),
+    ...(commandPath ? { commandPath } : {}),
+  };
+}
+
+function matchDispatchProvider(
+  rawProvider: string,
+  candidates: ReadonlyArray<ServerProvider>,
+  mappedDriver: ProviderDriverKind | null,
+): ServerProvider | null {
+  if (candidates.length === 0) return null;
+  const rawProviderLower = rawProvider.toLowerCase();
+  const targetBrand = resolveAgentBrandId(rawProvider);
+  const hasSpecificTargetBrand = targetBrand !== "custom" && targetBrand !== "acp";
+
+  const exactInstance = candidates.find(
+    (candidate) =>
+      candidate.instanceId === rawProvider ||
+      candidate.instanceId.toLowerCase() === rawProviderLower,
+  );
+  if (exactInstance) return exactInstance;
+
+  const exactAcpAgent = candidates.find((candidate) => {
+    const hints = extractAcpCandidateHints(candidate);
+    return (
+      (hints.agentId !== undefined && hints.agentId.toLowerCase() === rawProviderLower) ||
+      (hints.commandPath !== undefined &&
+        hints.commandPath.toLowerCase().includes(rawProviderLower))
+    );
+  });
+  if (exactAcpAgent) return exactAcpAgent;
+
+  const exactDriver = candidates.find(
+    (candidate) =>
+      candidate.driver === rawProvider ||
+      (mappedDriver !== null && candidate.driver === mappedDriver),
+  );
+  if (exactDriver) return exactDriver;
+
+  if (hasSpecificTargetBrand) {
+    const brandMatched = candidates.find((candidate) => {
+      const hints = extractAcpCandidateHints(candidate);
+      const acpBrandKey =
+        candidate.driver === "acpRegistry"
+          ? resolveAcpAgentBrandKey({
+              agentId: hints.agentId,
+              commandPath: hints.commandPath,
+              instanceId: candidate.instanceId,
+              displayName: candidate.displayName,
+            })
+          : null;
+      return (
+        (acpBrandKey !== null && resolveAgentBrandId(acpBrandKey) === targetBrand) ||
+        resolveAgentBrandId(hints.agentId) === targetBrand ||
+        resolveAgentBrandId(candidate.driver) === targetBrand ||
+        resolveAgentBrandId(candidate.instanceId) === targetBrand ||
+        resolveAgentBrandId(candidate.displayName) === targetBrand
+      );
+    });
+    if (brandMatched) return brandMatched;
+  }
+
+  const displayNameMatched = candidates.find(
+    (candidate) =>
+      typeof candidate.displayName === "string" &&
+      candidate.displayName.trim().toLowerCase() === rawProviderLower,
+  );
+  return displayNameMatched ?? null;
+}
+
 function mapCanonicalProviderDriver(rawProvider: string): ProviderDriverKind | null {
   const brand = resolveAgentBrandId(rawProvider);
   switch (brand) {
@@ -198,36 +383,14 @@ export function buildDispatchModelSelection(
   availableProviders: ReadonlyArray<ServerProvider> = [],
 ): ModelSelection {
   const rawProvider = envelope.provider.trim();
-  const rawProviderLower = rawProvider.toLowerCase();
   const mappedDriver = mapCanonicalProviderDriver(rawProvider);
-  const targetBrand = resolveAgentBrandId(rawProvider);
-  const hasSpecificTargetBrand = targetBrand !== "custom" && targetBrand !== "acp";
 
+  const healthyProviders = availableProviders.filter(
+    (candidate) => candidate.enabled !== false && candidate.status !== "error",
+  );
   const matchedProvider =
-    availableProviders.find(
-      (candidate) =>
-        candidate.instanceId === rawProvider ||
-        candidate.instanceId.toLowerCase() === rawProviderLower,
-    ) ??
-    availableProviders.find(
-      (candidate) =>
-        candidate.driver === rawProvider ||
-        (mappedDriver !== null && candidate.driver === mappedDriver),
-    ) ??
-    (hasSpecificTargetBrand
-      ? availableProviders.find(
-          (candidate) =>
-            resolveAgentBrandId(candidate.driver) === targetBrand ||
-            resolveAgentBrandId(candidate.instanceId) === targetBrand ||
-            resolveAgentBrandId(candidate.displayName) === targetBrand,
-        )
-      : undefined) ??
-    availableProviders.find(
-      (candidate) =>
-        typeof candidate.displayName === "string" &&
-        candidate.displayName.trim().toLowerCase() === rawProviderLower,
-    ) ??
-    null;
+    matchDispatchProvider(rawProvider, healthyProviders, mappedDriver) ??
+    matchDispatchProvider(rawProvider, availableProviders, mappedDriver);
 
   const instanceId =
     matchedProvider?.instanceId ??
@@ -235,25 +398,45 @@ export function buildDispatchModelSelection(
       ? defaultInstanceIdForDriver(mappedDriver)
       : ProviderInstanceId.make("codex"));
 
-  const effectiveDriver = matchedProvider?.driver ?? mappedDriver ?? ProviderDriverKind.make("codex");
-  const modelId =
-    envelope.modelId.trim() ||
-    DEFAULT_MODEL_BY_PROVIDER[effectiveDriver] ||
-    "gpt-6.2-sol";
+  const effectiveDriver =
+    matchedProvider?.driver ?? mappedDriver ?? ProviderDriverKind.make("codex");
+  const providerModels = matchedProvider?.models ?? [];
+  const rawModelId = envelope.modelId.trim();
+  const unwrappedRequested = unwrapUsageModelSlug(rawModelId).toLowerCase();
+
+  let matchedModel =
+    rawModelId.length > 0
+      ? (providerModels.find((item) => item.slug === rawModelId) ??
+        providerModels.find(
+          (item) =>
+            unwrapUsageModelSlug(item.slug).toLowerCase() === unwrappedRequested ||
+            item.name.trim().toLowerCase() === unwrappedRequested,
+        ))
+      : undefined;
+
+  let modelId: string;
+  if (rawModelId.length > 0 && !isSyntheticDefaultModelId(rawModelId, providerModels)) {
+    modelId = matchedModel?.slug ?? rawModelId;
+  } else {
+    const defaultCatalogModel = providerModels.find((item) => item.isDefault) ?? providerModels[0];
+    matchedModel = defaultCatalogModel;
+    modelId =
+      defaultCatalogModel?.slug ?? DEFAULT_MODEL_BY_PROVIDER[effectiveDriver] ?? "gpt-6.2-sol";
+  }
 
   const effort = envelope.reasoningEffort.trim();
   let options: ReadonlyArray<ProviderOptionSelection> | undefined;
   if (effort.length > 0 && effort.toLowerCase() !== "default") {
-    const matchedModel = matchedProvider?.models.find((item) => item.slug === modelId);
-    const descriptor = matchedModel?.capabilities?.optionDescriptors?.find(
+    const descriptorSource =
+      matchedModel ?? providerModels.find((item) => item.isDefault) ?? providerModels[0];
+    const descriptor = descriptorSource?.capabilities?.optionDescriptors?.find(
       (candidate) =>
         candidate.type === "select" &&
         (candidate.role === "reasoning" ||
           (MODEL_REASONING_EFFORT_OPTION_IDS as readonly string[]).includes(candidate.id)),
     );
     const optionId =
-      descriptor?.id ??
-      (effectiveDriver === "claudeAgent" ? "effort" : "reasoningEffort");
+      descriptor?.id ?? (effectiveDriver === "claudeAgent" ? "effort" : "reasoningEffort");
     options = [{ id: optionId, value: effort }];
   }
 
@@ -263,16 +446,22 @@ export function buildDispatchModelSelection(
 export function deriveDispatchThreadTitle(
   envelope: PrismuxDispatchEnvelope,
   configuredEntries: ReadonlyArray<ProviderInstanceEntry> = [],
+  settings?: ConfiguredProviderSettingsSlice | null,
 ): string {
   const firstLine =
     envelope.prompt
       .split(/\r?\n/)
       .map((line) => line.trim())
-      .find((line) => line.length > 0) ?? "";
+      .find((line) => line.length > 0 && !line.startsWith("<!--")) ?? "";
   if (firstLine.length > 0) {
     return firstLine.length > 64 ? `${firstLine.slice(0, 61)}...` : firstLine;
   }
-  return `${resolveConfiguredProviderLabel(envelope.provider, configuredEntries)} · ${formatDispatchCallerLabel(envelope)}`;
+  const providerLabel = resolveConfiguredProviderDisplayName({
+    provider: envelope.provider,
+    providerInstances: configuredEntries,
+    settings,
+  });
+  return `${providerLabel} · ${formatDispatchCallerLabel(envelope)}`;
 }
 
 export function isValidDispatchEnvelope(value: unknown): value is PrismuxDispatchEnvelope {
@@ -293,6 +482,8 @@ export function isValidDispatchEnvelope(value: unknown): value is PrismuxDispatc
 }
 
 export interface DispatchExecutionDeps {
+  readonly resolveChiefContext?: () => Promise<ChiefDispatchContext | null>;
+  readonly getConfiguredEntries?: () => ReadonlyArray<ProviderInstanceEntry>;
   readonly resolveTargetProject: (
     workspacePath: string,
     worktreePath: string | null,
@@ -373,6 +564,7 @@ export async function dispatchStagedThreadTurn(
   deps: Pick<
     DispatchExecutionDeps,
     | "allocateIds"
+    | "getConfiguredEntries"
     | "getPrompt"
     | "markDraftThreadPromoting"
     | "clearComposerContent"
@@ -387,7 +579,10 @@ export async function dispatchStagedThreadTurn(
       ? livePrompt
       : staged.envelope.prompt;
   const threadRef = scopeThreadRef(staged.environmentId, staged.threadId);
-  const title = deriveDispatchThreadTitle({ ...staged.envelope, prompt: promptText });
+  const title = deriveDispatchThreadTitle(
+    { ...staged.envelope, prompt: promptText },
+    deps.getConfiguredEntries?.() ?? [],
+  );
   const ids = deps.allocateIds?.();
   const messageId = ids?.messageId ?? newMessageId();
   const createdAt = staged.envelope.createdAt || new Date().toISOString();
@@ -427,13 +622,62 @@ export async function handlePrismuxDispatchEnvelope(
   | { readonly outcome: "staged_confirmation"; readonly staged: StagedPrismuxDispatch }
   | { readonly outcome: "failed"; readonly error: string }
 > {
+  let effectiveEnvelope: PrismuxDispatchEnvelope = envelope;
+  let chiefPromptForDraft = envelope.prompt;
+
+  if (deps.resolveChiefContext && isChiefDispatchEnvelope(envelope)) {
+    try {
+      const chiefCtx = await deps.resolveChiefContext();
+      if (chiefCtx) {
+        const rawProvider = envelope.provider.trim();
+        const shouldUseChiefProvider =
+          rawProvider.length === 0 || CHIEF_PROVIDER_ALIAS_RE.test(rawProvider);
+        const resolvedProvider =
+          shouldUseChiefProvider && chiefCtx.provider?.trim()
+            ? chiefCtx.provider.trim()
+            : envelope.provider;
+        const rawModel = envelope.modelId.trim();
+        const resolvedModelId =
+          (rawModel.length === 0 || isSyntheticDefaultModelId(rawModel, [])) &&
+          chiefCtx.model?.trim()
+            ? chiefCtx.model.trim()
+            : envelope.modelId;
+        const rawEffort = envelope.reasoningEffort.trim();
+        const resolvedEffort =
+          (rawEffort.length === 0 || rawEffort.toLowerCase() === "default") &&
+          chiefCtx.reasoningEffort?.trim()
+            ? chiefCtx.reasoningEffort.trim()
+            : envelope.reasoningEffort;
+        const resolvedWorkspacePath =
+          envelope.workspacePath.trim().length > 0
+            ? envelope.workspacePath
+            : (chiefCtx.workspacePath?.trim() ?? "");
+
+        chiefPromptForDraft = buildChiefDispatchPrompt(envelope.prompt, chiefCtx.agentsMdContent);
+        effectiveEnvelope = {
+          ...envelope,
+          provider: resolvedProvider,
+          modelId: resolvedModelId,
+          reasoningEffort: resolvedEffort,
+          workspacePath: resolvedWorkspacePath,
+        };
+      }
+    } catch {
+      // Proceed gracefully with original envelope if daemon chief context lookup fails.
+    }
+  }
+
   const worktreePath =
-    typeof envelope.worktreePath === "string" && envelope.worktreePath.trim().length > 0
-      ? envelope.worktreePath.trim()
+    typeof effectiveEnvelope.worktreePath === "string" &&
+    effectiveEnvelope.worktreePath.trim().length > 0
+      ? effectiveEnvelope.worktreePath.trim()
       : null;
-  const targetProject = await deps.resolveTargetProject(envelope.workspacePath, worktreePath);
+  const targetProject = await deps.resolveTargetProject(
+    effectiveEnvelope.workspacePath,
+    worktreePath,
+  );
   if (targetProject === null) {
-    const error = `未找到或无法初始化工作区：${worktreePath ?? envelope.workspacePath}`;
+    const error = `未找到或无法初始化工作区：${worktreePath ?? effectiveEnvelope.workspacePath}`;
     deps.onError?.(error);
     return { outcome: "failed", error };
   }
@@ -443,14 +687,17 @@ export async function handlePrismuxDispatchEnvelope(
     threadId: newThreadId(),
     messageId: newMessageId(),
   };
-  const createdAt = envelope.createdAt || new Date().toISOString();
+  const createdAt = effectiveEnvelope.createdAt || new Date().toISOString();
   const projectRef = scopeProjectRef(targetProject.environmentId, targetProject.projectId);
-  const modelSelection = buildDispatchModelSelection(envelope, targetProject.providers);
-  const tabTitle = deriveDispatchThreadTitle(envelope);
+  const modelSelection = buildDispatchModelSelection(effectiveEnvelope, targetProject.providers);
+  const tabTitle = deriveDispatchThreadTitle(
+    effectiveEnvelope,
+    deps.getConfiguredEntries?.() ?? [],
+  );
 
   deps.setLogicalProjectDraftThreadId(targetProject.logicalProjectKey, projectRef, ids.draftId, {
     threadId: ids.threadId,
-    branch: envelope.branchName ?? null,
+    branch: effectiveEnvelope.branchName ?? null,
     worktreePath,
     createdAt,
     envMode: worktreePath ? "worktree" : "local",
@@ -462,11 +709,11 @@ export async function handlePrismuxDispatchEnvelope(
     explicit: true,
     replaceOptions: true,
   });
-  deps.setPrompt(ids.draftId, envelope.prompt);
+  deps.setPrompt(ids.draftId, chiefPromptForDraft);
 
   deps.openWorkspaceDraftTab({
     title: tabTitle,
-    providerId: envelope.provider,
+    providerId: effectiveEnvelope.provider,
     instanceId: modelSelection.instanceId,
     model: modelSelection.model,
     environmentId: targetProject.environmentId,
@@ -477,7 +724,10 @@ export async function handlePrismuxDispatchEnvelope(
   await deps.navigateToDraft(ids.draftId);
 
   const staged: StagedPrismuxDispatch = {
-    envelope,
+    envelope: {
+      ...effectiveEnvelope,
+      prompt: chiefPromptForDraft,
+    },
     environmentId: targetProject.environmentId,
     projectId: targetProject.projectId,
     draftId: ids.draftId,
@@ -486,7 +736,7 @@ export async function handlePrismuxDispatchEnvelope(
     stagedAt: createdAt,
   };
 
-  if (!shouldAutoSendDispatch(envelope)) {
+  if (!shouldAutoSendDispatch(effectiveEnvelope)) {
     deps.onStagedForConfirmation(staged);
     return { outcome: "staged_confirmation", staged };
   }
@@ -494,7 +744,7 @@ export async function handlePrismuxDispatchEnvelope(
   const sendResult = await dispatchStagedThreadTurn(staged, deps);
   if (!sendResult.ok) {
     const error = sendResult.error ?? "调度任务发送失败。";
-    const blocked = extractSubscriptionOrchestrationBlockedError(error, envelope.provider);
+    const blocked = extractSubscriptionOrchestrationBlockedError(error, effectiveEnvelope.provider);
     if (blocked) {
       deps.onSubscriptionBlocked?.(blocked);
       return { outcome: "failed", error };
@@ -502,7 +752,7 @@ export async function handlePrismuxDispatchEnvelope(
     deps.onError?.(error);
     return { outcome: "failed", error };
   }
-  deps.onAutoSent?.(envelope, ids.threadId);
+  deps.onAutoSent?.(effectiveEnvelope, ids.threadId);
   return { outcome: "auto_sent", staged };
 }
 
@@ -569,6 +819,7 @@ export interface PrismuxDispatchConfirmationBannerProps {
   readonly busyTaskId: string | null;
   readonly errorMessage: string | null;
   readonly configuredEntries?: ReadonlyArray<ProviderInstanceEntry>;
+  readonly settings?: ConfiguredProviderSettingsSlice | null;
   readonly onConfirm: (staged: StagedPrismuxDispatch) => void;
   readonly onCancel: (staged: StagedPrismuxDispatch) => void;
 }
@@ -578,6 +829,7 @@ export function PrismuxDispatchConfirmationBanner({
   busyTaskId,
   errorMessage,
   configuredEntries = [],
+  settings = null,
   onConfirm,
   onCancel,
 }: PrismuxDispatchConfirmationBannerProps) {
@@ -588,7 +840,19 @@ export function PrismuxDispatchConfirmationBanner({
   const sourceLabel = formatDispatchCallerLabel(envelope);
   const replyDetail = formatDispatchReplyChannelDetail(envelope.replyChannel);
   const targetPath = envelope.worktreePath?.trim() || envelope.workspacePath.trim();
-  const providerDisplay = resolveConfiguredProviderLabel(envelope.provider, configuredEntries);
+  const providerDisplay = resolveConfiguredProviderDisplayName({
+    provider: envelope.provider,
+    providerInstances: configuredEntries,
+    settings,
+  });
+  const modelDisplay =
+    formatUsageModelDisplayName(
+      envelope.modelId || active.modelSelection.model,
+      configuredEntries,
+      envelope.provider,
+    ) ||
+    unwrapUsageModelSlug(envelope.modelId || active.modelSelection.model) ||
+    "默认模型";
   const isAgy = isAntigravityDispatchProvider(envelope.provider);
   const headline = isAgy
     ? // oxlint-disable-next-line prismux/no-em-dash-copy -- Prismux v3 spec mandates verbatim Chinese confirmation copy with ——
@@ -631,7 +895,7 @@ export function PrismuxDispatchConfirmationBanner({
                     {sourceLabel}
                   </Badge>
                   <Badge variant="outline" size="sm">
-                    {providerDisplay} · {envelope.modelId}
+                    {providerDisplay} · {modelDisplay}
                   </Badge>
                   {envelope.reasoningEffort ? (
                     <Badge variant="secondary" size="sm">
@@ -671,7 +935,8 @@ export function PrismuxDispatchConfirmationBanner({
             ) : null}
             {envelope.memoryContextSummary ? (
               <div className="line-clamp-2 text-2xs">
-                记忆上下文：<span className="text-foreground/85">{envelope.memoryContextSummary}</span>
+                记忆上下文：
+                <span className="text-foreground/85">{envelope.memoryContextSummary}</span>
               </div>
             ) : null}
             <div className="line-clamp-2 text-2xs">
@@ -752,8 +1017,7 @@ export function PrismuxIpcDispatchBridge() {
   const queuePromiseRef = useRef<Promise<void>>(Promise.resolve());
 
   const resolveLatestConfiguredEntries = (): ReadonlyArray<ProviderInstanceEntry> => {
-    const localEnvId =
-      appAtomRegistry.get(localEnvironmentIdAtom) ?? EnvironmentId.make("primary");
+    const localEnvId = appAtomRegistry.get(localEnvironmentIdAtom) ?? EnvironmentId.make("primary");
     const config = appAtomRegistry.get(environmentServerConfigsAtom).get(localEnvId);
     if (!config) {
       return configuredEntries;
@@ -770,6 +1034,43 @@ export function PrismuxIpcDispatchBridge() {
     const tabsStore = useWorkspaceTabsStore.getState();
 
     return {
+      getConfiguredEntries: resolveLatestConfiguredEntries,
+      resolveChiefContext: async () => {
+        const [chiefRes, agentsMdRes] = await Promise.all([
+          prismuxDaemonClient.getChief().catch(() => null),
+          prismuxDaemonClient.getChiefAgentsMd().catch(() => null),
+        ]);
+        if (!chiefRes?.slot && !agentsMdRes?.content) {
+          return null;
+        }
+        const slot = chiefRes?.slot;
+        const provider =
+          (typeof slot?.activeProvider === "string" && slot.activeProvider.trim()) ||
+          (typeof slot?.provider === "string" && slot.provider.trim()) ||
+          null;
+        const model =
+          typeof slot?.model === "string" && slot.model.trim() ? slot.model.trim() : null;
+        const reasoningEffort =
+          (typeof slot?.reasoningEffort === "string" && slot.reasoningEffort.trim()) ||
+          (typeof slot?.defaultEffort === "string" && slot.defaultEffort.trim()) ||
+          null;
+        const agentsMdPath =
+          agentsMdRes?.path?.trim() ||
+          chiefRes?.agentsMdPath?.trim() ||
+          (typeof slot?.agentsMdPath === "string" ? slot.agentsMdPath.trim() : "") ||
+          null;
+        const derivedWorkspacePath = agentsMdPath
+          ? agentsMdPath.replace(/[\\/]AGENTS\.md$/i, "")
+          : null;
+        return {
+          provider,
+          model,
+          reasoningEffort,
+          workspacePath: derivedWorkspacePath,
+          agentsMdContent: agentsMdRes?.content ?? null,
+          agentsMdPath,
+        };
+      },
       resolveTargetProject: async (workspacePath, worktreePath) => {
         const localEnvId =
           appAtomRegistry.get(localEnvironmentIdAtom) ?? EnvironmentId.make("primary");
@@ -783,10 +1084,10 @@ export function PrismuxIpcDispatchBridge() {
         const providers = configs.get(localEnvId)?.providers ?? [];
 
         const matched =
-          (preferredPath.length > 0
+          preferredPath.length > 0
             ? (findProjectByPath(envProjects, preferredPath) ??
               (worktreePath ? findProjectByPath(envProjects, worktreePath) : undefined))
-            : undefined) ?? envProjects[0];
+            : envProjects[0];
 
         if (matched) {
           return {
@@ -806,13 +1107,27 @@ export function PrismuxIpcDispatchBridge() {
           environmentId: localEnvId,
           input: {
             projectId,
-            title: inferProjectTitleFromPath(preferredPath),
+            title: isChiefWorkspacePathLike(preferredPath)
+              ? "主秘书工作区"
+              : inferProjectTitleFromPath(preferredPath),
             workspaceRoot: preferredPath,
-            createWorkspaceRootIfMissing: false,
+            createWorkspaceRootIfMissing: isChiefWorkspacePathLike(preferredPath),
             defaultModelSelection: null,
           },
         });
         if (createResult._tag === "Failure") {
+          const fallbackProject = envProjects[0];
+          if (fallbackProject) {
+            return {
+              environmentId: fallbackProject.environmentId,
+              projectId: fallbackProject.id,
+              logicalProjectKey: deriveLogicalProjectKeyFromSettings(
+                fallbackProject,
+                groupingSettings,
+              ),
+              providers,
+            };
+          }
           return null;
         }
         const projectRef = scopeProjectRef(localEnvId, projectId);
@@ -916,14 +1231,23 @@ export function PrismuxIpcDispatchBridge() {
         ]);
       },
       onAutoSent: (envelope) => {
-        const providerLabel = resolveConfiguredProviderLabel(
-          envelope.provider,
-          resolveLatestConfiguredEntries(),
-        );
+        const entries = resolveLatestConfiguredEntries();
+        const providerLabel = resolveConfiguredProviderDisplayName({
+          provider: envelope.provider,
+          providerInstances: entries,
+          settings: primarySettings,
+        });
+        const readableModel =
+          formatUsageModelDisplayName(envelope.modelId, entries, envelope.provider) ||
+          unwrapUsageModelSlug(envelope.modelId) ||
+          "默认模型";
+        const effortSuffix = envelope.reasoningEffort.trim()
+          ? ` · ${envelope.reasoningEffort.trim()}`
+          : "";
         toastManager.add({
           type: "info",
           title: `已通过工作台派发至 ${providerLabel}`,
-          description: `${envelope.modelId} · ${envelope.reasoningEffort}`,
+          description: `${readableModel}${effortSuffix}`,
         });
       },
       onSubscriptionBlocked: (detail) => {
@@ -1022,14 +1346,24 @@ export function PrismuxIpcDispatchBridge() {
         setStagedQueue((prev) =>
           prev.filter((item) => item.envelope.taskId !== staged.envelope.taskId),
         );
-        const providerLabel = resolveConfiguredProviderLabel(
-          staged.envelope.provider,
-          resolveLatestConfiguredEntries(),
-        );
+        const entries = resolveLatestConfiguredEntries();
+        const providerLabel = resolveConfiguredProviderDisplayName({
+          provider: staged.envelope.provider,
+          providerInstances: entries,
+          settings: primarySettings,
+        });
+        const readableModel =
+          formatUsageModelDisplayName(
+            staged.envelope.modelId || staged.modelSelection.model,
+            entries,
+            staged.envelope.provider,
+          ) ||
+          unwrapUsageModelSlug(staged.envelope.modelId || staged.modelSelection.model) ||
+          "默认模型";
         toastManager.add({
           type: "success",
           title: "已确认放行并发送",
-          description: `${providerLabel} · ${staged.envelope.modelId}`,
+          description: `${providerLabel} · ${readableModel}`,
         });
       } finally {
         setBusyTaskId(null);
@@ -1091,6 +1425,7 @@ export function PrismuxIpcDispatchBridge() {
         busyTaskId={busyTaskId}
         errorMessage={errorMessage}
         configuredEntries={configuredEntries}
+        settings={primarySettings}
         onConfirm={handleConfirmStaged}
         onCancel={handleCancelStaged}
       />

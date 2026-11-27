@@ -1,26 +1,20 @@
 import { useAtomValue } from "@effect/atom-react";
 import { formatEffortLabel } from "@prismux/appearance";
-import { providerClients } from "@prismux/client-runtime/provider-clients";
-import {
-  PROVIDER_DISPLAY_NAMES,
-  ProviderDriverKind,
-  type ServerSettings,
-} from "@prismux/core-contracts";
 import { memo, useEffect, useState } from "react";
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
+import { formatUsageModelDisplayName } from "../components/usage/usageCallTelemetryStore";
 import { cn } from "../lib/utils";
 import {
   brandProviderInstanceEntries,
   deriveProviderInstanceEntries,
   disambiguateProviderInstanceDisplayNames,
   orderProviderInstanceEntries,
-  resolveConfiguredProviderLabel,
-  type ProviderInstanceEntry,
 } from "../providerInstances";
 import { primaryServerProvidersAtom, primaryServerSettingsAtom } from "../state/server";
-import { AgentBrandLogo, resolveAgentBrandId } from "./agentBrand";
+import { AgentBrandLogo } from "./agentBrand";
 import { isCustomChiefDisplayName, normalizeChiefDisplayName } from "./chiefMention";
+import { resolveConfiguredProviderDisplayName } from "./providerDisplayName";
 import { useOptionalPrismuxRuntime, type PrismuxDialMode } from "./PrismuxRuntimeProvider";
 
 export interface ChiefSlotBroadcastDetail {
@@ -41,11 +35,12 @@ let lastKnownChiefSlot: ChiefSlotBroadcastDetail | null = null;
  * so status indicators reflect provider/model/effort/identity changes instantaneously.
  */
 export function emitChiefSlotUpdated(detail: ChiefSlotBroadcastDetail): void {
+  const nextDialMode = detail.dialMode ?? lastKnownChiefSlot?.dialMode;
   lastKnownChiefSlot = {
     provider: detail.provider,
     model: detail.model ?? null,
     reasoningEffort: detail.reasoningEffort ?? null,
-    ...(detail.dialMode ? { dialMode: detail.dialMode } : {}),
+    ...(nextDialMode ? { dialMode: nextDialMode } : {}),
     secretaryName:
       detail.secretaryName !== undefined
         ? detail.secretaryName
@@ -56,7 +51,11 @@ export function emitChiefSlotUpdated(detail: ChiefSlotBroadcastDetail): void {
         : (lastKnownChiefSlot?.agentsMdPath ?? null),
   };
   if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
-    window.dispatchEvent(new CustomEvent<ChiefSlotBroadcastDetail>(CHIEF_SLOT_UPDATED_EVENT, { detail: lastKnownChiefSlot }));
+    window.dispatchEvent(
+      new CustomEvent<ChiefSlotBroadcastDetail>(CHIEF_SLOT_UPDATED_EVENT, {
+        detail: lastKnownChiefSlot,
+      }),
+    );
   }
 }
 
@@ -104,30 +103,6 @@ function formatEffortForTooltip(effort: string | null | undefined): string {
   return formatEffortLabel(trimmed);
 }
 
-function resolveChiefPillProviderLabel(
-  effectiveProvider: string,
-  configuredEntries: ReadonlyArray<ProviderInstanceEntry>,
-  providerInstances: ServerSettings["providerInstances"] | undefined,
-): string {
-  const resolved = resolveConfiguredProviderLabel(effectiveProvider, configuredEntries);
-  if (resolveAgentBrandId(effectiveProvider) !== "claude-code") {
-    return resolved;
-  }
-  const hasExplicitClaudeCodeCustomName = configuredEntries.some((entry) => {
-    if (entry.driverKind !== "claudeAgent") return false;
-    const explicit = providerInstances?.[entry.instanceId]?.displayName?.trim();
-    return Boolean(explicit && explicit.toLowerCase() === "claude code");
-  });
-  if (resolved === "Claude Code" && !hasExplicitClaudeCodeCustomName) {
-    return (
-      providerClients.get(ProviderDriverKind.make("claudeAgent"))?.label ??
-      PROVIDER_DISPLAY_NAMES[ProviderDriverKind.make("claudeAgent")] ??
-      "Claude"
-    );
-  }
-  return resolved;
-}
-
 export interface PrismuxChiefStatusPillProps {
   /** Invoked when the user clicks the Chief pill (typically navigates to /settings/memory). */
   readonly onClick?: () => void;
@@ -163,9 +138,12 @@ export const PrismuxChiefStatusPill = memo(function PrismuxChiefStatusPill({
   className,
 }: PrismuxChiefStatusPillProps) {
   const runtime = useOptionalPrismuxRuntime();
-  const [hydrated, setHydrated] = useState<ChiefSlotBroadcastDetail | null>(() => lastKnownChiefSlot);
+  const [hydrated, setHydrated] = useState<ChiefSlotBroadcastDetail | null>(
+    () => lastKnownChiefSlot,
+  );
 
   const daemonReady = runtime?.daemonInfo.ready ?? false;
+  const runtimeChiefSlot = runtime?.chiefSlot;
   const runtimeChiefProvider = runtime?.chiefProvider;
   const runtimeDialMode = runtime?.dialMode;
 
@@ -174,6 +152,7 @@ export const PrismuxChiefStatusPill = memo(function PrismuxChiefStatusPill({
     const handleUpdate = (event: Event) => {
       const custom = event as CustomEvent<ChiefSlotBroadcastDetail>;
       if (custom.detail && typeof custom.detail.provider === "string") {
+        lastKnownChiefSlot = custom.detail;
         setHydrated(custom.detail);
       }
     };
@@ -185,6 +164,7 @@ export const PrismuxChiefStatusPill = memo(function PrismuxChiefStatusPill({
 
   useEffect(() => {
     if (!runtime || !daemonReady) return;
+    if (runtimeChiefSlot?.hydrated && hydrated) return;
     let cancelled = false;
     void runtime.daemon
       .getChief()
@@ -222,54 +202,78 @@ export const PrismuxChiefStatusPill = memo(function PrismuxChiefStatusPill({
         setHydrated(snapshot);
       })
       .catch(() => {
-        // Degrade smoothly if daemon is restarting.
+        // Degrade smoothly if daemon is restarting; preserve lastKnownChiefSlot.
       });
     return () => {
       cancelled = true;
     };
-  }, [daemonReady, runtime, runtimeChiefProvider, runtimeDialMode]);
+  }, [
+    daemonReady,
+    hydrated,
+    runtime,
+    runtimeChiefProvider,
+    runtimeChiefSlot?.hydrated,
+    runtimeDialMode,
+  ]);
 
-  const effectiveProvider = providerProp ?? hydrated?.provider ?? runtimeChiefProvider ?? "codex";
-  const effectiveModel =
-    modelProp !== undefined ? modelProp : (hydrated?.model ?? null);
+  const effectiveSlot: ChiefSlotBroadcastDetail | null =
+    hydrated ??
+    (runtimeChiefSlot?.hydrated
+      ? {
+          provider: runtimeChiefSlot.provider,
+          model: runtimeChiefSlot.model,
+          reasoningEffort: runtimeChiefSlot.reasoningEffort,
+          dialMode: runtimeChiefSlot.dialMode,
+          secretaryName: runtimeChiefSlot.secretaryName,
+          agentsMdPath: runtimeChiefSlot.agentsMdPath,
+        }
+      : null);
+
+  const effectiveProvider =
+    providerProp ?? effectiveSlot?.provider ?? runtimeChiefProvider ?? "codex";
+  const effectiveModel = modelProp !== undefined ? modelProp : (effectiveSlot?.model ?? null);
   const effectiveEffort =
-    effortProp !== undefined ? effortProp : (hydrated?.reasoningEffort ?? null);
+    effortProp !== undefined ? effortProp : (effectiveSlot?.reasoningEffort ?? null);
   const effectiveDialMode = normalizeDialMode(
-    dialModeProp ?? hydrated?.dialMode ?? runtimeDialMode,
+    dialModeProp ?? effectiveSlot?.dialMode ?? runtimeDialMode,
     "agent",
   );
   const effectiveSecretaryName = normalizeChiefDisplayName(
-    secretaryNameProp !== undefined ? secretaryNameProp : hydrated?.secretaryName,
+    secretaryNameProp !== undefined ? secretaryNameProp : effectiveSlot?.secretaryName,
   );
   const hasCustomName = isCustomChiefDisplayName(effectiveSecretaryName);
   const effectiveAgentsMdPath =
-    (agentsMdPathProp !== undefined ? agentsMdPathProp : hydrated?.agentsMdPath)?.trim() ||
+    (agentsMdPathProp !== undefined ? agentsMdPathProp : effectiveSlot?.agentsMdPath)?.trim() ||
     "~/.prismux/chief/AGENTS.md";
   const effectiveOnline = onlineProp ?? daemonReady;
   const isGlassActive =
     isGlassActiveProp ??
-    Boolean(runtime && runtime.appearance.themeMode === "glass" && runtime.appearance.glassPreset !== "off");
+    Boolean(
+      runtime &&
+      runtime.appearance.themeMode === "glass" &&
+      runtime.appearance.glassPreset !== "off",
+    );
 
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
   const serverSettings = useAtomValue(primaryServerSettingsAtom);
   const configuredEntries = disambiguateProviderInstanceDisplayNames(
     orderProviderInstanceEntries(
-      brandProviderInstanceEntries(
-        deriveProviderInstanceEntries(serverProviders),
-        serverSettings,
-      ),
+      brandProviderInstanceEntries(deriveProviderInstanceEntries(serverProviders), serverSettings),
       serverSettings.providerOrder,
     ),
   );
 
-  const brandName = resolveChiefPillProviderLabel(
-    effectiveProvider,
-    configuredEntries,
-    serverSettings.providerInstances,
-  );
+  const brandName = resolveConfiguredProviderDisplayName({
+    provider: effectiveProvider,
+    providerInstances: configuredEntries,
+    settings: serverSettings,
+  });
   const pillLabel = hasCustomName ? effectiveSecretaryName : brandName;
-  const modelLabel =
-    effectiveModel && effectiveModel.trim().length > 0 ? effectiveModel.trim() : "跟随提供方默认";
+  const formattedModel =
+    effectiveModel && effectiveModel.trim().length > 0
+      ? formatUsageModelDisplayName(effectiveModel.trim(), configuredEntries, effectiveProvider)
+      : "";
+  const modelLabel = formattedModel.length > 0 ? formattedModel : "跟随提供方默认";
   const effortLabel = formatEffortForTooltip(effectiveEffort);
   const dialLabel = DIAL_MODE_TOOLTIP_LABELS[effectiveDialMode];
   const onlineLabel = effectiveOnline ? "在线" : "离线 / 本地预览";
@@ -290,9 +294,10 @@ export const PrismuxChiefStatusPill = memo(function PrismuxChiefStatusPill({
             data-pmx-chief-name={effectiveSecretaryName}
             onClick={onClick}
             className={cn(
-              "inline-flex h-7 max-w-44 cursor-pointer items-center gap-1.5 rounded-full border border-border/70 bg-muted/40 px-2.5 text-[11.5px] font-medium text-foreground/90 transition-colors hover:bg-muted/80 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [-webkit-app-region:no-drag]",
-              isGlassActive && "border-white/20 bg-white/10 backdrop-blur-md hover:bg-white/18",
-              !effectiveOnline && "text-muted-foreground",
+              "inline-flex h-7 max-w-44 cursor-pointer items-center gap-1.5 rounded-full border border-border/75 bg-muted/55 px-2.5 text-[11.5px] font-medium text-foreground transition-colors hover:bg-muted/85 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [-webkit-app-region:no-drag]",
+              isGlassActive &&
+                "border-foreground/15 bg-background/72 text-foreground backdrop-blur-md hover:bg-background/88 dark:border-white/22 dark:bg-black/42 dark:text-white/95 dark:hover:bg-black/58",
+              !effectiveOnline && "text-foreground/75 dark:text-foreground/75",
               className,
             )}
             aria-label={ariaLabel}
@@ -321,7 +326,9 @@ export const PrismuxChiefStatusPill = memo(function PrismuxChiefStatusPill({
             <span
               className={cn(
                 "shrink-0 text-[10px] font-normal",
-                effectiveOnline ? "text-emerald-500 dark:text-emerald-400" : "text-muted-foreground",
+                effectiveOnline
+                  ? "text-emerald-700 dark:text-emerald-400"
+                  : "text-foreground/70 dark:text-muted-foreground",
               )}
             >
               {onlineLabel}
@@ -337,12 +344,16 @@ export const PrismuxChiefStatusPill = memo(function PrismuxChiefStatusPill({
             <span>工作档位</span>
             <span className="truncate text-foreground/90">{dialLabel}</span>
             <span>独立指令</span>
-            <span className="truncate text-emerald-600 dark:text-emerald-400" title={effectiveAgentsMdPath}>
+            <span
+              className="truncate text-emerald-700 dark:text-emerald-400"
+              title={effectiveAgentsMdPath}
+            >
               独立 AGENTS.md 已加载
             </span>
           </div>
           <div className="border-t border-border/50 pt-1 text-[10px] text-muted-foreground">
-            喊「{effectiveSecretaryName}」或 @{effectiveSecretaryName} 即可唤起 · 点击管理秘书与记忆设置
+            喊「{effectiveSecretaryName}」或 @{effectiveSecretaryName} 即可唤起 ·
+            点击管理秘书与记忆设置
           </div>
         </div>
       </TooltipPopup>

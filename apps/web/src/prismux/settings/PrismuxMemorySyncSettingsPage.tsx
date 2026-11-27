@@ -64,6 +64,7 @@ import {
   SettingsSegmentedTabs,
   type SettingsSegmentedTabItem,
 } from "../../components/settings/SettingsSegmentedTabs";
+import { unwrapUsageModelSlug } from "../../components/usage/usageCallTelemetryStore";
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { getAppModelOptionsForInstance } from "../../modelSelection";
 import {
@@ -220,9 +221,7 @@ function asDialMode(value: unknown, fallback: DialModeValue = "agent"): DialMode
 function isPlaceholderModelSlug(slug: string): boolean {
   const trimmed = slug.trim();
   return (
-    trimmed.length === 0 ||
-    trimmed === ANTIGRAVITY_DEFAULT_MODEL ||
-    trimmed === MUSE_DEFAULT_MODEL
+    trimmed.length === 0 || trimmed === ANTIGRAVITY_DEFAULT_MODEL || trimmed === MUSE_DEFAULT_MODEL
   );
 }
 
@@ -359,10 +358,7 @@ export function formatChiefProviderLabel(
   }
   const canonicalId = normalizeChiefOptionProviderId(providerIdOrDriver);
   const customLower = trimmedCustom.toLowerCase();
-  if (
-    canonicalId !== "acp" &&
-    (customLower === "acp" || customLower === "acp registry")
-  ) {
+  if (canonicalId !== "acp" && (customLower === "acp" || customLower === "acp registry")) {
     return defaultLabel;
   }
   if (canonicalId === "claude-code" && RAW_CLAUDE_IDENTIFIERS.has(customLower)) {
@@ -588,15 +584,17 @@ export function buildChiefProviderOptions(input: {
       }
       bucket.seenModelSlugs.add(opt.slug);
       const rawModel = rawModelsBySlug.get(opt.slug);
-      const displayName = opt.name?.trim() || opt.slug;
+      const readableSlug = unwrapUsageModelSlug(opt.slug) || opt.slug;
+      const rawName = opt.name?.trim() ?? "";
+      const displayName = rawName ? unwrapUsageModelSlug(rawName) || rawName : readableSlug;
       const sourceParts: string[] = [];
       if (opt.subProvider && opt.subProvider.trim().length > 0) {
         sourceParts.push(opt.subProvider.trim());
       } else if (!entry.isDefault && entry.displayName.trim().length > 0) {
         sourceParts.push(entry.displayName.trim());
       }
-      if (displayName.toLowerCase() !== opt.slug.toLowerCase()) {
-        sourceParts.push(opt.slug);
+      if (readableSlug.length > 0 && displayName.toLowerCase() !== readableSlug.toLowerCase()) {
+        sourceParts.push(readableSlug);
       }
       if (opt.isCustom) {
         sourceParts.push("自定义");
@@ -669,14 +667,12 @@ export function buildChiefModelDropdownItems(input: {
 }): ChiefModelDropdownOption[] {
   const models = input.providerOption?.models ?? [];
   const trimmedSelected = input.selectedModel.trim();
-  if (
-    trimmedSelected.length > 0 &&
-    !models.some((item) => item.slug === trimmedSelected)
-  ) {
+  if (trimmedSelected.length > 0 && !models.some((item) => item.slug === trimmedSelected)) {
+    const readableSelected = unwrapUsageModelSlug(trimmedSelected) || trimmedSelected;
     return [
       {
         slug: trimmedSelected,
-        label: `当前配置：${trimmedSelected}`,
+        label: `当前配置：${readableSelected}`,
         subtitle: "已保存模型（当前目录未返回，保留防丢值）",
         isCompatibilityFallback: true,
       },
@@ -697,8 +693,9 @@ export function resolveChiefEffortSpec(input: {
   readonly modelSlug: string;
   readonly modelOption?: ChiefModelDropdownOption | undefined;
 }): ResolvedChiefEffortSpec {
+  const readableModelSlug = unwrapUsageModelSlug(input.modelSlug).trim();
   const theme = resolveReasoningModelTheme(
-    input.modelSlug.trim() || null,
+    readableModelSlug || null,
     input.modelOption?.label ?? null,
     input.provider,
   );
@@ -768,8 +765,7 @@ export function reconcileChiefSelectionOnProviderChange(input: {
   });
   const trimmedEffort = input.currentEffort.trim();
   const nextEffortStillValid =
-    trimmedEffort.length > 0 &&
-    nextEffortSpec.stops.some((stop) => stop.value === trimmedEffort);
+    trimmedEffort.length > 0 && nextEffortSpec.stops.some((stop) => stop.value === trimmedEffort);
 
   return {
     provider: nextProvider,
@@ -849,6 +845,11 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
   selectedEffortRef.current = selectedEffort;
   const selectedDialRef = useRef(selectedDial);
   selectedDialRef.current = selectedDial;
+  const runtimeChiefProviderRef = useRef(runtimeChiefProvider);
+  runtimeChiefProviderRef.current = runtimeChiefProvider;
+  const runtimeDialModeRef = useRef(runtimeDialMode);
+  runtimeDialModeRef.current = runtimeDialMode;
+  const chiefRequestSeqRef = useRef(0);
 
   // Base catalog derives strictly from live configured serverProviders so switching between
   // configured providers hits cache in O(1) without recomputing provider instance metadata.
@@ -894,6 +895,39 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
     activeProviderOption?.label ?? formatChiefProviderLabel(effectiveSelectedProvider);
   const providerOptionsRef = useRef(providerOptions);
   providerOptionsRef.current = providerOptions;
+  const committedProviderLabel =
+    providerOptions.find((opt) => opt.value === chief.provider)?.label ??
+    formatChiefProviderLabel(chief.provider);
+  const lastReportedCommittedLabelRef = useRef(committedProviderLabel);
+
+  useEffect(() => {
+    if (committedProviderLabel === lastReportedCommittedLabelRef.current) {
+      return;
+    }
+    lastReportedCommittedLabelRef.current = committedProviderLabel;
+    startTransition(() => {
+      onChiefSummaryChange({
+        secretaryName: chief.secretaryName,
+        agentsMdPath: chief.agentsMdPath,
+        provider: chief.provider,
+        providerLabel: committedProviderLabel,
+        model: chief.model,
+        reasoningEffort: chief.reasoningEffort,
+        dialMode: chief.dialMode,
+        coreConnected: chief.coreConnected,
+      });
+    });
+  }, [
+    chief.agentsMdPath,
+    chief.coreConnected,
+    chief.dialMode,
+    chief.model,
+    chief.provider,
+    chief.reasoningEffort,
+    chief.secretaryName,
+    committedProviderLabel,
+    onChiefSummaryChange,
+  ]);
 
   // Keep shared draft snapshot ref synced without triggering parent re-renders.
   activeSlotRef.current = {
@@ -1008,14 +1042,18 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
   );
 
   const loadChiefState = useCallback(async () => {
+    const requestSeq = ++chiefRequestSeqRef.current;
     try {
       const chiefRes = await daemon.requestJson<unknown>("/v1/chief");
+      if (requestSeq !== chiefRequestSeqRef.current) {
+        return;
+      }
       const root = asRecord(chiefRes);
       const slot = asRecord(root?.slot);
       const rawProvider =
         asString(slot?.activeProvider) ||
         asString(slot?.provider) ||
-        runtimeChiefProvider ||
+        runtimeChiefProviderRef.current ||
         "codex";
       const provider = normalizeChiefOptionProviderId(rawProvider);
       const secretaryName = normalizeChiefDisplayName(
@@ -1026,9 +1064,8 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
         asString(slot?.agentsMdPath) ||
         "~/.prismux/chief/AGENTS.md";
       const model = asString(slot?.model);
-      const reasoningEffort =
-        asString(slot?.reasoningEffort) || asString(slot?.defaultEffort);
-      const mode = asDialMode(root?.dialMode, runtimeDialMode);
+      const reasoningEffort = asString(slot?.reasoningEffort) || asString(slot?.defaultEffort);
+      const mode = asDialMode(root?.dialMode, runtimeDialModeRef.current);
       const providers = Array.isArray(root?.availableProviders)
         ? root.availableProviders.filter(
             (p): p is string => typeof p === "string" && !isRetiredChiefProviderId(p),
@@ -1051,6 +1088,7 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
       const resolvedProviderLabel =
         providerOptionsRef.current.find((opt) => opt.value === provider)?.label ??
         formatChiefProviderLabel(provider);
+      lastReportedCommittedLabelRef.current = resolvedProviderLabel;
 
       startTransition(() => {
         setChief((prev) => ({
@@ -1084,9 +1122,12 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
         agentsMdPath,
       });
     } catch (err) {
+      if (requestSeq !== chiefRequestSeqRef.current) {
+        return;
+      }
       onError(`主秘书状态：${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [daemon, onChiefSummaryChange, onError, runtimeChiefProvider, runtimeDialMode]);
+  }, [daemon, onChiefSummaryChange, onError]);
 
   useEffect(() => {
     void loadChiefState();
@@ -1133,7 +1174,8 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
       });
       const currentEffort = selectedEffortRef.current.trim();
       const nextEffort =
-        currentEffort.length > 0 && !nextEffortSpec.stops.some((stop) => stop.value === currentEffort)
+        currentEffort.length > 0 &&
+        !nextEffortSpec.stops.some((stop) => stop.value === currentEffort)
           ? ""
           : selectedEffortRef.current;
 
@@ -1178,6 +1220,7 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
     if (providerOptions.length === 0) {
       return;
     }
+    const requestSeq = ++chiefRequestSeqRef.current;
     setSavingChief(true);
     onError(null);
     onStatus(null);
@@ -1186,57 +1229,137 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
       const trimmedEffort = selectedEffort.trim();
       const currentSecretaryName = secretaryNameRef.current;
       const currentAgentsMdPath = agentsMdPathRef.current;
-      await daemon.switchChief({
+      const switchRes = await daemon.switchChief({
         provider: normalizedProvider,
-        ...(trimmedModel.length > 0 ? { model: trimmedModel } : {}),
+        model: trimmedModel,
         dialMode: selectedDial,
         reasoningEffort: trimmedEffort,
         defaultEffort: trimmedEffort,
-      });
-      emitChiefSlotUpdated({
-        provider: normalizedProvider,
-        model: trimmedModel || null,
-        reasoningEffort: trimmedEffort || null,
-        dialMode: selectedDial,
         secretaryName: currentSecretaryName,
-        agentsMdPath: currentAgentsMdPath,
       });
+      if (requestSeq !== chiefRequestSeqRef.current) {
+        return;
+      }
+
+      const switchRoot = asRecord(switchRes);
+      const switchSlot = asRecord(switchRoot?.slot);
+      const finalProvider = normalizeChiefOptionProviderId(
+        asString(switchSlot?.activeProvider) ||
+          asString(switchSlot?.provider) ||
+          normalizedProvider,
+      );
+      const finalModel =
+        switchSlot && typeof switchSlot.model === "string" ? switchSlot.model.trim() : trimmedModel;
+      const finalEffort =
+        switchSlot &&
+        (typeof switchSlot.reasoningEffort === "string" ||
+          typeof switchSlot.defaultEffort === "string")
+          ? (asString(switchSlot.reasoningEffort) || asString(switchSlot.defaultEffort)).trim()
+          : trimmedEffort;
+      const finalDialMode = asDialMode(switchRoot?.dialMode, selectedDial);
+      const finalSecretaryName = normalizeChiefDisplayName(
+        asString(switchRoot?.secretaryName) ||
+          asString(switchSlot?.secretaryName) ||
+          currentSecretaryName,
+      );
+      const finalAgentsMdPath =
+        asString(switchRoot?.agentsMdPath) ||
+        asString(switchSlot?.agentsMdPath) ||
+        currentAgentsMdPath;
+      const finalCoreConnected = asBoolean(
+        switchRoot?.coreConnected ?? switchRoot?.t3Connected,
+        chief.coreConnected,
+      );
+      const finalProviders = Array.isArray(switchRoot?.availableProviders)
+        ? switchRoot.availableProviders.filter(
+            (p): p is string => typeof p === "string" && !isRetiredChiefProviderId(p),
+          )
+        : chief.availableProviders;
+
+      const nextChief: ChiefStateView = {
+        threadId: asString(switchSlot?.threadId) || chief.threadId,
+        provider: finalProvider,
+        secretaryName: finalSecretaryName,
+        agentsMdPath: finalAgentsMdPath,
+        model: finalModel,
+        reasoningEffort: finalEffort,
+        dialMode: finalDialMode,
+        availableProviders: finalProviders,
+        coreConnected: finalCoreConnected,
+        updatedAt: typeof switchSlot?.updatedAt === "number" ? switchSlot.updatedAt : Date.now(),
+      };
+      chiefStateCache.set(daemon as object, nextChief);
+
       const brandLabel =
-        providerOptionsRef.current.find((opt) => opt.value === normalizedProvider)?.label ??
-        formatChiefProviderLabel(normalizedProvider);
-      const modelSummary = trimmedModel.length > 0 ? ` · 模型：${trimmedModel}` : "";
+        providerOptionsRef.current.find((opt) => opt.value === finalProvider)?.label ??
+        formatChiefProviderLabel(finalProvider);
+      lastReportedCommittedLabelRef.current = brandLabel;
+
+      emitChiefSlotUpdated({
+        provider: finalProvider,
+        model: finalModel || null,
+        reasoningEffort: finalEffort || null,
+        dialMode: finalDialMode,
+        secretaryName: finalSecretaryName,
+        agentsMdPath: finalAgentsMdPath,
+      });
+
+      const readableModelLabel =
+        finalModel.length > 0
+          ? (providerOptionsRef.current
+              .find((opt) => opt.value === finalProvider)
+              ?.models.find((m) => m.slug === finalModel)?.label ??
+            unwrapUsageModelSlug(finalModel) ??
+            finalModel)
+          : "";
+      const modelSummary = readableModelLabel.length > 0 ? ` · 模型：${readableModelLabel}` : "";
       const effortSummary =
-        trimmedEffort.length > 0
-          ? ` · 思考强度：${formatEffortLabel(trimmedEffort)}`
+        finalEffort.length > 0
+          ? ` · 思考强度：${formatEffortLabel(finalEffort)}`
           : " · 思考强度：跟随默认";
       onStatus(
-        `主秘书「${currentSecretaryName}」底层引擎已切换为 ${brandLabel}${modelSummary}${effortSummary}（档位：${selectedDial}；独立 AGENTS.md 与称呼已完整保留）。`,
+        `主秘书「${finalSecretaryName}」底层引擎已切换为 ${brandLabel}${modelSummary}${effortSummary}（档位：${finalDialMode}；独立 AGENTS.md 与称呼已完整保留）。`,
       );
       startTransition(() => {
+        setChief((prev) => ({
+          ...nextChief,
+          availableProviders: sameStringArray(prev.availableProviders, finalProviders)
+            ? prev.availableProviders
+            : finalProviders,
+        }));
+        setSelectedProvider(finalProvider);
+        setSelectedModel(finalModel);
+        setSelectedEffort(finalEffort);
+        setSelectedDial(finalDialMode);
         onChiefSummaryChange({
-          secretaryName: currentSecretaryName,
-          agentsMdPath: currentAgentsMdPath,
-          provider: normalizedProvider,
+          secretaryName: finalSecretaryName,
+          agentsMdPath: finalAgentsMdPath,
+          provider: finalProvider,
           providerLabel: brandLabel,
-          model: trimmedModel,
-          reasoningEffort: trimmedEffort,
-          dialMode: selectedDial,
-          coreConnected: chief.coreConnected,
+          model: finalModel,
+          reasoningEffort: finalEffort,
+          dialMode: finalDialMode,
+          coreConnected: finalCoreConnected,
         });
       });
-      await loadChiefState();
     } catch (err) {
+      if (requestSeq !== chiefRequestSeqRef.current) {
+        return;
+      }
       onError(err instanceof Error ? err.message : String(err));
     } finally {
-      setSavingChief(false);
+      if (requestSeq === chiefRequestSeqRef.current) {
+        setSavingChief(false);
+      }
     }
   }, [
     agentsMdPathRef,
     agyAllowed,
+    chief.availableProviders,
     chief.coreConnected,
+    chief.threadId,
     daemon,
     effectiveSelectedProvider,
-    loadChiefState,
     onChiefSummaryChange,
     onError,
     onStatus,
@@ -1250,6 +1373,11 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
 
   const trimmedSelectedModel = selectedModel.trim();
   const trimmedSelectedEffort = selectedEffort.trim();
+  const hasUnsavedChiefChanges =
+    effectiveSelectedProvider !== chief.provider ||
+    trimmedSelectedModel !== chief.model.trim() ||
+    trimmedSelectedEffort !== chief.reasoningEffort.trim() ||
+    selectedDial !== chief.dialMode;
 
   return (
     <>
@@ -1326,7 +1454,11 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
           <div className={`${SETTINGS_CONTROL_LG} max-w-full`}>
             <Select
               modal={false}
-              value={trimmedSelectedModel.length > 0 ? trimmedSelectedModel : CHIEF_DEFAULT_MODEL_SENTINEL}
+              value={
+                trimmedSelectedModel.length > 0
+                  ? trimmedSelectedModel
+                  : CHIEF_DEFAULT_MODEL_SENTINEL
+              }
               onValueChange={handleModelChange}
             >
               <SelectTrigger size="sm" data-pmx-chief-model-select="">
@@ -1334,7 +1466,8 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
                   <span className="truncate">
                     {trimmedSelectedModel.length === 0
                       ? "跟随该提供方默认模型（留空）"
-                      : (activeModelOption?.label ?? `当前配置：${trimmedSelectedModel}`)}
+                      : (activeModelOption?.label ??
+                        `当前配置：${unwrapUsageModelSlug(trimmedSelectedModel) || trimmedSelectedModel}`)}
                   </span>
                 </SelectValue>
               </SelectTrigger>
@@ -1400,10 +1533,7 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
         </div>
       </SettingsRow>
 
-      <SettingsRow
-        title="工作模式"
-        description="切换主秘书的执行权限与分析深度。"
-      >
+      <SettingsRow title="工作模式" description="切换主秘书的执行权限与分析深度。">
         <div className="mt-2.5 space-y-3 pb-2">
           <div className="grid gap-2 sm:grid-cols-3">
             {DIAL_MODES.map((item) => {
@@ -1431,7 +1561,12 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
               );
             })}
           </div>
-          <div className="flex justify-end">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {hasUnsavedChiefChanges ? (
+              <Badge variant="warning" size="sm" data-pmx-chief-dirty-badge="">
+                有未保存配置
+              </Badge>
+            ) : null}
             <Button
               size="sm"
               data-pmx-chief-save-button=""
@@ -1546,10 +1681,16 @@ const PrismuxMemorySyncSettingsPageShell = memo(function PrismuxMemorySyncSettin
   );
 
   const handleError = useCallback((msg: string | null) => {
+    if (msg !== null) {
+      setStatusMsg(null);
+    }
     setErrorMsg(msg);
   }, []);
 
   const handleStatus = useCallback((msg: string | null) => {
+    if (msg !== null) {
+      setErrorMsg(null);
+    }
     setStatusMsg(msg);
   }, []);
 
@@ -1678,7 +1819,7 @@ const PrismuxMemorySyncSettingsPageShell = memo(function PrismuxMemorySyncSettin
   ];
 
   return (
-    <SettingsPageContainer width="readable">
+    <SettingsPageContainer width="full">
       <div
         id={showSyncSection ? "prismux-memory-sync" : "prismux-memory"}
         data-pmx-memory-settings-page={showSyncSection ? undefined : ""}
@@ -1687,13 +1828,15 @@ const PrismuxMemorySyncSettingsPageShell = memo(function PrismuxMemorySyncSettin
         <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-2">
             <DatabaseIcon className="size-4 text-primary" />
-            <h1 className="text-base font-semibold tracking-tight text-foreground">
-              秘书与记忆
-            </h1>
+            <h1 className="text-base font-semibold tracking-tight text-foreground">秘书与记忆</h1>
             <Badge variant={daemonReady ? "success" : "warning"} size="sm">
               {daemonReady ? "服务在线" : "服务未连接"}
             </Badge>
-            <Badge variant={chiefSummary.coreConnected ? "info" : "outline"} size="sm" className="gap-1">
+            <Badge
+              variant={chiefSummary.coreConnected ? "info" : "outline"}
+              size="sm"
+              className="gap-1"
+            >
               <BotIcon className="size-3" />
               {chiefSummary.coreConnected ? "已桥接" : "本地模式"}
             </Badge>

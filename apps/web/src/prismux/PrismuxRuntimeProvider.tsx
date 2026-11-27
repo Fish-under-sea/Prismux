@@ -46,6 +46,7 @@ import {
 import type { AppRouter } from "../router";
 import {
   prismuxDaemonClient,
+  type DaemonChiefStatusResponse,
   type DaemonConnectionInfo,
   type DaemonKillStalePtyResponse,
   type DaemonKillSystemPortResponse,
@@ -66,6 +67,30 @@ import type { PortsScanState } from "./statusBar/portsPolling";
 export { useOptionalPrismuxTelemetry, usePrismuxTelemetry, type PrismuxTelemetryContextValue };
 
 export type PrismuxDialMode = "agent" | "oracle" | "review";
+
+export interface PrismuxChiefSlotState {
+  readonly provider: string;
+  readonly model: string | null;
+  readonly reasoningEffort: string | null;
+  readonly dialMode: PrismuxDialMode;
+  readonly secretaryName: string | null;
+  readonly agentsMdPath: string | null;
+  readonly threadId: string | null;
+  readonly hydrated: boolean;
+}
+
+const CHIEF_SLOT_SYNC_EVENT = "prismux:chief-slot-updated";
+
+const DEFAULT_CHIEF_SLOT_STATE: PrismuxChiefSlotState = {
+  provider: "codex",
+  model: null,
+  reasoningEffort: null,
+  dialMode: "agent",
+  secretaryName: null,
+  agentsMdPath: null,
+  threadId: null,
+  hydrated: false,
+};
 
 export interface PrismuxUpdaterBadgeState {
   readonly currentVersion: string | null;
@@ -99,18 +124,25 @@ export interface PrismuxRuntimeContextValue {
   daemon: PrismuxDaemonClient;
   daemonInfo: DaemonConnectionInfo;
   appearance: AppearanceConfig;
-  setAppearance: (
-    next: AppearanceConfig | ((prev: AppearanceConfig) => AppearanceConfig),
-  ) => void;
+  setAppearance: (next: AppearanceConfig | ((prev: AppearanceConfig) => AppearanceConfig)) => void;
   setThemeMode: (mode: ThemeMode) => void;
   wallpaperStore: WallpaperStore;
   wallpaperHost: WallpaperHostAdapter;
   occluded: boolean;
   systemFonts: string[];
   refreshSystemFonts: (forceRefresh?: boolean) => Promise<string[]>;
+  chiefSlot: PrismuxChiefSlotState;
   chiefProvider: string;
   dialMode: PrismuxDialMode;
-  switchChief: (next: { provider?: string; dialMode?: PrismuxDialMode }) => Promise<void>;
+  refreshChief: () => Promise<PrismuxChiefSlotState | null>;
+  switchChief: (next: {
+    provider?: string;
+    model?: string;
+    reasoningEffort?: string;
+    defaultEffort?: string;
+    dialMode?: PrismuxDialMode;
+    secretaryName?: string;
+  }) => Promise<void>;
   portsState: PortsScanState;
   refreshSystemPorts: (workspace?: string) => Promise<void>;
   killSystemPort: (pid: number) => Promise<DaemonKillSystemPortResponse>;
@@ -220,9 +252,7 @@ function mapDaemonWallpaperItem(
     ...(dto.tags !== undefined ? { tags: dto.tags } : {}),
     ...(dto.schemeColor !== undefined ? { schemeColor: dto.schemeColor } : {}),
     ...(dto.builtinSceneId !== undefined ? { builtinSceneId: dto.builtinSceneId } : {}),
-    ...(dto.sceneLiveSupported !== undefined
-      ? { sceneLiveSupported: dto.sceneLiveSupported }
-      : {}),
+    ...(dto.sceneLiveSupported !== undefined ? { sceneLiveSupported: dto.sceneLiveSupported } : {}),
     ...(dto.webLiveSupported !== undefined ? { webLiveSupported: dto.webLiveSupported } : {}),
     ...(dto.fileSize !== undefined ? { fileSize: dto.fileSize } : {}),
     ...(dto.mtimeMs !== undefined ? { mtimeMs: dto.mtimeMs } : {}),
@@ -524,10 +554,7 @@ function extractAppearanceConfigFromDaemonPayload(
   wallpaperMigrated: boolean;
 } {
   const { ok: _ok, recoveredFromCorruption: _recovered, wallpaper, ...rest } = raw;
-  const appearance = normalizeAppearanceConfig(
-    rest as DeepPartialAppearanceConfig,
-    fallback,
-  );
+  const appearance = normalizeAppearanceConfig(rest as DeepPartialAppearanceConfig, fallback);
   if (!isPlainRecord(wallpaper)) {
     return { appearance, wallpaperPatch: null, wallpaperMigrated: false };
   }
@@ -579,8 +606,7 @@ function deriveUpdaterBadgeFromPayload(
       : typeof status.hasUpdate === "boolean"
         ? status.hasUpdate
         : prev.hasUpdate;
-  const checking =
-    typeof status.checking === "boolean" ? status.checking : prev.checking;
+  const checking = typeof status.checking === "boolean" ? status.checking : prev.checking;
   const portableMode =
     typeof status.portableMode === "boolean" ? status.portableMode : prev.portableMode;
   const downloadedFilePath =
@@ -610,7 +636,10 @@ function deriveUpdaterBadgeFromPayload(
         : typeof progress?.bytesDownloaded === "number" &&
             typeof progress?.totalBytes === "number" &&
             progress.totalBytes > 0
-          ? Math.max(0, Math.min(100, Math.round((progress.bytesDownloaded / progress.totalBytes) * 100)))
+          ? Math.max(
+              0,
+              Math.min(100, Math.round((progress.bytesDownloaded / progress.totalBytes) * 100)),
+            )
           : prev.downloadPercent;
 
   const rawStage =
@@ -656,7 +685,9 @@ function deriveUpdaterBadgeFromPayload(
     hasUpdate: hasUpdate || installState === "ready",
     installState,
     downloadPercent:
-      installState === "downloading" || installState === "extracting" || installState === "verifying"
+      installState === "downloading" ||
+      installState === "extracting" ||
+      installState === "verifying"
         ? rawPercent
         : installState === "ready"
           ? 100
@@ -666,6 +697,62 @@ function deriveUpdaterBadgeFromPayload(
     downloadedSha256,
     sourceUsed,
     checking,
+  };
+}
+
+function readDaemonChiefProvider(slot: Record<string, unknown> | null | undefined): string | null {
+  if (!slot) return null;
+  if (typeof slot.activeProvider === "string" && slot.activeProvider.trim().length > 0) {
+    return slot.activeProvider.trim();
+  }
+  if (typeof slot.provider === "string" && slot.provider.trim().length > 0) {
+    return slot.provider.trim();
+  }
+  return null;
+}
+
+function normalizeChiefSlotFromDaemonResponse(
+  res: DaemonChiefStatusResponse | null | undefined,
+  fallback: PrismuxChiefSlotState,
+): PrismuxChiefSlotState {
+  const slotRec = isPlainRecord(res?.slot) ? res.slot : null;
+  const nextProvider = readDaemonChiefProvider(slotRec) ?? fallback.provider;
+  const nextModel =
+    typeof slotRec?.model === "string" ? slotRec.model.trim() || null : fallback.model;
+  const rawEffort =
+    typeof slotRec?.reasoningEffort === "string"
+      ? slotRec.reasoningEffort.trim()
+      : typeof slotRec?.defaultEffort === "string"
+        ? slotRec.defaultEffort.trim()
+        : null;
+  const nextEffort =
+    rawEffort !== null ? (rawEffort.length > 0 ? rawEffort : null) : fallback.reasoningEffort;
+  const nextDialMode = res?.dialMode ? normalizeDialMode(res.dialMode) : fallback.dialMode;
+  const rawSecretaryName =
+    typeof res?.secretaryName === "string"
+      ? res.secretaryName.trim() || null
+      : typeof slotRec?.secretaryName === "string"
+        ? slotRec.secretaryName.trim() || null
+        : fallback.secretaryName;
+  const rawAgentsMdPath =
+    typeof res?.agentsMdPath === "string"
+      ? res.agentsMdPath.trim() || null
+      : typeof slotRec?.agentsMdPath === "string"
+        ? slotRec.agentsMdPath.trim() || null
+        : fallback.agentsMdPath;
+  const rawThreadId =
+    typeof slotRec?.threadId === "string" && slotRec.threadId.trim().length > 0
+      ? slotRec.threadId.trim()
+      : fallback.threadId;
+  return {
+    provider: nextProvider,
+    model: nextModel,
+    reasoningEffort: nextEffort,
+    dialMode: nextDialMode,
+    secretaryName: rawSecretaryName,
+    agentsMdPath: rawAgentsMdPath,
+    threadId: rawThreadId,
+    hydrated: true,
   };
 }
 
@@ -690,8 +777,13 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
     typeof document !== "undefined" ? document.visibilityState === "hidden" : false,
   );
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
-  const [chiefProvider, setChiefProvider] = useState<string>("codex");
-  const [dialMode, setDialMode] = useState<PrismuxDialMode>("agent");
+  const [chiefSlot, setChiefSlot] = useState<PrismuxChiefSlotState>(DEFAULT_CHIEF_SLOT_STATE);
+  const chiefProvider = chiefSlot.provider;
+  const dialMode = chiefSlot.dialMode;
+  const chiefSlotRef = useRef<PrismuxChiefSlotState>(chiefSlot);
+  chiefSlotRef.current = chiefSlot;
+  const chiefSyncSeqRef = useRef<number>(0);
+  const broadcastingChiefRef = useRef<boolean>(false);
   const [telemetryMirror] = useState(() => createPrismuxTelemetryMirror());
   const [updaterBadge, setUpdaterBadge] = useState<PrismuxUpdaterBadgeState>(DEFAULT_UPDATER_BADGE);
   const [portsPopoverRequest, setPortsPopoverRequest] = useState<PrismuxPortsPopoverRequest | null>(
@@ -809,8 +901,7 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       options?: { syncPolarity?: boolean },
     ) => {
       const prev = appearanceRef.current;
-      const rawNext =
-        typeof nextOrUpdater === "function" ? nextOrUpdater(prev) : nextOrUpdater;
+      const rawNext = typeof nextOrUpdater === "function" ? nextOrUpdater(prev) : nextOrUpdater;
       const normalized = normalizeAppearanceConfig(rawNext);
       appearanceRef.current = normalized;
       setAppearanceState(normalized);
@@ -863,7 +954,9 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
     const unsubscribe = wallpaperStore.subscribe(() => {
       const snap = wallpaperStore.getSnapshot();
       const nextWs = snap.settings;
-      setWallpaperSelectedId((prevId) => (prevId === nextWs.selectedId ? prevId : nextWs.selectedId));
+      setWallpaperSelectedId((prevId) =>
+        prevId === nextWs.selectedId ? prevId : nextWs.selectedId,
+      );
 
       if (syncingRef.current) {
         lastSyncedWallpaperRef.current = nextWs;
@@ -1035,8 +1128,7 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
   useEffect(() => {
     let bridgeOccluded = false;
     let receivedLiveOcclusionEvent = false;
-    let docHidden =
-      typeof document !== "undefined" ? document.visibilityState === "hidden" : false;
+    let docHidden = typeof document !== "undefined" ? document.visibilityState === "hidden" : false;
 
     const recompute = () => {
       const nextOccluded = bridgeOccluded || docHidden;
@@ -1054,8 +1146,7 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
     };
 
     const handleWindowFocus = () => {
-      docHidden =
-        typeof document !== "undefined" ? document.visibilityState === "hidden" : false;
+      docHidden = typeof document !== "undefined" ? document.visibilityState === "hidden" : false;
       if (!docHidden) {
         receivedLiveOcclusionEvent = true;
         bridgeOccluded = false;
@@ -1070,8 +1161,7 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       window.addEventListener("focus", handleWindowFocus);
     }
 
-    const prismuxBridge =
-      typeof window !== "undefined" ? window.desktopBridge?.prismux : undefined;
+    const prismuxBridge = typeof window !== "undefined" ? window.desktopBridge?.prismux : undefined;
 
     let unsubscribeOcclusion: (() => void) | undefined;
     if (prismuxBridge && typeof prismuxBridge.onWindowOcclusionChange === "function") {
@@ -1118,40 +1208,175 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
     }
   }, []);
 
+  const broadcastChiefSlot = useCallback((slot: PrismuxChiefSlotState) => {
+    if (typeof window === "undefined" || typeof window.dispatchEvent !== "function") return;
+    broadcastingChiefRef.current = true;
+    try {
+      window.dispatchEvent(
+        new CustomEvent(CHIEF_SLOT_SYNC_EVENT, {
+          detail: {
+            provider: slot.provider,
+            model: slot.model,
+            reasoningEffort: slot.reasoningEffort,
+            dialMode: slot.dialMode,
+            secretaryName: slot.secretaryName,
+            agentsMdPath: slot.agentsMdPath,
+            threadId: slot.threadId,
+          },
+        }),
+      );
+    } finally {
+      broadcastingChiefRef.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleChiefSlotUpdated = (event: Event) => {
+      if (broadcastingChiefRef.current) return;
+      const detail = (event as CustomEvent<Record<string, unknown>>).detail;
+      if (!isPlainRecord(detail)) return;
+      const nextProvider =
+        typeof detail.provider === "string" && detail.provider.trim().length > 0
+          ? detail.provider.trim()
+          : null;
+      if (!nextProvider) return;
+      chiefSyncSeqRef.current += 1;
+      setChiefSlot((prev) => {
+        const next: PrismuxChiefSlotState = {
+          provider: nextProvider,
+          model:
+            detail.model !== undefined
+              ? typeof detail.model === "string" && detail.model.trim().length > 0
+                ? detail.model.trim()
+                : null
+              : prev.model,
+          reasoningEffort:
+            detail.reasoningEffort !== undefined
+              ? typeof detail.reasoningEffort === "string" &&
+                detail.reasoningEffort.trim().length > 0
+                ? detail.reasoningEffort.trim()
+                : null
+              : prev.reasoningEffort,
+          dialMode: detail.dialMode ? normalizeDialMode(detail.dialMode) : prev.dialMode,
+          secretaryName:
+            detail.secretaryName !== undefined
+              ? typeof detail.secretaryName === "string" && detail.secretaryName.trim().length > 0
+                ? detail.secretaryName.trim()
+                : null
+              : prev.secretaryName,
+          agentsMdPath:
+            detail.agentsMdPath !== undefined
+              ? typeof detail.agentsMdPath === "string" && detail.agentsMdPath.trim().length > 0
+                ? detail.agentsMdPath.trim()
+                : null
+              : prev.agentsMdPath,
+          threadId:
+            typeof detail.threadId === "string" && detail.threadId.trim().length > 0
+              ? detail.threadId.trim()
+              : prev.threadId,
+          hydrated: true,
+        };
+        if (
+          prev.provider === next.provider &&
+          prev.model === next.model &&
+          prev.reasoningEffort === next.reasoningEffort &&
+          prev.dialMode === next.dialMode &&
+          prev.secretaryName === next.secretaryName &&
+          prev.agentsMdPath === next.agentsMdPath &&
+          prev.threadId === next.threadId &&
+          prev.hydrated === next.hydrated
+        ) {
+          return prev;
+        }
+        chiefSlotRef.current = next;
+        return next;
+      });
+    };
+    window.addEventListener(CHIEF_SLOT_SYNC_EVENT, handleChiefSlotUpdated);
+    return () => {
+      window.removeEventListener(CHIEF_SLOT_SYNC_EVENT, handleChiefSlotUpdated);
+    };
+  }, []);
+
+  const refreshChief = useCallback(async (): Promise<PrismuxChiefSlotState | null> => {
+    const seq = ++chiefSyncSeqRef.current;
+    try {
+      const chief = await prismuxDaemonClient.getChief();
+      if (seq !== chiefSyncSeqRef.current) {
+        return chiefSlotRef.current;
+      }
+      const normalized = normalizeChiefSlotFromDaemonResponse(chief, chiefSlotRef.current);
+      chiefSlotRef.current = normalized;
+      setChiefSlot(normalized);
+      broadcastChiefSlot(normalized);
+      return normalized;
+    } catch {
+      return null;
+    }
+  }, [broadcastChiefSlot]);
+
   const switchChief = useCallback(
-    async (next: { provider?: string; dialMode?: PrismuxDialMode }): Promise<void> => {
-      const targetProvider = next.provider ?? chiefProvider;
-      const targetDialMode = next.dialMode ?? dialMode;
-      if (next.provider) {
-        setChiefProvider(next.provider);
-      }
-      if (next.dialMode) {
-        setDialMode(next.dialMode);
-      }
+    async (next: {
+      provider?: string;
+      model?: string;
+      reasoningEffort?: string;
+      defaultEffort?: string;
+      dialMode?: PrismuxDialMode;
+      secretaryName?: string;
+    }): Promise<void> => {
+      const seq = ++chiefSyncSeqRef.current;
+      const prev = chiefSlotRef.current;
+      const targetProvider = next.provider?.trim() || prev.provider;
+      const targetDialMode = next.dialMode ?? prev.dialMode;
+      const targetEffort =
+        next.reasoningEffort !== undefined
+          ? next.reasoningEffort.trim()
+          : next.defaultEffort !== undefined
+            ? next.defaultEffort.trim()
+            : undefined;
+      const optimistic: PrismuxChiefSlotState = {
+        ...prev,
+        provider: targetProvider,
+        ...(next.model !== undefined ? { model: next.model.trim() || null } : {}),
+        ...(targetEffort !== undefined ? { reasoningEffort: targetEffort || null } : {}),
+        dialMode: targetDialMode,
+        ...(next.secretaryName !== undefined
+          ? { secretaryName: next.secretaryName.trim() || null }
+          : {}),
+        hydrated: true,
+      };
+      chiefSlotRef.current = optimistic;
+      setChiefSlot(optimistic);
+      broadcastChiefSlot(optimistic);
       try {
         const res = await prismuxDaemonClient.switchChief({
           provider: targetProvider,
+          ...(next.model !== undefined ? { model: next.model.trim() } : {}),
+          ...(targetEffort !== undefined
+            ? { reasoningEffort: targetEffort, defaultEffort: targetEffort }
+            : {}),
           dialMode: targetDialMode,
+          ...(next.secretaryName !== undefined ? { secretaryName: next.secretaryName.trim() } : {}),
         });
-        if (typeof res?.slot?.provider === "string" && res.slot.provider.trim().length > 0) {
-          setChiefProvider(res.slot.provider);
+        if (seq !== chiefSyncSeqRef.current) {
+          return;
         }
-        if (res?.dialMode) {
-          setDialMode(normalizeDialMode(res.dialMode));
-        }
+        const normalized = normalizeChiefSlotFromDaemonResponse(res, optimistic);
+        chiefSlotRef.current = normalized;
+        setChiefSlot(normalized);
+        broadcastChiefSlot(normalized);
       } catch {
         // Keep optimistic UI state when daemon is offline or restarting.
       }
     },
-    [chiefProvider, dialMode],
+    [broadcastChiefSlot],
   );
 
   const navigateToSettings = useCallback(
     (section: WallpaperSettingsTabId | "") => {
-      const targetPath =
-        section === "appearance" ? "/settings/appearance" : "/settings/wallpaper";
-      const search =
-        section && section !== "appearance" ? ({ tab: section } as never) : undefined;
+      const targetPath = section === "appearance" ? "/settings/appearance" : "/settings/wallpaper";
+      const search = section && section !== "appearance" ? ({ tab: section } as never) : undefined;
       if (router) {
         void router.navigate({
           to: targetPath as never,
@@ -1160,7 +1385,8 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
         return;
       }
       if (typeof window !== "undefined") {
-        const query = section && section !== "appearance" ? `?tab=${encodeURIComponent(section)}` : "";
+        const query =
+          section && section !== "appearance" ? `?tab=${encodeURIComponent(section)}` : "";
         window.location.hash = `#${targetPath}${query}`;
       }
     },
@@ -1194,9 +1420,7 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
           opts?.steamRootOverride !== undefined ||
           opts?.customDir !== undefined;
         const customDirs =
-          opts?.customDir && opts.customDir.trim().length > 0
-            ? [opts.customDir.trim()]
-            : undefined;
+          opts?.customDir && opts.customDir.trim().length > 0 ? [opts.customDir.trim()] : undefined;
         const res = shouldRescan
           ? await prismuxDaemonClient.rescanWallpapers(customDirs, opts?.steamRootOverride)
           : await prismuxDaemonClient.getWallpaperInventory();
@@ -1432,25 +1656,14 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       void wallpaperStore.refreshLibrary(wallpaperHost, false);
       void wallpaperStore.refreshSystemFonts(wallpaperHost, false);
 
-      void prismuxDaemonClient
-        .getChief()
-        .then((chief) => {
-          if (cancelled) return;
-          if (typeof chief?.slot?.provider === "string" && chief.slot.provider.trim().length > 0) {
-            setChiefProvider(chief.slot.provider);
-          }
-          if (chief?.dialMode) {
-            setDialMode(normalizeDialMode(chief.dialMode));
-          }
-        })
-        .catch(() => {});
+      void refreshChief();
     };
 
     void hydrate();
     return () => {
       cancelled = true;
     };
-  }, [scheduleDaemonSave, syncHostPolarity, wallpaperHost, wallpaperStore]);
+  }, [refreshChief, scheduleDaemonSave, syncHostPolarity, wallpaperHost, wallpaperStore]);
 
   const refreshSystemPorts = useCallback(
     (workspace?: string): Promise<void> => telemetryMirror.refreshSystemPorts(workspace),
@@ -1507,8 +1720,7 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
     const unsubscribe = prismuxDaemonClient.subscribeUpdaterEvents((evt) => {
       if (cancelled) return;
       if (isPlainRecord(evt.data)) {
-        const payload =
-          isPlainRecord(evt.data.status) ? evt.data.status : evt.data;
+        const payload = isPlainRecord(evt.data.status) ? evt.data.status : evt.data;
         setUpdaterBadge((prev) => deriveUpdaterBadgeFromPayload(payload, prev));
       }
     });
@@ -1531,8 +1743,10 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       occluded,
       systemFonts,
       refreshSystemFonts,
+      chiefSlot,
       chiefProvider,
       dialMode,
+      refreshChief,
       switchChief,
       get portsState() {
         return telemetryMirror.portsState;
@@ -1565,8 +1779,10 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       occluded,
       systemFonts,
       refreshSystemFonts,
+      chiefSlot,
       chiefProvider,
       dialMode,
+      refreshChief,
       switchChief,
       telemetryMirror,
       refreshSystemPorts,
