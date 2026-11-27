@@ -3,7 +3,6 @@ import { memo, useEffect, useRef, type CSSProperties } from "react";
 import { AgentBrandLogo, type AgentBrandId } from "../agentBrand";
 import {
   buildBeeTileBackground,
-  computeBeeColor,
   computeBeeRamp,
   type AgentAuxMemberVisualStatus,
 } from "./agentAux.logic";
@@ -493,9 +492,7 @@ export const AgentMemberAvatar = memo(function AgentMemberAvatar({
   useBees,
   providerBrand,
   name,
-  displayName,
   status,
-  color,
   size = "md",
   showStatusDot = true,
   isCoordinator = false,
@@ -504,7 +501,6 @@ export const AgentMemberAvatar = memo(function AgentMemberAvatar({
     return <SwarmBeeTile name={name} status={status} size={size} showStatusDot={showStatusDot} />;
   }
 
-  const accent = color || computeBeeColor(name || displayName || "agent");
   const isCoord = isCoordinator || name === "coordinator";
   const showDot =
     showStatusDot &&
@@ -512,22 +508,19 @@ export const AgentMemberAvatar = memo(function AgentMemberAvatar({
       status === "needs_you" ||
       status === "waiting_on" ||
       status === "error");
-  const iconSize = size === "lg" ? 26 : size === "md" ? 20 : size === "sm" ? 18 : 14;
+  const iconSize = size === "lg" ? 30 : size === "md" ? 22 : size === "sm" ? 20 : 16;
 
   return (
     <span
-      className={`pmx-agent-avatar pmx-agent-avatar--${size}${isCoord ? " pmx-agent-avatar--coord" : ""}${status === "working" ? " pmx-agent-avatar--working" : ""}${status === "parked" ? " pmx-agent-avatar--parked" : ""}`}
-      style={{
-        background: `color-mix(in srgb, ${accent} 16%, var(--pmx-aux-card))`,
-        borderColor: `color-mix(in srgb, ${accent} 38%, var(--pmx-aux-border))`,
-      }}
+      className={`pmx-agent-avatar pmx-agent-avatar--bare pmx-agent-avatar--${size}${isCoord ? " pmx-agent-avatar--coord" : ""}${status === "working" ? " pmx-agent-avatar--working" : ""}${status === "parked" ? " pmx-agent-avatar--parked" : ""}`}
       data-agent-avatar-brand={providerBrand}
+      data-agent-avatar-bare="1"
       aria-hidden="true"
     >
       <AgentBrandLogo
         provider={providerBrand}
         size={iconSize}
-        online={status === "working"}
+        online={status !== "killed" && status !== "error"}
         breathing={status === "working"}
       />
       {status === "parked" ? (
@@ -535,7 +528,7 @@ export const AgentMemberAvatar = memo(function AgentMemberAvatar({
           z
         </span>
       ) : null}
-      {showDot ? <i className={`pmx-bee-dot pmx-bee-dot--${status}`} /> : null}
+      {showDot ? <i className={`pmx-bee-dot pmx-bee-dot--bare pmx-bee-dot--${status}`} /> : null}
     </span>
   );
 });

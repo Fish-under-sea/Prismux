@@ -436,6 +436,7 @@ export const AgentAuxBoardTab = memo(function AgentAuxBoardTab({
                   data-aux-seq={msg.seq}
                   className={[
                     "pmx-aux-msg",
+                    !model.useBees ? "pmx-aux-msg--bare" : "",
                     msg.isUnread ? "pmx-aux-msg--unread" : "",
                     msg.isDirectToYou ? "pmx-aux-msg--direct" : "",
                     isAbsorbedAcp ? "pmx-aux-msg--acp" : "",
@@ -444,7 +445,13 @@ export const AgentAuxBoardTab = memo(function AgentAuxBoardTab({
                     .filter(Boolean)
                     .join(" ")}
                 >
-                  <div className="pmx-aux-msg-avatar">
+                  <div
+                    className={
+                      isSwarmBee
+                        ? "pmx-aux-msg-avatar pmx-aux-msg-avatar--bee"
+                        : "pmx-aux-msg-avatar"
+                    }
+                  >
                     <AgentMemberAvatar
                       useBees={isSwarmBee}
                       providerBrand={

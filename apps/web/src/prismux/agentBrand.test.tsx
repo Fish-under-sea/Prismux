@@ -49,9 +49,7 @@ describe("agentBrand canonical naming & official logos", () => {
   });
 
   it("preserves user custom display names while Title-Casing raw unknown ACP IDs", () => {
-    expect(formatAgentBrandName("acpRegistry:team", "DeepSeek Internal")).toBe(
-      "DeepSeek Internal",
-    );
+    expect(formatAgentBrandName("acpRegistry:team", "DeepSeek Internal")).toBe("DeepSeek Internal");
     expect(formatAgentBrandName("claudeAgent", "Claude")).toBe("Claude Code");
     expect(formatAgentBrandName("my-custom-acp")).toBe("My Custom ACP");
     expect(formatAgentBrandName("acmeCodeAgent")).toBe("Acme Code Agent");
@@ -61,12 +59,10 @@ describe("agentBrand canonical naming & official logos", () => {
   it("scrubs UUID instance IDs and humanized UUID strings while preserving user custom renames", () => {
     expect(formatAgentBrandName("codex_048c43c3-0798-480e-bc42-1a2b3c4d5e6f")).toBe("Codex");
     expect(formatAgentBrandName("codex-048c43c3-0798-480e-bc42-1a2b3c4d5e6f")).toBe("Codex");
-    expect(
-      formatAgentBrandName("codex", "Codex 048c43c3 0798 480e Bc42 1..."),
-    ).toBe("Codex");
-    expect(
-      formatAgentBrandName("claudeAgent_048c43c3-0798-480e-bc42-1a2b3c4d5e6f"),
-    ).toBe("Claude Code");
+    expect(formatAgentBrandName("codex", "Codex 048c43c3 0798 480e Bc42 1...")).toBe("Codex");
+    expect(formatAgentBrandName("claudeAgent_048c43c3-0798-480e-bc42-1a2b3c4d5e6f")).toBe(
+      "Claude Code",
+    );
     expect(formatAgentBrandName("048c43c3-0798-480e-bc42-1a2b3c4d5e6f")).toBe("Agent");
     expect(formatAgentBrandName("codex", "主力 Codex")).toBe("主力 Codex");
     expect(formatAgentBrandName("codex", "Codex (2)")).toBe("Codex (2)");
@@ -248,9 +244,9 @@ describe("agentBrand canonical naming & official logos", () => {
     expect(multiHtml).not.toContain("data:image/png");
 
     // Every rendered instance must produce distinct gradient/clipPath IDs via React useId()
-    const idMatches = [...multiHtml.matchAll(/id="([^"]*agy-(?:clip|base|green|yellow|red|belly))"/g)].map(
-      (m) => m[1],
-    );
+    const idMatches = [
+      ...multiHtml.matchAll(/id="([^"]*agy-(?:clip|base|green|yellow|red|belly))"/g),
+    ].map((m) => m[1]);
     expect(idMatches.length).toBe(6 * 6);
     expect(new Set(idMatches).size).toBe(idMatches.length);
 
@@ -313,5 +309,15 @@ describe("agentBrand canonical naming & official logos", () => {
     expect(piIconHtml).toContain(`viewBox="${PI_LOGO_VIEWBOX}"`);
     expect(piIconHtml).toContain(PI_LOGO_FRAME_PATH);
     expect(piIconHtml).toContain(PI_LOGO_DOT_PATH);
+  });
+
+  it("enforces block display and xMidYMid meet optical centering on all AgentBrandLogo SVGs (including non-square viewBoxes)", () => {
+    for (const provider of ["dsh", "opencode", "cursor", "qwen", "glm", "kimi", "codex"]) {
+      const html = renderToStaticMarkup(<AgentBrandLogo provider={provider} size={16} />);
+      expect(html).toContain('preserveAspectRatio="xMidYMid meet"');
+      expect(html).toContain("display:block");
+    }
+    expect(AGENT_BRAND_BREATHE_CSS).toContain("line-height: 0;");
+    expect(AGENT_BRAND_BREATHE_CSS).toContain(".pmx-agent-brand-logo > svg");
   });
 });

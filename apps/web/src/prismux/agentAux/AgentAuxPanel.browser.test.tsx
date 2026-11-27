@@ -482,4 +482,272 @@ describe("AgentAuxPanel real-Chrome browser verification", () => {
     expect(screenshotPath).toContain("w2-swarm-panel-verification.png");
     expect(screen.container.querySelectorAll(".pmx-aux-pane")).toHaveLength(4);
   });
+
+  it("renders shell-less transparent ACP Captain & worker logos with 0px Hive centering and aligned Members/Board/Mentions across Light, Dark, and Liquid Glass", async () => {
+    using _theme = useThemeGuard();
+    const baseTs = 1_760_000_000_000;
+    const dshEntry = {
+      instanceId: "acpRegistry:dsh",
+      driverKind: "acpRegistry",
+      displayName: "DeepSeek Harness",
+      acpRegistryAgentId: "dsh",
+    };
+    const glmEntry = {
+      instanceId: "acpRegistry:glm",
+      driverKind: "acpRegistry",
+      displayName: "GLM Agent",
+      acpRegistryAgentId: "glm-acp-agent",
+    };
+    const qwenEntry = {
+      instanceId: "acpRegistry:qwen",
+      driverKind: "acpRegistry",
+      displayName: "Qwen Code",
+      acpRegistryAgentId: "qwen-code",
+    };
+    const kimiEntry = {
+      instanceId: "acpRegistry:kimi",
+      driverKind: "acpRegistry",
+      displayName: "Kimi Code",
+      acpRegistryAgentId: "kimi-code",
+    };
+    const entryMap = new Map([
+      [dshEntry.instanceId, dshEntry],
+      [glmEntry.instanceId, glmEntry],
+      [qwenEntry.instanceId, qwenEntry],
+      [kimiEntry.instanceId, kimiEntry],
+    ]);
+
+    const acpModel = buildAgentAuxViewModel({
+      provider: "acpRegistry",
+      providerEntry: dshEntry,
+      model: "DeepSeek-V4.1",
+      providerEntryByInstanceId: entryMap,
+      threadId: "thread-acp-browser" as ThreadId,
+      threadShell: {
+        id: "thread-acp-browser" as ThreadId,
+        title: "DSH 统筹多模型透明图标重构",
+        activityRunStatus: "running",
+        modelSelection: { instanceId: dshEntry.instanceId, model: "DeepSeek-V4.1" },
+        lineage: {},
+      },
+      projection: {
+        runs: [{ id: "run-acp-1", status: "running" }],
+        subagents: [
+          {
+            id: "sub-glm",
+            runId: "run-acp-1",
+            title: "GLM 样式对齐审计",
+            status: "running",
+            driver: "acpRegistry",
+            providerInstanceId: glmEntry.instanceId,
+            model: "glm-5",
+            childThreadId: "child-glm" as ThreadId,
+            prompt: "审查蜂巢坐标居中与无壳透明图标对比度",
+            progress: "正在校验浅色/深色/液态玻璃三主题",
+            startedAt: baseTs + 5_000,
+          },
+          {
+            id: "sub-qwen",
+            runId: "run-acp-1",
+            title: "Qwen 单测补齐",
+            status: "completed",
+            driver: "acpRegistry",
+            providerInstanceId: qwenEntry.instanceId,
+            model: "qwen3-coder",
+            childThreadId: "child-qwen" as ThreadId,
+            prompt: "覆盖多信号品牌解析与迁移兼容性",
+            result: "全部 16 项断言通过",
+            startedAt: baseTs + 10_000,
+            completedAt: baseTs + 45_000,
+          },
+          {
+            id: "sub-kimi",
+            runId: "run-acp-1",
+            title: "Kimi 交互验收",
+            status: "completed",
+            driver: "acpRegistry",
+            providerInstanceId: kimiEntry.instanceId,
+            model: "kimi-k2",
+            childThreadId: "child-kimi" as ThreadId,
+            prompt: "核对提及关系图真实品牌图标渲染",
+            result: "节点图标居中且无残留圆点",
+            startedAt: baseTs + 15_000,
+            completedAt: baseTs + 55_000,
+          },
+        ],
+      },
+      daemonSnapshot: null,
+      locale: "zh",
+    });
+
+    await page.viewport(1580, 860);
+    document.body.style.margin = "0";
+
+    const assertThemeGeometry = async (mode: "light" | "dark" | "glass") => {
+      document.documentElement.classList.toggle("dark", mode !== "light");
+      if (mode === "glass") {
+        document.documentElement.dataset.pmxGlass = "1";
+      } else {
+        delete document.documentElement.dataset.pmxGlass;
+      }
+      document.documentElement.style.setProperty("--pmx-accent", "#38bdf8");
+
+      const container = document.createElement("div");
+      container.style.cssText =
+        mode === "light"
+          ? "display:grid;grid-template-columns:repeat(4,376px);gap:14px;padding:18px;background:#eef2f7;min-height:824px;box-sizing:border-box;"
+          : mode === "dark"
+            ? "display:grid;grid-template-columns:repeat(4,376px);gap:14px;padding:18px;background:#0f1117;min-height:824px;box-sizing:border-box;"
+            : "display:grid;grid-template-columns:repeat(4,376px);gap:14px;padding:18px;background:radial-gradient(120% 100% at 20% 0%, #162238 0%, #0b0f19 55%, #121521 100%);min-height:824px;box-sizing:border-box;";
+
+      const tabs = ["overview", "board", "members", "graph"] as const;
+      await using screen = await render(
+        <>
+          {tabs.map((tab) => (
+            <div
+              key={tab}
+              style={{
+                height: "820px",
+                borderRadius: "14px",
+                overflow: "hidden",
+                border:
+                  mode === "light"
+                    ? "1px solid rgba(15,23,42,0.12)"
+                    : "1px solid rgba(255,255,255,0.12)",
+                background:
+                  mode === "light"
+                    ? "#ffffff"
+                    : mode === "dark"
+                      ? "#141518"
+                      : "rgba(20, 22, 30, 0.72)",
+              }}
+            >
+              <AgentAuxPanel
+                model={acpModel}
+                initialTab={tab}
+                locale="zh"
+                onRefresh={() => undefined}
+                onOpenChildThread={() => undefined}
+              />
+            </div>
+          ))}
+        </>,
+        { container, router: false },
+      );
+
+      // 1. ZERO [AC] monogram badges anywhere across all 4 tabs
+      expect(screen.container.querySelector('[data-agent-brand-monogram="AC"]')).toBeNull();
+      // Captain DSH logo present in header, hero, board, members, and hive hub
+      expect(
+        screen.container.querySelectorAll('[data-agent-brand="dsh"]').length,
+      ).toBeGreaterThanOrEqual(5);
+
+      // 2. EVERY bare ACP avatar has strictly transparent background, zero border, and 1:1 square bounding box
+      const bareAvatars = screen.container.querySelectorAll<HTMLElement>(
+        '[data-agent-avatar-bare="1"]',
+      );
+      expect(bareAvatars.length).toBeGreaterThan(0);
+      for (const el of bareAvatars) {
+        const cs = getComputedStyle(el);
+        expect(cs.backgroundColor).toBe("rgba(0, 0, 0, 0)");
+        expect(cs.borderTopWidth).toBe("0px");
+        const rect = el.getBoundingClientRect();
+        expect(Math.abs(rect.width - rect.height)).toBeLessThan(0.5);
+      }
+
+      // 3. Hive Graph bare icons have zero box shell and center on exact (bee.x, bee.y) with < 1px error!
+      const hiveCanvas = screen.container.querySelector<HTMLElement>(".pmx-aux-hv-canvas");
+      expect(hiveCanvas).toBeTruthy();
+      const canvasRect = hiveCanvas!.getBoundingClientRect();
+      const hiveButtons = screen.container.querySelectorAll<HTMLButtonElement>("[data-hive-bee]");
+      expect(hiveButtons.length).toBeGreaterThanOrEqual(4);
+      for (const btn of hiveButtons) {
+        const expectedX = Number.parseFloat(btn.dataset.hiveX ?? "0");
+        const expectedY = Number.parseFloat(btn.dataset.hiveY ?? "0");
+        const r = btn.getBoundingClientRect();
+        const actualCenterX = r.left - canvasRect.left + r.width / 2;
+        const actualCenterY = r.top - canvasRect.top + r.height / 2;
+        expect(Math.abs(actualCenterX - expectedX)).toBeLessThan(1.0);
+        expect(Math.abs(actualCenterY - expectedY)).toBeLessThan(1.0);
+      }
+      const hiveBareIcons = screen.container.querySelectorAll<HTMLElement>('[data-hive-bare="1"]');
+      expect(hiveBareIcons.length).toBeGreaterThanOrEqual(4);
+      for (const icon of hiveBareIcons) {
+        const cs = getComputedStyle(icon);
+        expect(cs.backgroundColor).toBe("rgba(0, 0, 0, 0)");
+        expect(cs.borderTopWidth).toBe("0px");
+      }
+
+      // 4. Board bare avatars align optically with message author & meta row centerline
+      const boardMsgs = screen.container.querySelectorAll<HTMLElement>(".pmx-aux-msg--bare");
+      expect(boardMsgs.length).toBeGreaterThan(0);
+      for (const msg of boardMsgs) {
+        const av = msg.querySelector<HTMLElement>(".pmx-aux-msg-avatar");
+        const author = msg.querySelector<HTMLElement>(".pmx-aux-msg-author");
+        const meta = msg.querySelector<HTMLElement>(".pmx-aux-msg-meta");
+        expect(av).toBeTruthy();
+        expect(author).toBeTruthy();
+        expect(meta).toBeTruthy();
+        const avRect = av!.getBoundingClientRect();
+        const authorRect = author!.getBoundingClientRect();
+        const metaRect = meta!.getBoundingClientRect();
+        const avCenterY = avRect.top + avRect.height / 2;
+        const authorCenterY = authorRect.top + authorRect.height / 2;
+        const metaCenterY = metaRect.top + metaRect.height / 2;
+        expect(Math.abs(avCenterY - authorCenterY)).toBeLessThan(1.5);
+        expect(Math.abs(avCenterY - metaCenterY)).toBeLessThan(1.5);
+      }
+
+      // 4b. Members bare avatars center optically against member main content row
+      const memberRows = screen.container.querySelectorAll<HTMLElement>(
+        ".pmx-aux-member-row--bare",
+      );
+      expect(memberRows.length).toBeGreaterThanOrEqual(4);
+      for (const row of memberRows) {
+        const av = row.querySelector<HTMLElement>(".pmx-aux-member-avatar");
+        const main = row.querySelector<HTMLElement>(".pmx-aux-member-main");
+        expect(av).toBeTruthy();
+        expect(main).toBeTruthy();
+        const avRect = av!.getBoundingClientRect();
+        const mainRect = main!.getBoundingClientRect();
+        const avCenterY = avRect.top + avRect.height / 2;
+        const mainCenterY = mainRect.top + mainRect.height / 2;
+        expect(Math.abs(avCenterY - mainCenterY)).toBeLessThan(1.5);
+      }
+
+      // Capture Hive 4-tab visual screenshot for each theme (Light / Dark / Liquid Glass)
+      await page.screenshot({
+        path: `../../../../../.work/acp-logos-align-${mode}.png`,
+      });
+
+      // 5. Switch Graph pane to Mentions mode and verify real transparent brand SVGs replace colored circles
+      const mentionsBtn = Array.from(
+        screen.container.querySelectorAll<HTMLButtonElement>(".pmx-aux-segmented button"),
+      ).find((b) => b.textContent?.includes("提及关系"));
+      expect(mentionsBtn).toBeTruthy();
+      await act(() => {
+        mentionsBtn!.click();
+      });
+      const mentionsStage = screen.container.querySelector<SVGSVGElement>(
+        '[data-mentions-stage="1"]',
+      );
+      expect(mentionsStage).toBeTruthy();
+      expect(mentionsStage!.querySelectorAll("[data-mention-brand]").length).toBeGreaterThanOrEqual(
+        4,
+      );
+      expect(mentionsStage!.querySelector('[data-mention-brand="dsh"]')).toBeTruthy();
+      expect(mentionsStage!.querySelector('[data-mention-brand="glm"]')).toBeTruthy();
+      expect(mentionsStage!.querySelector('circle[cx="14"]')).toBeNull();
+
+      if (mode === "glass") {
+        await page.screenshot({
+          path: "../../../../../.work/acp-logos-align-mentions-glass.png",
+        });
+      }
+    };
+
+    await assertThemeGeometry("light");
+    await assertThemeGeometry("dark");
+    await assertThemeGeometry("glass");
+  });
 });

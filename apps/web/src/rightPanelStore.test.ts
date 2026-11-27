@@ -1463,4 +1463,87 @@ describe("rightPanelStore", () => {
       "pull-request",
     );
   });
+
+  it("persists resolved Captain providerBrand on AgentAuxSurface while remaining backwards-compatible with legacy persisted surfaces", () => {
+    const store = useRightPanelStore.getState();
+    store.openAgentAux(refA, {
+      title: "DeepSeek Harness 多智能体协同",
+      auxKind: "provider-subagents",
+      provider: "acpRegistry",
+      providerBrand: "dsh",
+      activeCount: 2,
+    });
+    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      id: "agent-aux",
+      kind: "agent-aux",
+      title: "DeepSeek Harness 多智能体协同",
+      auxKind: "provider-subagents",
+      provider: "acpRegistry",
+      providerBrand: "dsh",
+      activeCount: 2,
+    });
+
+    store.updateAgentAux(refA, { providerBrand: "glm", activeCount: 1 });
+    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      id: "agent-aux",
+      kind: "agent-aux",
+      title: "DeepSeek Harness 多智能体协同",
+      auxKind: "provider-subagents",
+      provider: "acpRegistry",
+      providerBrand: "glm",
+      activeCount: 1,
+    });
+
+    // Legacy persisted agent-aux without providerBrand AND modern persisted agent-aux WITH providerBrand both survive migration cleanly
+    const migrated = migratePersistedRightPanelState({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "agent-aux",
+          surfaces: [
+            {
+              id: "agent-aux",
+              kind: "agent-aux",
+              title: "Legacy ACP",
+              auxKind: "provider-subagents",
+              provider: "acpRegistry",
+            },
+          ],
+        },
+        "env-1:thread-B": {
+          isOpen: true,
+          activeSurfaceId: "agent-aux",
+          surfaces: [
+            {
+              id: "agent-aux",
+              kind: "agent-aux",
+              title: "DSH 协同",
+              auxKind: "provider-subagents",
+              provider: "acpRegistry",
+              providerBrand: "dsh",
+            },
+          ],
+        },
+      },
+    });
+    expect(selectThreadRightPanelState(migrated.byThreadKey, refA).surfaces).toEqual([
+      {
+        id: "agent-aux",
+        kind: "agent-aux",
+        title: "Legacy ACP",
+        auxKind: "provider-subagents",
+        provider: "acpRegistry",
+      },
+    ]);
+    expect(selectThreadRightPanelState(migrated.byThreadKey, refB).surfaces).toEqual([
+      {
+        id: "agent-aux",
+        kind: "agent-aux",
+        title: "DSH 协同",
+        auxKind: "provider-subagents",
+        provider: "acpRegistry",
+        providerBrand: "dsh",
+      },
+    ]);
+  });
 });

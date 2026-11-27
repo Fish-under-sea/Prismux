@@ -12,6 +12,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -22,7 +23,7 @@ import {
 } from "react";
 
 import { observeResize } from "~/lib/observeResize";
-import { AgentBrandLogo } from "../agentBrand";
+import { AgentBrandLogo, renderBundledBrandSvg } from "../agentBrand";
 import {
   formatAuxPostsOverDuration,
   formatAuxReplayProgress,
@@ -30,7 +31,6 @@ import {
   getAuxStrings,
 } from "./agentAux.i18n";
 import {
-  computeBeeColor,
   computeHiveLayout,
   computeMentionGraphLayout,
   computeReplayDelayMs,
@@ -87,6 +87,7 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
 }: AgentAuxGraphTabProps) {
   const s = getAuxStrings(model.locale);
   const reducedMotion = usePrefersReducedMotion();
+  const graphIdPrefix = useId().replace(/[^a-zA-Z0-9_-]/g, "");
 
   const [graphMode, setGraphMode] = useState<"hive" | "mentions">("hive");
   const [replaySeq, setReplaySeq] = useState<number | null>(null);
@@ -697,14 +698,12 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
                 })}
               </svg>
 
-              {/* Layer 3: Crisp Pixel Bees & Vendor Brand Badges Overlay */}
+              {/* Layer 3: Crisp Pixel Bees & Pure Transparent Brand Logos Overlay */}
               {hiveLayout.bees
                 .filter((b) => !b.tucked && b.replayState !== "unborn")
                 .map((bee) => {
                   const scale: 1 | 2 | 3 = bee.size === "lg" ? 2 : bee.size === "sm" ? 1 : 1;
                   const useBeeSprite = model.useBees && bee.sourceKind !== "acp-delegated";
-                  const halfW = useBeeSprite ? (22 * scale) / 2 : bee.size === "lg" ? 16 : 11;
-                  const halfH = useBeeSprite ? (18 * scale) / 2 : bee.size === "lg" ? 16 : 11;
                   const tooltip = `@${bee.name} · ${formatAuxStatusLabel(bee.state, bee.waitingOn, model.locale)}`;
 
                   return (
@@ -713,15 +712,20 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
                       type="button"
                       title={tooltip}
                       aria-label={tooltip}
+                      data-hive-bee={bee.name}
+                      data-hive-x={bee.x.toFixed(1)}
+                      data-hive-y={bee.y.toFixed(1)}
                       className={[
                         "pmx-aux-hv-bee",
+                        replaySeq !== null && !reducedMotion ? "pmx-aux-hv-bee--replay" : "",
                         bee.replayState === "working" ? "pmx-aux-hv-bee--working" : "",
                         bee.replayState === "retired" ? "pmx-aux-hv-bee--retired" : "",
                       ]
                         .filter(Boolean)
                         .join(" ")}
                       style={{
-                        transform: `translate(${(bee.x - halfW).toFixed(1)}px, ${(bee.y - halfH).toFixed(1)}px)`,
+                        left: `${bee.x.toFixed(1)}px`,
+                        top: `${bee.y.toFixed(1)}px`,
                       }}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -736,15 +740,15 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
                         />
                       ) : (
                         <span
-                          className={`pmx-aux-hv-brand-dot pmx-aux-hv-brand-dot--${bee.size}`}
-                          style={{
-                            borderColor: computeBeeColor(bee.name),
-                          }}
+                          className={`pmx-aux-hv-brand-bare pmx-aux-hv-brand-bare--${bee.size}`}
+                          data-hive-brand={bee.providerBrand}
+                          data-hive-bare="1"
                         >
                           <AgentBrandLogo
                             provider={bee.providerBrand}
-                            size={bee.size === "lg" ? 20 : 14}
-                            online={bee.replayState === "working"}
+                            size={bee.size === "lg" ? 26 : bee.size === "sm" ? 18 : 15}
+                            online={bee.replayState !== "retired"}
+                            breathing={bee.replayState === "working"}
                           />
                         </span>
                       )}
@@ -843,11 +847,15 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
               const beeUrl = useBeeImg
                 ? getBeeSpriteDataUrl(node.name, toPixelBeeState(node.status), 0)
                 : "";
-              const labelMax = Math.max(6, Math.floor((node.width - 34) / 7));
+              const labelMax = Math.max(
+                6,
+                Math.floor((node.width - (useBeeImg && beeUrl ? 34 : 31)) / 7),
+              );
               const shortLabel =
                 node.displayName.length > labelMax
                   ? `${node.displayName.slice(0, labelMax - 1)}…`
                   : node.displayName;
+              const safeNodeKey = node.name.replace(/[^a-zA-Z0-9_-]/g, "");
 
               return (
                 <g
@@ -893,11 +901,23 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
                       style={{ imageRendering: "pixelated" }}
                     />
                   ) : (
-                    <circle cx="14" cy={node.height / 2} r="5" fill={computeBeeColor(node.name)} />
+                    <g
+                      className="pmx-aux-graph-node-icon"
+                      transform={`translate(6, ${(node.height - 16) / 2})`}
+                      data-mention-brand={node.providerBrand}
+                    >
+                      {renderBundledBrandSvg({
+                        brandId: node.providerBrand,
+                        gradientPrefix: `${graphIdPrefix}-m-${safeNodeKey}`,
+                        size: 16,
+                        fallbackLabel: node.displayName,
+                      })}
+                    </g>
                   )}
                   <text
-                    x={useBeeImg && beeUrl ? 31 : 25}
-                    y={node.height / 2 + 4}
+                    x={useBeeImg && beeUrl ? 31 : 27}
+                    y={node.height / 2}
+                    dominantBaseline="central"
                     className="pmx-aux-graph-node-txt"
                   >
                     {shortLabel}

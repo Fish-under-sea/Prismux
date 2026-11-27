@@ -1055,8 +1055,13 @@ export const AGENT_BRAND_BREATHE_CSS = `
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  line-height: 1;
+  line-height: 0;
   transition: opacity 220ms ease, filter 220ms ease;
+}
+
+.pmx-agent-brand-logo > svg {
+  display: block;
+  flex-shrink: 0;
 }
 
 .pmx-agent-brand-logo[data-breathing="true"] {
@@ -1382,7 +1387,10 @@ export function renderBundledBrandSvg(options: {
           height: size,
           style: { width: size, height: size, display: "block" } satisfies CSSProperties,
         }
-      : {}),
+      : {
+          style: { display: "block" } satisfies CSSProperties,
+        }),
+    preserveAspectRatio: "xMidYMid meet",
     className,
     "aria-hidden": true as const,
     focusable: false as const,

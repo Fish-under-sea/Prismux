@@ -1,7 +1,10 @@
 import type { ThreadId } from "@prismux/core-contracts";
+import { EnvironmentId } from "@prismux/core-contracts";
+import { GTProvider, initializeGT } from "gt-react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
+import { RightPanelTabs } from "../../components/RightPanelTabs";
 import { buildAgentAuxViewModel } from "./agentAux.logic";
 import {
   AgentAuxOverviewEntryButton,
@@ -446,5 +449,177 @@ describe("AgentAuxPanel & AgentAuxOverviewEntryButton", () => {
     expect(
       renderToStaticMarkup(<AgentAuxOverviewEntryButton entry={null} onOpen={vi.fn()} />),
     ).toBe("");
+  });
+
+  it("renders shell-less transparent Captain & worker logos (zero [AC], zero box shells) across all 4 ACP tabs and RightPanelTabs", () => {
+    const dshEntry = {
+      instanceId: "acpRegistry:dsh",
+      driverKind: "acpRegistry",
+      displayName: "DeepSeek Harness",
+      acpRegistryAgentId: "dsh",
+    };
+    const glmEntry = {
+      instanceId: "acpRegistry:glm",
+      driverKind: "acpRegistry",
+      displayName: "GLM Agent",
+      acpRegistryAgentId: "glm-acp-agent",
+    };
+    const qwenEntry = {
+      instanceId: "acpRegistry:qwen",
+      driverKind: "acpRegistry",
+      displayName: "Qwen Code",
+      acpRegistryAgentId: "qwen-code",
+    };
+    const entryMap = new Map([
+      [dshEntry.instanceId, dshEntry],
+      [glmEntry.instanceId, glmEntry],
+      [qwenEntry.instanceId, qwenEntry],
+    ]);
+
+    const acpModel = buildAgentAuxViewModel({
+      provider: "acpRegistry",
+      providerEntry: dshEntry,
+      model: "DeepSeek-V4.1",
+      providerEntryByInstanceId: entryMap,
+      threadId: "thread-acp-bare" as ThreadId,
+      projection: {
+        runs: [{ id: "r1", status: "running" }],
+        subagents: [
+          {
+            id: "sub-glm",
+            runId: "r1",
+            title: "GLM 视觉审查",
+            status: "running",
+            driver: "acpRegistry",
+            providerInstanceId: glmEntry.instanceId,
+            model: "glm-5",
+            childThreadId: "child-glm" as ThreadId,
+            prompt: "审查对齐与透明图标",
+            progress: "检查中",
+            startedAt: 1_760_000_010_000,
+          },
+          {
+            id: "sub-qwen",
+            runId: "r1",
+            title: "Qwen 单元测试",
+            status: "completed",
+            driver: "acpRegistry",
+            providerInstanceId: qwenEntry.instanceId,
+            model: "qwen3-coder",
+            childThreadId: "child-qwen" as ThreadId,
+            prompt: "运行单测",
+            result: "全部通过",
+            startedAt: 1_760_000_020_000,
+            completedAt: 1_760_000_050_000,
+          },
+        ],
+      },
+      daemonSnapshot: null,
+      locale: "zh",
+    });
+
+    const overviewHtml = renderToStaticMarkup(
+      <AgentAuxPanel model={acpModel} initialTab="overview" locale="zh" />,
+    );
+    const boardHtml = renderToStaticMarkup(
+      <AgentAuxPanel model={acpModel} initialTab="board" locale="zh" />,
+    );
+    const membersHtml = renderToStaticMarkup(
+      <AgentAuxPanel model={acpModel} initialTab="members" locale="zh" />,
+    );
+    const graphHtml = renderToStaticMarkup(
+      <AgentAuxPanel model={acpModel} initialTab="graph" locale="zh" />,
+    );
+    const entryHtml = renderToStaticMarkup(
+      <AgentAuxOverviewEntryButton
+        entry={toAgentAuxOverviewEntry(acpModel)}
+        onOpen={vi.fn()}
+        locale="zh"
+      />,
+    );
+
+    const allHtml = [overviewHtml, boardHtml, membersHtml, graphHtml, entryHtml].join("\n");
+    // NEVER renders generic [AC] monogram badge when Captain/worker brands are known
+    expect(allHtml).not.toContain('data-agent-brand-monogram="AC"');
+    // Renders Captain DSH pure transparent logo everywhere
+    expect(overviewHtml).toContain('data-agent-brand="dsh"');
+    expect(overviewHtml).toContain('data-agent-avatar-bare="1"');
+    expect(overviewHtml).toContain('data-aux-all-bare="1"');
+    expect(overviewHtml).not.toContain("background:color-mix(");
+    expect(boardHtml).toContain("pmx-aux-msg--bare");
+    expect(membersHtml).toContain("pmx-aux-member-row--bare");
+    expect(membersHtml).not.toContain("pt-0.5");
+    expect(graphHtml).toContain('data-hive-bare="1"');
+    expect(graphHtml).toContain('data-hive-brand="dsh"');
+    expect(graphHtml).toContain('data-hive-brand="glm"');
+    expect(graphHtml).not.toContain("pmx-aux-hv-brand-dot");
+    expect(entryHtml).toContain('data-agent-brand="dsh"');
+
+    // RightPanelTabs agent-aux tab renders resolved Captain providerBrand (DSH), NOT [AC]
+    initializeGT({ defaultLocale: "zh", locales: ["zh", "en"] });
+    const noop = () => {};
+    const tabHtml = renderToStaticMarkup(
+      <GTProvider locale="zh" translations={{}}>
+        <RightPanelTabs
+          mode="embedded"
+          open
+          keybindings={[]}
+          getShortcutContext={() => ({
+            terminalFocus: false,
+            terminalOpen: false,
+            previewFocus: false,
+            previewOpen: false,
+            isWeb: true,
+            isDesktop: false,
+          })}
+          surfaces={[
+            {
+              id: "agent-aux",
+              kind: "agent-aux",
+              title: "DeepSeek Harness 多智能体协同",
+              auxKind: "provider-subagents",
+              provider: "acpRegistry",
+              providerBrand: "dsh",
+              activeCount: 1,
+            },
+          ]}
+          environmentId={EnvironmentId.make("local")}
+          activeSurfaceId="agent-aux"
+          pendingSurfaceIds={new Set<string>()}
+          previewSessions={{}}
+          desktopByTabId={{}}
+          terminalLabelsById={new Map<string, string>()}
+          onActivate={noop}
+          onCloseSurface={noop}
+          onCloseOtherSurfaces={noop}
+          onCloseSurfacesToRight={noop}
+          onCloseAllSurfaces={noop}
+          onCopyFilePath={noop}
+          onAddBrowser={noop}
+          onAddBrowserInProfile={noop}
+          onAddTerminal={noop}
+          onAddDiff={noop}
+          onAddFiles={noop}
+          onAddPullRequest={noop}
+          onAddPullRequests={noop}
+          onAddDevice={noop}
+          onAddWallpaper={noop}
+          onAddSideChat={noop}
+          browserAvailable={false}
+          terminalAvailable={false}
+          diffAvailable={false}
+          filesAvailable={false}
+          pullRequestAvailable={false}
+          pullRequestsAvailable={false}
+          deviceAvailable={false}
+          wallpaperAvailable={false}
+          sideChatAvailable={false}
+        >
+          <div />
+        </RightPanelTabs>
+      </GTProvider>,
+    );
+    expect(tabHtml).toContain('data-agent-brand="dsh"');
+    expect(tabHtml).not.toContain('data-agent-brand-monogram="AC"');
   });
 });

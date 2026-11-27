@@ -24,6 +24,7 @@ import {
   formatAuxTaskStatusLabel,
   parseBoardMentions,
   parseSidecarSwarmLink,
+  resolveAgentAuxBrand,
   shortenWorkspacePath,
   shouldAutoOpenAgentAux,
   stripLeadingMentionTokens,
@@ -849,5 +850,133 @@ describe("agentAux.logic", () => {
     expect(formatAuxStatusLabel("working", null, "zh")).toBe("工作中");
     expect(formatAuxStatusLabel("waiting_on", "coordinator", "zh")).toBe("等待 @coordinator");
     expect(formatAuxTaskStatusLabel("blocked", "zh")).toBe("受阻");
+  });
+
+  it("resolves ACP Registry Captain and delegated children to real vendor brands (NEVER generic acp/[AC]) via multi-signal resolver", () => {
+    const dshEntry = {
+      instanceId: "acpRegistry:dsh-main",
+      driverKind: "acpRegistry",
+      displayName: "DeepSeek Harness",
+      acpRegistryAgentId: "dsh",
+    };
+    const glmEntry = {
+      instanceId: "acpRegistry:custom-uuid-1",
+      driverKind: "acpRegistry",
+      displayName: "GLM Agent",
+      acpCommandPath: "C:\\tools\\glm-acp-agent.cmd",
+    };
+    const qwenEntry = {
+      instanceId: "acpRegistry:custom-uuid-2",
+      driverKind: "acpRegistry",
+      displayName: "Qwen Code",
+    };
+    const kimiEntry = {
+      instanceId: "acpRegistry:custom-uuid-3",
+      driverKind: "acpRegistry",
+      displayName: "My Internal Bot",
+    };
+    const entryMap = new Map([
+      [dshEntry.instanceId, dshEntry],
+      [glmEntry.instanceId, glmEntry],
+      [qwenEntry.instanceId, qwenEntry],
+      [kimiEntry.instanceId, kimiEntry],
+    ]);
+
+    expect(resolveAgentAuxBrand({ provider: "acpRegistry", providerEntry: dshEntry })).toBe("dsh");
+    expect(
+      resolveAgentAuxBrand({
+        provider: "acpRegistry",
+        instanceId: glmEntry.instanceId,
+        providerEntryByInstanceId: entryMap,
+      }),
+    ).toBe("glm");
+    expect(
+      resolveAgentAuxBrand({
+        provider: "acpRegistry",
+        instanceId: qwenEntry.instanceId,
+        providerEntryByInstanceId: entryMap,
+      }),
+    ).toBe("qwen");
+    expect(
+      resolveAgentAuxBrand({
+        provider: "acpRegistry",
+        instanceId: kimiEntry.instanceId,
+        model: "kimi-k2-thinking",
+        providerEntryByInstanceId: entryMap,
+      }),
+    ).toBe("kimi");
+
+    // Full ViewModel when Captain is DSH (raw driverKind = "acpRegistry") delegating to GLM, Qwen, Kimi
+    const model = buildAgentAuxViewModel({
+      provider: "acpRegistry",
+      providerEntry: dshEntry,
+      model: "DeepSeek-V4.1",
+      providerEntryByInstanceId: entryMap,
+      threadId: "thread-dsh-captain" as ThreadId,
+      threadShell: {
+        id: "thread-dsh-captain" as ThreadId,
+        title: "DSH 统筹多代理联调",
+        activityRunStatus: "running",
+        modelSelection: { instanceId: dshEntry.instanceId, model: "DeepSeek-V4.1" },
+        lineage: {},
+      },
+      projection: {
+        runs: [{ id: "run-1", status: "running" }],
+        subagents: [
+          {
+            id: "sub-glm",
+            runId: "run-1",
+            title: "GLM 审阅样式",
+            status: "running",
+            driver: "acpRegistry",
+            providerInstanceId: glmEntry.instanceId,
+            model: "glm-5",
+            childThreadId: "child-glm" as ThreadId,
+            prompt: "检查对齐",
+            startedAt: 1_760_000_010_000,
+          },
+          {
+            id: "sub-qwen",
+            runId: "run-1",
+            title: "Qwen 补测",
+            status: "completed",
+            driver: "acpRegistry",
+            providerInstanceId: qwenEntry.instanceId,
+            childThreadId: "child-qwen" as ThreadId,
+            prompt: "补齐回归测试",
+            result: "12/12 通过",
+            startedAt: 1_760_000_020_000,
+            completedAt: 1_760_000_060_000,
+          },
+          {
+            id: "sub-kimi",
+            runId: "run-1",
+            title: "Kimi 文档核对",
+            status: "completed",
+            driver: "acpRegistry",
+            providerInstanceId: kimiEntry.instanceId,
+            model: "kimi-k2",
+            childThreadId: "child-kimi" as ThreadId,
+            prompt: "核对中文术语",
+            result: "无残留英文",
+            startedAt: 1_760_000_030_000,
+            completedAt: 1_760_000_070_000,
+          },
+        ],
+      },
+      daemonSnapshot: null,
+      locale: "zh",
+    });
+
+    expect(model.active).toBe(true);
+    expect(model.providerBrand).toBe("dsh");
+    expect(model.title).toContain("DeepSeek Harness");
+    expect(model.title).not.toContain("ACP");
+    expect(model.members[0]?.isCoordinator).toBe(true);
+    expect(model.members[0]?.providerBrand).toBe("dsh");
+    expect(model.members.find((m) => m.id === "sub-glm")?.providerBrand).toBe("glm");
+    expect(model.members.find((m) => m.id === "sub-qwen")?.providerBrand).toBe("qwen");
+    expect(model.members.find((m) => m.id === "sub-kimi")?.providerBrand).toBe("kimi");
+    expect(model.messages[0]?.providerBrand).toBe("dsh");
   });
 });

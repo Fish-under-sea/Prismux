@@ -144,7 +144,7 @@ export const AgentAuxMembersTab = memo(function AgentAuxMembersTab({
     return (
       <div
         key={member.id}
-        className={`pmx-aux-member-row${isRetiredRow ? " pmx-aux-member-row--retired" : ""}${member.isCoordinator ? " pmx-aux-member-row--coord" : ""}`}
+        className={`pmx-aux-member-row${!model.useBees ? " pmx-aux-member-row--bare" : ""}${isRetiredRow ? " pmx-aux-member-row--retired" : ""}${member.isCoordinator ? " pmx-aux-member-row--coord" : ""}`}
         data-aux-member={member.name}
         role="button"
         tabIndex={0}
@@ -156,7 +156,7 @@ export const AgentAuxMembersTab = memo(function AgentAuxMembersTab({
           }
         }}
       >
-        <div className="pt-0.5">
+        <div className="pmx-aux-member-avatar">
           <AgentMemberAvatar
             useBees={memberUsesBees}
             providerBrand={member.providerBrand}
@@ -169,7 +169,7 @@ export const AgentAuxMembersTab = memo(function AgentAuxMembersTab({
           />
         </div>
 
-        <div className="min-w-0 flex-1">
+        <div className="pmx-aux-member-main min-w-0 flex-1">
           {/* Top Line: @name + status pill + ACP badge + #lastSeq */}
           <div className="pmx-aux-member-top">
             <strong className="pmx-aux-member-handle" title={`@${member.name}`}>
@@ -290,36 +290,36 @@ export const AgentAuxMembersTab = memo(function AgentAuxMembersTab({
               ) : null}
             </div>
           ) : null}
-
-          {/* Expandable native steps drawer */}
-          {hasSteps && stepsOpen ? (
-            <div className="pmx-aux-steps-box" onClick={(e) => e.stopPropagation()}>
-              {member.nativeSteps!.map((step) => (
-                <div key={step.index} className="pmx-aux-step-item">
-                  <div className="flex items-center gap-1.5 font-medium">
-                    <span className="font-mono text-[10.5px] text-muted-foreground">
-                      #{step.index}
-                    </span>
-                    <span className="truncate">{step.text || step.type}</span>
-                  </div>
-                  {step.toolCalls.length > 0 ? (
-                    <div className="mt-1 flex flex-wrap gap-1">
-                      {step.toolCalls.map((tc) => (
-                        <span
-                          key={`${step.index}-${tc.name}-${tc.summary}`}
-                          className="pmx-aux-inline-code"
-                        >
-                          {tc.name}
-                          {tc.summary ? `: ${tc.summary}` : ""}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          ) : null}
         </div>
+
+        {/* Expandable native steps drawer (row 2 col 2 so row 1 avatar stays dead-center) */}
+        {hasSteps && stepsOpen ? (
+          <div className="pmx-aux-steps-box" onClick={(e) => e.stopPropagation()}>
+            {member.nativeSteps!.map((step) => (
+              <div key={step.index} className="pmx-aux-step-item">
+                <div className="flex items-center gap-1.5 font-medium">
+                  <span className="font-mono text-[10.5px] text-muted-foreground">
+                    #{step.index}
+                  </span>
+                  <span className="truncate">{step.text || step.type}</span>
+                </div>
+                {step.toolCalls.length > 0 ? (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {step.toolCalls.map((tc) => (
+                      <span
+                        key={`${step.index}-${tc.name}-${tc.summary}`}
+                        className="pmx-aux-inline-code"
+                      >
+                        {tc.name}
+                        {tc.summary ? `: ${tc.summary}` : ""}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
       </div>
     );
   };

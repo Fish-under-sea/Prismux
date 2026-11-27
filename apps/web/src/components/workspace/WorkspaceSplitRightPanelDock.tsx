@@ -694,6 +694,12 @@ function BoundSplitThreadRightPanel(props: {
     isServerThread,
     embedded: false,
     provider: focusedContext.providerId ?? null,
+    providerInstanceId:
+      serverThreadShell?.runtime?.providerInstanceId ??
+      serverThreadShell?.modelSelection.instanceId ??
+      null,
+    model: serverThreadShell?.modelSelection.model ?? null,
+    projectId,
     cwd: activeWorkspaceRoot ?? gitCwd ?? null,
     projection: serverProjection,
     threadShell: serverThreadShell,

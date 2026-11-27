@@ -32,10 +32,8 @@ import {
   type LinkedThreadSurface,
 } from "./linkedThreadSurface";
 import type { ThreadPanelPresentation } from "./rightPanelLayout";
-import {
-  resolveConfiguredProviderLabel,
-  type ProviderInstanceEntry,
-} from "./providerInstances";
+import { resolveConfiguredProviderLabel, type ProviderInstanceEntry } from "./providerInstances";
+import type { AgentBrandId } from "./prismux/agentBrand";
 import type { ChatFileAttachment } from "./types";
 
 const RIGHT_PANEL_KINDS = [
@@ -148,6 +146,7 @@ export interface AgentAuxSurface {
   readonly title: string;
   readonly auxKind: string;
   readonly provider?: string | null | undefined;
+  readonly providerBrand?: AgentBrandId | null | undefined;
   readonly activeCount?: number | undefined;
 }
 
@@ -155,6 +154,7 @@ export interface OpenAgentAuxInput {
   readonly title: string;
   readonly auxKind: string;
   readonly provider?: string | null | undefined;
+  readonly providerBrand?: AgentBrandId | null | undefined;
   readonly activeCount?: number | undefined;
 }
 
@@ -392,9 +392,7 @@ const ACTIVITY_BAR_GAP_PX = 2;
 function estimateActivityLabelWidth(label: string): number {
   let width = 0;
   for (const ch of label) {
-    width += /[^\u0000-\u00ff]/.test(ch)
-      ? ACTIVITY_BAR_WIDE_CHAR_PX
-      : ACTIVITY_BAR_ASCII_CHAR_PX;
+    width += /[^\u0000-\u00ff]/.test(ch) ? ACTIVITY_BAR_WIDE_CHAR_PX : ACTIVITY_BAR_ASCII_CHAR_PX;
   }
   return Math.min(88, ACTIVITY_BAR_LABELED_CHROME_PX + Math.ceil(width));
 }
@@ -671,10 +669,7 @@ interface RightPanelStoreState {
   removeThread: (ref: ScopedThreadRef) => void;
   /** Persisted drag-and-drop ordering of right sidebar Activity Bar surface shortcuts. */
   activityBarOrder: RightPanelActivityItemId[];
-  reorderActivityBar: (
-    fromId: RightPanelActivityItemId,
-    toId: RightPanelActivityItemId,
-  ) => void;
+  reorderActivityBar: (fromId: RightPanelActivityItemId, toId: RightPanelActivityItemId) => void;
   resetActivityBarOrder: () => void;
   /** Transient launch intent & blank-stage state for one-click Phone Simulator mode (iPhone 16 Pro + bezel). */
   pendingMobileSimulatorPresetId: PreviewViewportPresetId | null;
@@ -685,7 +680,10 @@ interface RightPanelStoreState {
   mobileSimulatorColorScheme: DesktopPreviewColorScheme;
   requestMobileSimulatorLaunch: (presetId?: PreviewViewportPresetId) => void;
   consumeMobileSimulatorLaunch: () => PreviewViewportPresetId | null;
-  consumeMobileSimulatorSetting: () => Exclude<PreviewViewportSetting, { readonly _tag: "fill" }> | null;
+  consumeMobileSimulatorSetting: () => Exclude<
+    PreviewViewportSetting,
+    { readonly _tag: "fill" }
+  > | null;
   setMobileSimulatorIdleActive: (active: boolean) => void;
   setPendingMobileSimulatorSetting: (
     setting: Exclude<PreviewViewportSetting, { readonly _tag: "fill" }> | null,
@@ -1163,6 +1161,15 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                       ) {
                         return [];
                       }
+                      const rawBrand = (surface as { providerBrand?: unknown }).providerBrand;
+                      if (
+                        rawBrand !== undefined &&
+                        rawBrand !== null &&
+                        typeof rawBrand !== "string"
+                      ) {
+                        const { providerBrand: _invalidBrand, ...rest } = surface;
+                        return [rest];
+                      }
                       return [surface];
                     }
                     if (surface.kind !== "terminal") return [surface];
@@ -1492,6 +1499,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               title: input.title.trim() || "智能体协同",
               auxKind: input.auxKind,
               ...(input.provider !== undefined ? { provider: input.provider } : {}),
+              ...(input.providerBrand !== undefined ? { providerBrand: input.providerBrand } : {}),
               ...(input.activeCount !== undefined ? { activeCount: input.activeCount } : {}),
             };
             const exists = current.surfaces.some((entry) => entry.id === "agent-aux");
@@ -1513,15 +1521,19 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               surface.id === "agent-aux" && surface.kind === "agent-aux",
           );
           if (!existing) return state;
-          const nextTitle = patch.title !== undefined ? patch.title.trim() || existing.title : existing.title;
+          const nextTitle =
+            patch.title !== undefined ? patch.title.trim() || existing.title : existing.title;
           const nextAuxKind = patch.auxKind !== undefined ? patch.auxKind : existing.auxKind;
           const nextProvider = patch.provider !== undefined ? patch.provider : existing.provider;
+          const nextProviderBrand =
+            patch.providerBrand !== undefined ? patch.providerBrand : existing.providerBrand;
           const nextActiveCount =
             patch.activeCount !== undefined ? patch.activeCount : existing.activeCount;
           if (
             nextTitle === existing.title &&
             nextAuxKind === existing.auxKind &&
             nextProvider === existing.provider &&
+            nextProviderBrand === existing.providerBrand &&
             nextActiveCount === existing.activeCount
           ) {
             return state;
@@ -1535,6 +1547,9 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
                     title: nextTitle,
                     auxKind: nextAuxKind,
                     ...(nextProvider !== undefined ? { provider: nextProvider } : {}),
+                    ...(nextProviderBrand !== undefined
+                      ? { providerBrand: nextProviderBrand }
+                      : {}),
                     ...(nextActiveCount !== undefined ? { activeCount: nextActiveCount } : {}),
                   }
                 : surface,
@@ -1650,10 +1665,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             const withoutEmptyPullRequest = current.surfaces.filter(
               (entry) => entry.kind !== "pull-request-empty",
             );
-            const next = upsertSurface(
-              { ...current, surfaces: withoutEmptyPullRequest },
-              surface,
-            );
+            const next = upsertSurface({ ...current, surfaces: withoutEmptyPullRequest }, surface);
             const { url, revealUrl } = target;
             if (!url && !revealUrl) return next;
             return {

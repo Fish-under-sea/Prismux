@@ -999,13 +999,17 @@ function SurfaceIcon({
       return <AgentBrandLogo provider={surface.providerId} size={12} className="shrink-0" />;
     case "agent-aux":
       return surface.auxKind === "agy-swarm" ? (
-        <SwarmMiniBeeGlyph size={14} />
+        <span className="inline-flex size-3 shrink-0 items-center justify-center leading-none">
+          <SwarmMiniBeeGlyph size={14} />
+        </span>
       ) : (
-        <AgentBrandLogo
-          provider={surface.provider ?? "antigravity"}
-          size={12}
-          className="shrink-0"
-        />
+        <span className="inline-flex size-3 shrink-0 items-center justify-center leading-none">
+          <AgentBrandLogo
+            provider={surface.providerBrand ?? surface.provider ?? "antigravity"}
+            size={12}
+            className="shrink-0"
+          />
+        </span>
       );
   }
 }
