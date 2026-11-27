@@ -1497,10 +1497,13 @@ export function makeDshTurnUsageWatcher(input: MakeDshTurnUsageWatcherInput): Ds
       } catch {
         entries = [];
       }
-      let scanned = 0;
+      const siblingFiles: Array<{
+        readonly entryName: string;
+        readonly candidateFile: string;
+        readonly mtimeMs: number;
+      }> = [];
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
-        if (scanned >= 64) break;
         const candidateDir = NodePath.join(projectDir, entry.name);
         const candidateFile = findBestSessionFileInDir(candidateDir);
         if (candidateFile === undefined) continue;
@@ -1510,10 +1513,20 @@ export function makeDshTurnUsageWatcher(input: MakeDshTurnUsageWatcherInput): Ds
         ) {
           continue;
         }
-        scanned += 1;
-        const parsed = readParsedChildFile(candidateFile);
+        let mtimeMs = 0;
+        try {
+          mtimeMs = NodeFS.statSync(candidateFile).mtimeMs;
+        } catch {
+          continue;
+        }
+        siblingFiles.push({ entryName: entry.name, candidateFile, mtimeMs });
+      }
+      // Prioritize newest 64 sibling sessions so active projects with >64 historical sessions never truncate fresh children.
+      siblingFiles.sort((left, right) => right.mtimeMs - left.mtimeMs);
+      for (const item of siblingFiles.slice(0, 64)) {
+        const parsed = readParsedChildFile(item.candidateFile);
         if (parsed === undefined) continue;
-        const childId = parsed.sessionId ?? entry.name;
+        const childId = parsed.sessionId ?? item.entryName;
         if (childId && childId !== sessionId) {
           candidates.set(childId, parsed);
         }

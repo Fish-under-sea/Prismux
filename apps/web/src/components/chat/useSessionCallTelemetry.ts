@@ -632,6 +632,237 @@ function fingerprintChildThreadStructure(value: EnvironmentThreadStructure | nul
   return parts.join("|");
 }
 
+export interface DescendantThreadSubscriberRegistry {
+  readonly getThreadShells: () => ReadonlyArray<EnvironmentThreadShell>;
+  readonly subscribeThreadShells: (
+    listener: (shells: ReadonlyArray<EnvironmentThreadShell>) => void,
+  ) => () => void;
+  readonly getThreadStructure: (ref: ScopedThreadRef) => EnvironmentThreadStructure | null;
+  readonly subscribeThreadStructure: (
+    ref: ScopedThreadRef,
+    listener: (structure: EnvironmentThreadStructure | null) => void,
+  ) => () => void;
+}
+
+export interface DescendantThreadSubscriptionController {
+  readonly sync: (threadId: string | null, serverProjection: SessionProjectionLike | null) => void;
+  readonly dispose: () => void;
+}
+
+/**
+ * Long-lived manager for recursive descendant subagent thread subscriptions.
+ * Keeps active child atom subscriptions alive across parent `serverProjection` streaming
+ * updates (no per-effect stale `disposed` closure), tearing them down only when `threadId`
+ * changes or `dispose()` runs on unmount.
+ */
+export function createDescendantThreadSubscriptionController(input: {
+  readonly registry: DescendantThreadSubscriberRegistry;
+  readonly onChange: (descendants: readonly SubagentThreadTelemetryInput[]) => void;
+}): DescendantThreadSubscriptionController {
+  const { registry, onChange } = input;
+  let controllerDisposed = false;
+  let activeParentThreadId: string | null = null;
+  let latestServerProjection: SessionProjectionLike | null = null;
+  let allThreadShells: ReadonlyArray<EnvironmentThreadShell> = [];
+  let unsubscribeShells: (() => void) | null = null;
+  let lastPublishedFingerprint = "";
+
+  const snapshots = new Map<string, SubagentThreadTelemetryInput>();
+  const projectionsById = new Map<string, SessionProjectionLike | null>();
+  const childSubscriptions = new Map<
+    string,
+    {
+      readonly unsubscribe: () => void;
+      fingerprint: string;
+      shell: EnvironmentThreadShell | null;
+    }
+  >();
+
+  const clearChildSubscriptions = () => {
+    for (const sub of childSubscriptions.values()) {
+      sub.unsubscribe();
+    }
+    childSubscriptions.clear();
+    snapshots.clear();
+    projectionsById.clear();
+  };
+
+  const detachShells = () => {
+    unsubscribeShells?.();
+    unsubscribeShells = null;
+  };
+
+  const publishIfChanged = () => {
+    if (controllerDisposed) return;
+    const entries = Array.from(snapshots.values());
+    const combinedFp = entries
+      .map((entry) => {
+        const sub = Array.from(childSubscriptions.entries()).find(([key]) =>
+          key.endsWith(`\0${entry.threadId}`),
+        )?.[1];
+        return `${entry.threadId}:${entry.model ?? ""}:${sub?.fingerprint ?? ""}`;
+      })
+      .join("||");
+    if (combinedFp === lastPublishedFingerprint) return;
+    lastPublishedFingerprint = combinedFp;
+    onChange(entries);
+  };
+
+  const syncDescendants = () => {
+    if (controllerDisposed || !activeParentThreadId) return;
+    const currentParentId = activeParentThreadId;
+    const discovered = collectDescendantThreadRefs({
+      threadId: currentParentId,
+      serverProjection: latestServerProjection,
+      allThreadShells,
+      hydratedProjections: projectionsById,
+    });
+    const desiredKeys = new Set(discovered.map((entry) => entry.key));
+    let changed = false;
+
+    for (const [key, sub] of childSubscriptions) {
+      if (!desiredKeys.has(key)) {
+        sub.unsubscribe();
+        childSubscriptions.delete(key);
+        const removedId = key.split("\0")[1];
+        if (removedId) {
+          snapshots.delete(removedId);
+          projectionsById.delete(removedId);
+        }
+        changed = true;
+      }
+    }
+
+    for (const entry of discovered) {
+      const existing = childSubscriptions.get(entry.key);
+      if (existing) {
+        if (existing.shell !== entry.shell) {
+          existing.shell = entry.shell;
+          const current = snapshots.get(entry.ref.threadId);
+          if (current) {
+            snapshots.set(entry.ref.threadId, {
+              ...current,
+              parentThreadId: entry.shell?.lineage.parentThreadId ?? current.parentThreadId,
+              rootThreadId: entry.shell?.lineage.rootThreadId ?? current.rootThreadId,
+              model: entry.shell?.modelSelection.model ?? current.model,
+              provider: entry.shell?.modelSelection.instanceId ?? current.provider,
+            });
+            changed = true;
+          }
+        }
+        continue;
+      }
+
+      const applyValue = (
+        structure: EnvironmentThreadStructure | null,
+        recordRef: { fingerprint: string; shell: EnvironmentThreadShell | null },
+        allowResync: boolean,
+      ) => {
+        if (controllerDisposed || activeParentThreadId !== currentParentId) return;
+        const nextFp = fingerprintChildThreadStructure(structure);
+        const prevFp = recordRef.fingerprint;
+        recordRef.fingerprint = nextFp;
+        const proj = structure?.projection ?? null;
+        projectionsById.set(entry.ref.threadId, proj);
+        snapshots.set(entry.ref.threadId, {
+          threadId: entry.ref.threadId,
+          parentThreadId:
+            recordRef.shell?.lineage.parentThreadId ?? proj?.thread?.lineage.parentThreadId ?? null,
+          rootThreadId:
+            recordRef.shell?.lineage.rootThreadId ?? proj?.thread?.lineage.rootThreadId ?? null,
+          creationSource: proj?.thread?.creationSource ?? null,
+          model:
+            recordRef.shell?.modelSelection.model ?? proj?.thread?.modelSelection.model ?? null,
+          provider:
+            recordRef.shell?.modelSelection.instanceId ??
+            proj?.thread?.modelSelection.instanceId ??
+            null,
+          projection: proj,
+        });
+        if (nextFp !== prevFp) {
+          if (allowResync && proj && (proj.subagents?.length ?? 0) > 0) {
+            syncDescendants();
+          }
+          publishIfChanged();
+        }
+      };
+
+      const holder: {
+        unsubscribe: () => void;
+        fingerprint: string;
+        shell: EnvironmentThreadShell | null;
+      } = {
+        unsubscribe: () => undefined,
+        fingerprint: "",
+        shell: entry.shell,
+      };
+      const initialStructure = registry.getThreadStructure(entry.ref);
+      applyValue(initialStructure, holder, false);
+      holder.unsubscribe = registry.subscribeThreadStructure(entry.ref, (nextStructure) => {
+        applyValue(nextStructure, holder, true);
+      });
+      childSubscriptions.set(entry.key, holder);
+      changed = true;
+    }
+
+    if (changed) {
+      publishIfChanged();
+    }
+  };
+
+  return {
+    sync(threadId, serverProjection) {
+      if (controllerDisposed) return;
+      latestServerProjection = serverProjection;
+
+      if (activeParentThreadId !== threadId) {
+        activeParentThreadId = threadId;
+        clearChildSubscriptions();
+        detachShells();
+        if (lastPublishedFingerprint !== "") {
+          lastPublishedFingerprint = "";
+          onChange([]);
+        }
+        if (threadId) {
+          try {
+            allThreadShells = registry.getThreadShells();
+          } catch {
+            allThreadShells = [];
+          }
+          try {
+            unsubscribeShells = registry.subscribeThreadShells((nextShells) => {
+              if (controllerDisposed || activeParentThreadId !== threadId) return;
+              allThreadShells = nextShells;
+              syncDescendants();
+            });
+          } catch {
+            unsubscribeShells = null;
+          }
+        }
+      }
+
+      if (!threadId) return;
+      syncDescendants();
+    },
+    dispose() {
+      controllerDisposed = true;
+      activeParentThreadId = null;
+      latestServerProjection = null;
+      detachShells();
+      clearChildSubscriptions();
+    },
+  };
+}
+
+const DEFAULT_DESCENDANT_REGISTRY: DescendantThreadSubscriberRegistry = {
+  getThreadShells: () => appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
+  subscribeThreadShells: (listener) =>
+    appAtomRegistry.subscribe(environmentThreadShells.threadShellsAtom, listener),
+  getThreadStructure: (ref) => appAtomRegistry.get(environmentThreadDetails.quietThreadAtom(ref)),
+  subscribeThreadStructure: (ref, listener) =>
+    appAtomRegistry.subscribe(environmentThreadDetails.quietThreadAtom(ref), listener),
+};
+
 /**
  * Observes real local session streaming & turn completion in `ChatView` and writes measured
  * TTFT, output TPS, input/cached/cache-write/output tokens, and context % to
@@ -664,206 +895,28 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
   const [descendantThreads, setDescendantThreads] = useState<
     readonly SubagentThreadTelemetryInput[]
   >([]);
-  const descendantSnapshotsRef = useRef<Map<string, SubagentThreadTelemetryInput>>(new Map());
-  const descendantProjectionByIdRef = useRef<Map<string, SessionProjectionLike | null>>(new Map());
-  const descendantShellsRef = useRef<ReadonlyArray<EnvironmentThreadShell>>([]);
-  const descendantSubsRef = useRef<
-    Map<
-      string,
-      {
-        readonly unsubscribe: () => void;
-        fingerprint: string;
-        shell: EnvironmentThreadShell | null;
-      }
-    >
-  >(new Map());
-  const subscribedParentThreadIdRef = useRef<string | null>(null);
-  const lastPublishedDescendantsFingerprintRef = useRef<string>("");
+  const descendantControllerRef = useRef<DescendantThreadSubscriptionController | null>(null);
 
-  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- subscribes to descendant subagent thread detail atoms so unopened child threads stream real token/model usage into active session telemetry
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- disposes long-lived descendant subagent atom subscriptions cleanly on unmount
   useEffect(() => {
-    let disposed = false;
-    const childSubscriptions = descendantSubsRef.current;
-
-    const clearAllChildSubscriptions = () => {
-      for (const sub of childSubscriptions.values()) {
-        sub.unsubscribe();
-      }
-      childSubscriptions.clear();
-      descendantSnapshotsRef.current.clear();
-      descendantProjectionByIdRef.current.clear();
-    };
-
-    if (subscribedParentThreadIdRef.current !== threadId) {
-      subscribedParentThreadIdRef.current = threadId;
-      clearAllChildSubscriptions();
-      if (lastPublishedDescendantsFingerprintRef.current !== "") {
-        lastPublishedDescendantsFingerprintRef.current = "";
-        setDescendantThreads([]);
-      }
-    }
-
-    if (!threadId) return;
-
-    const publishIfChanged = () => {
-      if (disposed) return;
-      const entries = Array.from(descendantSnapshotsRef.current.values());
-      const combinedFp = entries
-        .map((entry) => {
-          const sub = Array.from(childSubscriptions.entries()).find(([key]) =>
-            key.endsWith(`\0${entry.threadId}`),
-          )?.[1];
-          return `${entry.threadId}:${entry.model ?? ""}:${sub?.fingerprint ?? ""}`;
-        })
-        .join("||");
-      if (combinedFp === lastPublishedDescendantsFingerprintRef.current) return;
-      lastPublishedDescendantsFingerprintRef.current = combinedFp;
-      setDescendantThreads(entries);
-    };
-
-    const syncDescendants = () => {
-      if (disposed) return;
-      const discovered = collectDescendantThreadRefs({
-        threadId,
-        serverProjection,
-        allThreadShells: descendantShellsRef.current,
-        hydratedProjections: descendantProjectionByIdRef.current,
-      });
-      const desiredKeys = new Set(discovered.map((entry) => entry.key));
-      let changed = false;
-
-      for (const [key, sub] of childSubscriptions) {
-        if (!desiredKeys.has(key)) {
-          sub.unsubscribe();
-          childSubscriptions.delete(key);
-          const removedId = key.split("\0")[1];
-          if (removedId) {
-            descendantSnapshotsRef.current.delete(removedId);
-            descendantProjectionByIdRef.current.delete(removedId);
-          }
-          changed = true;
-        }
-      }
-
-      for (const entry of discovered) {
-        const existing = childSubscriptions.get(entry.key);
-        if (existing) {
-          if (existing.shell !== entry.shell) {
-            existing.shell = entry.shell;
-            const current = descendantSnapshotsRef.current.get(entry.ref.threadId);
-            if (current) {
-              descendantSnapshotsRef.current.set(entry.ref.threadId, {
-                ...current,
-                parentThreadId: entry.shell?.lineage.parentThreadId ?? current.parentThreadId,
-                rootThreadId: entry.shell?.lineage.rootThreadId ?? current.rootThreadId,
-                model: entry.shell?.modelSelection.model ?? current.model,
-                provider: entry.shell?.modelSelection.instanceId ?? current.provider,
-              });
-              changed = true;
-            }
-          }
-          continue;
-        }
-
-        const atom = environmentThreadDetails.quietThreadAtom(entry.ref);
-        const applyValue = (
-          structure: EnvironmentThreadStructure | null,
-          recordRef: { fingerprint: string; shell: EnvironmentThreadShell | null },
-          allowResync: boolean,
-        ) => {
-          const nextFp = fingerprintChildThreadStructure(structure);
-          const prevFp = recordRef.fingerprint;
-          recordRef.fingerprint = nextFp;
-          const proj = structure?.projection ?? null;
-          descendantProjectionByIdRef.current.set(entry.ref.threadId, proj);
-          descendantSnapshotsRef.current.set(entry.ref.threadId, {
-            threadId: entry.ref.threadId,
-            parentThreadId:
-              recordRef.shell?.lineage.parentThreadId ??
-              proj?.thread?.lineage.parentThreadId ??
-              null,
-            rootThreadId:
-              recordRef.shell?.lineage.rootThreadId ?? proj?.thread?.lineage.rootThreadId ?? null,
-            creationSource: proj?.thread?.creationSource ?? null,
-            model:
-              recordRef.shell?.modelSelection.model ?? proj?.thread?.modelSelection.model ?? null,
-            provider:
-              recordRef.shell?.modelSelection.instanceId ??
-              proj?.thread?.modelSelection.instanceId ??
-              null,
-            projection: proj,
-          });
-          if (nextFp !== prevFp) {
-            if (allowResync && proj && (proj.subagents?.length ?? 0) > 0) {
-              syncDescendants();
-            }
-            publishIfChanged();
-          }
-        };
-
-        const holder: {
-          unsubscribe: () => void;
-          fingerprint: string;
-          shell: EnvironmentThreadShell | null;
-        } = {
-          unsubscribe: () => undefined,
-          fingerprint: "",
-          shell: entry.shell,
-        };
-        const initialStructure = appAtomRegistry.get(atom);
-        applyValue(initialStructure, holder, false);
-        holder.unsubscribe = appAtomRegistry.subscribe(atom, (nextStructure) => {
-          applyValue(nextStructure, holder, true);
-        });
-        childSubscriptions.set(entry.key, holder);
-        changed = true;
-      }
-
-      if (changed) {
-        publishIfChanged();
-      }
-    };
-
-    try {
-      descendantShellsRef.current = appAtomRegistry.get(environmentThreadShells.threadShellsAtom);
-    } catch {
-      descendantShellsRef.current = [];
-    }
-    syncDescendants();
-
-    let unsubscribeShells: () => void = () => undefined;
-    try {
-      unsubscribeShells = appAtomRegistry.subscribe(
-        environmentThreadShells.threadShellsAtom,
-        (nextShells) => {
-          descendantShellsRef.current = nextShells;
-          syncDescendants();
-        },
-      );
-    } catch {
-      unsubscribeShells = () => undefined;
-    }
-
     return () => {
-      disposed = true;
-      unsubscribeShells();
-    };
-  }, [threadId, serverProjection]);
-
-  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- releases all descendant subagent atom subscriptions on unmount
-  useEffect(() => {
-    const childSubscriptions = descendantSubsRef.current;
-    const snapshots = descendantSnapshotsRef.current;
-    const projections = descendantProjectionByIdRef.current;
-    return () => {
-      for (const sub of childSubscriptions.values()) {
-        sub.unsubscribe();
-      }
-      childSubscriptions.clear();
-      snapshots.clear();
-      projections.clear();
+      descendantControllerRef.current?.dispose();
+      descendantControllerRef.current = null;
     };
   }, []);
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- syncs recursive descendant thread subscriptions across parent projection updates without silencing reused child callbacks
+  useEffect(() => {
+    let controller = descendantControllerRef.current;
+    if (controller === null) {
+      controller = createDescendantThreadSubscriptionController({
+        registry: DEFAULT_DESCENDANT_REGISTRY,
+        onChange: setDescendantThreads,
+      });
+      descendantControllerRef.current = controller;
+    }
+    controller.sync(threadId, serverProjection);
+  }, [threadId, serverProjection]);
 
   // Release per-thread published telemetry detail when this thread view switches or unmounts (L10)
   // and clear per-thread turn timing/fingerprint maps on unmount (L12).

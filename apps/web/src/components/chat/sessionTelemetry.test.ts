@@ -62,6 +62,7 @@ import {
 } from "./sessionTelemetry.logic";
 import {
   collectDescendantThreadRefs,
+  createDescendantThreadSubscriptionController,
   deriveContextOccupancyPercent,
   deriveSessionTelemetryFromProjection,
   extractProviderTurnTokenCounts,
@@ -1970,5 +1971,351 @@ describe("Session telemetry aggregation, strict active-thread isolation & 3 inde
     expect(dedupedDetail.subagentCount).toBe(1);
     expect(dedupedDetail.subagentTotalTokens).toBe(80_800);
     expect(dedupedDetail.aggregatedTaskTotalTokens).toBe(101_000 + 80_800);
+  });
+
+  it("keeps reused child thread subscriptions live across parent serverProjection streaming updates and discovers grandchildren", () => {
+    const childListeners = new Map<string, Set<(structure: never) => void>>();
+    const childStructures = new Map<string, unknown>();
+    let shellListener: ((shells: ReadonlyArray<never>) => void) | null = null;
+    const initialShells = [
+      {
+        id: "thread-parent",
+        environmentId: "env-local",
+        lineage: {
+          parentThreadId: null,
+          rootThreadId: "thread-parent",
+          relationshipToParent: null,
+        },
+        delegatedFrom: null,
+        modelSelection: { instanceId: "antigravity", model: "MODEL_PLACEHOLDER_M536" },
+      },
+      {
+        id: "child-stream-1",
+        environmentId: "env-local",
+        lineage: {
+          parentThreadId: "thread-parent",
+          rootThreadId: "thread-parent",
+          relationshipToParent: "subagent",
+        },
+        delegatedFrom: null,
+        modelSelection: { instanceId: "dsh", model: "group/deepseek" },
+      },
+    ];
+    let currentShells: ReadonlyArray<unknown> = initialShells;
+
+    let latestDescendants: ReadonlyArray<
+      import("./sessionTelemetry.logic").SubagentThreadTelemetryInput
+    > = [];
+    const controller = createDescendantThreadSubscriptionController({
+      registry: {
+        getThreadShells: () => currentShells as never,
+        subscribeThreadShells: (listener) => {
+          shellListener = listener as never;
+          return () => {
+            if (shellListener === listener) shellListener = null;
+          };
+        },
+        getThreadStructure: (ref) => (childStructures.get(ref.threadId) ?? null) as never,
+        subscribeThreadStructure: (ref, listener) => {
+          let set = childListeners.get(ref.threadId);
+          if (!set) {
+            set = new Set();
+            childListeners.set(ref.threadId, set);
+          }
+          set.add(listener as never);
+          return () => {
+            set?.delete(listener as never);
+          };
+        },
+      },
+      onChange: (next) => {
+        latestDescendants = next;
+      },
+    });
+
+    const parentTurnV1 = makeProviderTurn({
+      id: "turn-parent-1" as OrchestrationV2ProviderTurn["id"],
+      model: "MODEL_PLACEHOLDER_M536",
+      turnTokenUsage: {
+        usageScope: "main_agent",
+        hasSubagents: false,
+        usageStatus: "complete",
+        inputTokens: 100_000,
+        cachedInputTokens: 99_000,
+        outputTokens: 1_000,
+      },
+    });
+
+    // 1. Initial sync subscribes to child-stream-1.
+    controller.sync("thread-parent", {
+      runs: [makeRun("run-p1", 1)],
+      providerTurns: [parentTurnV1],
+      subagents: [],
+    });
+    expect(childListeners.get("child-stream-1")?.size).toBe(1);
+
+    // 2. Simulate multiple parent streaming refreshes (new serverProjection object each tick).
+    controller.sync("thread-parent", {
+      runs: [makeRun("run-p1", 1)],
+      providerTurns: [parentTurnV1],
+      subagents: [],
+      messages: [{ id: "m-1", role: "assistant", text: "streaming chunk 1" } as never],
+    });
+    controller.sync("thread-parent", {
+      runs: [makeRun("run-p1", 1)],
+      providerTurns: [parentTurnV1],
+      subagents: [],
+      messages: [{ id: "m-1", role: "assistant", text: "streaming chunk 2" } as never],
+    });
+    // Subscription must be reused (still 1 listener) and remain LIVE!
+    expect(childListeners.get("child-stream-1")?.size).toBe(1);
+
+    // 3. Emit live child projection update (new tokens + spawned grandchild-stream-2) AFTER parent refreshes.
+    const grandchildStructure = {
+      projection: {
+        providerTurns: [
+          makeProviderTurn({
+            id: "turn-grand-1" as OrchestrationV2ProviderTurn["id"],
+            model: "gpt-5.4-codex",
+            turnTokenUsage: {
+              usageScope: "main_agent",
+              hasSubagents: false,
+              usageStatus: "complete",
+              inputTokens: 20_000,
+              cachedInputTokens: 19_800,
+              outputTokens: 200,
+              models: ["gpt-5.4-codex"],
+            },
+          }),
+        ],
+        subagents: [],
+      },
+    };
+    childStructures.set("grandchild-stream-2", grandchildStructure);
+
+    const childUpdatedStructure = {
+      projection: {
+        providerTurns: [
+          makeProviderTurn({
+            id: "turn-child-stream-1" as OrchestrationV2ProviderTurn["id"],
+            model: "group/deepseek",
+            turnTokenUsage: {
+              usageScope: "main_agent",
+              hasSubagents: true,
+              usageStatus: "complete",
+              inputTokens: 50_000,
+              cachedInputTokens: 49_500,
+              outputTokens: 500,
+              models: ["group/deepseek"],
+            },
+          }),
+        ],
+        subagents: [
+          makeSubagent({
+            id: "sub-grand-1" as OrchestrationV2Subagent["id"],
+            origin: "app_owned",
+            childThreadId:
+              "grandchild-stream-2" as unknown as OrchestrationV2Subagent["childThreadId"],
+          }),
+        ],
+      },
+    };
+    childStructures.set("child-stream-1", childUpdatedStructure);
+    for (const listener of childListeners.get("child-stream-1") ?? []) {
+      listener(childUpdatedStructure as never);
+    }
+
+    const detail = deriveSessionTelemetryDetail({
+      threadId: "thread-parent",
+      serverProjection: {
+        runs: [makeRun("run-p1", 1)],
+        providerTurns: [parentTurnV1],
+        subagents: [],
+        turnItems: [],
+        messages: [],
+        nodes: [],
+      },
+      descendantThreads: latestDescendants,
+      activeContextWindow: null,
+      providerStatuses: TEST_PROVIDERS,
+      activeProvider: "antigravity",
+      activeModel: "MODEL_PLACEHOLDER_M536",
+    });
+
+    expect(detail.subagentCount).toBe(2);
+    expect(detail.subagentTotalTokens).toBe(50_500 + 20_200);
+    expect(detail.aggregatedTaskTotalTokens).toBe(101_000 + 50_500 + 20_200);
+    expect(detail.modelDistribution.map((m) => m.modelId).sort()).toEqual([
+      "MODEL_PLACEHOLDER_M536",
+      "gpt-5.4-codex",
+      "group/deepseek",
+    ]);
+
+    // 4. Disposing unsubscribes all listeners cleanly.
+    controller.dispose();
+    expect(childListeners.get("child-stream-1")?.size ?? 0).toBe(0);
+    expect(childListeners.get("grandchild-stream-2")?.size ?? 0).toBe(0);
+  });
+
+  it("never double-counts native subagent tokens or models when parent otherUsage and matching disk callLogs coexist", () => {
+    const rootTurn = makeProviderTurn({
+      id: "turn-root-native-overlap" as OrchestrationV2ProviderTurn["id"],
+      model: "MODEL_PLACEHOLDER_M536",
+      turnTokenUsage: {
+        usageScope: "main_agent",
+        hasSubagents: true,
+        usageStatus: "complete",
+        inputTokens: 100_000,
+        cachedInputTokens: 99_000,
+        cacheCreationTokens: 0,
+        outputTokens: 1_000,
+        otherUsage: { inputTokens: 39_600, outputTokens: 400 }, // 40,000 tok already in otherUsage
+      },
+    });
+
+    const nativeSubWithModel = makeSubagent({
+      id: "sub-native-disk" as OrchestrationV2Subagent["id"],
+      origin: "provider_native",
+      model: "claude-haiku-4-5",
+      childThreadId: "child-native-disk-1" as unknown as OrchestrationV2Subagent["childThreadId"],
+    });
+    const appOwnedSub = makeSubagent({
+      id: "sub-app-disk" as OrchestrationV2Subagent["id"],
+      origin: "app_owned",
+      childThreadId: "child-app-disk-1" as unknown as OrchestrationV2Subagent["childThreadId"],
+    });
+
+    const nativeChildEmptyProjection = {
+      providerThreads: [
+        {
+          id: "pt-native-disk" as never,
+          driver: "antigravity" as never,
+          nativeThreadRef: { driver: "antigravity" as never, nativeId: "native-conv-40k" },
+          contextUsage: null,
+        } as never,
+      ],
+      providerTurns: [],
+    };
+    const appChildEmptyProjection = {
+      providerThreads: [
+        {
+          id: "pt-app-disk" as never,
+          driver: "acpRegistry" as never,
+          nativeThreadRef: { driver: "acpRegistry" as never, nativeId: "app-conv-15k" },
+          contextUsage: null,
+        } as never,
+      ],
+      providerTurns: [],
+    };
+
+    const callLogs = [
+      {
+        id: "disk-native-log-1",
+        timestamp: 1_795_000_010_000,
+        threadId: "native-conv-40k",
+        provider: "antigravity",
+        model: "claude-haiku-4-5",
+        ttftMs: null,
+        durationMs: 1_200,
+        tps: null,
+        inputTokens: 400,
+        cachedInputTokens: 39_200,
+        cacheCreationTokens: 0,
+        outputTokens: 400,
+        totalTokens: 40_000,
+        cacheHitRate: 39_200 / 39_600,
+        status: "completed" as const,
+        source: "backend" as const,
+      },
+      {
+        id: "disk-app-log-1",
+        timestamp: 1_795_000_011_000,
+        threadId: "app-conv-15k",
+        provider: "dsh",
+        model: "group/deepseek",
+        ttftMs: null,
+        durationMs: 900,
+        tps: null,
+        inputTokens: 150,
+        cachedInputTokens: 14_700,
+        cacheCreationTokens: 0,
+        outputTokens: 150,
+        totalTokens: 15_000,
+        cacheHitRate: 14_700 / 14_850,
+        status: "completed" as const,
+        source: "backend" as const,
+      },
+    ];
+
+    // Case A: native subagent carries explicit `model` -> `otherUsage` (40k) already credited `claude-haiku-4-5`;
+    // matching disk callLog (40k) must NOT double-count tokens (stays 40k + 15k = 55k) or double `claude-haiku-4-5`.
+    const detailWithModel = deriveSessionTelemetryDetail({
+      threadId: "thread-native-overlap",
+      serverProjection: {
+        runs: [makeRun("run-n1", 1)],
+        providerTurns: [rootTurn],
+        subagents: [nativeSubWithModel, appOwnedSub],
+        turnItems: [],
+        messages: [],
+        nodes: [],
+      },
+      descendantThreads: [
+        { threadId: "child-native-disk-1", projection: nativeChildEmptyProjection },
+        { threadId: "child-app-disk-1", projection: appChildEmptyProjection },
+      ],
+      activeContextWindow: null,
+      providerStatuses: TEST_PROVIDERS,
+      activeProvider: "antigravity",
+      activeModel: "MODEL_PLACEHOLDER_M536",
+    });
+
+    const displayWithModel = resolveComposerTelemetryDisplay(null, null, {
+      threadId: "thread-native-overlap",
+      detail: detailWithModel,
+      providerStatuses: TEST_PROVIDERS,
+      callLogs,
+    });
+    expect(displayWithModel.subagentCount).toBe(2);
+    expect(displayWithModel.subagentTotalTokens).toBe(55_000);
+    expect(displayWithModel.aggregatedTaskTotalTokens).toBe(101_000 + 55_000);
+    const haikuEntry = displayWithModel.modelDistribution.find(
+      (m) => m.modelId === "claude-haiku-4-5",
+    );
+    expect(haikuEntry?.totalTokens).toBe(40_000);
+    const dshEntry = displayWithModel.modelDistribution.find((m) => m.modelId === "group/deepseek");
+    expect(dshEntry?.totalTokens).toBe(15_000);
+
+    // Case B: native subagent has `model: null` -> disk callLog provides first model attribution (40k)
+    // while `subagentTotalTokens` STILL stays 40k (never 80k!).
+    const detailWithoutModel = deriveSessionTelemetryDetail({
+      threadId: "thread-native-overlap-nomodel",
+      serverProjection: {
+        runs: [makeRun("run-n2", 1)],
+        providerTurns: [rootTurn],
+        subagents: [{ ...nativeSubWithModel, model: null }],
+        turnItems: [],
+        messages: [],
+        nodes: [],
+      },
+      descendantThreads: [
+        { threadId: "child-native-disk-1", projection: nativeChildEmptyProjection },
+      ],
+      activeContextWindow: null,
+      providerStatuses: TEST_PROVIDERS,
+      activeProvider: "antigravity",
+      activeModel: "MODEL_PLACEHOLDER_M536",
+    });
+    const displayWithoutModel = resolveComposerTelemetryDisplay(null, null, {
+      threadId: "thread-native-overlap-nomodel",
+      detail: detailWithoutModel,
+      providerStatuses: TEST_PROVIDERS,
+      callLogs: [callLogs[0]!],
+    });
+    expect(displayWithoutModel.subagentTotalTokens).toBe(40_000);
+    expect(displayWithoutModel.aggregatedTaskTotalTokens).toBe(141_000);
+    expect(
+      displayWithoutModel.modelDistribution.find((m) => m.modelId === "claude-haiku-4-5")
+        ?.totalTokens,
+    ).toBe(40_000);
   });
 });

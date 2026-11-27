@@ -1388,5 +1388,101 @@ describe("dshSessionUsage", () => {
       expect(childRec?.totals.uncachedInputTokens).toBe(1_000);
       expect(childRec?.totals.cachedInputTokens).toBe(29_000);
     });
+
+    it("prioritizes newest 64 sibling DSH sessions by mtimeMs so fresh children are discovered in large projects", async () => {
+      const root = createTempDir("prismux-dsh-mtime-cap-");
+      const cwd = "D:/Proj/LargeDshHistory";
+      const projectKey = encodeDshProjectKey(cwd);
+      const projectDir = NodePath.join(root, "sessions", projectKey);
+      const parentDir = NodePath.join(projectDir, "sess-parent-large");
+      NodeFS.mkdirSync(parentDir, { recursive: true });
+
+      const baseTime = Date.parse("2026-11-27T03:00:00Z");
+      // Create 70 older unrelated sessions that sort lexicographically BEFORE "zzz-fresh-child"
+      for (let i = 0; i < 70; i += 1) {
+        const oldId = `aaa-old-${String(i).padStart(3, "0")}`;
+        const oldDir = NodePath.join(projectDir, oldId);
+        NodeFS.mkdirSync(oldDir, { recursive: true });
+        const oldFile = NodePath.join(oldDir, "session.v4.jsonl");
+        NodeFS.writeFileSync(
+          oldFile,
+          `${JSON.stringify({ type: "session", version: 4, id: oldId, delegationDepth: 0 })}\n`,
+        );
+        const oldSec = (baseTime - 3_600_000 - i * 1_000) / 1_000;
+        NodeFS.utimesSync(oldFile, oldSec, oldSec);
+      }
+
+      const parentFile = NodePath.join(parentDir, "session.v4.jsonl");
+      NodeFS.writeFileSync(
+        parentFile,
+        `${JSON.stringify({ type: "session", version: 4, id: "sess-parent-large", delegationDepth: 0 })}\n`,
+      );
+
+      const watcher = makeDshTurnUsageWatcher({
+        dshHome: root,
+        sessionId: "sess-parent-large",
+        cwd,
+        settleWaitMs: 0,
+      });
+
+      NodeFS.appendFileSync(
+        parentFile,
+        [
+          {
+            seq: 1,
+            type: "assistant/message",
+            time: baseTime + 1_000,
+            data: {
+              turn: 1,
+              step: 1,
+              usage: { inputTokens: 200, cacheReadTokens: 19_800, outputTokens: 100 },
+              message: { source: { provider: "magpie", model: "group/deepseek" }, content: [] },
+            },
+          },
+          { seq: 2, type: "turn/end", time: baseTime + 2_000, data: { turn: 1 } },
+        ]
+          .map((row) => JSON.stringify(row))
+          .join("\n") + "\n",
+      );
+
+      // Fresh child sorts lexicographically AFTER all 70 old dirs, but has newest mtimeMs
+      const childDir = NodePath.join(projectDir, "zzz-fresh-child");
+      NodeFS.mkdirSync(childDir, { recursive: true });
+      const childFile = NodePath.join(childDir, "session.v4.jsonl");
+      NodeFS.writeFileSync(
+        childFile,
+        [
+          {
+            type: "session",
+            version: 4,
+            id: "zzz-fresh-child",
+            parentSessionId: "sess-parent-large",
+            delegationDepth: 1,
+          },
+          {
+            seq: 1,
+            type: "assistant/message",
+            time: baseTime + 1_500,
+            data: {
+              turn: 1,
+              step: 1,
+              usage: { inputTokens: 500, cacheReadTokens: 9_500, outputTokens: 250 },
+              message: { source: { provider: "magpie", model: "group/deepseek" }, content: [] },
+            },
+          },
+        ]
+          .map((row) => JSON.stringify(row))
+          .join("\n") + "\n",
+      );
+      const freshSec = (baseTime + 2_000) / 1_000;
+      NodeFS.utimesSync(childFile, freshSec, freshSec);
+
+      const delta = await watcher.collectFinal();
+      expect(delta?.usage.hasSubagents).toBe(true);
+      expect(delta?.usage.otherUsage).toEqual({
+        inputTokens: 10_000,
+        outputTokens: 250,
+      });
+    });
   });
 });

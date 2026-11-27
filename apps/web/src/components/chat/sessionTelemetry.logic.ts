@@ -182,7 +182,14 @@ export interface SessionTelemetryDetailSnapshot {
   readonly subagentChildThreadIds: readonly string[];
   readonly measuredSubagentChildThreadIds?: readonly string[] | undefined;
   readonly subagentNativeSessionIds?: readonly string[] | undefined;
+  /** Non-native (`app_owned` / `descendant`) unmeasured child IDs eligible for additive `callLogs` fallback. */
   readonly unmeasuredSubagentMatchIds?: readonly string[] | undefined;
+  /** Native (`provider_native`) unmeasured child IDs whose `callLogs` overlap with parent `otherUsage` and must reconcile via `Math.max` rather than double-adding. */
+  readonly unmeasuredNativeSubagentMatchIds?: readonly string[] | undefined;
+  /** Native subagent token baseline already counted via parent `otherUsage` / `nativeWorkflowTokens`. */
+  readonly nativeOtherUsageTokens?: number | undefined;
+  /** Explicit model already credited with `nativeOtherUsageTokens` in `modelDistribution`, if any. */
+  readonly nativeOtherUsageAttributedModel?: string | null | undefined;
   readonly subagentUncachedInputTokens?: number | undefined;
   readonly subagentCachedInputTokens?: number | undefined;
   readonly subagentCacheCreationTokens?: number | undefined;
@@ -1698,6 +1705,7 @@ export function deriveSessionTelemetryDetail(
   const measuredSubagentChildThreadIds: string[] = [];
   const subagentNativeSessionIds: string[] = [];
   const unmeasuredSubagentMatchIds: string[] = [];
+  const unmeasuredNativeSubagentMatchIds: string[] = [];
   const seenChildThreads = new Set<string>();
   const seenSubagentIds = new Set<string>();
   const seenNativeTaskIds = new Set<string>();
@@ -1720,6 +1728,18 @@ export function deriveSessionTelemetryDetail(
     }
   };
 
+  const registerUnmeasuredMatchId = (
+    id: string,
+    origin: "provider_native" | "app_owned" | "descendant",
+  ) => {
+    if (!id) return;
+    const bucket =
+      origin === "provider_native" ? unmeasuredNativeSubagentMatchIds : unmeasuredSubagentMatchIds;
+    if (!bucket.includes(id)) {
+      bucket.push(id);
+    }
+  };
+
   const absorbDescendantUsage = (
     childId: string,
     origin: "provider_native" | "app_owned" | "descendant",
@@ -1727,9 +1747,7 @@ export function deriveSessionTelemetryDetail(
     if (consumedDescendantThreadIds.has(childId)) return 0;
     const usage = childUsageByThreadId.get(childId);
     if (!usage) {
-      if (!unmeasuredSubagentMatchIds.includes(childId)) {
-        unmeasuredSubagentMatchIds.push(childId);
-      }
+      registerUnmeasuredMatchId(childId, origin);
       return 0;
     }
     consumedDescendantThreadIds.add(childId);
@@ -1752,13 +1770,9 @@ export function deriveSessionTelemetryDetail(
       }
       return usage.totalTokens;
     }
-    if (!unmeasuredSubagentMatchIds.includes(childId)) {
-      unmeasuredSubagentMatchIds.push(childId);
-    }
+    registerUnmeasuredMatchId(childId, origin);
     for (const nativeId of usage.nativeSessionIds) {
-      if (!unmeasuredSubagentMatchIds.includes(nativeId)) {
-        unmeasuredSubagentMatchIds.push(nativeId);
-      }
+      registerUnmeasuredMatchId(nativeId, origin);
     }
     return 0;
   };
@@ -2059,6 +2073,7 @@ export function deriveSessionTelemetryDetail(
     unmeasuredNativeSubagentCount > 0
       ? otherUsageTotal
       : Math.max(0, otherUsageTotal - nativeChildProjectionTokens);
+  let nativeOtherUsageAttributedModel: string | null = null;
   if (unmeasuredNativeOtherTokens > 0) {
     const explicitNativeModels: string[] = [];
     for (const sub of subagents) {
@@ -2071,6 +2086,7 @@ export function deriveSessionTelemetryDetail(
     }
     if (explicitNativeModels.length === 1) {
       const nativeModel = explicitNativeModels[0]!;
+      nativeOtherUsageAttributedModel = nativeModel;
       tokensByModel.set(
         nativeModel,
         (tokensByModel.get(nativeModel) ?? 0) + unmeasuredNativeOtherTokens,
@@ -2115,10 +2131,11 @@ export function deriveSessionTelemetryDetail(
   }
 
   const effectiveSubagentCount = subagentCount > 0 ? subagentCount : turnsWithSubagents;
+  const nativeOtherUsageBaseline = Math.max(otherUsageTotal, nativeWorkflowTokens);
   const effectiveNativeSubagentTokens =
     unmeasuredNativeSubagentCount > 0
-      ? Math.max(otherUsageTotal, nativeWorkflowTokens) + nativeChildProjectionTokens
-      : Math.max(otherUsageTotal, nativeWorkflowTokens, nativeChildProjectionTokens);
+      ? nativeOtherUsageBaseline + nativeChildProjectionTokens
+      : Math.max(nativeOtherUsageBaseline, nativeChildProjectionTokens);
   const subagentTotalTokens =
     effectiveNativeSubagentTokens + appOwnedSubagentTokens + descendantOnlySubagentTokens;
 
@@ -2181,6 +2198,9 @@ export function deriveSessionTelemetryDetail(
     measuredSubagentChildThreadIds,
     subagentNativeSessionIds,
     unmeasuredSubagentMatchIds,
+    unmeasuredNativeSubagentMatchIds,
+    nativeOtherUsageTokens: nativeOtherUsageBaseline,
+    nativeOtherUsageAttributedModel,
     subagentUncachedInputTokens: subagentUncached,
     subagentCachedInputTokens: subagentCached,
     subagentCacheCreationTokens: subagentCacheCreate,
@@ -2335,34 +2355,86 @@ export function resolveSessionTelemetryDisplay(
   }
 
   // Child-thread logs for subagents belonging to THIS session that did NOT already supply
-  // measured tokens via hydrated child thread projections (prevents double counting while
-  // matching both Prismux childThreadId and native provider sessionId).
-  let fallbackChildLogTokens = 0;
+  // measured tokens via hydrated child thread projections. Keep non-native (`app_owned`/
+  // `descendant`) child logs separate from `provider_native` child logs so native subagents
+  // already reported via parent `otherUsage` reconcile via `Math.max` instead of double counting.
+  let fallbackNonNativeLogTokens = 0;
+  let fallbackNativeLogTokens = 0;
   let fallbackChildLogUncached = 0;
   let fallbackChildLogCached = 0;
   let fallbackChildLogCacheCreate = 0;
-  const fallbackChildLogTokensByModel = new Map<string, number>();
-  const hasExplicitUnmeasuredIds = detail?.unmeasuredSubagentMatchIds !== undefined;
-  const subagentChildSet = new Set(
+  const fallbackNonNativeLogTokensByModel = new Map<string, number>();
+  const fallbackNativeLogTokensByModel = new Map<string, number>();
+  const hasExplicitUnmeasuredIds =
+    detail?.unmeasuredSubagentMatchIds !== undefined ||
+    detail?.unmeasuredNativeSubagentMatchIds !== undefined;
+  const unmeasuredNonNativeSet = new Set(
     hasExplicitUnmeasuredIds
-      ? detail.unmeasuredSubagentMatchIds
+      ? (detail?.unmeasuredSubagentMatchIds ?? [])
       : [...(detail?.subagentChildThreadIds ?? []), ...(detail?.subagentNativeSessionIds ?? [])],
   );
-  if (subagentChildSet.size > 0) {
+  const unmeasuredNativeSet = new Set(
+    hasExplicitUnmeasuredIds
+      ? (detail?.unmeasuredNativeSubagentMatchIds ?? []).filter(
+          (id) => !unmeasuredNonNativeSet.has(id),
+        )
+      : [],
+  );
+  if (unmeasuredNonNativeSet.size > 0 || unmeasuredNativeSet.size > 0) {
     for (const log of callLogs) {
-      if (log.threadId && subagentChildSet.has(log.threadId)) {
-        const logTok = nonNegInt(log.totalTokens);
-        fallbackChildLogTokens += logTok;
-        fallbackChildLogUncached += nonNegInt(log.inputTokens);
-        fallbackChildLogCached += nonNegInt(log.cachedInputTokens);
-        fallbackChildLogCacheCreate += nonNegInt(log.cacheCreationTokens);
-        const childModel = unwrapUsageModelSlug(log.model);
+      if (!log.threadId) continue;
+      const isNonNative = unmeasuredNonNativeSet.has(log.threadId);
+      const isNative = !isNonNative && unmeasuredNativeSet.has(log.threadId);
+      if (!isNonNative && !isNative) continue;
+      const logTok = nonNegInt(log.totalTokens);
+      fallbackChildLogUncached += nonNegInt(log.inputTokens);
+      fallbackChildLogCached += nonNegInt(log.cachedInputTokens);
+      fallbackChildLogCacheCreate += nonNegInt(log.cacheCreationTokens);
+      const childModel = unwrapUsageModelSlug(log.model);
+      if (isNonNative) {
+        fallbackNonNativeLogTokens += logTok;
         if (childModel && childModel !== "unknown" && logTok > 0) {
-          fallbackChildLogTokensByModel.set(
+          fallbackNonNativeLogTokensByModel.set(
             childModel,
-            (fallbackChildLogTokensByModel.get(childModel) ?? 0) + logTok,
+            (fallbackNonNativeLogTokensByModel.get(childModel) ?? 0) + logTok,
           );
         }
+      } else {
+        fallbackNativeLogTokens += logTok;
+        if (childModel && childModel !== "unknown" && logTok > 0) {
+          fallbackNativeLogTokensByModel.set(
+            childModel,
+            (fallbackNativeLogTokensByModel.get(childModel) ?? 0) + logTok,
+          );
+        }
+      }
+    }
+  }
+  const nativeOtherBaseline = nonNegInt(detail?.nativeOtherUsageTokens);
+  const extraNativeLogTokens = Math.max(0, fallbackNativeLogTokens - nativeOtherBaseline);
+  const fallbackChildLogTokensByModel = new Map<string, number>(fallbackNonNativeLogTokensByModel);
+  if (fallbackNativeLogTokensByModel.size > 0) {
+    const alreadyAttributedModel = detail?.nativeOtherUsageAttributedModel ?? null;
+    if (alreadyAttributedModel === null) {
+      // `otherUsage` had no model attribution in `detail.modelDistribution`, so disk callLogs
+      // provide the first model attribution for these native subagent tokens without doubling.
+      for (const [childModel, childTokens] of fallbackNativeLogTokensByModel) {
+        fallbackChildLogTokensByModel.set(
+          childModel,
+          (fallbackChildLogTokensByModel.get(childModel) ?? 0) + childTokens,
+        );
+      }
+    } else if (extraNativeLogTokens > 0) {
+      // `alreadyAttributedModel` already received `nativeOtherBaseline`; add only any net excess.
+      let remainingExtra = extraNativeLogTokens;
+      for (const [childModel, childTokens] of fallbackNativeLogTokensByModel) {
+        if (remainingExtra <= 0) break;
+        const credit = Math.min(childTokens, remainingExtra);
+        fallbackChildLogTokensByModel.set(
+          childModel,
+          (fallbackChildLogTokensByModel.get(childModel) ?? 0) + credit,
+        );
+        remainingExtra -= credit;
       }
     }
   }
@@ -2497,8 +2569,8 @@ export function resolveSessionTelemetryDisplay(
   // Subagents & aggregated task tokens
   const subagentCount = detail?.subagentCount ?? 0;
   const subagentTotalTokens = hasExplicitUnmeasuredIds
-    ? (detail?.subagentTotalTokens ?? 0) + fallbackChildLogTokens
-    : Math.max(detail?.subagentTotalTokens ?? 0, fallbackChildLogTokens);
+    ? (detail?.subagentTotalTokens ?? 0) + fallbackNonNativeLogTokens + extraNativeLogTokens
+    : Math.max(detail?.subagentTotalTokens ?? 0, fallbackNonNativeLogTokens);
   const aggregatedTaskTotalTokens = sessionTotalTokens + subagentTotalTokens;
 
   // Multi-model distribution (strictly current session + participating subagent models)
