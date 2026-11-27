@@ -315,6 +315,81 @@ describe("acpPerTurnPromptUsage", () => {
       hasSubagents: false,
     });
   });
+
+  it("disambiguates inclusive vs exclusive inputTokens via totalTokens so 99% cache hit is never halved", () => {
+    // Inclusive ACP payload even when geminiUsage=true: inputTokens already includes cachedReadTokens.
+    assert.deepEqual(
+      acpPerTurnPromptUsage(
+        {
+          inputTokens: 100_000,
+          outputTokens: 1_000,
+          totalTokens: 101_000,
+          cachedReadTokens: 99_000,
+          cachedWriteTokens: 0,
+        },
+        false,
+        "completed",
+        true,
+      ),
+      {
+        usageScope: "main_agent",
+        usageStatus: "complete",
+        hasSubagents: false,
+        inputTokens: 100_000,
+        outputTokens: 1_000,
+        cachedInputTokens: 99_000,
+        cacheCreationTokens: 0,
+      },
+    );
+
+    // Exclusive Antigravity/Claude payload with cachedWriteTokens: total = in + cachedRead + cachedWrite + out.
+    assert.deepEqual(
+      acpPerTurnPromptUsage(
+        {
+          inputTokens: 1_000,
+          outputTokens: 500,
+          totalTokens: 100_500,
+          cachedReadTokens: 90_000,
+          cachedWriteTokens: 9_000,
+        },
+        false,
+        "completed",
+        true,
+      ),
+      {
+        usageScope: "main_agent",
+        usageStatus: "complete",
+        hasSubagents: false,
+        inputTokens: 100_000,
+        outputTokens: 500,
+        cachedInputTokens: 90_000,
+        cacheCreationTokens: 9_000,
+      },
+    );
+
+    // Non-Gemini ACP agent sending exclusive inputTokens: totalTokens proves cachedReadTokens is additive.
+    assert.deepEqual(
+      acpPerTurnPromptUsage(
+        {
+          inputTokens: 1_000,
+          outputTokens: 500,
+          totalTokens: 100_500,
+          cachedReadTokens: 99_000,
+        },
+        false,
+        "completed",
+        false,
+      ),
+      {
+        usageScope: "main_agent",
+        usageStatus: "complete",
+        hasSubagents: false,
+        inputTokens: 100_000,
+        outputTokens: 500,
+        cachedInputTokens: 99_000,
+      },
+    );
+  });
 });
 
 describe("acpToolCallDiffPatch", () => {

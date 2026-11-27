@@ -1265,5 +1265,128 @@ describe("dshSessionUsage", () => {
         "time-context",
       ]);
     });
+
+    it("preserves ~99% cache hit when gateway logs inclusive usage.inputTokens and aggregates native DSH subagent child sessions without double-counting scans", async () => {
+      const root = createTempDir("prismux-dsh-cache-subagents-");
+      const cwd = "D:/Proj/CacheSub";
+      const projectKey = encodeDshProjectKey(cwd);
+      const parentDir = NodePath.join(root, "sessions", projectKey, "sess-parent");
+      const childDir = NodePath.join(root, "sessions", projectKey, "sess-child-1");
+      NodeFS.mkdirSync(parentDir, { recursive: true });
+      NodeFS.mkdirSync(childDir, { recursive: true });
+
+      const parentFile = NodePath.join(parentDir, "session.v4.jsonl");
+      const childFile = NodePath.join(childDir, "session.v4.jsonl");
+      const baseTime = Date.parse("2026-11-27T02:00:00Z");
+
+      // Write parent header before starting watcher
+      NodeFS.writeFileSync(
+        parentFile,
+        `${JSON.stringify({
+          type: "session",
+          version: 4,
+          id: "sess-parent",
+          createdAt: baseTime,
+          isSeeded: false,
+          delegationDepth: 0,
+        })}\n`,
+      );
+
+      const watcher = makeDshTurnUsageWatcher({
+        dshHome: root,
+        sessionId: "sess-parent",
+        cwd,
+        settleWaitMs: 0,
+      });
+
+      // Append an inclusive-gateway parent step (inputTokens=100_000 already includes cacheReadTokens=99_000)
+      // plus a `subagent` tool call.
+      NodeFS.appendFileSync(
+        parentFile,
+        [
+          {
+            seq: 1,
+            type: "assistant/message",
+            time: baseTime + 2_000,
+            data: {
+              turn: 1,
+              step: 1,
+              usage: {
+                inputTokens: 100_000,
+                cacheReadTokens: 99_000,
+                outputTokens: 500,
+                totalTokens: 100_500,
+              },
+              message: {
+                source: { provider: "openai-gateway", model: "group/deepseek" },
+                content: [{ type: "tool_use", name: "subagent", id: "call-1" }],
+              },
+            },
+          },
+          { seq: 2, type: "turn/end", time: baseTime + 4_000, data: { turn: 1 } },
+        ]
+          .map((row) => JSON.stringify(row))
+          .join("\n") + "\n",
+      );
+
+      // Write child DSH subagent session linked via parentSessionId & delegationDepth: 1
+      NodeFS.writeFileSync(
+        childFile,
+        [
+          {
+            type: "session",
+            version: 4,
+            id: "sess-child-1",
+            parentSessionId: "sess-parent",
+            createdAt: baseTime + 2_100,
+            isSeeded: false,
+            delegationDepth: 1,
+          },
+          {
+            seq: 1,
+            type: "assistant/message",
+            time: baseTime + 3_500,
+            data: {
+              turn: 1,
+              step: 1,
+              usage: {
+                inputTokens: 1_000,
+                cacheReadTokens: 29_000,
+                outputTokens: 400,
+                totalTokens: 30_400,
+              },
+              message: {
+                source: { provider: "magpie", model: "group/deepseek-sub" },
+                content: [{ type: "text", text: "child done" }],
+              },
+            },
+          },
+        ]
+          .map((row) => JSON.stringify(row))
+          .join("\n") + "\n",
+      );
+
+      const finalDelta = await watcher.collectFinal();
+      expect(finalDelta).toBeDefined();
+      // Inclusive gateway: uncached=1_000, cached=99_000 -> total input=100_000 (99% cache hit, NEVER 199_000!)
+      expect(finalDelta?.usage.inputTokens).toBe(100_000);
+      expect(finalDelta?.usage.cachedInputTokens).toBe(99_000);
+      expect(finalDelta?.usage.outputTokens).toBe(500);
+      expect(finalDelta?.usage.hasSubagents).toBe(true);
+      expect(finalDelta?.usage.otherUsage).toEqual({
+        inputTokens: 30_000,
+        outputTokens: 400,
+      });
+
+      // Historical scan records each session once without double-counting child usage into parent
+      const scanned = await scanDshUsageRecords({ dshHome: root, sinceMs: baseTime - 1_000 });
+      expect(scanned).toHaveLength(2);
+      const parentRec = scanned.find((r) => r.sessionId === "sess-parent");
+      expect(parentRec?.totals.uncachedInputTokens).toBe(1_000);
+      expect(parentRec?.totals.cachedInputTokens).toBe(99_000);
+      const childRec = scanned.find((r) => r.sessionId === "sess-child-1");
+      expect(childRec?.totals.uncachedInputTokens).toBe(1_000);
+      expect(childRec?.totals.cachedInputTokens).toBe(29_000);
+    });
   });
 });

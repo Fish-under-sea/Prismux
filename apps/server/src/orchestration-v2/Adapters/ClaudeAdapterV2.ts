@@ -330,6 +330,7 @@ export function claudeProviderTurnTokenUsage(
   const inputTokens = claudeMessageInputTokens(usage);
   const outputTokens = optionalClaudeUsageTokenCount(usage.output_tokens) ?? 0;
   const cachedInputTokens = optionalClaudeUsageTokenCount(usage.cache_read_input_tokens) ?? 0;
+  const cacheCreationTokens = optionalClaudeUsageTokenCount(usage.cache_creation_input_tokens) ?? 0;
   const promptCacheTtlMs = claudePromptCacheTtlMs(usage.cache_creation);
   // The cache lifetime starts with the request, not when its response ends.
   const promptCacheExpiresAt =
@@ -341,6 +342,7 @@ export function claudeProviderTurnTokenUsage(
     maxTokens,
     inputTokens,
     cachedInputTokens,
+    ...(cacheCreationTokens > 0 ? { cacheCreationTokens } : {}),
     outputTokens,
     reasoningOutputTokens: 0,
     ...(promptCacheTtlMs === undefined ? {} : { promptCacheTtlMs }),

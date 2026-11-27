@@ -229,11 +229,16 @@ export function codexProviderTurnTokenUsage(
   tokenUsage: CodexSchema.V2ThreadTokenUsageUpdatedNotification["tokenUsage"],
   updatedAt: string,
 ) {
+  const cacheCreationTokens =
+    tokenUsage.last.cacheWriteInputTokens !== undefined
+      ? Math.max(0, tokenUsage.last.cacheWriteInputTokens)
+      : 0;
   return {
     usedTokens: Math.max(0, tokenUsage.last.totalTokens),
     maxTokens: tokenUsage.modelContextWindow ?? null,
     inputTokens: Math.max(0, tokenUsage.last.inputTokens),
     cachedInputTokens: Math.max(0, tokenUsage.last.cachedInputTokens),
+    ...(cacheCreationTokens > 0 ? { cacheCreationTokens } : {}),
     outputTokens: Math.max(0, tokenUsage.last.outputTokens),
     reasoningOutputTokens: Math.max(0, tokenUsage.last.reasoningOutputTokens),
     updatedAt,

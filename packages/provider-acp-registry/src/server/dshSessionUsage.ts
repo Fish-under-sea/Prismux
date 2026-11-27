@@ -824,10 +824,18 @@ export interface DshContextInjectionEvent extends TrackedContextInjectionPayload
 
 interface ParsedDshSessionLog {
   readonly sessionId: string | undefined;
+  readonly parentSessionId: string | undefined;
+  readonly rootSessionId: string | undefined;
+  readonly delegationDepth: number;
   readonly maxSeq: number;
   readonly steps: ReadonlyArray<ParsedDshAssistantStep>;
   readonly contextInjections: ReadonlyArray<DshContextInjectionEvent>;
   readonly turnEndSeqs: ReadonlyArray<number>;
+  readonly subagentCallSeqs: ReadonlyArray<number>;
+  readonly referencedChildSessions: ReadonlyArray<{
+    readonly seq: number;
+    readonly sessionId: string;
+  }>;
 }
 
 const DSH_MAX_SKILL_CATALOG_ENTRIES = 200;
@@ -1032,11 +1040,50 @@ function parseDshContextInjectionRecord(
   };
 }
 
+function isDshSubagentToolName(name: unknown): boolean {
+  if (typeof name !== "string") return false;
+  const normalized = name.trim().toLowerCase();
+  return normalized === "subagent" || normalized === "subagent_fork";
+}
+
+function extractReferencedChildSessionId(
+  record: Record<string, unknown> | undefined,
+  ownSessionId: string | undefined,
+): string | undefined {
+  if (record === undefined) return undefined;
+  const containers: Array<Record<string, unknown>> = [record];
+  for (const nestedKey of ["result", "output", "metadata", "meta", "payload", "data"] as const) {
+    const nested = asRecord(record[nestedKey]);
+    if (nested !== undefined) containers.push(nested);
+  }
+  for (const container of containers) {
+    for (const key of [
+      "childSessionId",
+      "child_session_id",
+      "subagentSessionId",
+      "subagent_session_id",
+      "forkedSessionId",
+      "forked_session_id",
+      "sessionId",
+      "session_id",
+    ] as const) {
+      const candidate = asTrimmedString(container[key]);
+      if (candidate !== undefined && candidate !== ownSessionId) {
+        return candidate;
+      }
+    }
+  }
+  return undefined;
+}
+
 function parseDshSessionRecords(
   records: ReadonlyArray<Record<string, unknown>>,
   options?: { readonly skipSeededPrefix?: boolean },
 ): ParsedDshSessionLog {
   let sessionId: string | undefined;
+  let parentSessionId: string | undefined;
+  let rootSessionId: string | undefined;
+  let delegationDepth = 0;
   let isSeeded = false;
   let lastEndSeedIndex = -1;
 
@@ -1046,6 +1093,14 @@ function parseDshSessionRecords(
       if (typeof rec.id === "string" && rec.id.trim().length > 0) {
         sessionId = rec.id.trim();
       }
+      parentSessionId ??=
+        asTrimmedString(rec.parentSessionId) ??
+        asTrimmedString(rec.parent_session_id) ??
+        asTrimmedString(rec.parentId) ??
+        asTrimmedString(rec.forkedFromSessionId) ??
+        asTrimmedString(rec.sourceSessionId);
+      rootSessionId ??= asTrimmedString(rec.rootSessionId) ?? asTrimmedString(rec.root_session_id);
+      delegationDepth = Math.max(delegationDepth, asNonNegInt(rec.delegationDepth));
       if (rec.isSeeded === true) {
         isSeeded = true;
       }
@@ -1065,6 +1120,8 @@ function parseDshSessionRecords(
   const steps: Array<ParsedDshAssistantStep> = [];
   const contextInjections: Array<DshContextInjectionEvent> = [];
   const turnEndSeqs: Array<number> = [];
+  const subagentCallSeqs: Array<number> = [];
+  const referencedChildSessions: Array<{ readonly seq: number; readonly sessionId: string }> = [];
 
   for (let index = 0; index < records.length; index += 1) {
     const rec = records[index]!;
@@ -1075,6 +1132,21 @@ function parseDshSessionRecords(
     const type = rec.type;
     const data = asRecord(rec.data);
     const time = asFiniteNumber(rec.time);
+    const effectiveSeq = seq ?? index;
+
+    if (
+      (type === "tool/call" || type === "tool/result" || type === "subagent/spawn") &&
+      data !== undefined
+    ) {
+      const toolName = data.name ?? data.toolName ?? data.tool_name;
+      if (type === "subagent/spawn" || isDshSubagentToolName(toolName)) {
+        subagentCallSeqs.push(effectiveSeq);
+        const childId = extractReferencedChildSessionId(data, sessionId);
+        if (childId !== undefined) {
+          referencedChildSessions.push({ seq: effectiveSeq, sessionId: childId });
+        }
+      }
+    }
 
     if (type === "user/message") {
       if (
@@ -1165,15 +1237,44 @@ function parseDshSessionRecords(
       const usage = asRecord(data.usage);
       if (usage === undefined) continue;
 
-      const uncachedInputTokens = asNonNegInt(usage.inputTokens);
+      const rawInputTokens = asNonNegInt(usage.inputTokens);
       const cachedInputTokens = asNonNegInt(usage.cacheReadTokens);
       const cacheCreationTokens = asNonNegInt(usage.cacheWriteTokens);
       const outputTokens = asNonNegInt(usage.outputTokens);
+      const rawTotalTokens = asNonNegInt(usage.totalTokens);
+      const cacheTotal = cachedInputTokens + cacheCreationTokens;
+      let uncachedInputTokens = rawInputTokens;
+      if (cacheTotal > 0 && rawTotalTokens > 0 && rawInputTokens >= cacheTotal) {
+        const rawReasoning = asNonNegInt(usage.reasoningTokens);
+        const inclusiveDiff = Math.min(
+          Math.abs(rawTotalTokens - (rawInputTokens + outputTokens)),
+          Math.abs(rawTotalTokens - (rawInputTokens + outputTokens + rawReasoning)),
+        );
+        const exclusiveDiff = Math.min(
+          Math.abs(rawTotalTokens - (rawInputTokens + cacheTotal + outputTokens)),
+          Math.abs(rawTotalTokens - (rawInputTokens + cacheTotal + outputTokens + rawReasoning)),
+        );
+        if (inclusiveDiff < exclusiveDiff) {
+          uncachedInputTokens = rawInputTokens - cacheTotal;
+        }
+      }
       if (uncachedInputTokens + cachedInputTokens + cacheCreationTokens + outputTokens === 0) {
         continue;
       }
 
       const message = asRecord(data.message);
+      if (Array.isArray(message?.content)) {
+        for (const block of message.content) {
+          const blockRec = asRecord(block);
+          if (
+            blockRec !== undefined &&
+            (blockRec.type === "tool_use" || blockRec.type === "tool-call") &&
+            isDshSubagentToolName(blockRec.name)
+          ) {
+            subagentCallSeqs.push(effectiveSeq);
+          }
+        }
+      }
       const reasoningTokens = estimateDshReasoningTokens(
         outputTokens,
         usage.reasoningTokens,
@@ -1244,7 +1345,18 @@ function parseDshSessionRecords(
     }
   }
 
-  return { sessionId, maxSeq, steps, contextInjections, turnEndSeqs };
+  return {
+    sessionId,
+    parentSessionId,
+    rootSessionId,
+    delegationDepth,
+    maxSeq,
+    steps,
+    contextInjections,
+    turnEndSeqs,
+    subagentCallSeqs,
+    referencedChildSessions,
+  };
 }
 
 export interface DshLiveTokenUsage {
@@ -1343,9 +1455,112 @@ export function makeDshTurnUsageWatcher(input: MakeDshTurnUsageWatcherInput): Ds
     lastTornFrame = initialDecoded.tornFrame;
   }
   const baselineSeq = lastParsed?.maxSeq ?? 0;
+  const childParseCache = new Map<
+    string,
+    { readonly mtimeMs: number; readonly size: number; readonly parsed: ParsedDshSessionLog }
+  >();
+  const childBaselineSeqs = new Map<string, number>();
+
+  const readParsedChildFile = (filePath: string): ParsedDshSessionLog | undefined => {
+    let stat: NodeFS.Stats;
+    try {
+      stat = NodeFS.statSync(filePath);
+    } catch {
+      return undefined;
+    }
+    if (!stat.isFile()) return undefined;
+    const cached = childParseCache.get(filePath);
+    if (cached !== undefined && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      return cached.parsed;
+    }
+    const decoded = readDshSessionFileSync(filePath);
+    if (decoded === undefined) return undefined;
+    const parsed = parseDshSessionRecords(decoded.records, { skipSeededPrefix: true });
+    childParseCache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, parsed });
+    return parsed;
+  };
+
+  const discoverDescendantChildLogs = (
+    parentFilePath: string | undefined,
+    referencedIds: ReadonlyArray<string>,
+  ): ReadonlyArray<{ readonly id: string; readonly parsed: ParsedDshSessionLog }> => {
+    const candidates = new Map<string, ParsedDshSessionLog>();
+    const normalizedParent =
+      parentFilePath === undefined ? undefined : NodePath.resolve(parentFilePath);
+
+    if (parentFilePath !== undefined) {
+      const parentSessionDir = NodePath.dirname(parentFilePath);
+      const projectDir = NodePath.dirname(parentSessionDir);
+      let entries: ReadonlyArray<NodeFS.Dirent>;
+      try {
+        entries = NodeFS.readdirSync(projectDir, { withFileTypes: true });
+      } catch {
+        entries = [];
+      }
+      let scanned = 0;
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        if (scanned >= 64) break;
+        const candidateDir = NodePath.join(projectDir, entry.name);
+        const candidateFile = findBestSessionFileInDir(candidateDir);
+        if (candidateFile === undefined) continue;
+        if (
+          normalizedParent !== undefined &&
+          NodePath.resolve(candidateFile) === normalizedParent
+        ) {
+          continue;
+        }
+        scanned += 1;
+        const parsed = readParsedChildFile(candidateFile);
+        if (parsed === undefined) continue;
+        const childId = parsed.sessionId ?? entry.name;
+        if (childId && childId !== sessionId) {
+          candidates.set(childId, parsed);
+        }
+      }
+    }
+
+    for (const refId of referencedIds) {
+      if (refId === sessionId || candidates.has(refId)) continue;
+      const refFile = findDshSessionFile(dshHome, refId, cwd);
+      if (refFile === undefined) continue;
+      const parsed = readParsedChildFile(refFile);
+      if (parsed !== undefined) {
+        candidates.set(parsed.sessionId ?? refId, parsed);
+      }
+    }
+
+    const explicitRefSet = new Set(referencedIds);
+    const knownLineage = new Set<string>([sessionId]);
+    const matched = new Map<string, ParsedDshSessionLog>();
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      for (const [childId, parsed] of candidates) {
+        if (matched.has(childId)) continue;
+        const isDirectOrTransitiveChild =
+          explicitRefSet.has(childId) ||
+          (parsed.parentSessionId !== undefined && knownLineage.has(parsed.parentSessionId)) ||
+          (parsed.rootSessionId !== undefined && knownLineage.has(parsed.rootSessionId));
+        if (isDirectOrTransitiveChild) {
+          matched.set(childId, parsed);
+          knownLineage.add(childId);
+          expanded = true;
+        }
+      }
+    }
+    return [...matched.entries()].map(([id, parsed]) => ({ id, parsed }));
+  };
+
+  if (initialFile !== undefined) {
+    for (const child of discoverDescendantChildLogs(initialFile, [])) {
+      childBaselineSeqs.set(child.id, child.parsed.maxSeq);
+    }
+  }
 
   const ensureParsed = ():
     | {
+        readonly filePath: string;
         readonly parsed: ParsedDshSessionLog;
         readonly tornFrame: boolean;
         readonly changed: boolean;
@@ -1366,7 +1581,7 @@ export function makeDshTurnUsageWatcher(input: MakeDshTurnUsageWatcherInput): Ds
       lastStat.mtimeMs === stat.mtimeMs &&
       lastStat.size === stat.size
     ) {
-      return { parsed: lastParsed, tornFrame: lastTornFrame, changed: false };
+      return { filePath, parsed: lastParsed, tornFrame: lastTornFrame, changed: false };
     }
     const decoded = readDshSessionFileSync(filePath);
     if (decoded === undefined) return undefined;
@@ -1375,7 +1590,7 @@ export function makeDshTurnUsageWatcher(input: MakeDshTurnUsageWatcherInput): Ds
     lastParsed = parsed;
     lastTornFrame = decoded.tornFrame;
     lastDeltaComputedForStat = false;
-    return { parsed, tornFrame: decoded.tornFrame, changed: true };
+    return { filePath, parsed, tornFrame: decoded.tornFrame, changed: true };
   };
 
   const readContextInjections = (): ReadonlyArray<DshContextInjectionEvent> => {
@@ -1387,12 +1602,30 @@ export function makeDshTurnUsageWatcher(input: MakeDshTurnUsageWatcherInput): Ds
   const readTurnDelta = (): DshTurnUsageDelta | undefined => {
     const state = ensureParsed();
     if (state === undefined) return undefined;
-    if (!state.changed && lastDeltaComputedForStat) {
+    const { filePath, parsed, tornFrame } = state;
+    const turnReferencedChildIds = parsed.referencedChildSessions
+      .filter((entry) => entry.seq > baselineSeq)
+      .map((entry) => entry.sessionId);
+    const turnHasSubagentCall = parsed.subagentCallSeqs.some((seq) => seq > baselineSeq);
+    const childLogs = discoverDescendantChildLogs(filePath, turnReferencedChildIds);
+    let childInputTokens = 0;
+    let childOutputTokens = 0;
+    let hasNewChildSteps = false;
+    for (const child of childLogs) {
+      const childBase = childBaselineSeqs.get(child.id) ?? 0;
+      for (const step of child.parsed.steps) {
+        if (step.seq <= childBase) continue;
+        hasNewChildSteps = true;
+        childInputTokens +=
+          step.uncachedInputTokens + step.cachedInputTokens + step.cacheCreationTokens;
+        childOutputTokens += step.outputTokens;
+      }
+    }
+    if (!state.changed && !hasNewChildSteps && lastDeltaComputedForStat) {
       return lastDelta;
     }
-    const { parsed, tornFrame } = state;
     const turnSteps = parsed.steps.filter((step) => step.seq > baselineSeq);
-    if (turnSteps.length === 0) {
+    if (turnSteps.length === 0 && childInputTokens + childOutputTokens === 0) {
       lastDelta = undefined;
       lastDeltaComputedForStat = true;
       return undefined;
@@ -1470,16 +1703,21 @@ export function makeDshTurnUsageWatcher(input: MakeDshTurnUsageWatcherInput): Ds
           : Math.min(rawAvgTtftMs, modelDurationMs);
 
     const hasTurnEnd = parsed.turnEndSeqs.some((seq) => seq > baselineSeq);
+    const hasSubagents =
+      turnHasSubagentCall || hasNewChildSteps || childInputTokens + childOutputTokens > 0;
 
     const usage: TurnTokenUsage = {
       usageScope: "main_agent",
       usageStatus: "complete",
-      hasSubagents: false,
+      hasSubagents,
       inputTokens: totalInputTokens,
       outputTokens,
       cachedInputTokens: cachedInput,
       cacheCreationTokens: cacheCreation,
       reasoningTokens: clampedReasoning,
+      ...(childInputTokens + childOutputTokens > 0
+        ? { otherUsage: { inputTokens: childInputTokens, outputTokens: childOutputTokens } }
+        : {}),
       ...(models.length > 0 ? { models } : {}),
       ...(ttftMs !== undefined ? { ttftMs } : {}),
       ...(decodeMs !== undefined ? { decodeMs } : {}),

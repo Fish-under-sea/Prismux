@@ -1066,6 +1066,78 @@ const mergedUsageCallLogsCache = new WeakMap<
  * Merges live call logs with backend transcript logs, deduplicating matching calls and
  * memoizing by `(localLogs, backendLogs)` reference identity via WeakMap.
  */
+function mergeUsageTokenChannels(
+  primary: Pick<
+    UsageCallLogRecord,
+    "inputTokens" | "cachedInputTokens" | "cacheCreationTokens" | "outputTokens" | "totalTokens"
+  >,
+  secondary: Pick<
+    UsageCallLogRecord,
+    "inputTokens" | "cachedInputTokens" | "cacheCreationTokens" | "outputTokens" | "totalTokens"
+  >,
+): {
+  readonly inputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly cacheCreationTokens: number;
+  readonly outputTokens: number;
+  readonly totalTokens: number;
+  readonly cacheHitRate: number | null;
+} {
+  const pHasCacheSplit = primary.cachedInputTokens > 0 || primary.cacheCreationTokens > 0;
+  const sHasCacheSplit = secondary.cachedInputTokens > 0 || secondary.cacheCreationTokens > 0;
+  const pTotalInput = primary.inputTokens + primary.cachedInputTokens + primary.cacheCreationTokens;
+  const sTotalInput =
+    secondary.inputTokens + secondary.cachedInputTokens + secondary.cacheCreationTokens;
+
+  let inputTokens: number;
+  let cachedInputTokens: number;
+  let cacheCreationTokens: number;
+
+  if (!pHasCacheSplit && sHasCacheSplit && sTotalInput >= Math.floor(pTotalInput * 0.95)) {
+    // Primary had unsplit input (cached=0); adopt secondary's coherent cache split so we never
+    // cross-max unsplit inputTokens with cachedInputTokens and double-count cached tokens.
+    inputTokens = secondary.inputTokens;
+    cachedInputTokens = secondary.cachedInputTokens;
+    cacheCreationTokens = secondary.cacheCreationTokens;
+  } else if (pHasCacheSplit && !sHasCacheSplit && pTotalInput >= Math.floor(sTotalInput * 0.95)) {
+    inputTokens = primary.inputTokens;
+    cachedInputTokens = primary.cachedInputTokens;
+    cacheCreationTokens = primary.cacheCreationTokens;
+  } else if (pHasCacheSplit && sHasCacheSplit) {
+    if (sTotalInput > pTotalInput) {
+      inputTokens = secondary.inputTokens;
+      cachedInputTokens = secondary.cachedInputTokens;
+      cacheCreationTokens = secondary.cacheCreationTokens;
+    } else if (pTotalInput > sTotalInput) {
+      inputTokens = primary.inputTokens;
+      cachedInputTokens = primary.cachedInputTokens;
+      cacheCreationTokens = primary.cacheCreationTokens;
+    } else {
+      inputTokens = Math.min(primary.inputTokens, secondary.inputTokens);
+      cachedInputTokens = Math.max(primary.cachedInputTokens, secondary.cachedInputTokens);
+      cacheCreationTokens = Math.max(primary.cacheCreationTokens, secondary.cacheCreationTokens);
+    }
+  } else {
+    inputTokens = Math.max(primary.inputTokens, secondary.inputTokens);
+    cachedInputTokens = Math.max(primary.cachedInputTokens, secondary.cachedInputTokens);
+    cacheCreationTokens = Math.max(primary.cacheCreationTokens, secondary.cacheCreationTokens);
+  }
+
+  const outputTokens = Math.max(primary.outputTokens, secondary.outputTokens);
+  const channelTotal = inputTokens + cachedInputTokens + cacheCreationTokens + outputTokens;
+  const totalTokens =
+    channelTotal > 0 ? channelTotal : Math.max(primary.totalTokens, secondary.totalTokens);
+  const cacheHitRate = computeCacheHitRate(inputTokens, cachedInputTokens, cacheCreationTokens);
+  return {
+    inputTokens,
+    cachedInputTokens,
+    cacheCreationTokens,
+    outputTokens,
+    totalTokens,
+    cacheHitRate,
+  };
+}
+
 export function mergeUsageCallLogs(
   localLogs: readonly UsageCallLogRecord[],
   backendLogs?: readonly BackendUsageCallLogLike[] | null,
@@ -1117,10 +1189,10 @@ export function mergeUsageCallLogs(
           existing.ttftMs ?? normalized.ttftMs,
           mergedDurationMs,
         );
-        const mergedOutputTokens = Math.max(existing.outputTokens, normalized.outputTokens);
+        const mergedChannels = mergeUsageTokenChannels(existing, normalized);
         const mergedTps = sanitizeOutputTps(
           existing.tps ?? normalized.tps,
-          mergedOutputTokens,
+          mergedChannels.outputTokens,
           mergedDurationMs,
           mergedTtftMs,
         );
@@ -1129,8 +1201,12 @@ export function mergeUsageCallLogs(
           ttftMs: mergedTtftMs,
           durationMs: mergedDurationMs,
           tps: mergedTps,
-          outputTokens: mergedOutputTokens,
-          cacheHitRate: existing.cacheHitRate ?? normalized.cacheHitRate,
+          inputTokens: mergedChannels.inputTokens,
+          cachedInputTokens: mergedChannels.cachedInputTokens,
+          cacheCreationTokens: mergedChannels.cacheCreationTokens,
+          outputTokens: mergedChannels.outputTokens,
+          totalTokens: mergedChannels.totalTokens,
+          cacheHitRate: mergedChannels.cacheHitRate,
           contextPercent: existing.contextPercent ?? normalized.contextPercent,
           source: existing.source,
         });
@@ -1149,10 +1225,7 @@ export function mergeUsageCallLogs(
           if (
             Math.abs(candidate.timestamp - normalized.timestamp) <= 15_000 &&
             (item.unwrappedModel === normalizedModel ||
-              (candidate.outputTokens > 0 &&
-                candidate.inputTokens === normalized.inputTokens &&
-                candidate.cachedInputTokens === normalized.cachedInputTokens &&
-                candidate.totalTokens === normalized.totalTokens))
+              (candidate.outputTokens > 0 && candidate.totalTokens === normalized.totalTokens))
           ) {
             matchedKey = item.key;
             break;
@@ -1166,10 +1239,10 @@ export function mergeUsageCallLogs(
           live.ttftMs ?? normalized.ttftMs,
           mergedDurationMs,
         );
-        const mergedOutputTokens = Math.max(live.outputTokens, normalized.outputTokens);
+        const mergedChannels = mergeUsageTokenChannels(live, normalized);
         const mergedTps = sanitizeOutputTps(
           live.tps ?? normalized.tps,
-          mergedOutputTokens,
+          mergedChannels.outputTokens,
           mergedDurationMs,
           mergedTtftMs,
         );
@@ -1178,12 +1251,12 @@ export function mergeUsageCallLogs(
           ttftMs: mergedTtftMs,
           durationMs: mergedDurationMs,
           tps: mergedTps,
-          inputTokens: Math.max(live.inputTokens, normalized.inputTokens),
-          cachedInputTokens: Math.max(live.cachedInputTokens, normalized.cachedInputTokens),
-          cacheCreationTokens: Math.max(live.cacheCreationTokens, normalized.cacheCreationTokens),
-          outputTokens: mergedOutputTokens,
-          totalTokens: Math.max(live.totalTokens, normalized.totalTokens),
-          cacheHitRate: live.cacheHitRate ?? normalized.cacheHitRate,
+          inputTokens: mergedChannels.inputTokens,
+          cachedInputTokens: mergedChannels.cachedInputTokens,
+          cacheCreationTokens: mergedChannels.cacheCreationTokens,
+          outputTokens: mergedChannels.outputTokens,
+          totalTokens: mergedChannels.totalTokens,
+          cacheHitRate: mergedChannels.cacheHitRate,
         });
       } else {
         byId.set(normalized.id, normalized);

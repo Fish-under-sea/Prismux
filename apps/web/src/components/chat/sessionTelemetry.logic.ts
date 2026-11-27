@@ -180,6 +180,13 @@ export interface SessionTelemetryDetailSnapshot {
   readonly subagentCount: number;
   readonly subagentTotalTokens: number;
   readonly subagentChildThreadIds: readonly string[];
+  readonly measuredSubagentChildThreadIds?: readonly string[] | undefined;
+  readonly subagentNativeSessionIds?: readonly string[] | undefined;
+  readonly unmeasuredSubagentMatchIds?: readonly string[] | undefined;
+  readonly subagentUncachedInputTokens?: number | undefined;
+  readonly subagentCachedInputTokens?: number | undefined;
+  readonly subagentCacheCreationTokens?: number | undefined;
+  readonly subagentOutputTokens?: number | undefined;
   readonly aggregatedTaskTotalTokens: number;
   readonly modelDistribution: readonly SessionModelDistributionEntry[];
   readonly distinctSampledModels: readonly string[];
@@ -253,6 +260,16 @@ export type SessionProjectionLike = Partial<
   >
 >;
 
+export interface SubagentThreadTelemetryInput {
+  readonly threadId: string;
+  readonly parentThreadId?: string | null | undefined;
+  readonly rootThreadId?: string | null | undefined;
+  readonly creationSource?: string | null | undefined;
+  readonly model?: string | null | undefined;
+  readonly provider?: string | null | undefined;
+  readonly projection?: SessionProjectionLike | null | undefined;
+}
+
 export interface DeriveSessionTelemetryDetailInput {
   readonly threadId: string;
   readonly serverProjection: SessionProjectionLike | null;
@@ -264,6 +281,8 @@ export interface DeriveSessionTelemetryDetailInput {
   readonly activeLiveTps?: number | null | undefined;
   readonly activeLiveTtftMs?: number | null | undefined;
   readonly contextBreakdownCategories?: readonly ContextBreakdownCategoryInput[] | undefined;
+  /** Descendant child threads (Swarm / MCP / server / provider / ACP child threads, multi-level recursive). */
+  readonly descendantThreads?: readonly SubagentThreadTelemetryInput[] | undefined;
   readonly now?: number | undefined;
 }
 
@@ -611,6 +630,34 @@ function posFiniteNullable(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
+/**
+ * Splits canonical inclusive `inputTokens` into `(uncached, cached, cacheCreate)` without
+ * double-counting cached reads/writes. Also guards against external/legacy exclusive
+ * payloads where `rawInput > 0 && rawInput < cached + cacheCreate` so uncached tokens are
+ * preserved rather than clamped to 0 (which would fabricate 100% cache hit).
+ */
+export function splitPromptInputTokens(
+  rawInput: number,
+  cached: number,
+  cacheCreate: number,
+): { readonly uncached: number; readonly cached: number; readonly cacheCreate: number } {
+  const safeInput = nonNegInt(rawInput);
+  const safeCached = nonNegInt(cached);
+  const safeCreate = nonNegInt(cacheCreate);
+  const cacheTotal = safeCached + safeCreate;
+  if (safeInput === 0) {
+    return { uncached: 0, cached: safeCached, cacheCreate: safeCreate };
+  }
+  if (cacheTotal > 0 && safeInput < cacheTotal) {
+    return { uncached: safeInput, cached: safeCached, cacheCreate: safeCreate };
+  }
+  return {
+    uncached: Math.max(0, safeInput - cacheTotal),
+    cached: safeCached,
+    cacheCreate: safeCreate,
+  };
+}
+
 export function extractTurnUsageDetail(
   turn:
     | Pick<OrchestrationV2ProviderTurn, "turnTokenUsage" | "tokenUsage" | "model">
@@ -666,21 +713,22 @@ export function extractTurnUsageDetail(
   const hasSubagents = finalUsage?.hasSubagents === true || otherUsageTokens > 0;
 
   if (usableFinalUsage) {
-    const cached = nonNegInt(usableFinalUsage.cachedInputTokens);
-    const cacheCreate = nonNegInt(usableFinalUsage.cacheCreationTokens);
-    const rawInput = nonNegInt(usableFinalUsage.inputTokens);
-    const uncached = Math.max(0, rawInput - cached - cacheCreate);
+    const split = splitPromptInputTokens(
+      nonNegInt(usableFinalUsage.inputTokens),
+      nonNegInt(usableFinalUsage.cachedInputTokens),
+      nonNegInt(usableFinalUsage.cacheCreationTokens),
+    );
     const output = nonNegInt(usableFinalUsage.outputTokens);
     const reasoning = Math.min(
       output,
       nonNegInt(usableFinalUsage.reasoningTokens ?? liveUsage?.reasoningOutputTokens),
     );
-    const total = uncached + cached + cacheCreate + output;
+    const total = split.uncached + split.cached + split.cacheCreate + output;
     if (total > 0) {
       return {
-        uncachedInputTokens: uncached,
-        cachedInputTokens: cached,
-        cacheCreationTokens: cacheCreate,
+        uncachedInputTokens: split.uncached,
+        cachedInputTokens: split.cached,
+        cacheCreationTokens: split.cacheCreate,
         outputTokens: output,
         reasoningTokens: reasoning,
         totalTokens: total,
@@ -699,29 +747,28 @@ export function extractTurnUsageDetail(
     const cached = nonNegInt(liveUsage.cachedInputTokens);
     const cacheCreate = nonNegInt(liveUsage.cacheCreationTokens);
     const rawInput = nonNegInt(liveUsage.inputTokens);
-    const uncached = Math.max(0, rawInput - cached - cacheCreate);
     const output = nonNegInt(liveUsage.outputTokens);
-    const reasoning = Math.min(output, nonNegInt(liveUsage.reasoningOutputTokens));
-    const total = Math.max(
-      nonNegInt(liveUsage.usedTokens),
-      uncached + cached + cacheCreate + output,
-    );
-    if (total > 0) {
-      return {
-        uncachedInputTokens: uncached,
-        cachedInputTokens: cached,
-        cacheCreationTokens: cacheCreate,
-        outputTokens: output,
-        reasoningTokens: reasoning,
-        totalTokens: total,
-        otherUsageTokens,
-        hasSubagents,
-        reportedModels,
-        hasMeasuredTokens: true,
-        ttftMs,
-        decodeMs,
-        modelDurationMs,
-      };
+    if (rawInput + cached + cacheCreate + output > 0) {
+      const split = splitPromptInputTokens(rawInput, cached, cacheCreate);
+      const reasoning = Math.min(output, nonNegInt(liveUsage.reasoningOutputTokens));
+      const total = split.uncached + split.cached + split.cacheCreate + output;
+      if (total > 0) {
+        return {
+          uncachedInputTokens: split.uncached,
+          cachedInputTokens: split.cached,
+          cacheCreationTokens: split.cacheCreate,
+          outputTokens: output,
+          reasoningTokens: reasoning,
+          totalTokens: total,
+          otherUsageTokens,
+          hasSubagents,
+          reportedModels,
+          hasMeasuredTokens: true,
+          ttftMs,
+          decodeMs,
+          modelDurationMs,
+        };
+      }
     }
   }
 
@@ -1380,6 +1427,151 @@ export function deriveSessionContextBreakdown(input: {
   };
 }
 
+const NATIVE_SUBAGENT_TOOL_NAMES = new Set<string>([
+  "task",
+  "agent",
+  "invoke_subagent",
+  "start_subagent",
+  "subagent",
+  "subagent_fork",
+  "spawn_agent",
+  "spawn_subagent",
+  "delegate_task",
+]);
+
+interface ExtractedChildThreadUsage {
+  readonly uncachedInputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly cacheCreationTokens: number;
+  readonly outputTokens: number;
+  readonly totalTokens: number;
+  readonly hasCacheSplit: boolean;
+  readonly tokensByModel: ReadonlyMap<string, number>;
+  readonly nativeSessionIds: readonly string[];
+}
+
+function isDroppedProviderTurn(turn: OrchestrationV2ProviderTurn): boolean {
+  return (turn as { readonly promptDropped?: unknown }).promptDropped === true;
+}
+
+function extractChildThreadUsage(child: SubagentThreadTelemetryInput): ExtractedChildThreadUsage {
+  const projection = child.projection;
+  const nativeSessionIds: string[] = [];
+  for (const providerThread of projection?.providerThreads ?? []) {
+    const nativeId = providerThread.nativeThreadRef?.nativeId?.trim();
+    if (nativeId && !nativeSessionIds.includes(nativeId)) {
+      nativeSessionIds.push(nativeId);
+    }
+  }
+
+  const fallbackModelRaw =
+    child.model?.trim() || projection?.thread?.modelSelection?.model?.trim() || null;
+  const fallbackModel =
+    fallbackModelRaw && fallbackModelRaw !== "unknown"
+      ? unwrapUsageModelSlug(fallbackModelRaw)
+      : null;
+
+  const tokensByModel = new Map<string, number>();
+  let uncachedInputTokens = 0;
+  let cachedInputTokens = 0;
+  let cacheCreationTokens = 0;
+  let outputTokens = 0;
+  let totalTokens = 0;
+  let nestedOtherTokens = 0;
+  let hasCacheSplit = false;
+
+  for (const turn of projection?.providerTurns ?? []) {
+    if (isDroppedProviderTurn(turn)) continue;
+    const extracted = extractTurnUsageDetail(turn);
+    if (extracted.otherUsageTokens > 0) {
+      nestedOtherTokens += extracted.otherUsageTokens;
+    }
+    if (!extracted.hasMeasuredTokens) continue;
+    uncachedInputTokens += extracted.uncachedInputTokens;
+    cachedInputTokens += extracted.cachedInputTokens;
+    cacheCreationTokens += extracted.cacheCreationTokens;
+    outputTokens += extracted.outputTokens;
+    totalTokens += extracted.totalTokens;
+    if (
+      extracted.uncachedInputTokens > 0 ||
+      extracted.cachedInputTokens > 0 ||
+      extracted.cacheCreationTokens > 0
+    ) {
+      hasCacheSplit = true;
+    }
+    const primaryModelRaw = extracted.reportedModels[0] ?? fallbackModel;
+    const primaryModel = primaryModelRaw ? unwrapUsageModelSlug(primaryModelRaw) : null;
+    if (primaryModel && primaryModel !== "unknown") {
+      tokensByModel.set(
+        primaryModel,
+        (tokensByModel.get(primaryModel) ?? 0) + extracted.totalTokens,
+      );
+    }
+  }
+
+  // Fallback for ACP subagents that reported `usage_update` on `providerThread.contextUsage`
+  // without emitting a separate child `providerTurn`.
+  if (totalTokens === 0) {
+    let bestDirectionalTotal = 0;
+    let bestDirectionalSplit: {
+      readonly uncached: number;
+      readonly cached: number;
+      readonly output: number;
+    } | null = null;
+    let bestUsedOnly = 0;
+    for (const providerThread of projection?.providerThreads ?? []) {
+      const ctx = providerThread.contextUsage;
+      if (!ctx) continue;
+      const rawInput = nonNegInt(ctx.inputTokens);
+      const rawCached = nonNegInt(ctx.cachedInputTokens);
+      const rawOutput = nonNegInt(ctx.outputTokens);
+      if (rawInput + rawCached + rawOutput > 0) {
+        const split = splitPromptInputTokens(rawInput, rawCached, 0);
+        const dirTotal = split.uncached + split.cached + rawOutput;
+        if (dirTotal > bestDirectionalTotal) {
+          bestDirectionalTotal = dirTotal;
+          bestDirectionalSplit = {
+            uncached: split.uncached,
+            cached: split.cached,
+            output: rawOutput,
+          };
+        }
+      } else {
+        bestUsedOnly = Math.max(bestUsedOnly, nonNegInt(ctx.usedTokens));
+      }
+    }
+    if (bestDirectionalSplit !== null && bestDirectionalTotal > 0) {
+      uncachedInputTokens = bestDirectionalSplit.uncached;
+      cachedInputTokens = bestDirectionalSplit.cached;
+      outputTokens = bestDirectionalSplit.output;
+      totalTokens = bestDirectionalTotal;
+      hasCacheSplit = bestDirectionalSplit.uncached + bestDirectionalSplit.cached > 0;
+      if (fallbackModel && fallbackModel !== "unknown") {
+        tokensByModel.set(
+          fallbackModel,
+          (tokensByModel.get(fallbackModel) ?? 0) + bestDirectionalTotal,
+        );
+      }
+    } else if (bestUsedOnly > 0) {
+      totalTokens = bestUsedOnly;
+      if (fallbackModel && fallbackModel !== "unknown") {
+        tokensByModel.set(fallbackModel, (tokensByModel.get(fallbackModel) ?? 0) + bestUsedOnly);
+      }
+    }
+  }
+
+  return {
+    uncachedInputTokens,
+    cachedInputTokens,
+    cacheCreationTokens,
+    outputTokens,
+    totalTokens: totalTokens + nestedOtherTokens,
+    hasCacheSplit,
+    tokensByModel,
+    nativeSessionIds,
+  };
+}
+
 /**
  * Derives complete active-session telemetry directly from the active thread's
  * server projection, context window, and local timing tracker.
@@ -1398,6 +1590,7 @@ export function deriveSessionTelemetryDetail(
     turnTimingsById,
     activeLiveTps,
     activeLiveTtftMs,
+    descendantThreads = [],
   } = input;
   const now = input.now ?? Date.now();
 
@@ -1406,7 +1599,9 @@ export function deriveSessionTelemetryDetail(
   const rolledBackRunIds = new Set(
     runs.filter((run) => run.status === "rolled_back").map((run) => run.id),
   );
-  const turns = serverProjection?.providerTurns ?? [];
+  const turns = (serverProjection?.providerTurns ?? []).filter(
+    (turn) => !isDroppedProviderTurn(turn),
+  );
   const rawTurnItems =
     serverProjection?.turnItems && serverProjection.turnItems.length > 0
       ? serverProjection.turnItems
@@ -1415,6 +1610,18 @@ export function deriveSessionTelemetryDetail(
   const subagents = (serverProjection?.subagents ?? []).filter(
     (sub) => sub.runId === null || !rolledBackRunIds.has(sub.runId),
   );
+
+  // Index descendant child threads by threadId (deduplicating and excluding self).
+  const descendantByThreadId = new Map<string, SubagentThreadTelemetryInput>();
+  for (const child of descendantThreads) {
+    const childId = child.threadId?.trim();
+    if (!childId || childId === threadId || descendantByThreadId.has(childId)) continue;
+    descendantByThreadId.set(childId, child);
+  }
+  const childUsageByThreadId = new Map<string, ExtractedChildThreadUsage>();
+  for (const [childId, child] of descendantByThreadId) {
+    childUsageByThreadId.set(childId, extractChildThreadUsage(child));
+  }
 
   // 1. Turns / rounds count
   let userMessageCount = 0;
@@ -1472,28 +1679,117 @@ export function deriveSessionTelemetryDetail(
     }
   }
 
-  // Also collect subagent workflow duration/steps when timestamps weren't on turnItems
+  // Deduplicate subagents across projection.subagents, recursive descendant threads,
+  // untracked subagent turnItems, and native turnTokenUsage.otherUsage.
   let workflowExtraDurationMs = 0;
   let workflowToolCalls = 0;
   let subagentCount = 0;
   let nativeWorkflowTokens = 0;
+  let nativeChildProjectionTokens = 0;
+  let unmeasuredNativeSubagentCount = 0;
   let appOwnedSubagentTokens = 0;
+  let descendantOnlySubagentTokens = 0;
+  let subagentUncached = 0;
+  let subagentCached = 0;
+  let subagentCacheCreate = 0;
+  let subagentOutput = 0;
+
   const subagentChildThreadIds: string[] = [];
+  const measuredSubagentChildThreadIds: string[] = [];
+  const subagentNativeSessionIds: string[] = [];
+  const unmeasuredSubagentMatchIds: string[] = [];
   const seenChildThreads = new Set<string>();
+  const seenSubagentIds = new Set<string>();
+  const seenNativeTaskIds = new Set<string>();
+  const runsWithTrackedSubagents = new Set<string>();
+  const consumedDescendantThreadIds = new Set<string>();
+  const subagentTokensByModel = new Map<string, number>();
+
+  const registerChildThreadId = (childId: string | null | undefined) => {
+    const trimmed = childId?.trim();
+    if (!trimmed || trimmed === threadId || seenChildThreads.has(trimmed)) return;
+    seenChildThreads.add(trimmed);
+    subagentChildThreadIds.push(trimmed);
+  };
+
+  const registerNativeSessionIds = (ids: readonly string[]) => {
+    for (const nativeId of ids) {
+      if (nativeId && !subagentNativeSessionIds.includes(nativeId)) {
+        subagentNativeSessionIds.push(nativeId);
+      }
+    }
+  };
+
+  const absorbDescendantUsage = (
+    childId: string,
+    origin: "provider_native" | "app_owned" | "descendant",
+  ): number => {
+    if (consumedDescendantThreadIds.has(childId)) return 0;
+    const usage = childUsageByThreadId.get(childId);
+    if (!usage) {
+      if (!unmeasuredSubagentMatchIds.includes(childId)) {
+        unmeasuredSubagentMatchIds.push(childId);
+      }
+      return 0;
+    }
+    consumedDescendantThreadIds.add(childId);
+    registerNativeSessionIds(usage.nativeSessionIds);
+    if (usage.totalTokens > 0) {
+      if (!measuredSubagentChildThreadIds.includes(childId)) {
+        measuredSubagentChildThreadIds.push(childId);
+      }
+      if (usage.hasCacheSplit) {
+        subagentUncached += usage.uncachedInputTokens;
+        subagentCached += usage.cachedInputTokens;
+        subagentCacheCreate += usage.cacheCreationTokens;
+      }
+      subagentOutput += usage.outputTokens;
+      for (const [modelId, modelTokens] of usage.tokensByModel) {
+        subagentTokensByModel.set(modelId, (subagentTokensByModel.get(modelId) ?? 0) + modelTokens);
+      }
+      if (origin === "provider_native") {
+        nativeChildProjectionTokens += usage.totalTokens;
+      }
+      return usage.totalTokens;
+    }
+    if (!unmeasuredSubagentMatchIds.includes(childId)) {
+      unmeasuredSubagentMatchIds.push(childId);
+    }
+    for (const nativeId of usage.nativeSessionIds) {
+      if (!unmeasuredSubagentMatchIds.includes(nativeId)) {
+        unmeasuredSubagentMatchIds.push(nativeId);
+      }
+    }
+    return 0;
+  };
 
   for (const sub of subagents) {
+    seenSubagentIds.add(sub.id);
+    if (sub.nativeTaskRef?.nativeId) {
+      seenNativeTaskIds.add(sub.nativeTaskRef.nativeId);
+    }
+    if (sub.runId !== null) {
+      runsWithTrackedSubagents.add(sub.runId);
+    }
     const workflowAgents = sub.workflow?.agents ?? [];
     subagentCount += workflowAgents.length > 0 ? workflowAgents.length : 1;
 
-    if (sub.childThreadId && !seenChildThreads.has(sub.childThreadId)) {
-      seenChildThreads.add(sub.childThreadId);
-      subagentChildThreadIds.push(sub.childThreadId);
-    }
+    registerChildThreadId(sub.childThreadId);
+    const linkedChildIds: string[] = [];
+    if (sub.childThreadId) linkedChildIds.push(sub.childThreadId);
     for (const agent of workflowAgents) {
-      if (agent.childThreadId && !seenChildThreads.has(agent.childThreadId)) {
-        seenChildThreads.add(agent.childThreadId);
-        subagentChildThreadIds.push(agent.childThreadId);
+      registerChildThreadId(agent.childThreadId);
+      if (agent.childThreadId && !linkedChildIds.includes(agent.childThreadId)) {
+        linkedChildIds.push(agent.childThreadId);
       }
+    }
+
+    let subChildMeasuredTokens = 0;
+    for (const linkedChildId of linkedChildIds) {
+      subChildMeasuredTokens += absorbDescendantUsage(
+        linkedChildId,
+        sub.origin === "provider_native" ? "provider_native" : "app_owned",
+      );
     }
 
     const wfTokens =
@@ -1501,8 +1797,11 @@ export function deriveSessionTelemetryDetail(
       workflowAgents.reduce((acc, agent) => acc + nonNegInt(agent.totalTokens), 0);
     if (sub.origin === "provider_native") {
       nativeWorkflowTokens += wfTokens;
+      if (subChildMeasuredTokens === 0) {
+        unmeasuredNativeSubagentCount += 1;
+      }
     } else {
-      appOwnedSubagentTokens += wfTokens;
+      appOwnedSubagentTokens += Math.max(wfTokens, subChildMeasuredTokens);
     }
 
     if (sub.workflow?.toolCalls) {
@@ -1517,6 +1816,50 @@ export function deriveSessionTelemetryDetail(
       } else if (sub.workflow?.durationMs && sub.workflow.durationMs > 0) {
         workflowExtraDurationMs += nonNegInt(sub.workflow.durationMs);
       }
+    }
+  }
+
+  // Source 2: Descendant child threads (Swarm / MCP / server / provider / ACP child threads)
+  // not already represented in `serverProjection.subagents`.
+  for (const [childId] of descendantByThreadId) {
+    if (seenChildThreads.has(childId)) continue;
+    registerChildThreadId(childId);
+    subagentCount += 1;
+    descendantOnlySubagentTokens += absorbDescendantUsage(childId, "descendant");
+  }
+
+  // Source 3: Untracked native subagent turnItems (e.g. when `serverProjection.subagents` is partial/empty).
+  for (const item of rawTurnItems) {
+    if (item.runId !== null && rolledBackRunIds.has(item.runId)) continue;
+    if (item.type === "subagent") {
+      const itemSubId = item.subagentId;
+      const itemChildId = item.childThreadId;
+      const itemNativeId = item.nativeItemRef?.nativeId;
+      if (
+        (itemSubId && seenSubagentIds.has(itemSubId)) ||
+        (itemChildId && seenChildThreads.has(itemChildId)) ||
+        (itemNativeId && seenNativeTaskIds.has(itemNativeId))
+      ) {
+        continue;
+      }
+      if (itemSubId) seenSubagentIds.add(itemSubId);
+      if (itemNativeId) seenNativeTaskIds.add(itemNativeId);
+      if (itemChildId) {
+        registerChildThreadId(itemChildId);
+        descendantOnlySubagentTokens += absorbDescendantUsage(itemChildId, "descendant");
+      }
+      subagentCount += 1;
+      continue;
+    }
+    if (item.type === "dynamic_tool") {
+      const rawToolName = (item as { readonly toolName?: unknown }).toolName;
+      const toolName = typeof rawToolName === "string" ? rawToolName.trim().toLowerCase() : "";
+      if (!NATIVE_SUBAGENT_TOOL_NAMES.has(toolName)) continue;
+      const itemNativeId = item.nativeItemRef?.nativeId;
+      if (itemNativeId && seenNativeTaskIds.has(itemNativeId)) continue;
+      if (item.runId !== null && runsWithTrackedSubagents.has(item.runId)) continue;
+      if (itemNativeId) seenNativeTaskIds.add(itemNativeId);
+      subagentCount += 1;
     }
   }
 
@@ -1549,13 +1892,15 @@ export function deriveSessionTelemetryDetail(
   const distinctSampledModels: string[] = [];
   let latestSampledModelId: string | null = null;
 
-  const recordSampledModel = (modelId: string | null | undefined) => {
+  const recordSampledModel = (modelId: string | null | undefined, updateLatest = true) => {
     const cleaned = modelId ? unwrapUsageModelSlug(modelId) : "";
     if (!cleaned || cleaned === "unknown") return;
     if (!distinctSampledModels.includes(cleaned)) {
       distinctSampledModels.push(cleaned);
     }
-    latestSampledModelId = cleaned;
+    if (updateLatest) {
+      latestSampledModelId = cleaned;
+    }
   };
 
   for (const turn of turns) {
@@ -1664,7 +2009,7 @@ export function deriveSessionTelemetryDetail(
     const rawInput = nonNegInt(
       activeContextWindow.lastInputTokens ?? activeContextWindow.inputTokens,
     );
-    const uncached = Math.max(0, rawInput - cached);
+    const split = splitPromptInputTokens(rawInput, cached, 0);
     const output = nonNegInt(
       activeContextWindow.lastOutputTokens ?? activeContextWindow.outputTokens,
     );
@@ -1677,11 +2022,11 @@ export function deriveSessionTelemetryDetail(
     const fallbackTotal = Math.max(
       nonNegInt(activeContextWindow.totalProcessedTokens),
       nonNegInt(activeContextWindow.usedTokens),
-      uncached + cached + output,
+      split.uncached + split.cached + output,
     );
     if (fallbackTotal > 0) {
-      totalUncached = uncached;
-      totalCached = cached;
+      totalUncached = split.uncached;
+      totalCached = split.cached;
       totalOutput = output;
       totalReasoning = reasoning;
       sessionTotalTokens = fallbackTotal;
@@ -1699,6 +2044,38 @@ export function deriveSessionTelemetryDetail(
         tpsSum += ctxTps;
         tpsSampleCount += 1;
       }
+    }
+  }
+
+  // Merge subagent model tokens into multi-model distribution (without overwriting root's latestSampledModelId).
+  for (const [subModelId, subModelTokens] of subagentTokensByModel) {
+    if (subModelTokens <= 0) continue;
+    tokensByModel.set(subModelId, (tokensByModel.get(subModelId) ?? 0) + subModelTokens);
+    recordSampledModel(subModelId, false);
+  }
+  // When native subagents report an explicit model and usage arrived via `otherUsage`
+  // (no child projection turns), attribute that native `otherUsage` to the native subagent's model.
+  const unmeasuredNativeOtherTokens =
+    unmeasuredNativeSubagentCount > 0
+      ? otherUsageTotal
+      : Math.max(0, otherUsageTotal - nativeChildProjectionTokens);
+  if (unmeasuredNativeOtherTokens > 0) {
+    const explicitNativeModels: string[] = [];
+    for (const sub of subagents) {
+      if (sub.origin !== "provider_native") continue;
+      if (sub.childThreadId && measuredSubagentChildThreadIds.includes(sub.childThreadId)) continue;
+      const cleaned = sub.model ? unwrapUsageModelSlug(sub.model) : "";
+      if (cleaned && cleaned !== "unknown" && !explicitNativeModels.includes(cleaned)) {
+        explicitNativeModels.push(cleaned);
+      }
+    }
+    if (explicitNativeModels.length === 1) {
+      const nativeModel = explicitNativeModels[0]!;
+      tokensByModel.set(
+        nativeModel,
+        (tokensByModel.get(nativeModel) ?? 0) + unmeasuredNativeOtherTokens,
+      );
+      recordSampledModel(nativeModel, false);
     }
   }
 
@@ -1738,8 +2115,12 @@ export function deriveSessionTelemetryDetail(
   }
 
   const effectiveSubagentCount = subagentCount > 0 ? subagentCount : turnsWithSubagents;
+  const effectiveNativeSubagentTokens =
+    unmeasuredNativeSubagentCount > 0
+      ? Math.max(otherUsageTotal, nativeWorkflowTokens) + nativeChildProjectionTokens
+      : Math.max(otherUsageTotal, nativeWorkflowTokens, nativeChildProjectionTokens);
   const subagentTotalTokens =
-    Math.max(otherUsageTotal, nativeWorkflowTokens) + appOwnedSubagentTokens;
+    effectiveNativeSubagentTokens + appOwnedSubagentTokens + descendantOnlySubagentTokens;
 
   const steps = Math.max(
     stepItemCount + workflowToolCalls,
@@ -1758,7 +2139,11 @@ export function deriveSessionTelemetryDetail(
   const avgTtftMs = ttftSampleCount > 0 ? ttftSum / ttftSampleCount : null;
   const textOutputTokens = Math.max(0, totalOutput - totalReasoning);
   const effectiveUncachedInput = totalUncached + totalCacheCreate;
-  const cacheHitRate = computeCacheHitRate(totalUncached, totalCached, totalCacheCreate);
+  const cacheHitRate = computeCacheHitRate(
+    totalUncached + subagentUncached,
+    totalCached + subagentCached,
+    totalCacheCreate + subagentCacheCreate,
+  );
   const modelDistribution = buildModelDistribution(tokensByModel, providerStatuses, activeProvider);
 
   const latestSampledModelDisplayName = latestSampledModelId
@@ -1793,6 +2178,13 @@ export function deriveSessionTelemetryDetail(
     subagentCount: effectiveSubagentCount,
     subagentTotalTokens,
     subagentChildThreadIds,
+    measuredSubagentChildThreadIds,
+    subagentNativeSessionIds,
+    unmeasuredSubagentMatchIds,
+    subagentUncachedInputTokens: subagentUncached,
+    subagentCachedInputTokens: subagentCached,
+    subagentCacheCreationTokens: subagentCacheCreate,
+    subagentOutputTokens: subagentOutput,
     aggregatedTaskTotalTokens: sessionTotalTokens + subagentTotalTokens,
     modelDistribution,
     distinctSampledModels,
@@ -1942,13 +2334,35 @@ export function resolveSessionTelemetryDisplay(
     }
   }
 
-  // Child-thread logs for app-owned subagents belonging to THIS session
-  let childThreadSubagentTokens = 0;
-  const subagentChildSet = new Set(detail?.subagentChildThreadIds ?? []);
+  // Child-thread logs for subagents belonging to THIS session that did NOT already supply
+  // measured tokens via hydrated child thread projections (prevents double counting while
+  // matching both Prismux childThreadId and native provider sessionId).
+  let fallbackChildLogTokens = 0;
+  let fallbackChildLogUncached = 0;
+  let fallbackChildLogCached = 0;
+  let fallbackChildLogCacheCreate = 0;
+  const fallbackChildLogTokensByModel = new Map<string, number>();
+  const hasExplicitUnmeasuredIds = detail?.unmeasuredSubagentMatchIds !== undefined;
+  const subagentChildSet = new Set(
+    hasExplicitUnmeasuredIds
+      ? detail.unmeasuredSubagentMatchIds
+      : [...(detail?.subagentChildThreadIds ?? []), ...(detail?.subagentNativeSessionIds ?? [])],
+  );
   if (subagentChildSet.size > 0) {
     for (const log of callLogs) {
       if (log.threadId && subagentChildSet.has(log.threadId)) {
-        childThreadSubagentTokens += nonNegInt(log.totalTokens);
+        const logTok = nonNegInt(log.totalTokens);
+        fallbackChildLogTokens += logTok;
+        fallbackChildLogUncached += nonNegInt(log.inputTokens);
+        fallbackChildLogCached += nonNegInt(log.cachedInputTokens);
+        fallbackChildLogCacheCreate += nonNegInt(log.cacheCreationTokens);
+        const childModel = unwrapUsageModelSlug(log.model);
+        if (childModel && childModel !== "unknown" && logTok > 0) {
+          fallbackChildLogTokensByModel.set(
+            childModel,
+            (fallbackChildLogTokensByModel.get(childModel) ?? 0) + logTok,
+          );
+        }
       }
     }
   }
@@ -1972,9 +2386,10 @@ export function resolveSessionTelemetryDisplay(
       : null;
   const contextPercent = live?.contextPercent ?? derivedContextPercent;
 
-  // Choose authoritative current-session token source (detail > threadLogs > live > contextWindow)
-  const useDetailTokens =
-    (detail?.sessionTotalTokens ?? 0) >= logTotalTokens && (detail?.sessionTotalTokens ?? 0) > 0;
+  // Choose authoritative current-session token source (detail > threadLogs > live > contextWindow).
+  // Authoritative `detail` (derived from `serverProjection.providerTurns`) MUST NOT be overridden
+  // by stale or duplicated `threadLogs`.
+  const useDetailTokens = (detail?.sessionTotalTokens ?? 0) > 0;
   const contextWindowFallbackTotal = contextWindow
     ? Math.max(nonNegInt(contextWindow.totalProcessedTokens), nonNegInt(contextWindow.usedTokens))
     : 0;
@@ -1992,14 +2407,29 @@ export function resolveSessionTelemetryDisplay(
     outputTokens = detail.outputTokens;
     reasoningOutputTokens = detail.reasoningOutputTokens;
     sessionTotalTokens = detail.sessionTotalTokens;
-    cacheHitRate = detail.cacheHitRate;
+    if (fallbackChildLogUncached + fallbackChildLogCached + fallbackChildLogCacheCreate > 0) {
+      const rootRawUncached = Math.max(0, detail.uncachedInputTokens - detail.cacheCreationTokens);
+      cacheHitRate = computeCacheHitRate(
+        rootRawUncached + (detail.subagentUncachedInputTokens ?? 0) + fallbackChildLogUncached,
+        detail.cachedInputTokens + (detail.subagentCachedInputTokens ?? 0) + fallbackChildLogCached,
+        detail.cacheCreationTokens +
+          (detail.subagentCacheCreationTokens ?? 0) +
+          fallbackChildLogCacheCreate,
+      );
+    } else {
+      cacheHitRate = detail.cacheHitRate;
+    }
   } else if (logTotalTokens > 0) {
     uncachedInputTokens = logUncached + logCacheCreate;
     cachedInputTokens = logCached;
     outputTokens = logOutput;
     reasoningOutputTokens = logReasoning;
     sessionTotalTokens = logTotalTokens;
-    cacheHitRate = computeCacheHitRate(logUncached, logCached, logCacheCreate);
+    cacheHitRate = computeCacheHitRate(
+      logUncached + fallbackChildLogUncached,
+      logCached + fallbackChildLogCached,
+      logCacheCreate + fallbackChildLogCacheCreate,
+    );
   } else if (live && Math.max(live.sessionTotalTokens, live.totalTokens) > 0) {
     uncachedInputTokens = live.inputTokens + live.cacheCreationTokens;
     cachedInputTokens = live.cachedInputTokens;
@@ -2014,18 +2444,18 @@ export function resolveSessionTelemetryDisplay(
       contextWindow.lastCachedInputTokens ?? contextWindow.cachedInputTokens,
     );
     const rawInput = nonNegInt(contextWindow.lastInputTokens ?? contextWindow.inputTokens);
-    const uncached = Math.max(0, rawInput - cached);
+    const split = splitPromptInputTokens(rawInput, cached, 0);
     const output = nonNegInt(contextWindow.lastOutputTokens ?? contextWindow.outputTokens);
     const reasoning = Math.min(
       output,
       nonNegInt(contextWindow.lastReasoningOutputTokens ?? contextWindow.reasoningOutputTokens),
     );
-    uncachedInputTokens = uncached;
-    cachedInputTokens = cached;
+    uncachedInputTokens = split.uncached;
+    cachedInputTokens = split.cached;
     outputTokens = output;
     reasoningOutputTokens = reasoning;
     sessionTotalTokens = contextWindowFallbackTotal;
-    cacheHitRate = computeCacheHitRate(uncached, cached, 0);
+    cacheHitRate = computeCacheHitRate(split.uncached, split.cached, 0);
   }
 
   const textOutputTokens = Math.max(0, outputTokens - reasoningOutputTokens);
@@ -2066,16 +2496,40 @@ export function resolveSessionTelemetryDisplay(
 
   // Subagents & aggregated task tokens
   const subagentCount = detail?.subagentCount ?? 0;
-  const subagentTotalTokens = Math.max(detail?.subagentTotalTokens ?? 0, childThreadSubagentTokens);
+  const subagentTotalTokens = hasExplicitUnmeasuredIds
+    ? (detail?.subagentTotalTokens ?? 0) + fallbackChildLogTokens
+    : Math.max(detail?.subagentTotalTokens ?? 0, fallbackChildLogTokens);
   const aggregatedTaskTotalTokens = sessionTotalTokens + subagentTotalTokens;
 
-  // Multi-model distribution (strictly current session)
+  // Multi-model distribution (strictly current session + participating subagent models)
   let modelDistribution: readonly SessionModelDistributionEntry[] = [];
   if (detail && detail.modelDistribution.length > 0) {
-    modelDistribution = detail.modelDistribution;
-  } else if (logTokensByModel.size > 0) {
+    if (fallbackChildLogTokensByModel.size > 0) {
+      const mergedModelTokens = new Map<string, number>();
+      for (const entry of detail.modelDistribution) {
+        mergedModelTokens.set(entry.modelId, entry.totalTokens);
+      }
+      for (const [childModel, childTokens] of fallbackChildLogTokensByModel) {
+        mergedModelTokens.set(childModel, (mergedModelTokens.get(childModel) ?? 0) + childTokens);
+      }
+      modelDistribution = buildModelDistribution(
+        mergedModelTokens,
+        providerStatuses,
+        live?.provider ?? selectedProvider,
+      );
+    } else {
+      modelDistribution = detail.modelDistribution;
+    }
+  } else if (logTokensByModel.size > 0 || fallbackChildLogTokensByModel.size > 0) {
+    const mergedLogModelTokens = new Map<string, number>(logTokensByModel);
+    for (const [childModel, childTokens] of fallbackChildLogTokensByModel) {
+      mergedLogModelTokens.set(
+        childModel,
+        (mergedLogModelTokens.get(childModel) ?? 0) + childTokens,
+      );
+    }
     modelDistribution = buildModelDistribution(
-      logTokensByModel,
+      mergedLogModelTokens,
       providerStatuses,
       live?.provider ?? selectedProvider,
     );

@@ -135,6 +135,7 @@ export function resolveTurnUsageByRunId(
   const accByRunId = new Map<RunId, MutableTurnUsageAccumulator>();
 
   for (const turn of providerTurns) {
+    if ((turn as { readonly promptDropped?: unknown }).promptDropped === true) continue;
     const attempt =
       (turn.runAttemptId ? attemptById.get(turn.runAttemptId) : undefined) ??
       attemptByProviderTurnId.get(turn.id);

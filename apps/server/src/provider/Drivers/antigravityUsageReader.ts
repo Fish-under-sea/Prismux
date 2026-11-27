@@ -426,9 +426,7 @@ const readDatabase = Effect.fn("readDatabase")(function* (
     }
     let stepHasTypeColumn = false;
     if (tables.has("steps")) {
-      const stepColumns = yield* sql.unsafe<{ readonly name: unknown }>(
-        "PRAGMA table_info(steps)",
-      );
+      const stepColumns = yield* sql.unsafe<{ readonly name: unknown }>("PRAGMA table_info(steps)");
       stepHasTypeColumn = stepColumns.some((column) => column.name === "step_type");
     }
     const steps = tables.has("steps")
@@ -732,7 +730,10 @@ export const readAntigravityUsage = Effect.fn("readAntigravityUsage")(function* 
       );
     const { stat, part } = yield* fingerprintOf(path);
     const wal = yield* fingerprintOf(`${path}-wal`).pipe(Effect.option);
-    const effectiveMtimeMs = Math.max(stat.mtimeMs, wal._tag === "Some" ? wal.value.stat.mtimeMs : 0);
+    const effectiveMtimeMs = Math.max(
+      stat.mtimeMs,
+      wal._tag === "Some" ? wal.value.stat.mtimeMs : 0,
+    );
     if (sinceMs > 0 && effectiveMtimeMs + ANTIGRAVITY_MTIME_SLACK_MS < sinceMs) {
       return null;
     }
@@ -741,7 +742,9 @@ export const readAntigravityUsage = Effect.fn("readAntigravityUsage")(function* 
     if (cached?.fingerprint === fingerprint) return cached.data;
     const data = yield* readDatabase(path, pathService.basename(path, ".db"), stat.mtimeMs).pipe(
       NodeSqliteClient.readOnly,
-      Effect.provide(NodeSqliteClient.layer({ filename: path, readonly: true, readerWorker: true })),
+      Effect.provide(
+        NodeSqliteClient.layer({ filename: path, readonly: true, readerWorker: true }),
+      ),
     );
     cache?.set(canonical, { fingerprint, data });
     return data;
@@ -822,3 +825,136 @@ export const readAntigravityUsage = Effect.fn("readAntigravityUsage")(function* 
   }
   return { files, errors };
 });
+
+export interface AntigravityConversationUsageTotals {
+  readonly inputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly cacheCreationTokens: number;
+  readonly outputTokens: number;
+  readonly reasoningTokens: number;
+  readonly models: ReadonlyArray<string>;
+}
+
+/**
+ * Strictly read-only summary of one Antigravity conversation SQLite DB
+ * (`<profile>/antigravity-acp/conversations/<conversationId>.db`), reusing the
+ * exact protobuf decoder & deduplication rules of `readAntigravityUsage`.
+ */
+export const readAntigravityConversationUsage = Effect.fn("readAntigravityConversationUsage")(
+  function* (
+    databasePath: string,
+  ): Effect.fn.Return<AntigravityConversationUsageTotals | null, never, Path.Path> {
+    const pathService = yield* Path.Path;
+    const sessionId = pathService.basename(databasePath, ".db");
+    const data = yield* readDatabase(databasePath, sessionId, 0).pipe(
+      NodeSqliteClient.readOnly,
+      Effect.provide(
+        NodeSqliteClient.layer({ filename: databasePath, readonly: true, readerWorker: true }),
+      ),
+      Effect.orElseSucceed(() => null),
+    );
+    if (data === null || data.candidates.length === 0) return null;
+
+    const identities = new Map<string, number>();
+    const groups: Array<UsageCandidate & { parent: number; size: number; owner: number }> = [];
+    const find = (index: number): number => {
+      let root = index;
+      while (groups[root]!.parent !== root) root = groups[root]!.parent;
+      while (index !== root) {
+        const parent = groups[index]!.parent;
+        groups[index]!.parent = root;
+        index = parent;
+      }
+      return root;
+    };
+    const merge = (left: number, right: number): number => {
+      let a = find(left);
+      let b = find(right);
+      if (a === b) return a;
+      if (groups[a]!.size < groups[b]!.size) [a, b] = [b, a];
+      const target = groups[a]!;
+      const source = groups[b]!;
+      const first = target.owner < source.owner ? target : source;
+      const bestModel =
+        source.modelQuality === target.modelQuality
+          ? first
+          : source.modelQuality > target.modelQuality
+            ? source
+            : target;
+      const x = target.record.totals;
+      const y = source.record.totals;
+      target.record = {
+        ...first.record,
+        model: bestModel.record.model,
+        totals: {
+          uncachedInputTokens: Math.max(x.uncachedInputTokens, y.uncachedInputTokens),
+          cachedInputTokens: Math.max(x.cachedInputTokens, y.cachedInputTokens),
+          cacheCreationTokens: Math.max(x.cacheCreationTokens, y.cacheCreationTokens),
+          outputTokens: Math.max(x.outputTokens, y.outputTokens),
+          reasoningTokens: Math.max(x.reasoningTokens, y.reasoningTokens),
+        },
+      };
+      target.modelQuality = bestModel.modelQuality;
+      target.owner = first.owner;
+      target.size += source.size;
+      source.parent = a;
+      return a;
+    };
+
+    for (const candidate of data.candidates) {
+      const learned = data.models.get(candidate.modelId);
+      const fallback = learned === null ? undefined : MODEL_IDS[candidate.modelId];
+      const model =
+        (candidate.modelQuality === 4 ? candidate.record.model : "") ||
+        learned ||
+        fallback ||
+        candidate.record.model ||
+        "";
+      const index = groups.length;
+      groups.push({
+        ...candidate,
+        record: { ...candidate.record, model },
+        modelQuality:
+          candidate.modelQuality === 4 ? 4 : learned ? 3 : fallback ? 2 : candidate.modelQuality,
+        parent: index,
+        size: 1,
+        owner: index,
+      });
+      for (const key of candidate.keys) {
+        const existing = identities.get(key);
+        if (existing !== undefined) merge(index, existing);
+        identities.set(key, index);
+      }
+    }
+
+    let uncached = 0;
+    let cached = 0;
+    let cacheCreate = 0;
+    let output = 0;
+    let reasoning = 0;
+    const models: Array<string> = [];
+    for (const [index, group] of groups.entries()) {
+      if (group.parent !== index) continue;
+      const t = group.record.totals;
+      uncached += t.uncachedInputTokens;
+      cached += t.cachedInputTokens;
+      cacheCreate += t.cacheCreationTokens;
+      output += t.outputTokens;
+      reasoning += t.reasoningTokens;
+      const resolvedModel = group.record.model.trim();
+      if (resolvedModel.length > 0 && !models.includes(resolvedModel)) {
+        models.push(resolvedModel);
+      }
+    }
+    const inputTokens = uncached + cached + cacheCreate;
+    if (inputTokens + output === 0) return null;
+    return {
+      inputTokens,
+      cachedInputTokens: cached,
+      cacheCreationTokens: cacheCreate,
+      outputTokens: output,
+      reasoningTokens: reasoning,
+      models,
+    };
+  },
+);

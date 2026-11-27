@@ -1,10 +1,22 @@
 import type { ContextWindowSnapshot } from "@prismux/client-runtime/state/context-window";
 import type { ThreadStructure } from "@prismux/client-runtime/state/models";
-import type { OrchestrationV2ProviderTurn, ServerProvider } from "@prismux/core-contracts";
+import type {
+  EnvironmentThreadShell,
+  EnvironmentThreadStructure,
+} from "@prismux/client-runtime/state/shell";
+import type {
+  EnvironmentId,
+  OrchestrationV2ProviderTurn,
+  ScopedThreadRef,
+  ServerProvider,
+  ThreadId,
+} from "@prismux/core-contracts";
 import * as DateTime from "effect/DateTime";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { resolveAgentBrandId } from "../../prismux/agentBrand";
+import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { environmentThreadDetails, environmentThreadShells } from "../../state/threads";
 import {
   clampTtftToDuration,
   computeCacheHitRate,
@@ -22,11 +34,14 @@ import {
   extractTurnUsageDetail,
   publishSessionTelemetryDetail,
   retainSessionTelemetryDetailOwner,
+  splitPromptInputTokens,
   type SessionProjectionLike,
+  type SubagentThreadTelemetryInput,
 } from "./sessionTelemetry.logic";
 
 const MIN_STREAMING_TPS_ELAPSED_MS = 200;
 export const MAX_TRACKED_TURNS_PER_THREAD = 200;
+const MAX_SUBSCRIBED_DESCENDANT_THREADS = 64;
 
 function setBoundedMapEntry<K, V>(map: Map<K, V>, key: K, value: V, maxEntries: number): void {
   if (map.has(key)) {
@@ -99,17 +114,18 @@ export function extractProviderTurnTokenCounts(
 
   const finalUsage = turn.turnTokenUsage;
   if (finalUsage && finalUsage.usageStatus !== "unavailable") {
-    const cached = nonNegInt(finalUsage.cachedInputTokens);
-    const cacheCreate = nonNegInt(finalUsage.cacheCreationTokens);
-    const rawInput = nonNegInt(finalUsage.inputTokens);
-    const uncached = Math.max(0, rawInput - cached - cacheCreate);
+    const split = splitPromptInputTokens(
+      nonNegInt(finalUsage.inputTokens),
+      nonNegInt(finalUsage.cachedInputTokens),
+      nonNegInt(finalUsage.cacheCreationTokens),
+    );
     const output = nonNegInt(finalUsage.outputTokens);
-    const total = uncached + cached + cacheCreate + output;
+    const total = split.uncached + split.cached + split.cacheCreate + output;
     if (total > 0) {
       return {
-        uncachedInputTokens: uncached,
-        cachedInputTokens: cached,
-        cacheCreationTokens: cacheCreate,
+        uncachedInputTokens: split.uncached,
+        cachedInputTokens: split.cached,
+        cacheCreationTokens: split.cacheCreate,
         outputTokens: output,
         totalTokens: total,
         hasMeasuredTokens: true,
@@ -122,21 +138,20 @@ export function extractProviderTurnTokenCounts(
     const cached = nonNegInt(liveUsage.cachedInputTokens);
     const cacheCreate = nonNegInt(liveUsage.cacheCreationTokens);
     const rawInput = nonNegInt(liveUsage.inputTokens);
-    const uncached = Math.max(0, rawInput - cached - cacheCreate);
     const output = nonNegInt(liveUsage.outputTokens);
-    const total = Math.max(
-      nonNegInt(liveUsage.usedTokens),
-      uncached + cached + cacheCreate + output,
-    );
-    if (total > 0) {
-      return {
-        uncachedInputTokens: uncached,
-        cachedInputTokens: cached,
-        cacheCreationTokens: cacheCreate,
-        outputTokens: output,
-        totalTokens: total,
-        hasMeasuredTokens: true,
-      };
+    if (rawInput + cached + cacheCreate + output > 0) {
+      const split = splitPromptInputTokens(rawInput, cached, cacheCreate);
+      const total = split.uncached + split.cached + split.cacheCreate + output;
+      if (total > 0) {
+        return {
+          uncachedInputTokens: split.uncached,
+          cachedInputTokens: split.cached,
+          cacheCreationTokens: split.cacheCreate,
+          outputTokens: output,
+          totalTokens: total,
+          hasMeasuredTokens: true,
+        };
+      }
     }
   }
 
@@ -375,15 +390,18 @@ export function deriveSessionTelemetryFromProjection(input: {
     const rawInput = nonNegInt(
       activeContextWindow.lastInputTokens ?? activeContextWindow.inputTokens,
     );
-    const uncached = Math.max(0, rawInput - cached);
+    const split = splitPromptInputTokens(rawInput, cached, 0);
     const output = nonNegInt(
       activeContextWindow.lastOutputTokens ?? activeContextWindow.outputTokens,
     );
-    const total = Math.max(nonNegInt(activeContextWindow.usedTokens), uncached + cached + output);
+    const total = Math.max(
+      nonNegInt(activeContextWindow.usedTokens),
+      split.uncached + split.cached + output,
+    );
     if (total > 0) {
       latestTokens = {
-        uncachedInputTokens: uncached,
-        cachedInputTokens: cached,
+        uncachedInputTokens: split.uncached,
+        cachedInputTokens: split.cached,
         cacheCreationTokens: 0,
         outputTokens: output,
         totalTokens: total,
@@ -394,8 +412,8 @@ export function deriveSessionTelemetryFromProjection(input: {
         nonNegInt(activeContextWindow.totalProcessedTokens),
         total,
       );
-      totalUncached = Math.max(totalUncached, uncached);
-      totalCached = Math.max(totalCached, cached);
+      totalUncached = Math.max(totalUncached, split.uncached);
+      totalCached = Math.max(totalCached, split.cached);
     }
     if (latestTps === null && output > 0 && activeContextWindow.durationMs) {
       latestTps = computeOutputTps(output, activeContextWindow.durationMs, null);
@@ -443,6 +461,177 @@ export interface UseSessionCallTelemetryInput {
   readonly activeWorkStartedAt: unknown;
 }
 
+export interface DiscoveredDescendantThreadRef {
+  readonly key: string;
+  readonly ref: ScopedThreadRef;
+  readonly shell: EnvironmentThreadShell | null;
+}
+
+function threadRefKey(environmentId: EnvironmentId, threadId: ThreadId): string {
+  return `${environmentId}\0${threadId}`;
+}
+
+/**
+ * Pure multi-level recursive discovery of all descendant subagent threads belonging to
+ * `threadId` (covering Prismux MCP/Swarm/server/provider child threads, ACP child threads,
+ * remote linked child threads, and native subagent child threads). Never includes `threadId`
+ * itself or manual user-created forks without delegation lineage.
+ */
+export function collectDescendantThreadRefs(input: {
+  readonly threadId: string;
+  readonly serverProjection: SessionProjectionLike | null;
+  readonly allThreadShells: ReadonlyArray<EnvironmentThreadShell>;
+  readonly hydratedProjections?: ReadonlyMap<string, SessionProjectionLike | null> | undefined;
+}): ReadonlyArray<DiscoveredDescendantThreadRef> {
+  const { threadId, serverProjection, allThreadShells, hydratedProjections } = input;
+  if (!threadId) return [];
+
+  const shellByThreadId = new Map<string, EnvironmentThreadShell>();
+  for (const shell of allThreadShells) {
+    if (!shellByThreadId.has(shell.id)) {
+      shellByThreadId.set(shell.id, shell);
+    }
+  }
+  const activeShell = shellByThreadId.get(threadId) ?? null;
+  const activeEnvironmentId: EnvironmentId | null =
+    activeShell?.environmentId ??
+    (allThreadShells.length > 0 ? allThreadShells[0]!.environmentId : null);
+
+  const discovered = new Map<string, DiscoveredDescendantThreadRef>();
+  const visitedThreadIds = new Set<string>([threadId]);
+  const queue: string[] = [threadId];
+
+  const enqueueChild = (childId: string | null | undefined, envOverride?: EnvironmentId | null) => {
+    const trimmed = childId?.trim();
+    if (!trimmed || visitedThreadIds.has(trimmed)) return;
+    if (discovered.size >= MAX_SUBSCRIBED_DESCENDANT_THREADS) return;
+    const shell = shellByThreadId.get(trimmed) ?? null;
+    const environmentId = envOverride ?? shell?.environmentId ?? activeEnvironmentId;
+    if (environmentId === null) return;
+    visitedThreadIds.add(trimmed);
+    const ref: ScopedThreadRef = {
+      environmentId,
+      threadId: trimmed as ThreadId,
+    };
+    const key = threadRefKey(ref.environmentId, ref.threadId);
+    discovered.set(key, { key, ref, shell });
+    queue.push(trimmed);
+  };
+
+  const enqueueFromProjection = (projection: SessionProjectionLike | null | undefined) => {
+    if (!projection) return;
+    for (const sub of projection.subagents ?? []) {
+      if (sub.childThreadId) {
+        enqueueChild(sub.childThreadId);
+      }
+      if (sub.remoteChild) {
+        enqueueChild(sub.remoteChild.threadId, sub.remoteChild.environmentId);
+      }
+      for (const agent of sub.workflow?.agents ?? []) {
+        if (agent.childThreadId) {
+          enqueueChild(agent.childThreadId);
+        }
+      }
+    }
+    const items =
+      projection.turnItems && projection.turnItems.length > 0
+        ? projection.turnItems
+        : (projection.visibleTurnItems ?? []).map((entry) => entry.item);
+    for (const item of items) {
+      if (item.type === "subagent" && item.childThreadId) {
+        enqueueChild(item.childThreadId);
+      } else if (item.type === "notification") {
+        const sourceChildId = (
+          item as { readonly source?: { readonly childThreadId?: string | null } }
+        ).source?.childThreadId;
+        if (sourceChildId) {
+          enqueueChild(sourceChildId);
+        }
+      }
+    }
+  };
+
+  enqueueFromProjection(serverProjection);
+
+  let cursor = 0;
+  while (cursor < queue.length && discovered.size < MAX_SUBSCRIBED_DESCENDANT_THREADS) {
+    const parentId = queue[cursor]!;
+    cursor += 1;
+
+    for (const shell of allThreadShells) {
+      if (visitedThreadIds.has(shell.id)) continue;
+      const isFork = shell.lineage.relationshipToParent === "fork" && shell.delegatedFrom === null;
+      if (isFork) continue;
+      const isDirectChild =
+        shell.lineage.parentThreadId === parentId || shell.delegatedFrom?.threadId === parentId;
+      const isRootDescendant =
+        parentId === threadId &&
+        shell.lineage.rootThreadId === threadId &&
+        (shell.lineage.relationshipToParent === "subagent" ||
+          shell.lineage.parentThreadId !== null ||
+          shell.delegatedFrom !== null);
+      if (isDirectChild || isRootDescendant) {
+        enqueueChild(shell.id, shell.environmentId);
+      }
+    }
+
+    if (parentId !== threadId && hydratedProjections) {
+      const childProj = hydratedProjections.get(parentId);
+      if (childProj) {
+        enqueueFromProjection(childProj);
+      }
+    }
+  }
+
+  return Array.from(discovered.values());
+}
+
+function fingerprintChildThreadStructure(value: EnvironmentThreadStructure | null): string {
+  if (value === null) return "null";
+  const proj = value.projection;
+  const turns = proj.providerTurns ?? [];
+  const providerThreads = proj.providerThreads ?? [];
+  const subagents = proj.subagents ?? [];
+  const parts: string[] = [String(turns.length), String(subagents.length)];
+  for (const turn of turns) {
+    const u = turn.turnTokenUsage;
+    const live = turn.tokenUsage;
+    parts.push(
+      [
+        turn.id,
+        turn.status,
+        turn.model ?? "",
+        u?.usageStatus ?? "",
+        u?.inputTokens ?? "",
+        u?.cachedInputTokens ?? "",
+        u?.cacheCreationTokens ?? "",
+        u?.outputTokens ?? "",
+        u?.otherUsage?.inputTokens ?? "",
+        u?.otherUsage?.outputTokens ?? "",
+        live?.inputTokens ?? "",
+        live?.cachedInputTokens ?? "",
+        live?.outputTokens ?? "",
+      ].join(":"),
+    );
+  }
+  for (const pt of providerThreads) {
+    parts.push(
+      [
+        pt.id,
+        pt.nativeThreadRef?.nativeId ?? "",
+        pt.contextUsage?.usedTokens ?? "",
+        pt.contextUsage?.inputTokens ?? "",
+        pt.contextUsage?.cachedInputTokens ?? "",
+        pt.contextUsage?.outputTokens ?? "",
+      ].join(":"),
+    );
+  }
+  for (const sub of subagents) {
+    parts.push(`${sub.id}:${sub.childThreadId ?? ""}:${sub.status}`);
+  }
+  return parts.join("|");
+}
+
 /**
  * Observes real local session streaming & turn completion in `ChatView` and writes measured
  * TTFT, output TPS, input/cached/cache-write/output tokens, and context % to
@@ -469,6 +658,212 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
   const recordedTurnFingerprintsRef = useRef<Map<string, string>>(new Map());
   const lastLivePatchFingerprintRef = useRef<string | null>(null);
   const lastDetailFingerprintRef = useRef<string | null>(null);
+
+  // Zero-coupling subscription to all recursive descendant subagent threads (MCP/Swarm/ACP/native)
+  // via `environmentThreadShells` + `environmentThreadDetails` without touching `ChatView.tsx`.
+  const [descendantThreads, setDescendantThreads] = useState<
+    readonly SubagentThreadTelemetryInput[]
+  >([]);
+  const descendantSnapshotsRef = useRef<Map<string, SubagentThreadTelemetryInput>>(new Map());
+  const descendantProjectionByIdRef = useRef<Map<string, SessionProjectionLike | null>>(new Map());
+  const descendantShellsRef = useRef<ReadonlyArray<EnvironmentThreadShell>>([]);
+  const descendantSubsRef = useRef<
+    Map<
+      string,
+      {
+        readonly unsubscribe: () => void;
+        fingerprint: string;
+        shell: EnvironmentThreadShell | null;
+      }
+    >
+  >(new Map());
+  const subscribedParentThreadIdRef = useRef<string | null>(null);
+  const lastPublishedDescendantsFingerprintRef = useRef<string>("");
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- subscribes to descendant subagent thread detail atoms so unopened child threads stream real token/model usage into active session telemetry
+  useEffect(() => {
+    let disposed = false;
+    const childSubscriptions = descendantSubsRef.current;
+
+    const clearAllChildSubscriptions = () => {
+      for (const sub of childSubscriptions.values()) {
+        sub.unsubscribe();
+      }
+      childSubscriptions.clear();
+      descendantSnapshotsRef.current.clear();
+      descendantProjectionByIdRef.current.clear();
+    };
+
+    if (subscribedParentThreadIdRef.current !== threadId) {
+      subscribedParentThreadIdRef.current = threadId;
+      clearAllChildSubscriptions();
+      if (lastPublishedDescendantsFingerprintRef.current !== "") {
+        lastPublishedDescendantsFingerprintRef.current = "";
+        setDescendantThreads([]);
+      }
+    }
+
+    if (!threadId) return;
+
+    const publishIfChanged = () => {
+      if (disposed) return;
+      const entries = Array.from(descendantSnapshotsRef.current.values());
+      const combinedFp = entries
+        .map((entry) => {
+          const sub = Array.from(childSubscriptions.entries()).find(([key]) =>
+            key.endsWith(`\0${entry.threadId}`),
+          )?.[1];
+          return `${entry.threadId}:${entry.model ?? ""}:${sub?.fingerprint ?? ""}`;
+        })
+        .join("||");
+      if (combinedFp === lastPublishedDescendantsFingerprintRef.current) return;
+      lastPublishedDescendantsFingerprintRef.current = combinedFp;
+      setDescendantThreads(entries);
+    };
+
+    const syncDescendants = () => {
+      if (disposed) return;
+      const discovered = collectDescendantThreadRefs({
+        threadId,
+        serverProjection,
+        allThreadShells: descendantShellsRef.current,
+        hydratedProjections: descendantProjectionByIdRef.current,
+      });
+      const desiredKeys = new Set(discovered.map((entry) => entry.key));
+      let changed = false;
+
+      for (const [key, sub] of childSubscriptions) {
+        if (!desiredKeys.has(key)) {
+          sub.unsubscribe();
+          childSubscriptions.delete(key);
+          const removedId = key.split("\0")[1];
+          if (removedId) {
+            descendantSnapshotsRef.current.delete(removedId);
+            descendantProjectionByIdRef.current.delete(removedId);
+          }
+          changed = true;
+        }
+      }
+
+      for (const entry of discovered) {
+        const existing = childSubscriptions.get(entry.key);
+        if (existing) {
+          if (existing.shell !== entry.shell) {
+            existing.shell = entry.shell;
+            const current = descendantSnapshotsRef.current.get(entry.ref.threadId);
+            if (current) {
+              descendantSnapshotsRef.current.set(entry.ref.threadId, {
+                ...current,
+                parentThreadId: entry.shell?.lineage.parentThreadId ?? current.parentThreadId,
+                rootThreadId: entry.shell?.lineage.rootThreadId ?? current.rootThreadId,
+                model: entry.shell?.modelSelection.model ?? current.model,
+                provider: entry.shell?.modelSelection.instanceId ?? current.provider,
+              });
+              changed = true;
+            }
+          }
+          continue;
+        }
+
+        const atom = environmentThreadDetails.quietThreadAtom(entry.ref);
+        const applyValue = (
+          structure: EnvironmentThreadStructure | null,
+          recordRef: { fingerprint: string; shell: EnvironmentThreadShell | null },
+          allowResync: boolean,
+        ) => {
+          const nextFp = fingerprintChildThreadStructure(structure);
+          const prevFp = recordRef.fingerprint;
+          recordRef.fingerprint = nextFp;
+          const proj = structure?.projection ?? null;
+          descendantProjectionByIdRef.current.set(entry.ref.threadId, proj);
+          descendantSnapshotsRef.current.set(entry.ref.threadId, {
+            threadId: entry.ref.threadId,
+            parentThreadId:
+              recordRef.shell?.lineage.parentThreadId ??
+              proj?.thread?.lineage.parentThreadId ??
+              null,
+            rootThreadId:
+              recordRef.shell?.lineage.rootThreadId ?? proj?.thread?.lineage.rootThreadId ?? null,
+            creationSource: proj?.thread?.creationSource ?? null,
+            model:
+              recordRef.shell?.modelSelection.model ?? proj?.thread?.modelSelection.model ?? null,
+            provider:
+              recordRef.shell?.modelSelection.instanceId ??
+              proj?.thread?.modelSelection.instanceId ??
+              null,
+            projection: proj,
+          });
+          if (nextFp !== prevFp) {
+            if (allowResync && proj && (proj.subagents?.length ?? 0) > 0) {
+              syncDescendants();
+            }
+            publishIfChanged();
+          }
+        };
+
+        const holder: {
+          unsubscribe: () => void;
+          fingerprint: string;
+          shell: EnvironmentThreadShell | null;
+        } = {
+          unsubscribe: () => undefined,
+          fingerprint: "",
+          shell: entry.shell,
+        };
+        const initialStructure = appAtomRegistry.get(atom);
+        applyValue(initialStructure, holder, false);
+        holder.unsubscribe = appAtomRegistry.subscribe(atom, (nextStructure) => {
+          applyValue(nextStructure, holder, true);
+        });
+        childSubscriptions.set(entry.key, holder);
+        changed = true;
+      }
+
+      if (changed) {
+        publishIfChanged();
+      }
+    };
+
+    try {
+      descendantShellsRef.current = appAtomRegistry.get(environmentThreadShells.threadShellsAtom);
+    } catch {
+      descendantShellsRef.current = [];
+    }
+    syncDescendants();
+
+    let unsubscribeShells: () => void = () => undefined;
+    try {
+      unsubscribeShells = appAtomRegistry.subscribe(
+        environmentThreadShells.threadShellsAtom,
+        (nextShells) => {
+          descendantShellsRef.current = nextShells;
+          syncDescendants();
+        },
+      );
+    } catch {
+      unsubscribeShells = () => undefined;
+    }
+
+    return () => {
+      disposed = true;
+      unsubscribeShells();
+    };
+  }, [threadId, serverProjection]);
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- releases all descendant subagent atom subscriptions on unmount
+  useEffect(() => {
+    const childSubscriptions = descendantSubsRef.current;
+    const snapshots = descendantSnapshotsRef.current;
+    const projections = descendantProjectionByIdRef.current;
+    return () => {
+      for (const sub of childSubscriptions.values()) {
+        sub.unsubscribe();
+      }
+      childSubscriptions.clear();
+      snapshots.clear();
+      projections.clear();
+    };
+  }, []);
 
   // Release per-thread published telemetry detail when this thread view switches or unmounts (L10)
   // and clear per-thread turn timing/fingerprint maps on unmount (L12).
@@ -828,6 +1223,7 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
       turnTimingsById: turnTimingsByIdRef.current,
       activeLiveTps: streamingTps,
       activeLiveTtftMs: liveTtftMs,
+      descendantThreads,
       now,
     });
     const detailFingerprint = [
@@ -844,8 +1240,10 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
       detailSnapshot.reasoningOutputTokens,
       detailSnapshot.uncachedInputTokens,
       detailSnapshot.cachedInputTokens,
+      detailSnapshot.cacheCreationTokens,
       detailSnapshot.outputTokens,
       detailSnapshot.sessionTotalTokens,
+      detailSnapshot.cacheHitRate !== null ? detailSnapshot.cacheHitRate.toFixed(4) : "",
       detailSnapshot.subagentCount,
       detailSnapshot.subagentTotalTokens,
       detailSnapshot.modelDistribution.map((m) => `${m.modelId}:${m.totalTokens}`).join(","),
@@ -917,6 +1315,7 @@ export function useSessionCallTelemetry(input: UseSessionCallTelemetryInput): vo
   }, [
     activeContextWindow,
     activeWorkStartedAt,
+    descendantThreads,
     isWorking,
     model,
     provider,

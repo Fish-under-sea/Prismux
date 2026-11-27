@@ -820,3 +820,95 @@ export const readAntigravityChildrenAtWork = Effect.fn("readAntigravityChildrenA
     }).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
   },
 );
+
+export interface AntigravityChildConversationRef {
+  readonly conversationId: string;
+  readonly databasePath: string;
+}
+
+/**
+ * Discovers all native Antigravity subagent child conversation DBs launched by `rootSessionId`
+ * (both agy 1.5 detached `brain/<root>/.system_generated/subagents/*.json` records and legacy
+ * `INVOKE_SUBAGENT` steps in `conversations/<root>.db`), strictly read-only and path-verified.
+ */
+export const listAntigravityChildConversations = Effect.fn("listAntigravityChildConversations")(
+  function* (input: { readonly profileDirectory: string; readonly rootSessionId: string }) {
+    if (!NATIVE_ID.test(input.rootSessionId)) {
+      return [] as ReadonlyArray<AntigravityChildConversationRef>;
+    }
+    const discover = async (): Promise<ReadonlyArray<AntigravityChildConversationRef>> => {
+      const profileRoot = await antigravityProfileRoot(input.profileDirectory);
+      if (profileRoot === undefined) return [];
+      const childIds = new Set<string>();
+
+      const detached = await listDetachedChildIds(profileRoot, input.rootSessionId);
+      if (detached !== undefined) {
+        for (const id of detached) {
+          if (id !== input.rootSessionId && NATIVE_ID.test(id)) {
+            childIds.add(id);
+          }
+        }
+      }
+
+      const rootDbPath = (
+        await antigravityManagedPath(
+          profileRoot,
+          ["antigravity-acp", "conversations", `${input.rootSessionId}.db`],
+          "file",
+        )
+      )?.path;
+      if (rootDbPath !== undefined) {
+        let database: NodeSqlite.DatabaseSync | undefined;
+        try {
+          database = new NodeSqlite.DatabaseSync(rootDbPath, { readOnly: true });
+          let rows = 0;
+          let bytes = 0;
+          for (const row of database
+            .prepare(
+              "SELECT length(step_payload) AS size, CASE WHEN length(step_payload) <= ? THEN step_payload END AS step_payload FROM steps WHERE step_type = ? AND step_format = 0 ORDER BY idx",
+            )
+            .iterate(MAX_STEP_BYTES, INVOKE_SUBAGENT_STEP_TYPE)) {
+            const size =
+              row !== null && typeof row === "object" && "size" in row ? Number(row.size) : 0;
+            rows += 1;
+            bytes += size;
+            if (rows > MAX_INVOKE_ROWS || size > MAX_STEP_BYTES || bytes > MAX_SCAN_BYTES) break;
+            const payload = payloadOf(row);
+            const record = payload === undefined ? undefined : decodeInvokeRecord(payload);
+            if (record === undefined) continue;
+            for (const child of record.children) {
+              if (
+                child.conversationId !== input.rootSessionId &&
+                NATIVE_ID.test(child.conversationId)
+              ) {
+                childIds.add(child.conversationId);
+              }
+            }
+          }
+        } catch {
+          // Ignore unreadable or busy parent DB; detached records still apply.
+        } finally {
+          database?.close();
+        }
+      }
+
+      const refs: Array<AntigravityChildConversationRef> = [];
+      for (const conversationId of childIds) {
+        const dbFile = await antigravityManagedPath(
+          profileRoot,
+          ["antigravity-acp", "conversations", `${conversationId}.db`],
+          "file",
+        );
+        if (dbFile !== undefined) {
+          refs.push({ conversationId, databasePath: dbFile.path });
+        }
+        if (refs.length >= MAX_DETACHED_CHILDREN) break;
+      }
+      return refs;
+    };
+    return yield* Effect.tryPromise({
+      try: discover,
+      catch: (cause) => new AntigravityChildWorkReadError({ cause }),
+    }).pipe(Effect.orElseSucceed((): ReadonlyArray<AntigravityChildConversationRef> => []));
+  },
+);

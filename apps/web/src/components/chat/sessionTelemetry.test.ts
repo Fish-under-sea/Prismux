@@ -61,6 +61,7 @@ import {
   type SessionProjectionLike,
 } from "./sessionTelemetry.logic";
 import {
+  collectDescendantThreadRefs,
   deriveContextOccupancyPercent,
   deriveSessionTelemetryFromProjection,
   extractProviderTurnTokenCounts,
@@ -1489,5 +1490,485 @@ describe("Session telemetry aggregation, strict active-thread isolation & 3 inde
     });
     expect(detail.latestRequestTps).toBeCloseTo(242 / 3.83, 4);
     expect(detail.sessionTps).toBeCloseTo((128 + 242) / ((6_660 + 3_830) / 1_000), 4);
+  });
+
+  it("preserves accurate ~99% cache hit rate across inclusive/exclusive providers, ignores context-only liveUsage, and keeps authoritative detail over inflated callLogs", () => {
+    const engines = [
+      {
+        name: "openai-codex",
+        provider: "codex",
+        model: "gpt-5.4-codex",
+        turnTokenUsage: {
+          usageScope: "main_agent" as const,
+          hasSubagents: false,
+          usageStatus: "complete" as const,
+          inputTokens: 100_000,
+          cachedInputTokens: 99_000,
+          cacheCreationTokens: 0,
+          outputTokens: 500,
+        },
+        expectedRate: 0.99,
+      },
+      {
+        name: "antigravity-gemini",
+        provider: "antigravity",
+        model: "MODEL_PLACEHOLDER_M536",
+        turnTokenUsage: {
+          usageScope: "main_agent" as const,
+          hasSubagents: false,
+          usageStatus: "complete" as const,
+          inputTokens: 200_000,
+          cachedInputTokens: 198_000,
+          cacheCreationTokens: 0,
+          outputTokens: 800,
+        },
+        expectedRate: 0.99,
+      },
+      {
+        name: "dsh-acp",
+        provider: "dsh",
+        model: "group/deepseek",
+        turnTokenUsage: {
+          usageScope: "main_agent" as const,
+          hasSubagents: false,
+          usageStatus: "complete" as const,
+          inputTokens: 51_557,
+          cachedInputTokens: 51_200,
+          cacheCreationTokens: 0,
+          outputTokens: 189,
+        },
+        expectedRate: 51_200 / 51_557,
+      },
+      {
+        name: "claude-with-cache-creation",
+        provider: "claudeAgent",
+        model: "claude-sonnet-4-6",
+        turnTokenUsage: {
+          usageScope: "main_agent" as const,
+          hasSubagents: false,
+          usageStatus: "complete" as const,
+          inputTokens: 100_000,
+          cachedInputTokens: 90_000,
+          cacheCreationTokens: 9_000,
+          outputTokens: 600,
+        },
+        expectedRate: 0.9,
+      },
+    ];
+
+    for (const scenario of engines) {
+      const turn = makeProviderTurn({
+        id: `turn-${scenario.name}` as OrchestrationV2ProviderTurn["id"],
+        model: scenario.model,
+        turnTokenUsage: scenario.turnTokenUsage,
+      });
+      // Context-window-only live turn (usedTokens only, no directional counters) must NOT pollute totals/cache rate.
+      const contextOnlyTurn = makeProviderTurn({
+        id: `turn-ctx-only-${scenario.name}` as OrchestrationV2ProviderTurn["id"],
+        model: scenario.model,
+        tokenUsage: {
+          usedTokens: 180_000,
+          maxTokens: 512_000,
+          updatedAt: "2026-11-27T02:00:00.000Z",
+        },
+      });
+      const detail = deriveSessionTelemetryDetail({
+        threadId: `thread-${scenario.name}`,
+        serverProjection: {
+          runs: [makeRun("run-1", 1)],
+          providerTurns: [turn, contextOnlyTurn],
+          turnItems: [],
+          messages: [],
+          subagents: [],
+          nodes: [],
+        },
+        activeContextWindow: null,
+        activeProvider: scenario.provider,
+        activeModel: scenario.model,
+      });
+      expect(detail.cacheHitRate).toBeCloseTo(scenario.expectedRate, 4);
+      expect(detail.sessionTotalTokens).toBe(
+        scenario.turnTokenUsage.inputTokens + scenario.turnTokenUsage.outputTokens,
+      );
+
+      // Inflated/corrupted callLogs for the same thread must NOT override authoritative detail.
+      const display = resolveComposerTelemetryDisplay(null, null, {
+        threadId: `thread-${scenario.name}`,
+        detail,
+        callLogs: [
+          {
+            id: `stale-log-${scenario.name}`,
+            timestamp: 1_795_000_000_000,
+            threadId: `thread-${scenario.name}`,
+            provider: scenario.provider,
+            model: scenario.model,
+            ttftMs: null,
+            durationMs: 1_000,
+            tps: null,
+            inputTokens: 999_999,
+            cachedInputTokens: 0,
+            cacheCreationTokens: 0,
+            outputTokens: 100,
+            totalTokens: 1_000_099,
+            cacheHitRate: 0,
+            status: "completed",
+            source: "live",
+          },
+        ],
+      });
+      expect(display.cacheHitRate).toBeCloseTo(scenario.expectedRate, 4);
+      expect(display.totalTokens).toBe(detail.sessionTotalTokens);
+    }
+  });
+
+  it("aggregates native subagents, recursive MCP/Swarm delegated child threads, and ACP subagents into count, total tokens, multi-model distribution, and cache stats without double counting", () => {
+    const rootTurn = makeProviderTurn({
+      id: "turn-root-1" as OrchestrationV2ProviderTurn["id"],
+      model: "MODEL_PLACEHOLDER_M536",
+      turnTokenUsage: {
+        usageScope: "main_agent",
+        hasSubagents: true,
+        usageStatus: "complete",
+        inputTokens: 100_000,
+        cachedInputTokens: 99_000,
+        cacheCreationTokens: 0,
+        outputTokens: 1_000,
+        models: ["MODEL_PLACEHOLDER_M536"],
+        // Antigravity/Claude native subagent tokens reported in otherUsage
+        otherUsage: { inputTokens: 50_000, outputTokens: 500 },
+      },
+    });
+
+    const nativeSub = makeSubagent({
+      id: "sub-native-1" as OrchestrationV2Subagent["id"],
+      origin: "provider_native",
+      model: "claude-haiku-4-5",
+      nativeTaskRef: {
+        driver: "antigravity" as never,
+        nativeId: "native-call-1",
+        strength: "strong",
+      },
+    });
+
+    // Codex-style native subagent whose tokens live ONLY on its child thread projection
+    const codexNativeSub = makeSubagent({
+      id: "sub-codex-1" as OrchestrationV2Subagent["id"],
+      origin: "provider_native",
+      childThreadId: "child-codex-1" as unknown as OrchestrationV2Subagent["childThreadId"],
+    });
+
+    // ACP child thread delegated via Prismux MCP (not listed in parent.subagents!)
+    const acpDshChildProjection = {
+      providerThreads: [
+        {
+          id: "pt-dsh-child" as never,
+          driver: "acpRegistry" as never,
+          nativeThreadRef: { driver: "acpRegistry" as never, nativeId: "dsh-native-sess-9" },
+          contextUsage: null,
+        } as never,
+      ],
+      providerTurns: [
+        makeProviderTurn({
+          id: "turn-dsh-child-1" as OrchestrationV2ProviderTurn["id"],
+          model: '["magpie","group/deepseek"]',
+          turnTokenUsage: {
+            usageScope: "main_agent",
+            hasSubagents: false,
+            usageStatus: "complete",
+            inputTokens: 200_000,
+            cachedInputTokens: 198_000,
+            cacheCreationTokens: 0,
+            outputTokens: 2_000,
+            models: ['["magpie","group/deepseek"]'],
+          },
+        }),
+      ],
+    };
+
+    // Grandchild ACP subagent delegated by child-dsh-1 whose tokens came only via providerThread.contextUsage
+    const acpGrandchildProjection = {
+      providerThreads: [
+        {
+          id: "pt-acp-grand" as never,
+          driver: "acpRegistry" as never,
+          nativeThreadRef: { driver: "acpRegistry" as never, nativeId: "acp-grand-native-1" },
+          contextUsage: {
+            usedTokens: 40_400,
+            maxTokens: 200_000,
+            inputTokens: 40_000,
+            cachedInputTokens: 39_600,
+            outputTokens: 400,
+          },
+        } as never,
+      ],
+      providerTurns: [],
+    };
+
+    // Unmeasured ACP child whose tokens only appear in backend callLogs keyed by nativeSessionId
+    const unmeasuredAcpChildProjection = {
+      providerThreads: [
+        {
+          id: "pt-acp-log" as never,
+          driver: "acpRegistry" as never,
+          nativeThreadRef: { driver: "acpRegistry" as never, nativeId: "native-acp-log-sess" },
+          contextUsage: null,
+        } as never,
+      ],
+      providerTurns: [],
+    };
+
+    const codexChildProjection = {
+      providerTurns: [
+        makeProviderTurn({
+          id: "turn-codex-child-1" as OrchestrationV2ProviderTurn["id"],
+          model: "gpt-5.4-codex",
+          turnTokenUsage: {
+            usageScope: "main_agent",
+            hasSubagents: false,
+            usageStatus: "complete",
+            inputTokens: 80_000,
+            cachedInputTokens: 79_200,
+            cacheCreationTokens: 0,
+            outputTokens: 800,
+            models: ["gpt-5.4-codex"],
+          },
+        }),
+      ],
+    };
+
+    // Verify recursive multi-level descendant discovery excludes manual user forks!
+    const makeShell = (
+      id: string,
+      opts: {
+        parentThreadId?: string | null;
+        rootThreadId?: string | null;
+        delegatedFromThreadId?: string | null;
+        relationshipToParent?: "fork" | "subagent" | null;
+      },
+    ) =>
+      ({
+        id,
+        environmentId: "env-local",
+        lineage: {
+          parentThreadId: opts.parentThreadId ?? null,
+          rootThreadId: opts.rootThreadId ?? "thread-root",
+          relationshipToParent: opts.relationshipToParent ?? null,
+        },
+        delegatedFrom: opts.delegatedFromThreadId
+          ? { threadId: opts.delegatedFromThreadId, runId: "run-1" }
+          : null,
+        modelSelection: { instanceId: "dsh", model: "group/deepseek" },
+      }) as never;
+
+    const discovered = collectDescendantThreadRefs({
+      threadId: "thread-root",
+      serverProjection: { subagents: [nativeSub, codexNativeSub] },
+      allThreadShells: [
+        makeShell("thread-root", { rootThreadId: "thread-root", relationshipToParent: null }),
+        makeShell("child-codex-1", {
+          parentThreadId: "thread-root",
+          rootThreadId: "thread-root",
+          relationshipToParent: "subagent",
+        }),
+        makeShell("child-dsh-1", {
+          parentThreadId: "thread-root",
+          rootThreadId: "thread-root",
+          relationshipToParent: "subagent",
+        }),
+        makeShell("grandchild-acp-1", {
+          parentThreadId: "child-dsh-1",
+          rootThreadId: "thread-root",
+          relationshipToParent: "subagent",
+        }),
+        makeShell("child-acp-log-1", {
+          delegatedFromThreadId: "thread-root",
+          rootThreadId: "thread-root",
+          relationshipToParent: "subagent",
+        }),
+        // Manual user fork (relationshipToParent: "fork") must NOT be treated as a subagent
+        makeShell("unrelated-user-fork", {
+          parentThreadId: "thread-root",
+          rootThreadId: "thread-root",
+          relationshipToParent: "fork",
+        }),
+      ],
+    });
+    expect(discovered.map((entry) => entry.ref.threadId).sort()).toEqual([
+      "child-acp-log-1",
+      "child-codex-1",
+      "child-dsh-1",
+      "grandchild-acp-1",
+    ]);
+
+    const detail = deriveSessionTelemetryDetail({
+      threadId: "thread-root",
+      serverProjection: {
+        runs: [makeRun("run-1", 1)],
+        providerTurns: [rootTurn],
+        subagents: [nativeSub, codexNativeSub],
+        // Duplicate subagent turnItem referencing sub-native-1 must NOT double-count!
+        turnItems: [
+          {
+            id: "ti-sub-dup",
+            type: "subagent",
+            subagentId: "sub-native-1",
+            childThreadId: null,
+            runId: "run-1",
+            nodeId: "node-sub-1",
+            nativeItemRef: { driver: "antigravity", nativeId: "native-call-1", strength: "strong" },
+          } as never,
+        ],
+        messages: [],
+        nodes: [],
+      },
+      descendantThreads: [
+        {
+          threadId: "child-codex-1",
+          model: "gpt-5.4-codex",
+          projection: codexChildProjection,
+        },
+        {
+          threadId: "child-dsh-1",
+          model: "group/deepseek",
+          projection: acpDshChildProjection,
+        },
+        {
+          threadId: "grandchild-acp-1",
+          model: "acp-worker-model",
+          projection: acpGrandchildProjection,
+        },
+        {
+          threadId: "child-acp-log-1",
+          model: "acp-log-model",
+          projection: unmeasuredAcpChildProjection,
+        },
+      ],
+      activeContextWindow: null,
+      providerStatuses: TEST_PROVIDERS,
+      activeProvider: "antigravity",
+      activeModel: "MODEL_PLACEHOLDER_M536",
+    });
+
+    // 5 unique subagents: sub-native-1 + child-codex-1 + child-dsh-1 + grandchild-acp-1 + child-acp-log-1
+    expect(detail.subagentCount).toBe(5);
+    // Native: unmeasured sub-native-1 (otherUsage 50_500) + measured codex child projection (80_800) = 131_300
+    // Descendant-only: child-dsh-1 (202_000) + grandchild-acp-1 (40_400) = 242_400
+    // Total in detail before callLog fallback = 131_300 + 242_400 = 373_700
+    expect(detail.subagentTotalTokens).toBe(373_700);
+    // Cache hit rate across root (99k/100k) + codex child (79.2k/80k) + dsh child (198k/200k) + grandchild (39.6k/40k) = 99%
+    expect(detail.cacheHitRate).toBeCloseTo(0.99, 4);
+
+    // Resolve display with callLogs containing BOTH:
+    // - a log for ALREADY-MEASURED child-dsh-1 (MUST NOT be double-counted!)
+    // - a backend log for UNMEASURED child-acp-log-1 keyed by its nativeSessionId (MUST be added!)
+    const display = resolveComposerTelemetryDisplay(null, null, {
+      threadId: "thread-root",
+      detail,
+      providerStatuses: TEST_PROVIDERS,
+      callLogs: [
+        {
+          id: "log-already-measured-dsh",
+          timestamp: 1_795_000_001_000,
+          threadId: "child-dsh-1",
+          provider: "dsh",
+          model: "group/deepseek",
+          ttftMs: null,
+          durationMs: 2_000,
+          tps: null,
+          inputTokens: 2_000,
+          cachedInputTokens: 198_000,
+          cacheCreationTokens: 0,
+          outputTokens: 2_000,
+          totalTokens: 202_000,
+          cacheHitRate: 0.99,
+          status: "completed",
+          source: "live",
+        },
+        {
+          id: "log-unmeasured-acp-native",
+          timestamp: 1_795_000_002_000,
+          threadId: "native-acp-log-sess",
+          provider: "acpRegistry",
+          model: "acp-log-model",
+          ttftMs: null,
+          durationMs: 1_500,
+          tps: null,
+          inputTokens: 100,
+          cachedInputTokens: 9_900,
+          cacheCreationTokens: 0,
+          outputTokens: 200,
+          totalTokens: 10_200,
+          cacheHitRate: 0.99,
+          status: "completed",
+          source: "backend",
+        },
+      ],
+    });
+
+    expect(display.subagentCount).toBe(5);
+    // 373_700 + 10_200 = 383_900 (child-dsh-1's 202_000 NOT double-counted!)
+    expect(display.subagentTotalTokens).toBe(383_900);
+    expect(display.aggregatedTaskTotalTokens).toBe(101_000 + 383_900);
+    expect(display.cacheHitRate).toBeCloseTo(0.99, 4);
+    expect(display.modelDistribution.map((m) => m.modelId).sort()).toEqual([
+      "MODEL_PLACEHOLDER_M536",
+      "acp-log-model",
+      "acp-worker-model",
+      "claude-haiku-4-5",
+      "gpt-5.4-codex",
+      "group/deepseek",
+    ]);
+
+    const zhHtml = renderToStaticMarkup(
+      createElement(SessionTokenUsagePopoverContent, {
+        display,
+        copy: getSessionTelemetryCopy("zh"),
+      }),
+    );
+    expect(zhHtml).toContain("99.0%");
+    expect(zhHtml).toContain("子代理（5 个）");
+    expect(zhHtml).toContain("383,900 tok");
+    expect(zhHtml).toContain("484,900 tok");
+    expect(zhHtml).toContain("6 个模型");
+
+    // Verify anti-double-counting when a single native ACP subagent reports BOTH otherUsage AND measured child projection
+    const dedupedDetail = deriveSessionTelemetryDetail({
+      threadId: "thread-dedupe",
+      serverProjection: {
+        runs: [makeRun("run-d1", 1)],
+        providerTurns: [
+          makeProviderTurn({
+            id: "turn-dedupe-1" as OrchestrationV2ProviderTurn["id"],
+            model: "group/deepseek",
+            turnTokenUsage: {
+              usageScope: "main_agent",
+              hasSubagents: true,
+              usageStatus: "complete",
+              inputTokens: 100_000,
+              cachedInputTokens: 99_000,
+              outputTokens: 1_000,
+              otherUsage: { inputTokens: 80_000, outputTokens: 800 },
+            },
+          }),
+        ],
+        subagents: [codexNativeSub],
+        turnItems: [],
+        messages: [],
+        nodes: [],
+      },
+      descendantThreads: [
+        {
+          threadId: "child-codex-1",
+          model: "gpt-5.4-codex",
+          projection: codexChildProjection,
+        },
+      ],
+      activeContextWindow: null,
+      activeProvider: "dsh",
+      activeModel: "group/deepseek",
+    });
+    expect(dedupedDetail.subagentCount).toBe(1);
+    expect(dedupedDetail.subagentTotalTokens).toBe(80_800);
+    expect(dedupedDetail.aggregatedTaskTotalTokens).toBe(101_000 + 80_800);
   });
 });

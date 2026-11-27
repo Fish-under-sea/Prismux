@@ -800,4 +800,67 @@ describe("usageCallTelemetryStore", () => {
       });
     }
   });
+
+  it("merges unsplit live logs with split backend cache logs coherently without double-counting or keeping stale 0% cacheHitRate", () => {
+    // Live log initially captured unsplit input (100_000 uncached, 0 cached -> cacheHitRate: 0)
+    const liveUnsplit = recordModelCallTelemetry({
+      id: "turn:cache-merge-1",
+      timestamp: 1_000_000,
+      provider: "antigravity",
+      model: "gemini-4-hydrogen",
+      ttftMs: 420,
+      durationMs: 2_420,
+      inputTokens: 100_000,
+      cachedInputTokens: 0,
+      outputTokens: 500,
+      status: "completed",
+    });
+    expect(liveUnsplit.cacheHitRate).toBe(0);
+
+    // Backend transcript has the real 99% cache split (1_000 uncached, 99_000 cached)
+    const mergedByDedupe = mergeUsageCallLogs(
+      [liveUnsplit],
+      [
+        {
+          id: "backend:ag-resp-1",
+          timestamp: 1_002_000,
+          provider: "antigravity",
+          model: "gemini-4-hydrogen",
+          inputTokens: 1_000,
+          cachedInputTokens: 99_000,
+          cacheCreationTokens: 0,
+          outputTokens: 500,
+          cacheHitRate: 0.99,
+        },
+      ],
+    );
+    expect(mergedByDedupe).toHaveLength(1);
+    expect(mergedByDedupe[0]?.inputTokens).toBe(1_000);
+    expect(mergedByDedupe[0]?.cachedInputTokens).toBe(99_000);
+    expect(mergedByDedupe[0]?.totalTokens).toBe(100_500);
+    expect(mergedByDedupe[0]?.cacheHitRate).toBeCloseTo(0.99, 5);
+
+    // Exact-ID merge also preserves coherent split and recomputes cacheHitRate instead of keeping 0
+    const mergedById = mergeUsageCallLogs(
+      [liveUnsplit],
+      [
+        {
+          id: "turn:cache-merge-1",
+          timestamp: 1_000_000,
+          provider: "antigravity",
+          model: "gemini-4-hydrogen",
+          inputTokens: 1_000,
+          cachedInputTokens: 99_000,
+          cacheCreationTokens: 0,
+          outputTokens: 500,
+          cacheHitRate: 0.99,
+        },
+      ],
+    );
+    expect(mergedById).toHaveLength(1);
+    expect(mergedById[0]?.inputTokens).toBe(1_000);
+    expect(mergedById[0]?.cachedInputTokens).toBe(99_000);
+    expect(mergedById[0]?.totalTokens).toBe(100_500);
+    expect(mergedById[0]?.cacheHitRate).toBeCloseTo(0.99, 5);
+  });
 });

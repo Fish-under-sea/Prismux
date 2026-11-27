@@ -335,6 +335,41 @@ function addAcpUsage(
   };
 }
 
+function resolveAcpPromptInputTokens(
+  usage: Pick<
+    EffectAcpSchema.Usage,
+    | "inputTokens"
+    | "outputTokens"
+    | "totalTokens"
+    | "cachedReadTokens"
+    | "cachedWriteTokens"
+    | "thoughtTokens"
+  >,
+  geminiUsage: boolean,
+): number {
+  const rawInput = Math.max(0, usage.inputTokens);
+  const cachedRead = Math.max(0, usage.cachedReadTokens ?? 0);
+  const cachedWrite = Math.max(0, usage.cachedWriteTokens ?? 0);
+  const cacheTotal = cachedRead + cachedWrite;
+  if (cacheTotal === 0) return rawInput;
+  const total = usage.totalTokens;
+  if (Number.isFinite(total) && total > 0) {
+    const output = Math.max(0, usage.outputTokens);
+    const thought = Math.max(0, usage.thoughtTokens ?? 0);
+    const inclusiveDiff = Math.min(
+      Math.abs(total - (rawInput + output)),
+      Math.abs(total - (rawInput + output + thought)),
+    );
+    const exclusiveDiff = Math.min(
+      Math.abs(total - (rawInput + cacheTotal + output)),
+      Math.abs(total - (rawInput + cacheTotal + output + thought)),
+    );
+    if (inclusiveDiff < exclusiveDiff) return rawInput;
+    if (exclusiveDiff < inclusiveDiff) return rawInput + cacheTotal;
+  }
+  return geminiUsage ? rawInput + cacheTotal : rawInput;
+}
+
 /**
  * Maps one per-turn usage sample (flavors with reportsPerTurnPromptUsage)
  * directly onto TurnTokenUsage: the response's counters already cover exactly
@@ -349,9 +384,7 @@ export function acpPerTurnPromptUsage(
   if (usage == null) {
     return { usageScope: "main_agent", usageStatus: "unavailable", hasSubagents };
   }
-  const inputTokens = geminiUsage
-    ? usage.inputTokens + (usage.cachedReadTokens ?? 0)
-    : usage.inputTokens;
+  const inputTokens = resolveAcpPromptInputTokens(usage, geminiUsage);
   const outputTokens = usage.outputTokens;
   // TurnTokenUsage contract: input includes cache read + write and reasoning
   // is a subset of output, so clamp counters that exceed their parent and
@@ -391,6 +424,126 @@ export interface AcpTurnLiveTokenUsage {
 export interface AcpTurnContextInjection extends TrackedContextInjectionPayload {
   readonly nativeId?: string | undefined;
   readonly timestampMs?: number | undefined;
+}
+
+export interface AcpNativeSubagentUsageSnapshot {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cachedInputTokens?: number;
+  readonly cacheCreationTokens?: number;
+  readonly models?: ReadonlyArray<string>;
+  readonly childCount?: number;
+}
+
+function asNonNegUsageInt(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value)
+    : undefined;
+}
+
+function readUsageCounter(
+  source: Record<string, unknown>,
+  keys: ReadonlyArray<string>,
+): number | undefined {
+  for (const key of keys) {
+    const parsed = asNonNegUsageInt(source[key]);
+    if (parsed !== undefined) return parsed;
+  }
+  return undefined;
+}
+
+function extractAcpUsageUpdateCounters(
+  rawUpdate: unknown,
+  geminiUsage: boolean,
+): AcpTurnLiveTokenUsage | undefined {
+  if (typeof rawUpdate !== "object" || rawUpdate === null || Array.isArray(rawUpdate)) {
+    return undefined;
+  }
+  const updateRecord = rawUpdate as Record<string, unknown>;
+  const metaRecord =
+    typeof updateRecord._meta === "object" && updateRecord._meta !== null
+      ? (updateRecord._meta as Record<string, unknown>)
+      : undefined;
+  const candidate =
+    (typeof metaRecord?.usage === "object" && metaRecord.usage !== null
+      ? (metaRecord.usage as Record<string, unknown>)
+      : undefined) ??
+    (typeof updateRecord.usage === "object" && updateRecord.usage !== null
+      ? (updateRecord.usage as Record<string, unknown>)
+      : undefined) ??
+    updateRecord;
+
+  const rawInput = readUsageCounter(candidate, [
+    "inputTokens",
+    "input_tokens",
+    "promptTokens",
+    "prompt_tokens",
+  ]);
+  const rawCachedRead = readUsageCounter(candidate, [
+    "cachedReadTokens",
+    "cachedInputTokens",
+    "cacheReadTokens",
+    "cached_read_tokens",
+    "cached_input_tokens",
+    "cache_read_input_tokens",
+  ]);
+  const rawCachedWrite = readUsageCounter(candidate, [
+    "cachedWriteTokens",
+    "cacheCreationTokens",
+    "cacheWriteTokens",
+    "cached_write_tokens",
+    "cache_creation_tokens",
+    "cache_creation_input_tokens",
+  ]);
+  const rawOutput = readUsageCounter(candidate, [
+    "outputTokens",
+    "output_tokens",
+    "completionTokens",
+    "completion_tokens",
+  ]);
+  const rawThought = readUsageCounter(candidate, [
+    "thoughtTokens",
+    "reasoningTokens",
+    "reasoningOutputTokens",
+    "reasoning_tokens",
+  ]);
+  const rawTotal = readUsageCounter(candidate, ["totalTokens", "total_tokens"]);
+
+  const hasDirectional =
+    (rawInput ?? 0) > 0 ||
+    (rawCachedRead ?? 0) > 0 ||
+    (rawCachedWrite ?? 0) > 0 ||
+    (rawOutput ?? 0) > 0;
+  if (!hasDirectional) return undefined;
+
+  const inputTokens = resolveAcpPromptInputTokens(
+    {
+      inputTokens: rawInput ?? 0,
+      outputTokens: rawOutput ?? 0,
+      totalTokens: rawTotal ?? 0,
+      ...(rawCachedRead === undefined ? {} : { cachedReadTokens: rawCachedRead }),
+      ...(rawCachedWrite === undefined ? {} : { cachedWriteTokens: rawCachedWrite }),
+      ...(rawThought === undefined ? {} : { thoughtTokens: rawThought }),
+    },
+    geminiUsage,
+  );
+  const outputTokens = rawOutput ?? 0;
+  const cachedInputTokens =
+    rawCachedRead === undefined ? undefined : Math.min(rawCachedRead, inputTokens);
+  const cacheCreationTokens =
+    rawCachedWrite === undefined
+      ? undefined
+      : Math.min(rawCachedWrite, Math.max(0, inputTokens - (cachedInputTokens ?? 0)));
+  const reasoningOutputTokens =
+    rawThought === undefined ? undefined : Math.min(rawThought, outputTokens);
+
+  return {
+    inputTokens,
+    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+    ...(cacheCreationTokens === undefined ? {} : { cacheCreationTokens }),
+    outputTokens,
+    ...(reasoningOutputTokens === undefined ? {} : { reasoningOutputTokens }),
+  };
 }
 
 export interface AcpTurnUsageSample {
@@ -510,6 +663,14 @@ export interface AcpAdapterV2Flavor {
     readonly sessionId: string;
     readonly cwd: string;
   }) => Effect.Effect<AcpTurnUsageWatcher | undefined>;
+  /**
+   * Optional read-only collector of native subagent child-session token usage accrued during a
+   * turn (e.g. Antigravity detached/batch child conversation DBs), reported into `otherUsage`.
+   */
+  readonly readNativeSubagentUsage?: (input: {
+    readonly sessionId: string;
+    readonly nativeTaskIds: ReadonlyArray<string>;
+  }) => Effect.Effect<AcpNativeSubagentUsageSnapshot | undefined>;
   /**
    * Optional read-only per-turn context injection observer (0 LLM prompt token overhead)
    * for ACP agents that do not write structured context injections to a local session log.
@@ -1863,6 +2024,11 @@ interface ActiveAcpTurn {
   turnUsageWatcher: AcpTurnUsageWatcher | undefined;
   observedTurnUsage: AcpTurnUsageSample | undefined;
   liveTokenUsage: OrchestrationV2ProviderTurnTokenUsage | undefined;
+  readonly subagentUsageByKey: Map<
+    string,
+    { readonly inputTokens: number; readonly outputTokens: number }
+  >;
+  nativeSubagentUsage: AcpNativeSubagentUsageSnapshot | undefined;
   readonly emittedContextInjectionKeys: Set<string>;
   backgroundFinalizeGeneration: number;
   /** `replyEndsWithUsageUpdate`: output arrived and its closing `usage_update` has not. */
@@ -6004,6 +6170,54 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             if (stateEvent === undefined) return;
             if (stateEvent._tag === "UsageUpdated") {
               let effectiveContextUsage = stateEvent.usage;
+              const usageUpdateCounters = extractAcpUsageUpdateCounters(
+                update,
+                flavor.geminiPromptUsage === true,
+              );
+              if (
+                context !== null &&
+                !context.finalized &&
+                notification.sessionId !== context.nativeThreadId &&
+                usageUpdateCounters !== undefined
+              ) {
+                const updatedAt = DateTime.formatIso(yield* DateTime.now);
+                const childLiveUsage = buildAcpProviderTurnTokenUsage({
+                  contextUsage: stateEvent.usage,
+                  sample: { liveTokenUsage: usageUpdateCounters },
+                  updatedAt,
+                });
+                if (childLiveUsage !== undefined) {
+                  effectiveContextUsage = enrichAcpContextUsage(stateEvent.usage, childLiveUsage);
+                }
+                const previousChild = context.subagentUsageByKey.get(notification.sessionId);
+                context.subagentUsageByKey.set(notification.sessionId, {
+                  inputTokens: Math.max(
+                    previousChild?.inputTokens ?? 0,
+                    usageUpdateCounters.inputTokens ?? 0,
+                  ),
+                  outputTokens: Math.max(
+                    previousChild?.outputTokens ?? 0,
+                    usageUpdateCounters.outputTokens ?? 0,
+                  ),
+                });
+              } else if (
+                context !== null &&
+                context.nativeThreadId === notification.sessionId &&
+                !context.finalized &&
+                context.turnUsageWatcher === undefined &&
+                usageUpdateCounters !== undefined
+              ) {
+                const updatedAt = DateTime.formatIso(yield* DateTime.now);
+                const rootLiveUsage = buildAcpProviderTurnTokenUsage({
+                  contextUsage: stateEvent.usage,
+                  sample: { liveTokenUsage: usageUpdateCounters },
+                  updatedAt,
+                });
+                if (rootLiveUsage !== undefined) {
+                  context.liveTokenUsage = rootLiveUsage;
+                  effectiveContextUsage = enrichAcpContextUsage(stateEvent.usage, rootLiveUsage);
+                }
+              }
               if (
                 context !== null &&
                 context.nativeThreadId === notification.sessionId &&
@@ -8729,16 +8943,44 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           context: ActiveAcpTurn,
           status: OrchestrationV2ProviderTurn["status"],
         ): TurnTokenUsage => {
-          const hasSubagents = context.subagents.size > 0;
+          const observed = context.observedTurnUsage?.usage;
+          let streamChildInput = 0;
+          let streamChildOutput = 0;
+          for (const entry of context.subagentUsageByKey.values()) {
+            streamChildInput += entry.inputTokens;
+            streamChildOutput += entry.outputTokens;
+          }
+          const nativeChildInput = context.nativeSubagentUsage?.inputTokens ?? 0;
+          const nativeChildOutput = context.nativeSubagentUsage?.outputTokens ?? 0;
+          const observedOtherInput = observed?.otherUsage?.inputTokens ?? 0;
+          const observedOtherOutput = observed?.otherUsage?.outputTokens ?? 0;
+          const mergedOtherInput = Math.max(observedOtherInput, nativeChildInput, streamChildInput);
+          const mergedOtherOutput = Math.max(
+            observedOtherOutput,
+            nativeChildOutput,
+            streamChildOutput,
+          );
+          const mergedOtherUsage =
+            mergedOtherInput + mergedOtherOutput > 0
+              ? { inputTokens: mergedOtherInput, outputTokens: mergedOtherOutput }
+              : undefined;
+          const hasSubagents =
+            context.subagents.size > 0 ||
+            observed?.hasSubagents === true ||
+            (context.nativeSubagentUsage?.childCount ?? 0) > 0 ||
+            mergedOtherUsage !== undefined;
+
           if (context.promptUsage !== undefined) {
-            return acpPerTurnPromptUsage(
+            const mapped = acpPerTurnPromptUsage(
               context.promptUsage,
               hasSubagents,
               status,
               flavor.geminiPromptUsage,
             );
+            return mergedOtherUsage === undefined
+              ? mapped
+              : { ...mapped, otherUsage: mergedOtherUsage };
           }
-          const observed = context.observedTurnUsage?.usage;
           if (observed !== undefined && observed.usageStatus !== "unavailable") {
             const models =
               observed.models !== undefined && observed.models.length > 0
@@ -8750,16 +8992,20 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             return {
               ...observed,
               usageStatus: status === "completed" ? observed.usageStatus : "partial",
-              hasSubagents: hasSubagents || observed.hasSubagents,
+              hasSubagents,
+              ...(mergedOtherUsage === undefined ? {} : { otherUsage: mergedOtherUsage }),
               ...(models === undefined ? {} : { models }),
             } as TurnTokenUsage;
           }
-          return acpPerTurnPromptUsage(
+          const unavailable = acpPerTurnPromptUsage(
             context.promptUsage,
             hasSubagents,
             status,
             flavor.geminiPromptUsage,
           );
+          return mergedOtherUsage === undefined
+            ? unavailable
+            : { ...unavailable, otherUsage: mergedOtherUsage };
         };
 
         const providerTurnPayload = (
@@ -9036,6 +9282,17 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               }
             }
             yield* pollWatcherContextInjections(context);
+          }
+          if (flavor.readNativeSubagentUsage !== undefined) {
+            const nativeSubagentUsage = yield* flavor
+              .readNativeSubagentUsage({
+                sessionId: context.nativeThreadId,
+                nativeTaskIds: [...context.subagents.keys()],
+              })
+              .pipe(Effect.catchCause(() => Effect.undefined));
+            if (nativeSubagentUsage !== undefined) {
+              context.nativeSubagentUsage = nativeSubagentUsage;
+            }
           }
           const turn = providerTurnPayload(context, settledStatus, now);
           yield* Ref.update(providerTurns, (current) => {
@@ -9908,6 +10165,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               turnUsageWatcher,
               observedTurnUsage: undefined,
               liveTokenUsage: undefined,
+              subagentUsageByKey: new Map(),
+              nativeSubagentUsage: undefined,
               emittedContextInjectionKeys: new Set(),
               backgroundFinalizeGeneration: 0,
               replyOpen: false,

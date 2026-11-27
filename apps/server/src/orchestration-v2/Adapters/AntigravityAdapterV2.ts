@@ -36,9 +36,11 @@ import {
   ANTIGRAVITY_SUBAGENT_BATCH_TITLE,
   antigravitySubagentLaunches,
   describeAntigravitySubagentLaunches,
+  listAntigravityChildConversations,
   readAntigravityChildrenAtWork,
   readAntigravityPendingReply,
 } from "../../provider/acp/AntigravityChildWork.ts";
+import { readAntigravityConversationUsage } from "../../provider/Drivers/antigravityUsageReader.ts";
 import { readAntigravityClientTextFile } from "../../provider/acp/AntigravityClientFiles.ts";
 import { watchAntigravityPromptOutcome } from "../../provider/acp/AntigravityTurnOutcome.ts";
 import {
@@ -157,6 +159,18 @@ export function makeAntigravityAcpAdapterFlavor(
 ): AcpAdapterV2Flavor {
   const { profileDirectory } = options;
   const contextInjectionTracker = createTurnContextInjectionTracker();
+  const seenChildUsageBySession = new Map<
+    string,
+    Map<
+      string,
+      {
+        readonly inputTokens: number;
+        readonly cachedInputTokens: number;
+        readonly cacheCreationTokens: number;
+        readonly outputTokens: number;
+      }
+    >
+  >();
   const antigravityClientFileRoots = (cwd: string | null) =>
     cwd === null ? [options.host.paths.attachmentsDir] : [cwd, options.host.paths.attachmentsDir];
   const makeRuntime = Effect.fn("AntigravityAdapterV2.makeRuntime")(
@@ -347,6 +361,81 @@ export function makeAntigravityAcpAdapterFlavor(
               profileDirectory,
               sessionId,
             }),
+          readNativeSubagentUsage: Effect.fn("AntigravityAdapterV2.readNativeSubagentUsage")(
+            function* ({ sessionId }) {
+              const children = yield* listAntigravityChildConversations({
+                profileDirectory,
+                rootSessionId: sessionId,
+              });
+              if (children.length === 0) return undefined;
+              let sessionSeen = seenChildUsageBySession.get(sessionId);
+              if (sessionSeen === undefined) {
+                sessionSeen = new Map();
+                seenChildUsageBySession.set(sessionId, sessionSeen);
+              }
+              let deltaInput = 0;
+              let deltaCached = 0;
+              let deltaCacheCreate = 0;
+              let deltaOutput = 0;
+              let newChildCount = 0;
+              const models: Array<string> = [];
+              for (const child of children) {
+                const previous = sessionSeen.get(child.conversationId);
+                if (previous === undefined) {
+                  newChildCount += 1;
+                }
+                const totals = yield* readAntigravityConversationUsage(child.databasePath).pipe(
+                  Effect.provideService(Path.Path, options.path),
+                );
+                if (totals === null) {
+                  if (previous === undefined) {
+                    sessionSeen.set(child.conversationId, {
+                      inputTokens: 0,
+                      cachedInputTokens: 0,
+                      cacheCreationTokens: 0,
+                      outputTokens: 0,
+                    });
+                  }
+                  continue;
+                }
+                const nextInput = Math.max(previous?.inputTokens ?? 0, totals.inputTokens);
+                const nextCached = Math.max(
+                  previous?.cachedInputTokens ?? 0,
+                  totals.cachedInputTokens,
+                );
+                const nextCacheCreate = Math.max(
+                  previous?.cacheCreationTokens ?? 0,
+                  totals.cacheCreationTokens,
+                );
+                const nextOutput = Math.max(previous?.outputTokens ?? 0, totals.outputTokens);
+                deltaInput += Math.max(0, nextInput - (previous?.inputTokens ?? 0));
+                deltaCached += Math.max(0, nextCached - (previous?.cachedInputTokens ?? 0));
+                deltaCacheCreate += Math.max(
+                  0,
+                  nextCacheCreate - (previous?.cacheCreationTokens ?? 0),
+                );
+                deltaOutput += Math.max(0, nextOutput - (previous?.outputTokens ?? 0));
+                sessionSeen.set(child.conversationId, {
+                  inputTokens: nextInput,
+                  cachedInputTokens: nextCached,
+                  cacheCreationTokens: nextCacheCreate,
+                  outputTokens: nextOutput,
+                });
+                for (const m of totals.models) {
+                  if (!models.includes(m)) models.push(m);
+                }
+              }
+              if (deltaInput + deltaOutput === 0 && newChildCount === 0) return undefined;
+              return {
+                inputTokens: deltaInput,
+                outputTokens: deltaOutput,
+                ...(deltaCached > 0 ? { cachedInputTokens: deltaCached } : {}),
+                ...(deltaCacheCreate > 0 ? { cacheCreationTokens: deltaCacheCreate } : {}),
+                ...(models.length > 0 ? { models } : {}),
+                ...(newChildCount > 0 ? { childCount: newChildCount } : {}),
+              };
+            },
+          ),
         }),
   };
 }

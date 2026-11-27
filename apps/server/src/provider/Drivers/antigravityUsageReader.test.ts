@@ -13,7 +13,12 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import { parseRateTable, priceUsage } from "../../usage/usagePricing.ts";
 
-import { makeAntigravityUsageCache, readAntigravityUsage } from "./antigravityUsageReader.ts";
+import {
+  makeAntigravityUsageCache,
+  readAntigravityConversationUsage,
+  readAntigravityUsage,
+} from "./antigravityUsageReader.ts";
+import { listAntigravityChildConversations } from "../acp/AntigravityChildWork.ts";
 
 const openDatabase = Effect.fn("openDatabase")(function* (filename: string) {
   const context = yield* Layer.build(NodeSqliteClient.layer({ filename }));
@@ -707,9 +712,7 @@ describe("readAntigravityUsage", () => {
         yield* seedDatabase(path.join(dir, "timing-session.db"), (db) =>
           Effect.gen(function* () {
             yield* db.exec("CREATE TABLE gen_metadata (idx INTEGER, data BLOB)");
-            yield* db.exec(
-              "CREATE TABLE steps (idx INTEGER, step_type INTEGER, metadata BLOB)",
-            );
+            yield* db.exec("CREATE TABLE steps (idx INTEGER, step_type INTEGER, metadata BLOB)");
             // Generation idx=0 with no f9.f4 timestamp, real f11 (TTFT=4.857s) and f12 (decode=9.342s)
             const gen0 = protoBytes(1, [
               ...protoNumber(3, 1535),
@@ -821,5 +824,75 @@ describe("readAntigravityUsage", () => {
       cache.set("c", { fingerprint: "3", data: null });
       assert.deepStrictEqual([...cache.keys()], ["a", "c"]);
     }),
+  );
+
+  it.effect(
+    "discovers Antigravity detached subagent child DBs and decodes their usage totals",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const profileDir = yield* tempDir;
+        const rootSessionId = "root-session-123";
+        const childSessionId = "child-subagent-456";
+
+        const subagentsDir = path.join(
+          profileDir,
+          "antigravity-acp",
+          "brain",
+          rootSessionId,
+          ".system_generated",
+          "subagents",
+        );
+        const conversationsDir = path.join(profileDir, "antigravity-acp", "conversations");
+        yield* fileSystem.makeDirectory(subagentsDir, { recursive: true });
+        yield* fileSystem.makeDirectory(conversationsDir, { recursive: true });
+        yield* fileSystem.writeFileString(
+          path.join(subagentsDir, `${childSessionId}.json`),
+          JSON.stringify({
+            conversationId: childSessionId,
+            state: "SUBAGENT_STATE_COMPLETED",
+            subagentDescriptor: { role: "researcher" },
+          }),
+        );
+
+        const childDbPath = path.join(conversationsDir, `${childSessionId}.db`);
+        yield* seedDatabase(childDbPath, (db) =>
+          Effect.gen(function* () {
+            yield* createTables(db);
+            const usage = [
+              ...protoNumber(2, 1_000),
+              ...protoNumber(3, 500),
+              ...protoNumber(5, 99_000),
+              ...protoText(11, "child-resp-1"),
+            ];
+            const generation = protoBytes(1, [
+              ...protoBytes(4, usage),
+              ...protoText(19, "Gemini 4 Hydrogen"),
+            ]);
+            yield* db.run("INSERT INTO gen_metadata VALUES (?, ?)", [
+              0,
+              new Uint8Array(generation),
+            ]);
+          }),
+        );
+
+        const children = yield* listAntigravityChildConversations({
+          profileDirectory: profileDir,
+          rootSessionId,
+        });
+        assert.strictEqual(children.length, 1);
+        assert.strictEqual(children[0]?.conversationId, childSessionId);
+
+        const childUsage = yield* readAntigravityConversationUsage(children[0]!.databasePath);
+        assert.deepStrictEqual(childUsage, {
+          inputTokens: 100_000,
+          cachedInputTokens: 99_000,
+          cacheCreationTokens: 0,
+          outputTokens: 500,
+          reasoningTokens: 0,
+          models: ["gemini-4-hydrogen"],
+        });
+      }).pipe(Effect.provide(NodeServices.layer)),
   );
 });
