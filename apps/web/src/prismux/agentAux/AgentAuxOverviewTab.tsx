@@ -359,23 +359,26 @@ export const AgentAuxOverviewTab = memo(function AgentAuxOverviewTab({
           onSelectTeamMember(effectiveFilter === ownerName ? null : ownerName);
         }}
       >
-        {isSwarmBee ? (
-          <SwarmBeeSprite
-            name={ownerName}
-            state={
-              !model.finished && ownerObj && !ownerObj.killed && ownerObj.status === "working"
-                ? "working"
-                : "landed"
-            }
-            scale={1}
-          />
-        ) : (
-          <AgentBrandLogo
-            provider={ownerObj?.providerBrand ?? model.providerBrand}
-            size={13}
-            online={ownerObj?.status === "working"}
-          />
-        )}
+        <span className="pmx-aux-wchip-icon" aria-hidden="true">
+          {isSwarmBee ? (
+            <SwarmBeeSprite
+              name={ownerName}
+              state={
+                !model.finished && ownerObj && !ownerObj.killed && ownerObj.status === "working"
+                  ? "working"
+                  : "landed"
+              }
+              scale={1}
+            />
+          ) : (
+            <AgentBrandLogo
+              provider={ownerObj?.providerBrand ?? model.providerBrand}
+              size={13}
+              online={!ownerObj?.killed && ownerObj?.status !== "error"}
+              breathing={ownerObj?.status === "working"}
+            />
+          )}
+        </span>
         <span>{ownerName}</span>
       </button>
     );
@@ -445,7 +448,7 @@ export const AgentAuxOverviewTab = memo(function AgentAuxOverviewTab({
             <div className="pmx-aux-onboard-coord">
               <AgentMemberAvatar
                 useBees={model.useBees}
-                providerBrand={model.providerBrand}
+                providerBrand={coordinator?.providerBrand ?? model.providerBrand}
                 name="coordinator"
                 displayName={s.roleCoordinator}
                 status="working"
@@ -457,7 +460,7 @@ export const AgentAuxOverviewTab = memo(function AgentAuxOverviewTab({
               <div key={wName} className={`pmx-aux-onboard-worker pmx-aux-onboard-worker--${idx}`}>
                 <AgentMemberAvatar
                   useBees={model.useBees}
-                  providerBrand={model.providerBrand}
+                  providerBrand={liveWorkers[idx]?.providerBrand ?? model.providerBrand}
                   name={wName}
                   displayName={wName}
                   status="working"
@@ -1045,35 +1048,80 @@ export const AgentAuxOverviewTab = memo(function AgentAuxOverviewTab({
           ) : null}
 
           {liveWorkers.length > 0 ? (
-            <div className="pmx-aux-crew" role="group" aria-label={s.overviewTeamHeading}>
+            <div
+              className={
+                model.useBees
+                  ? "pmx-aux-crew pmx-aux-crew--bees"
+                  : "pmx-aux-crew pmx-aux-crew--bare"
+              }
+              role="group"
+              aria-label={s.overviewTeamHeading}
+            >
               <button
                 type="button"
-                className={
-                  effectiveFilter === null
-                    ? "pmx-aux-crew-btn pmx-aux-crew-btn--on"
-                    : "pmx-aux-crew-btn"
-                }
+                className={[
+                  "pmx-aux-crew-btn",
+                  !model.useBees ? "pmx-aux-crew-btn--bare" : "",
+                  effectiveFilter === null ? "pmx-aux-crew-btn--on" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
                 aria-pressed={effectiveFilter === null}
                 onClick={() => onSelectTeamMember(null)}
               >
-                {model.useBees ? (
-                  <SwarmMiniCluster names={teamMembers.map((m) => m.name)} />
-                ) : (
-                  <span
-                    className="pmx-bee-tile pmx-bee-tile--sm pmx-bee-tile--all"
-                    aria-hidden="true"
-                  >
-                    <span className="pmx-aux-all-grid">
-                      {liveWorkers.slice(0, 4).map((w) => (
-                        <span
-                          key={w.id}
-                          className="pmx-aux-all-dot"
-                          style={{ background: w.color ?? computeBeeColor(w.name) }}
+                <span className="pmx-aux-crew-icon" aria-hidden="true">
+                  {model.useBees ? (
+                    <SwarmMiniCluster names={teamMembers.map((m) => m.name)} />
+                  ) : (
+                    <span className="pmx-aux-all-bare" data-aux-all-bare="1">
+                      <svg
+                        width="18"
+                        height="18"
+                        viewBox="0 0 18 18"
+                        fill="none"
+                        preserveAspectRatio="xMidYMid meet"
+                        style={{ display: "block" }}
+                      >
+                        <rect
+                          x="1.5"
+                          y="1.5"
+                          width="6"
+                          height="6"
+                          rx="2"
+                          fill="currentColor"
+                          fillOpacity="0.88"
                         />
-                      ))}
+                        <rect
+                          x="10.5"
+                          y="1.5"
+                          width="6"
+                          height="6"
+                          rx="2"
+                          fill="currentColor"
+                          fillOpacity="0.58"
+                        />
+                        <rect
+                          x="1.5"
+                          y="10.5"
+                          width="6"
+                          height="6"
+                          rx="2"
+                          fill="currentColor"
+                          fillOpacity="0.58"
+                        />
+                        <rect
+                          x="10.5"
+                          y="10.5"
+                          width="6"
+                          height="6"
+                          rx="2"
+                          fill="currentColor"
+                          fillOpacity="0.38"
+                        />
+                      </svg>
                     </span>
-                  </span>
-                )}
+                  )}
+                </span>
                 <span className="pmx-aux-crew-name">{s.overviewAllTeam}</span>
               </button>
 
@@ -1084,20 +1132,28 @@ export const AgentAuxOverviewTab = memo(function AgentAuxOverviewTab({
                   <button
                     key={member.id}
                     type="button"
-                    className={isSel ? "pmx-aux-crew-btn pmx-aux-crew-btn--on" : "pmx-aux-crew-btn"}
+                    className={[
+                      "pmx-aux-crew-btn",
+                      !memberUsesBees ? "pmx-aux-crew-btn--bare" : "",
+                      isSel ? "pmx-aux-crew-btn--on" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
                     aria-pressed={isSel}
                     title={`@${member.name} · ${formatAuxStatusLabel(member.status, member.waitingOn, model.locale)}`}
                     onClick={() => onSelectTeamMember(isSel ? null : member.name)}
                   >
-                    <AgentMemberAvatar
-                      useBees={memberUsesBees}
-                      providerBrand={member.providerBrand}
-                      name={member.name}
-                      displayName={member.displayName}
-                      status={member.status}
-                      color={member.color}
-                      size="sm"
-                    />
+                    <span className="pmx-aux-crew-icon" aria-hidden="true">
+                      <AgentMemberAvatar
+                        useBees={memberUsesBees}
+                        providerBrand={member.providerBrand}
+                        name={member.name}
+                        displayName={member.displayName}
+                        status={member.status}
+                        color={member.color}
+                        size="sm"
+                      />
+                    </span>
                     <span className="pmx-aux-crew-name">@{member.name}</span>
                   </button>
                 );

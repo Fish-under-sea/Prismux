@@ -80,14 +80,14 @@ export function AgentAuxOverviewEntryButton(props: {
       onClick={onOpen}
       className="group flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-lg px-2 text-left text-[13px] font-medium text-foreground/90 transition-colors hover:bg-black/[0.045] dark:hover:bg-white/[0.08]"
     >
-      <span className="inline-flex size-4 shrink-0 items-center justify-center">
+      <span className="inline-flex size-4 shrink-0 items-center justify-center leading-none">
         {entry.kind === "agy-swarm" ? (
           <SwarmMiniBeeGlyph size={15} />
         ) : (
           <AgentBrandLogo
             provider={entry.providerBrand}
             size={15}
-            online={entry.hasLiveActivity}
+            online
             breathing={entry.hasLiveActivity}
           />
         )}
@@ -212,7 +212,7 @@ export function AgentAuxPanel(props: AgentAuxPanelProps) {
               <AgentBrandLogo
                 provider={effectiveModel.providerBrand}
                 size={16}
-                online={effectiveModel.hasLiveActivity}
+                online
                 breathing={effectiveModel.hasLiveActivity}
               />
             )}

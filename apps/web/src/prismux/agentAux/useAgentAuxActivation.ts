@@ -1,12 +1,19 @@
 import { scopedThreadKey } from "@prismux/client-runtime/environment";
-import type {
-  OrchestrationV2GetNativeChildWorkResult,
-  ScopedThreadRef,
+import { resolveProvidersForCwd } from "@prismux/client-runtime/providerSkills";
+import {
+  EnvironmentId,
+  type OrchestrationV2GetNativeChildWorkResult,
+  type ProjectId,
+  type ScopedThreadRef,
+  type ServerProvider,
 } from "@prismux/core-contracts";
 import { useEffect, useRef, useState } from "react";
 
+import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useStableCallback } from "../../hooks/useStableCallback";
+import { providerInstanceEntriesFor, type ProviderInstanceEntry } from "../../providerInstances";
 import { useRightPanelStore } from "../../rightPanelStore";
+import { useEnvironmentProviders } from "../../state/environments";
 import { orchestrationEnvironment } from "../../state/orchestration";
 import { useEnvironmentQuery } from "../../state/query";
 import {
@@ -19,10 +26,15 @@ import {
   buildAgentAuxViewModel,
   shouldAutoOpenAgentAux,
   type AgentAuxProjectionLike,
+  type AgentAuxProviderEntryLike,
   type AgentAuxThreadShellLike,
   type AgentAuxViewModel,
 } from "./agentAux.logic";
 import { toAgentAuxOverviewEntry, type AgentAuxOverviewEntryData } from "./AgentAuxPanel";
+
+const EMPTY_SERVER_PROVIDERS: ReadonlyArray<ServerProvider> = [];
+const EMPTY_PROVIDER_ENTRIES: ReadonlyArray<ProviderInstanceEntry> = [];
+const FALLBACK_ENVIRONMENT_ID = EnvironmentId.make("__agent-aux-none__");
 
 export const AGENT_AUX_POLL_INTERVAL_MS = 12_000;
 export const AGENT_AUX_ACTIVE_POLL_INTERVAL_MS = 2_500;
@@ -341,6 +353,12 @@ export interface UseAgentAuxActivationInput {
   readonly isServerThread: boolean;
   readonly embedded?: boolean;
   readonly provider: string | null | undefined;
+  readonly providerEntry?: AgentAuxProviderEntryLike | null | undefined;
+  readonly providerInstanceId?: string | null | undefined;
+  readonly model?: string | null | undefined;
+  readonly providerEntries?: ReadonlyArray<ProviderInstanceEntry> | undefined;
+  readonly providerEntryByInstanceId?: ReadonlyMap<string, AgentAuxProviderEntryLike> | undefined;
+  readonly projectId?: ProjectId | null | undefined;
   readonly cwd: string | null | undefined;
   readonly projection: AgentAuxProjectionLike | null | undefined;
   readonly threadShell?: AgentAuxThreadShellLike | null | undefined;
@@ -364,6 +382,12 @@ export function useAgentAuxActivation(
     isServerThread,
     embedded = false,
     provider,
+    providerEntry,
+    providerInstanceId,
+    model: activeModel,
+    providerEntries,
+    providerEntryByInstanceId,
+    projectId,
     cwd,
     projection,
     threadShell,
@@ -372,6 +396,10 @@ export function useAgentAuxActivation(
   } = input;
 
   const locale = useAgentAuxLocale();
+  const providersByEnvironment = useEnvironmentProviders();
+  const envSettings = useEnvironmentSettings(
+    activeThreadRef?.environmentId ?? FALLBACK_ENVIRONMENT_ID,
+  );
 
   const [snapshotState, setSnapshotState] = useState<{
     readonly threadKey: string | null;
@@ -617,14 +645,58 @@ export function useAgentAuxActivation(
     return () => window.clearInterval(timer);
   }, [fallbackPollIntervalMs, threadKey, provider, effectiveSessionId, cwd, fetchSnapshot]);
 
+  const effectiveProviderEntries: ReadonlyArray<ProviderInstanceEntry> =
+    providerEntries ??
+    (activeThreadRef
+      ? providerInstanceEntriesFor(
+          resolveProvidersForCwd(
+            providersByEnvironment.get(activeThreadRef.environmentId) ?? EMPTY_SERVER_PROVIDERS,
+            cwd ?? null,
+          ),
+          envSettings,
+          projectId ?? null,
+        )
+      : EMPTY_PROVIDER_ENTRIES);
+
+  const effectiveProviderEntryByInstanceId = new Map<string, AgentAuxProviderEntryLike>();
+  for (const entry of effectiveProviderEntries) {
+    effectiveProviderEntryByInstanceId.set(entry.instanceId, entry);
+  }
+  if (providerEntryByInstanceId) {
+    for (const [id, entry] of providerEntryByInstanceId.entries()) {
+      effectiveProviderEntryByInstanceId.set(id, entry);
+    }
+  }
+  if (providerEntry) {
+    effectiveProviderEntryByInstanceId.set(providerEntry.instanceId, providerEntry);
+  }
+
+  const resolvedCaptainInstanceId =
+    providerEntry?.instanceId ??
+    providerInstanceId ??
+    threadShell?.runtime?.providerInstanceId ??
+    threadShell?.modelSelection?.instanceId ??
+    null;
+  const effectiveProviderEntry =
+    providerEntry ??
+    (resolvedCaptainInstanceId
+      ? (effectiveProviderEntryByInstanceId.get(resolvedCaptainInstanceId) ?? null)
+      : null);
+  const effectiveModel =
+    activeModel ?? threadShell?.modelSelection?.model ?? threadShell?.model ?? null;
+
   const model = buildAgentAuxViewModel({
     provider,
+    providerEntry: effectiveProviderEntry,
+    model: effectiveModel,
     threadId: activeThreadRef?.threadId ?? null,
     daemonSnapshot,
     projection,
     threadShell,
     relationshipShells,
     nativeChildWork: nativeChildWorkQuery.data?.children,
+    providerEntries: effectiveProviderEntries,
+    providerEntryByInstanceId: effectiveProviderEntryByInstanceId,
     locale,
   });
 
@@ -639,6 +711,7 @@ export function useAgentAuxActivation(
       title: model.title || model.badgeLabel,
       auxKind: model.kind,
       provider: model.provider,
+      providerBrand: model.providerBrand,
       activeCount: model.activeCount,
     });
 
@@ -659,6 +732,7 @@ export function useAgentAuxActivation(
         title: model.title || model.badgeLabel,
         auxKind: model.kind,
         provider: model.provider,
+        providerBrand: model.providerBrand,
         activeCount: model.activeCount,
       },
       true,
@@ -671,6 +745,7 @@ export function useAgentAuxActivation(
       title: model.title || model.badgeLabel,
       auxKind: model.kind,
       provider: model.provider,
+      providerBrand: model.providerBrand,
       activeCount: model.activeCount,
     });
   };

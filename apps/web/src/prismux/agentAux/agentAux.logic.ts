@@ -10,9 +10,12 @@ import {
   type ProviderInstanceEntry,
 } from "../../providerInstances";
 import {
+  acpBrandKeyToAgentBrandId,
   formatAgentBrandName,
   inferAgentBrandFromModel,
+  resolveAcpAgentBrandKey,
   resolveAgentBrandId,
+  resolveProviderEntryDisplayName,
   type AgentBrandId,
 } from "../agentBrand";
 import type { DaemonAgentAuxInspectResponse, DaemonAgentAuxNativeStepDto } from "../daemonClient";
@@ -1985,6 +1988,18 @@ function mapNativeSteps(
   }));
 }
 
+export interface AgentAuxProviderEntryLike {
+  readonly instanceId: string;
+  readonly driverKind: string;
+  readonly displayName?: string | null | undefined;
+  readonly hasCustomDisplayName?: boolean | undefined;
+  readonly acpRegistryAgentId?: string | null | undefined;
+  readonly acpCommandPath?: string | null | undefined;
+  readonly models?:
+    | ReadonlyArray<{ readonly slug: string; readonly name?: string | undefined }>
+    | undefined;
+}
+
 export interface AgentAuxThreadShellLike {
   readonly id: ThreadId;
   readonly title?: string | null | undefined;
@@ -1995,7 +2010,21 @@ export interface AgentAuxThreadShellLike {
   readonly model?: string | null | undefined;
   readonly worktreePath?: string | null | undefined;
   readonly branch?: string | null | undefined;
-  readonly runtime?: { readonly status?: string | null | undefined } | null | undefined;
+  readonly modelSelection?:
+    | {
+        readonly instanceId?: string | null | undefined;
+        readonly model?: string | null | undefined;
+      }
+    | null
+    | undefined;
+  readonly runtime?:
+    | {
+        readonly status?: string | null | undefined;
+        readonly providerInstanceId?: string | null | undefined;
+        readonly providerName?: string | null | undefined;
+      }
+    | null
+    | undefined;
   readonly latestRun?: { readonly status?: string | null | undefined } | null | undefined;
   readonly lineage: {
     readonly parentThreadId?: ThreadId | null | undefined;
@@ -2122,23 +2151,90 @@ function slugifyHandle(raw: string, fallback: string, used: Set<string>): string
   return `${base}-${used.size + 1}`;
 }
 
-function resolveMemberBrand(
-  driver: string | null | undefined,
-  model: string | null | undefined,
-  fallbackBrand: AgentBrandId,
-): AgentBrandId {
-  if (driver && driver.trim().length > 0) {
-    const resolved = resolveAgentBrandId(driver);
-    if (resolved !== "acp" && resolved !== "custom") return resolved;
+export interface ResolveAgentAuxBrandInput {
+  readonly provider?: string | null | undefined;
+  readonly providerEntry?: AgentAuxProviderEntryLike | null | undefined;
+  readonly instanceId?: string | null | undefined;
+  readonly runtimeProviderName?: string | null | undefined;
+  readonly model?: string | null | undefined;
+  readonly providerEntryByInstanceId?: ReadonlyMap<string, AgentAuxProviderEntryLike> | undefined;
+  readonly fallbackBrand?: AgentBrandId | undefined;
+}
+
+/**
+ * Multi-signal brand resolver shared by BOTH the Captain (main agent) and every ACP
+ * delegated child, matching `DelegatedSubthreadTree`'s proven priority:
+ * `acpRegistryAgentId` -> `acpCommandPath` -> `displayName` -> `instanceId` ->
+ * `inferAgentBrandFromModel(model)` -> `resolveAgentBrandId(driverKind)`.
+ */
+export function resolveAgentAuxBrand(input: ResolveAgentAuxBrandInput): AgentBrandId {
+  const trimmedProvider = input.provider?.trim() || "";
+  const trimmedInstanceId = input.instanceId?.trim() || "";
+  const trimmedRuntimeName = input.runtimeProviderName?.trim() || "";
+  const trimmedModel = input.model?.trim() || "";
+
+  const entry =
+    input.providerEntry ??
+    (trimmedInstanceId ? input.providerEntryByInstanceId?.get(trimmedInstanceId) : undefined) ??
+    (trimmedProvider ? input.providerEntryByInstanceId?.get(trimmedProvider) : undefined) ??
+    null;
+
+  if (entry?.driverKind) {
+    const entryDriverBrand = resolveAgentBrandId(entry.driverKind);
+    if (entryDriverBrand !== "acp" && entryDriverBrand !== "custom") {
+      return entryDriverBrand;
+    }
   }
-  if (model && model.trim().length > 0) {
-    const inferred = inferAgentBrandFromModel(model);
-    if (inferred) return inferred;
+
+  const authoritativeAcpKey = resolveAcpAgentBrandKey({
+    agentId: entry?.acpRegistryAgentId,
+    commandPath: entry?.acpCommandPath,
+  });
+  if (authoritativeAcpKey !== null) {
+    return acpBrandKeyToAgentBrandId(authoritativeAcpKey);
   }
-  if (driver && driver.trim().length > 0) {
-    return resolveAgentBrandId(driver);
+
+  const displayNameAcpKey = resolveAcpAgentBrandKey({
+    displayName: entry?.displayName ?? (trimmedRuntimeName || undefined),
+  });
+  if (displayNameAcpKey !== null) {
+    return acpBrandKeyToAgentBrandId(displayNameAcpKey);
   }
-  return fallbackBrand;
+
+  const instanceAcpKey = resolveAcpAgentBrandKey({
+    instanceId: entry?.instanceId ?? (trimmedInstanceId || trimmedProvider || undefined),
+  });
+  if (instanceAcpKey !== null) {
+    return acpBrandKeyToAgentBrandId(instanceAcpKey);
+  }
+
+  for (const candidate of [trimmedProvider, trimmedInstanceId, trimmedRuntimeName]) {
+    if (!candidate) continue;
+    const direct = resolveAgentBrandId(candidate);
+    if (direct !== "acp" && direct !== "custom") {
+      return direct;
+    }
+  }
+
+  if (trimmedModel) {
+    const inferredFromSlug = inferAgentBrandFromModel(trimmedModel);
+    if (inferredFromSlug !== null) {
+      return inferredFromSlug;
+    }
+    const catalogModelName = entry?.models?.find((m) => m.slug === trimmedModel)?.name;
+    const inferredFromCatalog = inferAgentBrandFromModel(catalogModelName);
+    if (inferredFromCatalog !== null) {
+      return inferredFromCatalog;
+    }
+  }
+
+  const driverCandidate = entry?.driverKind || trimmedProvider || trimmedInstanceId;
+  if (driverCandidate) {
+    const resolved = resolveAgentBrandId(driverCandidate);
+    if (resolved !== "custom") return resolved;
+  }
+
+  return input.fallbackBrand ?? (driverCandidate ? resolveAgentBrandId(driverCandidate) : "custom");
 }
 
 function extractBriefLine(prompt: string, maxLen = 110): string {
@@ -2230,6 +2326,7 @@ function collectDelegatedChildren(input: {
   readonly projection?: AgentAuxProjectionLike | null | undefined;
   readonly relationshipShells?: ReadonlyArray<AgentAuxThreadShellLike> | undefined;
   readonly nativeChildWork?: ReadonlyArray<OrchestrationV2NativeChildWork> | undefined;
+  readonly providerEntryByInstanceId?: ReadonlyMap<string, AgentAuxProviderEntryLike> | undefined;
   readonly daemonSnapshot: DaemonAgentAuxInspectResponse | null;
   readonly locale: AgentAuxLocale;
   readonly reservedHandles?: ReadonlySet<string>;
@@ -2275,12 +2372,34 @@ function collectDelegatedChildren(input: {
         seenIds.add(key);
         const childShell = wfa.childThreadId ? shellById.get(wfa.childThreadId) : undefined;
         const status = normalizeSubagentStatus(childShell?.activityRunStatus ?? wfa.state);
-        const modelStr = wfa.model || agent.executedModel || agent.model || "";
-        const memberBrand = resolveMemberBrand(
-          wfa.agentId ?? agent.driver,
-          modelStr,
-          input.parentBrand,
-        );
+        const modelStr =
+          wfa.model ||
+          agent.executedModel ||
+          agent.model ||
+          childShell?.modelSelection?.model ||
+          childShell?.model ||
+          "";
+        const wfaAgentBrand = wfa.agentId ? resolveAgentBrandId(wfa.agentId) : "custom";
+        const wfaProviderHint =
+          wfa.agentId &&
+          (input.providerEntryByInstanceId?.has(wfa.agentId) ||
+            (wfaAgentBrand !== "acp" && wfaAgentBrand !== "custom"))
+            ? wfa.agentId
+            : (agent.driver ?? childShell?.provider ?? wfa.agentId);
+        const childInstanceId =
+          childShell?.runtime?.providerInstanceId ??
+          childShell?.modelSelection?.instanceId ??
+          agent.providerInstanceId ??
+          wfa.agentId ??
+          null;
+        const memberBrand = resolveAgentAuxBrand({
+          provider: wfaProviderHint,
+          instanceId: childInstanceId,
+          runtimeProviderName: childShell?.runtime?.providerName,
+          model: modelStr,
+          providerEntryByInstanceId: input.providerEntryByInstanceId,
+          fallbackBrand: input.parentBrand,
+        });
         const displayName = formatSubagentDisplayTitle(wfa.label || agent.title || s.roleSubagent);
         const handle = makeHandle(
           wfa.label || wfa.agentId || displayName,
@@ -2364,12 +2483,25 @@ function collectDelegatedChildren(input: {
     const childShell = agent.childThreadId ? shellById.get(agent.childThreadId) : undefined;
     const rawStatus = childShell?.activityRunStatus ?? agent.status;
     const status = normalizeSubagentStatus(rawStatus);
-    const modelStr = agent.executedModel ?? agent.model ?? childShell?.model ?? "";
-    const memberBrand = resolveMemberBrand(
-      agent.driver ?? childShell?.provider ?? agent.providerInstanceId,
-      modelStr,
-      input.parentBrand,
-    );
+    const modelStr =
+      agent.executedModel ??
+      agent.model ??
+      childShell?.modelSelection?.model ??
+      childShell?.model ??
+      "";
+    const childInstanceId =
+      childShell?.runtime?.providerInstanceId ??
+      childShell?.modelSelection?.instanceId ??
+      agent.providerInstanceId ??
+      null;
+    const memberBrand = resolveAgentAuxBrand({
+      provider: agent.driver ?? childShell?.provider,
+      instanceId: childInstanceId,
+      runtimeProviderName: childShell?.runtime?.providerName,
+      model: modelStr,
+      providerEntryByInstanceId: input.providerEntryByInstanceId,
+      fallbackBrand: input.parentBrand,
+    });
     const rawTitle =
       agent.title?.trim() ||
       childShell?.title?.trim() ||
@@ -2469,22 +2601,31 @@ function collectDelegatedChildren(input: {
     const itemProgress = typeof rawItem.progress === "string" ? rawItem.progress : "";
     const itemResult = typeof rawItem.result === "string" ? rawItem.result : "";
     const itemDriver = typeof rawItem.driver === "string" ? rawItem.driver : "";
+    const itemProviderInstanceId =
+      typeof rawItem.providerInstanceId === "string" ? rawItem.providerInstanceId : null;
     const itemModel =
       typeof rawItem.executedModel === "string"
         ? rawItem.executedModel
         : typeof rawItem.model === "string"
           ? rawItem.model
-          : (childShell?.model ?? "");
+          : (childShell?.modelSelection?.model ?? childShell?.model ?? "");
     const remoteChild =
       rawItem.remoteChild && typeof rawItem.remoteChild === "object"
         ? (rawItem.remoteChild as { readonly label?: unknown })
         : null;
     const remoteLabel = typeof remoteChild?.label === "string" ? remoteChild.label : null;
-    const memberBrand = resolveMemberBrand(
-      itemDriver || childShell?.provider,
-      itemModel,
-      input.parentBrand,
-    );
+    const childInstanceId =
+      childShell?.runtime?.providerInstanceId ??
+      childShell?.modelSelection?.instanceId ??
+      itemProviderInstanceId;
+    const memberBrand = resolveAgentAuxBrand({
+      provider: itemDriver || childShell?.provider,
+      instanceId: childInstanceId,
+      runtimeProviderName: childShell?.runtime?.providerName,
+      model: itemModel,
+      providerEntryByInstanceId: input.providerEntryByInstanceId,
+      fallbackBrand: input.parentBrand,
+    });
     const rawTitle =
       (typeof rawItem.title === "string" && rawItem.title.trim()) ||
       childShell?.title?.trim() ||
@@ -2556,7 +2697,17 @@ function collectDelegatedChildren(input: {
     seenIds.add(shell.id);
     const rawStatus = shell.activityRunStatus ?? shell.status ?? "idle";
     const status = normalizeSubagentStatus(rawStatus);
-    const memberBrand = resolveMemberBrand(shell.provider, shell.model, input.parentBrand);
+    const shellModel = shell.modelSelection?.model ?? shell.model ?? "";
+    const shellInstanceId =
+      shell.runtime?.providerInstanceId ?? shell.modelSelection?.instanceId ?? null;
+    const memberBrand = resolveAgentAuxBrand({
+      provider: shell.provider,
+      instanceId: shellInstanceId,
+      runtimeProviderName: shell.runtime?.providerName,
+      model: shellModel,
+      providerEntryByInstanceId: input.providerEntryByInstanceId,
+      fallbackBrand: input.parentBrand,
+    });
     const displayName = formatSubagentDisplayTitle(shell.title?.trim() || s.roleSubagent);
     const handle = makeHandle(displayName, shell.provider, children.length);
 
@@ -2573,7 +2724,7 @@ function collectDelegatedChildren(input: {
         ),
         title: displayName,
         brief: displayName,
-        model: shell.model || formatAgentBrandName(memberBrand),
+        model: shellModel || formatAgentBrandName(memberBrand),
         providerBrand: memberBrand,
         sourceKind: "acp-delegated",
         status,
@@ -3158,8 +3309,32 @@ function extractWorkerBriefFromMessages(
   return line.length > 110 ? `${line.slice(0, 109).trimEnd()}…` : line;
 }
 
+function extractParentProviderInstanceIdFromProjection(
+  projection: AgentAuxProjectionLike | null | undefined,
+): string {
+  if (!projection || typeof projection !== "object") return "";
+  const rec = projection as unknown as Record<string, unknown>;
+  const thread =
+    rec.thread && typeof rec.thread === "object" ? (rec.thread as Record<string, unknown>) : null;
+  const sel =
+    thread?.modelSelection && typeof thread.modelSelection === "object"
+      ? (thread.modelSelection as Record<string, unknown>)
+      : null;
+  if (typeof sel?.instanceId === "string" && sel.instanceId.trim()) return sel.instanceId.trim();
+  const runs = Array.isArray(rec.runs) ? rec.runs : [];
+  for (let i = runs.length - 1; i >= 0; i -= 1) {
+    const r = runs[i] as Record<string, unknown> | undefined;
+    if (typeof r?.providerInstanceId === "string" && r.providerInstanceId.trim()) {
+      return r.providerInstanceId.trim();
+    }
+  }
+  return "";
+}
+
 export interface BuildAgentAuxViewModelInput {
   readonly provider: string | null | undefined;
+  readonly providerEntry?: AgentAuxProviderEntryLike | null | undefined;
+  readonly model?: string | null | undefined;
   readonly threadId: ThreadId | null;
   readonly daemonSnapshot: DaemonAgentAuxInspectResponse | null;
   readonly projection?: AgentAuxProjectionLike | null | undefined;
@@ -3167,6 +3342,7 @@ export interface BuildAgentAuxViewModelInput {
   readonly relationshipShells?: ReadonlyArray<AgentAuxThreadShellLike> | undefined;
   readonly nativeChildWork?: ReadonlyArray<OrchestrationV2NativeChildWork> | undefined;
   readonly providerEntries?: ReadonlyArray<ProviderInstanceEntry> | undefined;
+  readonly providerEntryByInstanceId?: ReadonlyMap<string, AgentAuxProviderEntryLike> | undefined;
   readonly providerDisplayName?: string | null | undefined;
   readonly locale?: AgentAuxLocale;
 }
@@ -3175,12 +3351,63 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
   const locale: AgentAuxLocale = input.locale ?? "zh";
   const s = getAuxStrings(locale);
   const provider = input.provider ?? null;
-  const brand = resolveAgentBrandId(provider);
-  const defaultBrandName = formatAgentBrandName(provider);
+
+  const providerEntryByInstanceId = new Map<string, AgentAuxProviderEntryLike>();
+  if (input.providerEntries) {
+    for (const entry of input.providerEntries) {
+      providerEntryByInstanceId.set(entry.instanceId, entry);
+    }
+  }
+  if (input.providerEntryByInstanceId) {
+    for (const [id, entry] of input.providerEntryByInstanceId.entries()) {
+      providerEntryByInstanceId.set(id, entry);
+    }
+  }
+  if (input.providerEntry) {
+    providerEntryByInstanceId.set(input.providerEntry.instanceId, input.providerEntry);
+  }
+
+  const captainInstanceId =
+    input.providerEntry?.instanceId ??
+    input.threadShell?.runtime?.providerInstanceId ??
+    input.threadShell?.modelSelection?.instanceId ??
+    (extractParentProviderInstanceIdFromProjection(input.projection) || null);
+  const captainEntry =
+    input.providerEntry ??
+    (captainInstanceId ? providerEntryByInstanceId.get(captainInstanceId) : undefined) ??
+    null;
+  const parentModelRaw =
+    input.model?.trim() ||
+    input.threadShell?.modelSelection?.model?.trim() ||
+    input.threadShell?.model?.trim() ||
+    extractParentModelFromProjection(input.projection);
+  const brand = resolveAgentAuxBrand({
+    provider,
+    providerEntry: captainEntry,
+    instanceId: captainInstanceId,
+    runtimeProviderName: input.threadShell?.runtime?.providerName ?? input.providerDisplayName,
+    model: parentModelRaw,
+    providerEntryByInstanceId,
+  });
+  const defaultBrandName =
+    brand !== "acp" && brand !== "custom"
+      ? formatAgentBrandName(brand)
+      : formatAgentBrandName(provider);
+  const rawConfiguredLabel = captainEntry
+    ? resolveProviderEntryDisplayName(captainEntry)
+    : input.providerEntries && input.providerEntries.length > 0
+      ? resolveConfiguredProviderLabel(
+          captainInstanceId ?? provider,
+          input.providerEntries,
+          input.providerDisplayName,
+        )
+      : brand !== "acp" && brand !== "custom"
+        ? formatAgentBrandName(brand, input.providerDisplayName)
+        : formatAgentBrandName(provider, input.providerDisplayName);
   const brandDisplayName =
-    input.providerEntries && input.providerEntries.length > 0
-      ? resolveConfiguredProviderLabel(provider, input.providerEntries, input.providerDisplayName)
-      : formatAgentBrandName(provider, input.providerDisplayName);
+    brand !== "acp" && /^(?:acp|acp\s*registry)$/i.test(rawConfiguredLabel.trim())
+      ? defaultBrandName
+      : rawConfiguredLabel;
   const hasCustomBrandName =
     brandDisplayName.trim().length > 0 &&
     brandDisplayName.trim().toLowerCase() !== defaultBrandName.trim().toLowerCase();
@@ -3525,6 +3752,7 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
       projection: input.projection,
       relationshipShells: input.relationshipShells,
       nativeChildWork: input.nativeChildWork,
+      providerEntryByInstanceId,
       daemonSnapshot: null,
       locale,
       reservedHandles,
@@ -3866,6 +4094,7 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
     projection: input.projection,
     relationshipShells: input.relationshipShells,
     nativeChildWork: input.nativeChildWork,
+    providerEntryByInstanceId,
     daemonSnapshot: snap,
     locale,
   });
@@ -4013,7 +4242,7 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
       : anyChildActive
         ? "working"
         : "parked";
-  const parentModel = extractParentModelFromProjection(input.projection) || brandDisplayName;
+  const parentModel = parentModelRaw || brandDisplayName;
   const coordStats = childMsgStats.get("coordinator");
   const coordDisplayName =
     locale === "zh" ? `主线程 · ${brandDisplayName}` : `Main · ${brandDisplayName}`;
