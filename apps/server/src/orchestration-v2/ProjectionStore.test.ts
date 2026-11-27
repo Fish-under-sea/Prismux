@@ -3272,6 +3272,9 @@ it.effect("SQL list older settled threads below a cursor", () =>
       readonly settledDay: number | null;
       readonly project?: string;
       readonly subagent?: boolean;
+      readonly parentName?: string;
+      readonly rootName?: string;
+      readonly creationSource?: "web" | "mobile" | "mcp" | "server" | "provider";
       readonly archived?: boolean;
       readonly snoozedUntilDay?: number;
     }) =>
@@ -3281,8 +3284,8 @@ it.effect("SQL list older settled threads below a cursor", () =>
         threadId: id(input.name),
         occurredAt: now,
         payload: {
-          createdBy: "user",
-          creationSource: "web",
+          createdBy: input.subagent === true ? "agent" : "user",
+          creationSource: input.creationSource ?? (input.subagent === true ? "provider" : "web"),
           id: id(input.name),
           projectId: ProjectId.make(input.project ?? "project:a"),
           title: input.name,
@@ -3294,9 +3297,12 @@ it.effect("SQL list older settled threads below a cursor", () =>
           worktreePath: null,
           activeProviderThreadId: null,
           lineage: {
-            parentThreadId: input.subagent === true ? id("b") : null,
+            parentThreadId: input.subagent === true ? id(input.parentName ?? "b") : null,
             relationshipToParent: input.subagent === true ? "subagent" : null,
-            rootThreadId: input.subagent === true ? id("b") : id(input.name),
+            rootThreadId:
+              input.subagent === true
+                ? id(input.rootName ?? input.parentName ?? "b")
+                : id(input.name),
           },
           forkedFrom: null,
           createdAt: now,
@@ -3316,7 +3322,37 @@ it.effect("SQL list older settled threads below a cursor", () =>
     yield* createThread({ name: "snoozed", settledDay: 2, snoozedUntilDay: 30 });
     yield* createThread({ name: "recent", settledDay: 20 });
     yield* createThread({ name: "unsettled", settledDay: null });
-    yield* createThread({ name: "child", settledDay: 1, subagent: true });
+    yield* createThread({
+      name: "child",
+      settledDay: 1,
+      subagent: true,
+      creationSource: "provider",
+    });
+    yield* createThread({
+      name: "mcp-child",
+      settledDay: null,
+      subagent: true,
+      parentName: "b",
+      rootName: "b",
+      creationSource: "mcp",
+    });
+    yield* createThread({
+      name: "mcp-grandchild",
+      settledDay: null,
+      subagent: true,
+      parentName: "mcp-child",
+      rootName: "b",
+      creationSource: "mcp",
+    });
+    yield* createThread({
+      name: "mcp-archived-child",
+      settledDay: null,
+      subagent: true,
+      parentName: "b",
+      rootName: "b",
+      creationSource: "mcp",
+      archived: true,
+    });
     yield* createThread({ name: "archived", settledDay: 1, archived: true });
 
     const list = (
@@ -3326,7 +3362,17 @@ it.effect("SQL list older settled threads below a cursor", () =>
     ) => store.listOlderSettledThreads({ before, projectIds, limit });
     const before = { settledAt: DateTime.formatIso(at(10)) };
     const first = yield* list(before, 2);
-    assert.deepEqual(first, { threadIds: [id("a"), id("b")], counts: [] });
+    // Delegated MCP children of page parents are returned alongside the 2 top-level parents,
+    // placed ahead of them so `threadIds.at(-1)` stays the oldest top-level parent (`b`) for cursoring.
+    assert.deepEqual(first, {
+      threadIds: [id("mcp-child"), id("mcp-grandchild"), id("a"), id("b")],
+      counts: [],
+    });
+    // Active shell index surfaces creationSource for subagent rows only.
+    const shellIndex = yield* store.listActiveShellIndex();
+    assert.equal(shellIndex.find((row) => row.id === id("a"))?.creationSource, null);
+    assert.equal(shellIndex.find((row) => row.id === id("child"))?.creationSource, "provider");
+    assert.equal(shellIndex.find((row) => row.id === id("mcp-child"))?.creationSource, "mcp");
     assert.sameDeepMembers(
       [...(yield* list(before, 0)).counts],
       [

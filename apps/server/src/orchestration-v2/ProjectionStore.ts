@@ -515,6 +515,8 @@ export interface ActiveShellIndexEntry extends Pick<
   | "pinOrderKey"
   | "snoozedUntil"
 > {
+  /** Populated for non-side-chat subagent rows so shell trims distinguish delegated vs provider subagents. */
+  readonly creationSource?: OrchestrationV2ThreadShell["creationSource"] | null;
   /** False only when no run, request, work item, or watch can make the shell live. */
   readonly mayBeLive: boolean;
   /** Whether it delegated a task to a linked environment, whose clients nest that task under it. */
@@ -9497,6 +9499,17 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     const PENDING_ITEMS_INDEX = sql.literal(
       "INDEXED BY orchestration_v2_projection_turn_items_shell_pending_idx",
     );
+    const parseSubagentCreationSource = (
+      value: string | null,
+    ): OrchestrationV2ThreadShell["creationSource"] | null =>
+      value === "web" ||
+      value === "mobile" ||
+      value === "mcp" ||
+      value === "server" ||
+      value === "provider"
+        ? value
+        : null;
+
     const listActiveShellIndex = Effect.fn("ProjectionStore.listActiveShellIndex")(function* () {
       const rows = yield* sql<{
         readonly thread_id: string;
@@ -9505,6 +9518,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         readonly parent_thread_id: string | null;
         readonly root_thread_id: string;
         readonly side_chat: number | null;
+        readonly subagent_creation_source: string | null;
         readonly settled_override: string | null;
         readonly settled_at: string | null;
         readonly pinned_at: string | null;
@@ -9520,6 +9534,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           ${indexedField("$.lineage.parentThreadId")} AS parent_thread_id,
           ${indexedField("$.lineage.rootThreadId")} AS root_thread_id,
           ${indexedField("$.lineage.sideChat")} AS side_chat,
+          -- Only non-side-chat subagent rows read payload_json for creationSource; regular rows
+          -- stay completely covered by orchestration_v2_projection_threads_active_shell_idx.
+          CASE WHEN ${indexedField("$.lineage.relationshipToParent")} = 'subagent'
+            AND ${indexedField("$.lineage.sideChat")} IS NOT 1
+            THEN CASE WHEN json_valid(t.payload_json)
+              THEN json_extract(t.payload_json, '$.creationSource')
+            END
+          END AS subagent_creation_source,
           ${indexedField("$.settledOverride")} AS settled_override,
           ${indexedField("$.settledAt")} AS settled_at,
           ${indexedField("$.pinnedAt")} AS pinned_at,
@@ -9581,6 +9603,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         id: ThreadId.make(row.thread_id),
         projectId: ProjectId.make(row.project_id),
         lineage: shellIndexLineage(row),
+        creationSource: parseSubagentCreationSource(row.subagent_creation_source),
         settledOverride:
           row.settled_override === "settled" || row.settled_override === "active"
             ? row.settled_override
@@ -9739,8 +9762,40 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               WHERE ${belowCursor}
               GROUP BY older.project_id
             `;
+      const pageIds = pageRows.map((row) => ThreadId.make(row.thread_id));
+      const delegatedChildIds: Array<ThreadId> = [];
+      if (limit > 0 && pageIds.length > 0) {
+        const seenIds = new Set<string>(pageIds);
+        let frontierParentIds: ReadonlyArray<ThreadId> = pageIds;
+        while (frontierParentIds.length > 0) {
+          const childRows = yield* sql<{ readonly thread_id: string }>`
+            SELECT t.thread_id
+            FROM orchestration_v2_projection_threads t
+            WHERE t.deleted_at IS NULL
+              AND t.archived_at IS NULL
+              AND json_valid(t.payload_json)
+              AND json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+              AND json_extract(t.payload_json, '$.lineage.sideChat') IS NOT 1
+              AND json_extract(t.payload_json, '$.creationSource') IS NOT NULL
+              AND json_extract(t.payload_json, '$.creationSource') <> 'provider'
+              AND json_extract(t.payload_json, '$.lineage.parentThreadId') IN ${sql.in(frontierParentIds)}
+            ORDER BY t.created_at ASC, t.thread_id ASC
+          `;
+          const nextFrontier: Array<ThreadId> = [];
+          for (const child of childRows) {
+            if (seenIds.has(child.thread_id)) continue;
+            seenIds.add(child.thread_id);
+            const childId = ThreadId.make(child.thread_id);
+            delegatedChildIds.push(childId);
+            nextFrontier.push(childId);
+          }
+          frontierParentIds = nextFrontier;
+        }
+      }
       return {
-        threadIds: pageRows.map((row) => ThreadId.make(row.thread_id)),
+        // Place delegated children before top-level page rows so `threads.at(-1)` stays the
+        // oldest top-level settled parent for client cursor pagination (`olderSettledThreads.ts`).
+        threadIds: [...delegatedChildIds, ...pageIds],
         counts: countRows.map((row) => ({
           projectId: ProjectId.make(row.project_id),
           count: row.count,

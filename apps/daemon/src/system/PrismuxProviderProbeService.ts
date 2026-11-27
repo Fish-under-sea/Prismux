@@ -13,12 +13,16 @@ import type { CoreRpcClient, CoreProviderSummary } from "../core/CoreRpcClient.j
 import {
   CLI_DISCOVERY_NEGATIVE_TTL_MS,
   CLI_DISCOVERY_POSITIVE_TTL_MS,
+  DEFAULT_DIAGNOSTICS_CLI_TIMEOUT_MS,
   clearCliDiscoveryCaches,
   defaultCliProbe,
   findPackagedAntigravityCli,
+  findPackagedAntigravityCliAsync,
   findPackagedDshDesktopCli,
+  findPackagedDshDesktopCliAsync,
   getDefaultCliExtraDirs,
   isPlaceholderDshVersion,
+  locateCliBinaryFastSync,
   resolveDshInstalledVersionFastSync,
   type CliProbeResult
 } from "./ServiceDiagnosticsService.js";
@@ -28,7 +32,12 @@ import {
   type WindowsEnvRefreshResult
 } from "./WindowsEnvRefresh.js";
 
-const DEFAULT_CLI_TIMEOUT_MS = 1_100;
+const DEFAULT_CLI_TIMEOUT_MS = DEFAULT_DIAGNOSTICS_CLI_TIMEOUT_MS;
+const SERVER_AUTH_RPC_TIMEOUT_MS = 350;
+const SERVER_AUTH_SUCCESS_TTL_MS = 5_000;
+const SERVER_AUTH_FAILURE_BACKOFF_MS = 60_000;
+const PROBE_ALL_CONCURRENCY_LIMIT = 3;
+const TIMED_OUT_INSTALLED_CACHE_TTL_MS = 30_000;
 
 export const AUTH_LABEL_API_CUSTOM = "API / 自定义端点注入（已放行）" as const;
 export const AUTH_LABEL_CCS_MAGPIE = AUTH_LABEL_API_CUSTOM;
@@ -1364,6 +1373,7 @@ export class PrismuxProviderProbeService {
   private readonly platform: NodeJS.Platform;
   private readonly now: () => number;
   private readonly customCliProbe: boolean;
+  private readonly customLocateExecutable: boolean;
   private readonly refreshEnvFn: () => Promise<WindowsEnvRefreshResult | void> | void;
   private readonly cliProbeFn: (
     command: string,
@@ -1389,6 +1399,10 @@ export class PrismuxProviderProbeService {
     { snapshot: PrismuxProviderProbeSnapshot; expiresAt: number }
   >();
   private lastServerAuthByProvider = new Map<string, ServerProviderAuthMetadata>();
+  private inflightServerAuthFetch: Promise<Map<string, ServerProviderAuthMetadata>> | null =
+    null;
+  private serverAuthFetchedAt = 0;
+  private serverAuthBackoffUntil = 0;
 
   constructor(options: PrismuxProviderProbeServiceOptions = {}) {
     this.coreRpcClient = options.coreRpcClient;
@@ -1414,6 +1428,7 @@ export class PrismuxProviderProbeService {
     this.now = options.now ?? (() => Date.now());
     this.configuredProvidersSource = options.configuredProviders;
     this.customCliProbe = options.cliProbe !== undefined;
+    this.customLocateExecutable = options.locateExecutable !== undefined;
     this.refreshEnvFn =
       options.refreshEnv ??
       (() =>
@@ -1479,8 +1494,14 @@ export class PrismuxProviderProbeService {
     return out;
   }
 
+  hasCustomCliProbe(): boolean {
+    return this.customCliProbe;
+  }
+
   clearCache(): void {
     this.cache.clear();
+    this.serverAuthFetchedAt = 0;
+    this.serverAuthBackoffUntil = 0;
     if (!this.customCliProbe) {
       clearCliDiscoveryCaches();
     }
@@ -1502,6 +1523,86 @@ export class PrismuxProviderProbeService {
       return null;
     }
     return entry.snapshot;
+  }
+
+  /**
+   * Pure-FS zero-subprocess executable locator (<10ms; never runs `reg.exe` or CLI processes).
+   */
+  locateProviderExecutableFast(
+    providerId: string,
+    overrideEnv?: Record<string, string | undefined>,
+    overridePlatform?: NodeJS.Platform
+  ): string | null {
+    const spec = this.getProviderSpec(providerId);
+    if (!spec) {
+      return null;
+    }
+    if (this.customLocateExecutable) {
+      return this.locateExecutableFn(
+        spec.command,
+        overrideEnv ?? this.env,
+        overridePlatform ?? this.platform
+      );
+    }
+    return locateCliBinaryFastSync(spec.command, {
+      env: overrideEnv ?? this.env,
+      platform: overridePlatform ?? this.platform,
+      homeDir: this.homeDir
+    });
+  }
+
+  /**
+   * Pure-FS zero-subprocess snapshot fallback used when diagnostics safety timers trigger.
+   * Never spawns `reg.exe` or any CLI subprocess.
+   */
+  getFastFallbackSnapshotSync(providerId: string): PrismuxProviderProbeSnapshot {
+    const canonical = canonicalizeProbeProviderId(providerId);
+    const cached = this.getCachedSnapshot(canonical);
+    if (cached) {
+      return cached;
+    }
+    const spec = this.getProviderSpec(canonical);
+    const binaryPath = spec ? this.locateProviderExecutableFast(canonical) : null;
+    const installed = canonical === "local" ? true : binaryPath !== null;
+    const version =
+      canonical === "dsh" && installed
+        ? resolveDshInstalledVersionFastSync({
+            binaryPath,
+            env: this.env,
+            platform: this.platform,
+            homeDir: this.homeDir
+          })
+        : null;
+    const serverAuth = this.lastServerAuthByProvider.get(canonical) ?? null;
+    const classification = classifyProviderAuth({
+      providerId: canonical,
+      installed,
+      binaryPath,
+      env: this.env,
+      homeDir: this.homeDir,
+      workspacePath: this.workspacePath,
+      platform: this.platform,
+      serverAuth
+    });
+    const status: ProviderProbeStatus = !installed
+      ? "not_installed"
+      : classification.explicitlyUnauthenticated
+        ? "unauthenticated"
+        : "ready";
+
+    return {
+      providerId: canonical,
+      displayName: spec?.displayName ?? canonical,
+      installed,
+      version,
+      binaryPath,
+      status,
+      authMode: classification.authMode,
+      authSource: classification.authSource,
+      endpoint: classification.endpoint,
+      authLabel: classification.authLabel,
+      checkedAt: new Date(this.now()).toISOString()
+    };
   }
 
   /**
@@ -1608,17 +1709,51 @@ export class PrismuxProviderProbeService {
       }
     }
 
+    const effectiveTimeoutMs = options.timeoutMs ?? this.cliTimeoutMs;
+    const spec = this.getProviderSpec(canonical);
+
+    // Rule A: Pure-FS binary presence check BEFORE any Core RPC or subprocess spawn.
+    // Uninstalled CLIs immediately return `not_installed` (<10ms, 0 spawns) without
+    // ever blocking on `fetchServerAuthMap()` or spawning a `--version` process.
+    if (!this.customCliProbe && spec !== undefined) {
+      const precheckStarted = performance.now();
+      const installedPath = await this.locateBinaryBeforeProbeAsync(spec, {
+        refresh: options.refresh === true,
+        deepScan: options.deepScan === true
+      });
+      if (installedPath === null) {
+        const latencyMs = Math.max(0, Math.round(performance.now() - precheckStarted));
+        const serverAuth =
+          options.serverAuth !== undefined
+            ? options.serverAuth
+            : this.serverAuthResolver
+              ? (await this.fetchServerAuthMap(effectiveTimeoutMs)).get(canonical) ?? null
+              : null;
+        return this.finalizeProbeSnapshot(
+          spec,
+          {
+            found: false,
+            path: null,
+            version: null,
+            latencyMs,
+            error: `PATH 中未找到 ${spec.command}`
+          },
+          serverAuth
+        );
+      }
+    }
+
     const serverAuthMap =
       options.serverAuth !== undefined
         ? new Map<string, ServerProviderAuthMetadata>(
             options.serverAuth ? [[canonical, options.serverAuth]] : []
           )
-        : await this.fetchServerAuthMap();
+        : await this.fetchServerAuthMap(effectiveTimeoutMs);
 
     return this.probeSingleWithServerAuth(
       canonical,
       serverAuthMap.get(canonical) ?? null,
-      options.timeoutMs ?? this.cliTimeoutMs,
+      effectiveTimeoutMs,
       {
         refresh: options.refresh === true,
         deepScan: options.deepScan === true
@@ -1691,42 +1826,126 @@ export class PrismuxProviderProbeService {
       }
     }
 
-    const needProbe = targetSpecs.some(
-      (spec) => refresh || deepScan || this.getCachedSnapshot(spec.providerId) === null
-    );
-    const serverAuthMap = needProbe
-      ? await this.fetchServerAuthMap()
+    const timeoutMs = options.timeoutMs ?? this.cliTimeoutMs;
+
+    // Rule A: Pre-filter presence in pure FS before fetching server auth or spawning CLIs.
+    const precheckedBinaryById = new Map<string, string | null>();
+    if (!this.customCliProbe) {
+      await Promise.all(
+        targetSpecs.map(async (spec) => {
+          if (!refresh && !deepScan && this.getCachedSnapshot(spec.providerId) !== null) {
+            return;
+          }
+          const foundPath = await this.locateBinaryBeforeProbeAsync(spec, {
+            refresh,
+            deepScan
+          });
+          precheckedBinaryById.set(spec.providerId, foundPath);
+        })
+      );
+    }
+
+    const needServerAuth = targetSpecs.some((spec) => {
+      if (!refresh && !deepScan && this.getCachedSnapshot(spec.providerId) !== null) {
+        return false;
+      }
+      if (this.customCliProbe || this.serverAuthResolver) {
+        return true;
+      }
+      return precheckedBinaryById.get(spec.providerId) !== null;
+    });
+    const serverAuthMap = needServerAuth
+      ? await this.fetchServerAuthMap(timeoutMs)
       : this.lastServerAuthByProvider;
 
-    const timeoutMs = options.timeoutMs ?? this.cliTimeoutMs;
-    const providers = await Promise.all(
-      targetSpecs.map(async (spec) => {
+    const results = new Array<PrismuxProviderProbeSnapshot>(targetSpecs.length);
+    let nextIndex = 0;
+    const workerCount = Math.min(PROBE_ALL_CONCURRENCY_LIMIT, targetSpecs.length);
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const current = nextIndex;
+        nextIndex += 1;
+        if (current >= targetSpecs.length) break;
+        const spec = targetSpecs[current]!;
         if (!refresh && !deepScan) {
           const cached = this.getCachedSnapshot(spec.providerId);
           if (cached) {
-            return cached;
+            results[current] = cached;
+            continue;
           }
         }
-        return this.probeSingleWithServerAuth(
+        if (
+          !this.customCliProbe &&
+          precheckedBinaryById.has(spec.providerId) &&
+          precheckedBinaryById.get(spec.providerId) === null
+        ) {
+          results[current] = this.finalizeProbeSnapshot(
+            spec,
+            {
+              found: false,
+              path: null,
+              version: null,
+              latencyMs: 0,
+              error: `PATH 中未找到 ${spec.command}`
+            },
+            serverAuthMap.get(spec.providerId) ?? null
+          );
+          continue;
+        }
+        results[current] = await this.probeSingleWithServerAuth(
           spec.providerId,
           serverAuthMap.get(spec.providerId) ?? null,
           timeoutMs,
           { refresh, deepScan }
         );
-      })
-    );
+      }
+    });
+    await Promise.all(workers);
 
     return {
       ok: true,
       generatedAt: new Date(this.now()).toISOString(),
-      providers
+      providers: results
     };
   }
 
-  private async fetchServerAuthMap(): Promise<Map<string, ServerProviderAuthMetadata>> {
-    const map = new Map<string, ServerProviderAuthMetadata>();
+  private async locateBinaryBeforeProbeAsync(
+    spec: ProviderProbeSpec,
+    options: { refresh?: boolean; deepScan?: boolean }
+  ): Promise<string | null> {
+    const fast = this.locateProviderExecutableFast(spec.providerId);
+    if (fast !== null) {
+      return fast;
+    }
+    if (this.customLocateExecutable) {
+      return null;
+    }
+    if (spec.providerId === "antigravity") {
+      return findPackagedAntigravityCliAsync(this.env, this.platform, this.homeDir, {
+        deepScan: options.deepScan === true,
+        bypassCache: options.refresh === true
+      });
+    }
+    if (spec.providerId === "dsh") {
+      const packaged = await findPackagedDshDesktopCliAsync(
+        this.env,
+        this.platform,
+        this.homeDir,
+        {
+          deepScan: options.deepScan === true,
+          bypassCache: options.refresh === true
+        }
+      );
+      return packaged?.executablePath ?? null;
+    }
+    return null;
+  }
 
+  private async fetchServerAuthMap(
+    timeoutMs: number = this.cliTimeoutMs
+  ): Promise<Map<string, ServerProviderAuthMetadata>> {
     if (this.serverAuthResolver) {
+      const map = new Map<string, ServerProviderAuthMetadata>();
       try {
         const resolved = await this.serverAuthResolver();
         for (const [rawId, meta] of Object.entries(resolved)) {
@@ -1741,9 +1960,47 @@ export class PrismuxProviderProbeService {
       }
     }
 
-    if (this.coreRpcClient?.isConnected()) {
+    if (!this.coreRpcClient?.isConnected()) {
+      return new Map<string, ServerProviderAuthMetadata>();
+    }
+
+    const nowMs = this.now();
+    if (nowMs < this.serverAuthBackoffUntil) {
+      return this.lastServerAuthByProvider;
+    }
+    if (
+      this.serverAuthFetchedAt > 0 &&
+      nowMs - this.serverAuthFetchedAt < SERVER_AUTH_SUCCESS_TTL_MS
+    ) {
+      return this.lastServerAuthByProvider;
+    }
+    if (this.inflightServerAuthFetch !== null) {
+      return this.inflightServerAuthFetch;
+    }
+
+    const rpcTimeoutMs = Math.min(
+      SERVER_AUTH_RPC_TIMEOUT_MS,
+      Math.max(150, Math.floor(timeoutMs / 4))
+    );
+    const coreRpc = this.coreRpcClient;
+
+    const run = (async (): Promise<Map<string, ServerProviderAuthMetadata>> => {
+      const map = new Map<string, ServerProviderAuthMetadata>();
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const list = await this.coreRpcClient.listProviders();
+        const listPromise = coreRpc.listProviders();
+        // Prevent late CoreRpcClient 15s timeouts from triggering UnhandledPromiseRejection.
+        listPromise.catch(() => undefined);
+        const list = await Promise.race<CoreProviderSummary[] | null>([
+          listPromise,
+          new Promise<null>((resolveTimeout) => {
+            timer = setTimeout(() => resolveTimeout(null), rpcTimeoutMs);
+          })
+        ]);
+        if (list === null) {
+          this.serverAuthBackoffUntil = this.now() + SERVER_AUTH_FAILURE_BACKOFF_MS;
+          return this.lastServerAuthByProvider;
+        }
         for (const item of list) {
           const canonical = canonicalizeProbeProviderId(item.id);
           const meta = extractServerAuthFromSummary(item);
@@ -1752,13 +2009,25 @@ export class PrismuxProviderProbeService {
           }
         }
         this.lastServerAuthByProvider = map;
+        this.serverAuthFetchedAt = this.now();
+        this.serverAuthBackoffUntil = 0;
         return map;
       } catch {
+        this.serverAuthBackoffUntil = this.now() + SERVER_AUTH_FAILURE_BACKOFF_MS;
         return this.lastServerAuthByProvider;
+      } finally {
+        if (timer !== undefined) {
+          clearTimeout(timer);
+        }
       }
-    }
+    })().finally(() => {
+      if (this.inflightServerAuthFetch === run) {
+        this.inflightServerAuthFetch = null;
+      }
+    });
 
-    return map;
+    this.inflightServerAuthFetch = run;
+    return run;
   }
 
   private async probeSingleWithServerAuth(
@@ -1778,6 +2047,14 @@ export class PrismuxProviderProbeService {
       timeoutMs,
       probeOpts
     );
+    return this.finalizeProbeSnapshot(spec, cliResult, serverAuth);
+  }
+
+  private finalizeProbeSnapshot(
+    spec: ProviderProbeSpec,
+    cliResult: CliProbeResult,
+    serverAuth: ServerProviderAuthMetadata | null
+  ): PrismuxProviderProbeSnapshot {
     const installed = cliResult.found;
     const binaryPath = cliResult.path ?? null;
     let version = cliResult.version ?? null;
@@ -1812,10 +2089,19 @@ export class PrismuxProviderProbeService {
       serverAuth
     });
 
+    // Rule B: If the CLI binary is confirmed present on disk and auth mode is resolved,
+    // a slow `--version` timeout degrades gracefully to `ready` (instead of false degraded
+    // failure), while genuine non-timeout launch/exit crashes remain `degraded`.
+    const gracefulSlowVersion =
+      installed && binaryPath !== null && cliResult.timedOut === true && !version;
+    if (gracefulSlowVersion) {
+      cliError = null;
+    }
+
     let status: ProviderProbeStatus;
     if (!installed) {
       status = "not_installed";
-    } else if (!version || cliError) {
+    } else if (!gracefulSlowVersion && (!version || cliError)) {
       status = "degraded";
     } else if (classification.explicitlyUnauthenticated) {
       status = "unauthenticated";
@@ -1840,8 +2126,11 @@ export class PrismuxProviderProbeService {
       latencyMs: cliResult.latencyMs
     };
 
-    const ttlMs =
-      installed && !cliError ? this.positiveCacheTtlMs : this.negativeCacheTtlMs;
+    const ttlMs = gracefulSlowVersion
+      ? Math.min(this.negativeCacheTtlMs, TIMED_OUT_INSTALLED_CACHE_TTL_MS)
+      : installed && !cliError
+        ? this.positiveCacheTtlMs
+        : this.negativeCacheTtlMs;
     if (ttlMs > 0) {
       this.cache.set(spec.providerId, {
         snapshot,

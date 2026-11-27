@@ -180,7 +180,26 @@ function buildActiveShellSnapshot(input: {
 type ShellTrimRow = Pick<
   OrchestrationV2ThreadShell,
   "id" | "projectId" | "lineage" | "settledOverride" | "settledAt"
-> & { readonly hasRemoteTasks?: boolean };
+> & {
+  readonly creationSource?: OrchestrationV2ThreadShell["creationSource"] | null;
+  readonly hasRemoteTasks?: boolean;
+};
+
+/**
+ * Matches Prismux-delegated child threads that render inside the sidebar's 2-level delegated tree
+ * and ACP collaboration panel (`relationshipToParent === "subagent"`, non-side-chat, non-provider).
+ */
+export function isSidebarDelegatedSubagent(
+  row: Pick<ShellTrimRow, "lineage" | "creationSource">,
+): boolean {
+  return (
+    row.lineage.relationshipToParent === "subagent" &&
+    row.lineage.parentThreadId !== null &&
+    row.lineage.sideChat !== true &&
+    row.creationSource != null &&
+    row.creationSource !== "provider"
+  );
+}
 
 /**
  * What a subscriber's trims read across every active row. Computed from full shells or from the
@@ -236,29 +255,72 @@ function shellTrimFacts(rows: ReadonlyArray<ShellTrimRow>): ShellTrimFacts {
   };
 }
 
-function hiddenChildAncestorIds(
-  threads: ReadonlyArray<Pick<OrchestrationV2ThreadShell, "lineage">>,
-) {
+function hiddenChildAncestorIds<Row extends Pick<ShellTrimRow, "id" | "lineage">>(
+  threads: ReadonlyArray<Row>,
+  allRows: ReadonlyArray<Row>,
+): Set<string> {
+  const byId = new Map<string, Row>(allRows.map((row) => [row.id, row]));
   const ancestorIds = new Set<string>();
   for (const thread of threads) {
     if (isListedThreadLineage(thread.lineage)) continue;
-    if (thread.lineage.parentThreadId !== null) ancestorIds.add(thread.lineage.parentThreadId);
+    let parentId = thread.lineage.parentThreadId;
+    const seen = new Set<string>([thread.id]);
+    while (parentId !== null && !seen.has(parentId)) {
+      seen.add(parentId);
+      ancestorIds.add(parentId);
+      parentId = byId.get(parentId)?.lineage.parentThreadId ?? null;
+    }
     ancestorIds.add(thread.lineage.rootThreadId);
   }
   return ancestorIds;
+}
+
+function addKeptDelegatedSubagents<
+  Row extends Pick<ShellTrimRow, "id" | "lineage" | "creationSource">,
+>(rows: ReadonlyArray<Row>, keptIds: Set<string>): void {
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const row of rows) {
+      if (keptIds.has(row.id)) continue;
+      if (
+        isSidebarDelegatedSubagent(row) &&
+        row.lineage.parentThreadId !== null &&
+        keptIds.has(row.lineage.parentThreadId)
+      ) {
+        keptIds.add(row.id);
+        changed = true;
+      }
+    }
+  }
 }
 
 function omitIdleSubagentShellsWith(
   threads: ReadonlyArray<OrchestrationV2ThreadShell>,
   facts: Pick<ShellTrimFacts, "subagentParentIds" | "remoteTaskParentIds">,
 ): ReadonlyArray<OrchestrationV2ThreadShell> {
-  return threads.filter(
-    (thread) =>
+  const anchorSubagents = threads.filter((thread) => {
+    if (thread.lineage.relationshipToParent !== "subagent") return false;
+    return isSidebarDelegatedSubagent(thread)
+      ? isLiveSubagentShell(thread) || facts.remoteTaskParentIds.has(thread.id)
+      : isLiveSubagentShell(thread) ||
+          facts.subagentParentIds.has(thread.id) ||
+          facts.remoteTaskParentIds.has(thread.id);
+  });
+  const anchorSubagentIds = new Set<string>(anchorSubagents.map((thread) => thread.id));
+  const ancestorIds = hiddenChildAncestorIds(anchorSubagents, threads);
+  const keptIds = new Set<string>();
+  for (const thread of threads) {
+    if (
       thread.lineage.relationshipToParent !== "subagent" ||
-      isLiveSubagentShell(thread) ||
-      facts.subagentParentIds.has(thread.id) ||
-      facts.remoteTaskParentIds.has(thread.id),
-  );
+      anchorSubagentIds.has(thread.id) ||
+      ancestorIds.has(thread.id)
+    ) {
+      keptIds.add(thread.id);
+    }
+  }
+  addKeptDelegatedSubagents(threads, keptIds);
+  return threads.filter((thread) => keptIds.has(thread.id));
 }
 
 function omitOlderSettledShellsWith(
@@ -277,16 +339,33 @@ function omitOlderSettledShellsWith(
 } {
   const nowMs = DateTime.toEpochMillis(input.now);
   const beforeMs = facts.olderSettledBeforeMs ?? nowMs;
-  const ancestorIds = hiddenChildAncestorIds(input.threads);
-  const threads = input.threads.filter(
-    (thread) =>
+  const isIdleDelegated = (thread: OrchestrationV2ThreadShell) =>
+    isSidebarDelegatedSubagent(thread) &&
+    !isLiveSubagentShell(thread) &&
+    !facts.remoteTaskParentIds.has(thread.id);
+  // Idle sidebar-delegated subagents MUST NOT pull an older-settled parent above the 25-newest cut;
+  // they return with their parent via `listOlderSettledThreads` when the user expands older rows.
+  const anchorChildren = input.threads.filter((thread) => !isIdleDelegated(thread));
+  const ancestorIds = hiddenChildAncestorIds(anchorChildren, input.threads);
+  const keptIds = new Set<string>();
+  for (const thread of input.threads) {
+    if (isIdleDelegated(thread)) {
+      if (ancestorIds.has(thread.id)) keptIds.add(thread.id);
+      continue;
+    }
+    if (
       !isOlderSettledThreadShell(thread, beforeMs) ||
       thread.pinnedAt != null ||
       (thread.snoozedUntil != null && DateTime.toEpochMillis(thread.snoozedUntil) > nowMs) ||
       isLiveSubagentShell(thread) ||
       ancestorIds.has(thread.id) ||
-      facts.remoteTaskParentIds.has(thread.id),
-  );
+      facts.remoteTaskParentIds.has(thread.id)
+    ) {
+      keptIds.add(thread.id);
+    }
+  }
+  addKeptDelegatedSubagents(input.threads, keptIds);
+  const threads = input.threads.filter((thread) => keptIds.has(thread.id));
   return {
     threads,
     olderSettled: {
@@ -374,36 +453,56 @@ function shellSubscriberThreadIds(
   options: ShellSubscriberOptions,
 ): ReadonlyArray<ThreadId> {
   const facts = shellTrimFacts(index);
-  const subagents = index.filter(
-    (entry) =>
-      entry.lineage.relationshipToParent === "subagent" &&
-      (!options.omitIdleSubagents ||
+  const anchorSubagentIds = new Set<string>();
+  const anchorChildren: Array<ActiveShellIndexEntry> = [];
+  for (const entry of index) {
+    if (entry.lineage.sideChat === true) {
+      anchorChildren.push(entry);
+      continue;
+    }
+    if (entry.lineage.relationshipToParent !== "subagent") continue;
+    const keepAsAnchor = isSidebarDelegatedSubagent(entry)
+      ? entry.mayBeLive || entry.hasRemoteTasks
+      : !options.omitIdleSubagents ||
         entry.mayBeLive ||
         entry.hasRemoteTasks ||
-        facts.subagentParentIds.has(entry.id)),
-  );
-  const ancestorIds = hiddenChildAncestorIds([
-    ...subagents,
-    ...index.filter((entry) => entry.lineage.sideChat === true),
-  ]);
-  const keptSubagentIds = new Set(subagents.map((entry) => entry.id));
+        facts.subagentParentIds.has(entry.id);
+    if (keepAsAnchor) {
+      anchorSubagentIds.add(entry.id);
+      anchorChildren.push(entry);
+    }
+  }
+  const ancestorIds = hiddenChildAncestorIds(anchorChildren, index);
+  const keptIds = new Set<string>();
   const beforeMs = facts.olderSettledBeforeMs;
-  return index.flatMap((entry) =>
-    entry.lineage.relationshipToParent === "subagent"
-      ? keptSubagentIds.has(entry.id)
-        ? [entry.id]
-        : []
-      : !options.omitOlderSettled ||
-          beforeMs === undefined ||
-          !isOlderSettledThreadShell(entry, beforeMs) ||
-          entry.pinnedAt != null ||
-          entry.snoozedUntil != null ||
-          entry.mayBeLive ||
-          entry.hasRemoteTasks ||
-          ancestorIds.has(entry.id)
-        ? [entry.id]
-        : [],
-  );
+  for (const entry of index) {
+    if (entry.lineage.relationshipToParent === "subagent") {
+      if (anchorSubagentIds.has(entry.id) || ancestorIds.has(entry.id)) {
+        keptIds.add(entry.id);
+      }
+      continue;
+    }
+    if (
+      !options.omitOlderSettled ||
+      beforeMs === undefined ||
+      !isOlderSettledThreadShell(entry, beforeMs) ||
+      entry.pinnedAt != null ||
+      entry.snoozedUntil != null ||
+      entry.mayBeLive ||
+      entry.hasRemoteTasks ||
+      ancestorIds.has(entry.id)
+    ) {
+      keptIds.add(entry.id);
+    }
+  }
+  if (!options.omitIdleSubagents && !options.omitOlderSettled) {
+    for (const entry of index) {
+      if (isSidebarDelegatedSubagent(entry)) keptIds.add(entry.id);
+    }
+  } else {
+    addKeptDelegatedSubagents(index, keptIds);
+  }
+  return index.flatMap((entry) => (keptIds.has(entry.id) ? [entry.id] : []));
 }
 
 /**
