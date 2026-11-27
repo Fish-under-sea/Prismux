@@ -11,8 +11,16 @@ import {
   type OrchestrationV2RunAttempt,
 } from "@prismux/core-contracts";
 import * as DateTime from "effect/DateTime";
+import {
+  Children,
+  isValidElement,
+  type ComponentProps,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
+import { PopoverPopup } from "../ui/popover";
 import {
   formatHonestCacheHitPercent,
   formatTurnUsageCompact,
@@ -323,5 +331,142 @@ describe("TurnUsagePopover formatting, multi-agent aggregation & 3-theme markup"
       <TurnUsagePill usage={{ ...usage, totalTokens: 0 }} locale="zh-CN" />,
     );
     expect(zeroHtml).toBe("");
+  });
+
+  it("anchors TurnUsagePopover at side='top' align='start' with collisionPadding=12 so it expands rightward and never overlaps the left sidebar", () => {
+    const usage: ResolvedTurnUsageDisplay = {
+      runId: RunId.make("run-align-start"),
+      providerModelLabel: "anthropic/claude-opus-4-7",
+      totalTokens: 766_591,
+      uncachedInputTokens: 26_411,
+      cachedInputTokens: 720_604,
+      cacheCreationTokens: 14_807,
+      outputTokens: 4_769,
+      reasoningTokens: 0,
+      cacheHitRate: 720_604 / 761_822,
+      isEstimated: false,
+    };
+
+    const findElement = (
+      node: ReactNode,
+      predicate: (element: ReactElement<Record<string, unknown>>) => boolean,
+    ): ReactElement<Record<string, unknown>> | null => {
+      for (const child of Children.toArray(node)) {
+        if (!isValidElement(child)) continue;
+        const element = child as ReactElement<Record<string, unknown>>;
+        if (predicate(element)) return element;
+        const nested = findElement(element.props.children as ReactNode, predicate);
+        if (nested) return nested;
+      }
+      return null;
+    };
+
+    const renderTurnUsagePill = (
+      TurnUsagePill as unknown as {
+        type: (props: ComponentProps<typeof TurnUsagePill>) => ReactElement | null;
+      }
+    ).type;
+    const popoverRoot = renderTurnUsagePill({ usage, locale: "zh-CN", defaultOpen: true });
+    expect(popoverRoot).not.toBeNull();
+
+    const popupElement = findElement(popoverRoot, (el) => el.type === PopoverPopup);
+    expect(popupElement).not.toBeNull();
+    const popupProps = popupElement!.props as ComponentProps<typeof PopoverPopup>;
+    expect(popupProps.side).toBe("top");
+    expect(popupProps.align).toBe("start");
+    expect(popupProps.sideOffset).toBe(8);
+    expect(popupProps.collisionPadding).toBe(12);
+    expect(popupProps.padding).toBe("none");
+
+    // Verify PopoverPopup forwards side/align/collisionPadding straight to Base UI Positioner.
+    const renderedPortal = PopoverPopup(popupProps);
+    const positioner = findElement(
+      renderedPortal,
+      (el) => el.props["data-slot"] === "popover-positioner",
+    );
+    expect(positioner).not.toBeNull();
+    expect(positioner!.props.side).toBe("top");
+    expect(positioner!.props.align).toBe("start");
+    expect(positioner!.props.sideOffset).toBe(8);
+    expect(positioner!.props.collisionPadding).toBe(12);
+
+    // Geometry check: pill sits near the left edge of the chat pane right next to a 240px left sidebar.
+    const computePopoverHorizontalBounds = (params: {
+      readonly align: "start" | "center" | "end";
+      readonly triggerLeft: number;
+      readonly triggerWidth: number;
+      readonly popoverWidth: number;
+      readonly viewportWidth: number;
+      readonly collisionPadding: number;
+    }) => {
+      const rawLeft =
+        params.align === "start"
+          ? params.triggerLeft
+          : params.align === "end"
+            ? params.triggerLeft + params.triggerWidth - params.popoverWidth
+            : params.triggerLeft + (params.triggerWidth - params.popoverWidth) / 2;
+      const minLeft = params.collisionPadding;
+      const maxLeft = Math.max(
+        minLeft,
+        params.viewportWidth - params.collisionPadding - params.popoverWidth,
+      );
+      const left = Math.min(Math.max(rawLeft, minLeft), maxLeft);
+      return { left, right: left + params.popoverWidth };
+    };
+
+    const sidebarRight = 240;
+    const triggerLeft = 264;
+    const triggerWidth = 96;
+    const popoverWidth = 304;
+    const resolvedAlign = positioner!.props.align as "start" | "center" | "end";
+    const resolvedCollisionPadding = positioner!.props.collisionPadding as number;
+
+    const desktopBounds = computePopoverHorizontalBounds({
+      align: resolvedAlign,
+      triggerLeft,
+      triggerWidth,
+      popoverWidth,
+      viewportWidth: 1280,
+      collisionPadding: resolvedCollisionPadding,
+    });
+    expect(desktopBounds.left).toBe(triggerLeft);
+    expect(desktopBounds.left).toBeGreaterThanOrEqual(sidebarRight);
+    expect(desktopBounds.right).toBe(triggerLeft + popoverWidth);
+
+    // Narrow split pane: collisionPadding keeps the right edge safely 12px inside the viewport.
+    const narrowBounds = computePopoverHorizontalBounds({
+      align: resolvedAlign,
+      triggerLeft,
+      triggerWidth,
+      popoverWidth,
+      viewportWidth: 520,
+      collisionPadding: resolvedCollisionPadding,
+    });
+    expect(narrowBounds.right).toBeLessThanOrEqual(520 - 12);
+    expect(narrowBounds.left).toBeGreaterThanOrEqual(12);
+  });
+
+  it("defaults PopoverPopup collisionPadding to 12 for non-panel popovers, honors overrides, and keeps 0 for panel variant", () => {
+    const findPositioner = (node: ReactNode): ReactElement<Record<string, unknown>> | null => {
+      for (const child of Children.toArray(node)) {
+        if (!isValidElement(child)) continue;
+        const element = child as ReactElement<Record<string, unknown>>;
+        if (element.props["data-slot"] === "popover-positioner") return element;
+        const nested = findPositioner(element.props.children as ReactNode);
+        if (nested) return nested;
+      }
+      return null;
+    };
+
+    const defaultPositioner = findPositioner(PopoverPopup({ children: null }));
+    expect(defaultPositioner?.props.collisionPadding).toBe(12);
+
+    const customPositioner = findPositioner(PopoverPopup({ children: null, collisionPadding: 20 }));
+    expect(customPositioner?.props.collisionPadding).toBe(20);
+
+    const panelPositioner = findPositioner(
+      PopoverPopup({ children: null, variant: "panel", collisionPadding: 24 }),
+    );
+    expect(panelPositioner?.props.collisionPadding).toBe(0);
   });
 });
