@@ -5,7 +5,7 @@
     {
       "id": "qq",
       "packageName": "@prismux/plugin-qq",
-      "version": "0.2.4-rc.2",
+      "version": "0.2.4-rc.3",
       "description": "OneBot v11 QQ private Chief Supervisor bridge and isolated group companion plugin.",
       "engines": {
         "prismux": ">=0.1.2-0 <2.0.0 || >=0.1.1-0 <2.0.0 || >=0.1.0-0 <2.0.0 || >=0.0.1-0 <0.1.0"
@@ -21,8 +21,8 @@
         "hooks:subscribe"
       ],
       "modelVisible": false,
-      "sha256": "bccaba45cba1cf0f9cdac891a68d670e866876c1fcb30a2fc84dd9dee787472d",
-      "bytes": 88738,
+      "sha256": "9486dd27f86afa27d5e4140aa60bf0af30cfb086503a28ffed9f1397707684e4",
+      "bytes": 88739,
       "status": "verified"
     }
   ],
