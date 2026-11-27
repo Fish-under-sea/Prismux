@@ -1234,6 +1234,51 @@ export class DaemonBusinessService {
     );
   }
 
+  async deleteMemoryEntry(
+    rawId: unknown,
+    trustedCallerScope: CallerScope,
+  ): Promise<{ ok: true; id: string; deleted: true; deletedAt: number }> {
+    assertOwnerChief(trustedCallerScope, "/v1/memory/entries");
+    if (!this.ctx.memoryStore) {
+      throw new BusinessRouteError(
+        503,
+        "MEMORY_UNAVAILABLE",
+        "SqliteMemoryStore is not configured.",
+      );
+    }
+    const id = typeof rawId === "string" ? rawId.trim() : "";
+    if (id.length === 0) {
+      throw new BusinessRouteError(
+        400,
+        "INVALID_PARAMS",
+        "Memory entry id must be a non-empty string.",
+      );
+    }
+    const existing = await this.ctx.memoryStore.getById(id, trustedCallerScope);
+    if (existing === null || existing.deletedAt != null) {
+      throw new BusinessRouteError(
+        404,
+        "MEMORY_NOT_FOUND",
+        `Memory entry "${id}" was not found or has already been deleted.`,
+      );
+    }
+    const deletedAt = Date.now();
+    const deleted = await this.ctx.memoryStore.softDelete(id, deletedAt);
+    if (!deleted) {
+      throw new BusinessRouteError(
+        404,
+        "MEMORY_NOT_FOUND",
+        `Memory entry "${id}" was not found or has already been deleted.`,
+      );
+    }
+    return {
+      ok: true,
+      id,
+      deleted: true,
+      deletedAt,
+    };
+  }
+
   async getSyncStatus(trustedCallerScope: CallerScope): Promise<Record<string, unknown>> {
     assertOwnerChief(trustedCallerScope, "/v1/sync/status");
     if (!this.ctx.syncVault) {

@@ -589,9 +589,7 @@ export class DaemonRpcServer {
     this.startedAt = options.startedAt ?? Date.now();
     this.pairingRateLimitMaxRequests = Math.max(
       1,
-      Math.floor(
-        options.pairingRateLimitMaxRequests ?? DEFAULT_PAIRING_RATE_LIMIT_MAX_REQUESTS,
-      ),
+      Math.floor(options.pairingRateLimitMaxRequests ?? DEFAULT_PAIRING_RATE_LIMIT_MAX_REQUESTS),
     );
     this.pairingRateLimitWindowMs = Math.max(
       1_000,
@@ -1675,6 +1673,47 @@ export class DaemonRpcServer {
       }
       const rawBody = await readJsonBody(req);
       const result = await this.businessService.searchMemory(rawBody, trustedCallerScope);
+      writeJsonResponse(res, 200, result);
+      return true;
+    }
+
+    const memoryEntryMatch = /^\/v1\/memory\/entries\/([^/]+)$/.exec(pathname);
+    if (method === "DELETE" && memoryEntryMatch?.[1]) {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (!this.businessService) {
+        throw new BusinessRouteError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Business routes service is not configured.",
+        );
+      }
+      let entryId: string;
+      try {
+        entryId = decodeURIComponent(memoryEntryMatch[1]);
+      } catch {
+        throw new BusinessRouteError(400, "INVALID_PARAMS", "Malformed memory entry id.");
+      }
+      const result = await this.businessService.deleteMemoryEntry(entryId, trustedCallerScope);
+      this.diagnosticsService?.clearCache();
+      writeJsonResponse(res, 200, result);
+      return true;
+    }
+
+    if (method === "POST" && pathname === "/v1/memory/delete") {
+      const trustedCallerScope = this.authenticateHttpRequest(req, res);
+      if (trustedCallerScope === null) return true;
+      if (!this.businessService) {
+        throw new BusinessRouteError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Business routes service is not configured.",
+        );
+      }
+      const rawBody = await readJsonBody(req);
+      const entryId = isRecord(rawBody) ? rawBody["id"] : undefined;
+      const result = await this.businessService.deleteMemoryEntry(entryId, trustedCallerScope);
+      this.diagnosticsService?.clearCache();
       writeJsonResponse(res, 200, result);
       return true;
     }

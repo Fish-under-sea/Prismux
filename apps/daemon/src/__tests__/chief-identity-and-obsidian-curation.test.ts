@@ -384,6 +384,88 @@ describe("Chief custom identity, independent AGENTS.md & Obsidian Agent curation
         body: JSON.stringify({ vaultPath: vaultDir }),
       });
       assert.equal(forbiddenPlanRes.status, 403);
+
+      // 7. Verify authenticated soft-delete HTTP routes (`DELETE /v1/memory/entries/:id` & `POST /v1/memory/delete`)
+      const targetId = entries[0]!.id;
+      const forbiddenDeleteRes = await fetch(
+        `${baseUrl}/v1/memory/entries/${encodeURIComponent(targetId)}`,
+        {
+          method: "DELETE",
+          headers: qqGroupHeaders,
+        },
+      );
+      assert.equal(forbiddenDeleteRes.status, 403);
+
+      const forbiddenPostDeleteRes = await fetch(`${baseUrl}/v1/memory/delete`, {
+        method: "POST",
+        headers: qqGroupHeaders,
+        body: JSON.stringify({ id: targetId }),
+      });
+      assert.equal(forbiddenPostDeleteRes.status, 403);
+
+      const badDeleteRes = await fetch(`${baseUrl}/v1/memory/delete`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ id: "   " }),
+      });
+      assert.equal(badDeleteRes.status, 400);
+
+      const deleteRes = await fetch(
+        `${baseUrl}/v1/memory/entries/${encodeURIComponent(targetId)}`,
+        {
+          method: "DELETE",
+          headers,
+        },
+      );
+      assert.equal(deleteRes.status, 200);
+      const deleteJson = (await deleteRes.json()) as {
+        ok: boolean;
+        id: string;
+        deleted: boolean;
+        deletedAt: number;
+      };
+      assert.equal(deleteJson.ok, true);
+      assert.equal(deleteJson.id, targetId);
+      assert.equal(deleteJson.deleted, true);
+      assert.ok(deleteJson.deletedAt > 0);
+
+      // Re-deleting an already soft-deleted entry returns 404.
+      const deleteAgainRes = await fetch(
+        `${baseUrl}/v1/memory/entries/${encodeURIComponent(targetId)}`,
+        {
+          method: "DELETE",
+          headers,
+        },
+      );
+      assert.equal(deleteAgainRes.status, 404);
+
+      const statsAfterDeleteRes = await fetch(`${baseUrl}/v1/memory/stats`, { headers });
+      const statsAfterDeleteJson = (await statsAfterDeleteRes.json()) as { totalEntries: number };
+      assert.equal(statsAfterDeleteJson.totalEntries, 0);
+
+      // Verify POST /v1/memory/delete also soft-deletes cleanly.
+      const secondEntry = await memoryStore.upsert({
+        namespace: "private/chief",
+        kind: "fact",
+        title: "待软删测试条目",
+        content: "验证 POST /v1/memory/delete 路由生效",
+        machineId: "test-machine",
+      });
+      const postDeleteRes = await fetch(`${baseUrl}/v1/memory/delete`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ id: secondEntry.id }),
+      });
+      assert.equal(postDeleteRes.status, 200);
+      const postDeleteJson = (await postDeleteRes.json()) as {
+        ok: boolean;
+        id: string;
+        deleted: boolean;
+      };
+      assert.equal(postDeleteJson.ok, true);
+      assert.equal(postDeleteJson.id, secondEntry.id);
+      assert.equal(postDeleteJson.deleted, true);
+      assert.equal((await memoryStore.listEntries("owner_chief", { limit: 10 })).length, 0);
     } finally {
       await server.stop();
       ptyPool.dispose();
