@@ -178,6 +178,8 @@ function mapCanonicalProviderDriver(rawProvider: string): ProviderDriverKind | n
       return ProviderDriverKind.make("antigravity");
     case "opencode":
       return ProviderDriverKind.make("opencode");
+    case "pi":
+      return ProviderDriverKind.make("pi");
     case "cursor":
       return ProviderDriverKind.make("cursor");
     default: {
@@ -196,16 +198,36 @@ export function buildDispatchModelSelection(
   availableProviders: ReadonlyArray<ServerProvider> = [],
 ): ModelSelection {
   const rawProvider = envelope.provider.trim();
+  const rawProviderLower = rawProvider.toLowerCase();
   const mappedDriver = mapCanonicalProviderDriver(rawProvider);
+  const targetBrand = resolveAgentBrandId(rawProvider);
+  const hasSpecificTargetBrand = targetBrand !== "custom" && targetBrand !== "acp";
 
   const matchedProvider =
     availableProviders.find(
       (candidate) =>
         candidate.instanceId === rawProvider ||
+        candidate.instanceId.toLowerCase() === rawProviderLower,
+    ) ??
+    availableProviders.find(
+      (candidate) =>
         candidate.driver === rawProvider ||
-        (mappedDriver !== null && candidate.driver === mappedDriver) ||
-        resolveAgentBrandId(candidate.driver) === resolveAgentBrandId(rawProvider),
-    ) ?? null;
+        (mappedDriver !== null && candidate.driver === mappedDriver),
+    ) ??
+    (hasSpecificTargetBrand
+      ? availableProviders.find(
+          (candidate) =>
+            resolveAgentBrandId(candidate.driver) === targetBrand ||
+            resolveAgentBrandId(candidate.instanceId) === targetBrand ||
+            resolveAgentBrandId(candidate.displayName) === targetBrand,
+        )
+      : undefined) ??
+    availableProviders.find(
+      (candidate) =>
+        typeof candidate.displayName === "string" &&
+        candidate.displayName.trim().toLowerCase() === rawProviderLower,
+    ) ??
+    null;
 
   const instanceId =
     matchedProvider?.instanceId ??

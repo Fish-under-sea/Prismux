@@ -13,9 +13,13 @@ import {
   isReasoningControl,
   selectableProviderOptionChoices,
 } from "@prismux/client-runtime/model-traits";
+import { providerClients } from "@prismux/client-runtime/provider-clients";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   MUSE_DEFAULT_MODEL,
+  PROVIDER_DISPLAY_NAMES,
+  ProviderDriverKind,
+  isProviderDriverKind,
   type ServerProvider,
   type ServerProviderModel,
 } from "@prismux/core-contracts";
@@ -74,7 +78,6 @@ import { primaryServerProvidersAtom } from "../../state/server";
 import {
   AgentBrandLogo,
   formatAgentBrandName,
-  resolveProviderEntryDisplayName,
   toCanonicalChiefProviderId,
 } from "../agentBrand";
 import { DEFAULT_CHIEF_DISPLAY_NAME, normalizeChiefDisplayName } from "../chiefMention";
@@ -224,15 +227,121 @@ function isPlaceholderModelSlug(slug: string): boolean {
 
 function isRetiredChiefProviderId(raw: string | null | undefined): boolean {
   if (typeof raw !== "string") return false;
-  const normalized = raw.trim().toLowerCase();
+  const normalized = raw.trim().toLowerCase().replace(/\s+/g, " ");
   return (
     normalized === "omp" ||
     normalized === "oh-my-pi" ||
     normalized === "oh_my_pi" ||
+    normalized === "oh my pi" ||
     normalized.startsWith("omp:") ||
     normalized.startsWith("omp-") ||
-    normalized.startsWith("oh-my-pi")
+    normalized.startsWith("omp_") ||
+    normalized.startsWith("oh-my-pi") ||
+    normalized.startsWith("oh_my_pi") ||
+    normalized.startsWith("oh my pi")
   );
+}
+
+function normalizeChiefOptionProviderId(raw: string | null | undefined): string {
+  return toCanonicalChiefProviderId(raw).toLowerCase();
+}
+
+const RAW_CLAUDE_IDENTIFIERS = new Set([
+  "claude",
+  "claudeagent",
+  "claude-agent",
+  "claude_agent",
+  "claude agent",
+  "claude-code",
+  "claude_code",
+  "claudecode",
+  "claude-acp",
+  "claude_acp",
+  "claude acp",
+  "claude-agent-acp",
+  "claude_agent_acp",
+]);
+
+function resolveConfiguredDefaultProviderLabel(
+  providerIdOrDriver: string | null | undefined,
+): string {
+  const trimmed = typeof providerIdOrDriver === "string" ? providerIdOrDriver.trim() : "";
+  if (!trimmed) {
+    return formatAgentBrandName(providerIdOrDriver);
+  }
+  const canonicalId = normalizeChiefOptionProviderId(trimmed);
+  if (canonicalId === "claude-code") {
+    return (
+      providerClients.get(ProviderDriverKind.make("claudeAgent"))?.label ??
+      PROVIDER_DISPLAY_NAMES[ProviderDriverKind.make("claudeAgent")] ??
+      "Claude"
+    );
+  }
+  const directDriver = isProviderDriverKind(trimmed)
+    ? trimmed
+    : isProviderDriverKind(canonicalId)
+      ? canonicalId
+      : null;
+  if (directDriver && directDriver !== "acpRegistry") {
+    const configuredLabel =
+      providerClients.get(directDriver)?.label ?? PROVIDER_DISPLAY_NAMES[directDriver];
+    if (configuredLabel) {
+      return configuredLabel;
+    }
+  }
+  return formatAgentBrandName(canonicalId);
+}
+
+/**
+ * Formats a provider display name on the Chief settings page in alignment with `智能体配置`:
+ * honors explicit custom names, defaults Claude to `"Claude"`, and normalizes raw driver IDs.
+ */
+export function formatChiefProviderLabel(
+  providerIdOrDriver: string | null | undefined,
+  customDisplayName?: string | null,
+  options?: {
+    readonly explicitCustomName?: boolean;
+    readonly driverKind?: string | null;
+  },
+): string {
+  const defaultLabel = resolveConfiguredDefaultProviderLabel(providerIdOrDriver);
+  const trimmedCustom = typeof customDisplayName === "string" ? customDisplayName.trim() : "";
+  if (trimmedCustom.length === 0) {
+    return defaultLabel;
+  }
+  if (options?.explicitCustomName === true && !containsUuidNoise(trimmedCustom)) {
+    return trimmedCustom;
+  }
+  if (containsUuidNoise(trimmedCustom)) {
+    return defaultLabel;
+  }
+  const canonicalId = normalizeChiefOptionProviderId(providerIdOrDriver);
+  const customLower = trimmedCustom.toLowerCase();
+  if (
+    canonicalId !== "acp" &&
+    (customLower === "acp" || customLower === "acp registry")
+  ) {
+    return defaultLabel;
+  }
+  if (canonicalId === "claude-code" && RAW_CLAUDE_IDENTIFIERS.has(customLower)) {
+    return defaultLabel;
+  }
+  if (
+    customLower === canonicalId ||
+    (typeof options?.driverKind === "string" &&
+      customLower === options.driverKind.trim().toLowerCase())
+  ) {
+    return defaultLabel;
+  }
+  const formatted = formatAgentBrandName(canonicalId, trimmedCustom);
+  if (
+    canonicalId === "claude-code" &&
+    formatted === "Claude Code" &&
+    trimmedCustom !== "Claude Code"
+  ) {
+    return trimmedCustom;
+  }
+  return formatted;
 }
 
 function resolveCanonicalChiefProviderInput(entry: {
@@ -270,7 +379,7 @@ function createInitialChiefState(
 ): ChiefStateView {
   return {
     threadId: "",
-    provider: toCanonicalChiefProviderId(runtimeChiefProvider),
+    provider: normalizeChiefOptionProviderId(runtimeChiefProvider),
     secretaryName: DEFAULT_CHIEF_DISPLAY_NAME,
     agentsMdPath: "~/.prismux/chief/AGENTS.md",
     model: "",
@@ -338,14 +447,14 @@ export function buildChiefProviderOptions(input: {
   const buckets = new Map<string, ProviderBucket>();
 
   const ensureBucket = (rawId: string, customDisplayName?: string | null): ProviderBucket => {
-    const canonicalId = toCanonicalChiefProviderId(rawId);
+    const canonicalId = normalizeChiefOptionProviderId(rawId);
     const existing = buckets.get(canonicalId);
     if (existing) {
       return existing;
     }
     const created: ProviderBucket = {
       value: canonicalId,
-      label: formatAgentBrandName(canonicalId, customDisplayName),
+      label: formatChiefProviderLabel(canonicalId, customDisplayName),
       configured: false,
       available: false,
       models: [],
@@ -365,11 +474,11 @@ export function buildChiefProviderOptions(input: {
     if (isRetiredChiefProviderId(rawCanonicalInput)) {
       continue;
     }
-    const canonicalId = toCanonicalChiefProviderId(rawCanonicalInput);
+    const canonicalId = normalizeChiefOptionProviderId(rawCanonicalInput);
     if (isRetiredChiefProviderId(canonicalId)) {
       continue;
     }
-    const defaultBrandLabel = formatAgentBrandName(canonicalId);
+    const defaultBrandLabel = formatChiefProviderLabel(canonicalId);
     const explicitSettingsName =
       input.settings?.providerInstances?.[entry.instanceId]?.displayName?.trim() ?? "";
     const hasExplicitSettingsName =
@@ -377,11 +486,12 @@ export function buildChiefProviderOptions(input: {
     const candidateDisplayName = hasExplicitSettingsName
       ? explicitSettingsName
       : entry.hasCustomDisplayName
-        ? resolveProviderEntryDisplayName(entry)
-        : resolveProviderEntryDisplayName({
-            driverKind: canonicalId,
-            displayName: entry.displayName,
-            instanceId: entry.instanceId,
+        ? formatChiefProviderLabel(canonicalId, entry.displayName, {
+            explicitCustomName: true,
+            driverKind: entry.driverKind,
+          })
+        : formatChiefProviderLabel(canonicalId, entry.displayName, {
+            driverKind: entry.driverKind,
           });
     const resolvedEntryLabel =
       canonicalId !== "acp" && candidateDisplayName.trim().toLowerCase() === "acp"
@@ -458,7 +568,7 @@ export function buildChiefProviderOptions(input: {
     input.currentProvider.trim().length > 0 &&
     !isRetiredChiefProviderId(input.currentProvider)
   ) {
-    const canonicalCurrent = toCanonicalChiefProviderId(input.currentProvider);
+    const canonicalCurrent = normalizeChiefOptionProviderId(input.currentProvider);
     if (!isRetiredChiefProviderId(canonicalCurrent)) {
       ensureBucket(canonicalCurrent);
     }
@@ -591,7 +701,7 @@ export function reconcileChiefSelectionOnProviderChange(input: {
   readonly model: string;
   readonly reasoningEffort: string;
 } {
-  const nextProvider = toCanonicalChiefProviderId(input.nextProviderRaw);
+  const nextProvider = normalizeChiefOptionProviderId(input.nextProviderRaw);
   const nextProviderOpt = input.providerOptions.find((opt) => opt.value === nextProvider);
   const trimmedModel = input.currentModel.trim();
   const nextModelStillValid =
@@ -704,7 +814,7 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
     if (serverProviders.length > 0) {
       return baseProviderOptions;
     }
-    const canonicalSelected = toCanonicalChiefProviderId(selectedProvider);
+    const canonicalSelected = normalizeChiefOptionProviderId(selectedProvider);
     if (baseProviderOptions.some((opt) => opt.value === canonicalSelected)) {
       return baseProviderOptions;
     }
@@ -730,7 +840,7 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
       isAntigravityProviderLike(effectiveSelectedProvider));
 
   const activeProviderLabel =
-    activeProviderOption?.label ?? formatAgentBrandName(effectiveSelectedProvider);
+    activeProviderOption?.label ?? formatChiefProviderLabel(effectiveSelectedProvider);
   const providerOptionsRef = useRef(providerOptions);
   providerOptionsRef.current = providerOptions;
 
@@ -856,7 +966,7 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
         asString(slot?.provider) ||
         runtimeChiefProvider ||
         "codex";
-      const provider = toCanonicalChiefProviderId(rawProvider);
+      const provider = normalizeChiefOptionProviderId(rawProvider);
       const secretaryName = normalizeChiefDisplayName(
         asString(root?.secretaryName) || asString(slot?.secretaryName),
       );
@@ -889,7 +999,7 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
       chiefStateCache.set(daemon as object, nextChief);
       const resolvedProviderLabel =
         providerOptionsRef.current.find((opt) => opt.value === provider)?.label ??
-        formatAgentBrandName(provider);
+        formatChiefProviderLabel(provider);
 
       startTransition(() => {
         setChief((prev) => ({
@@ -934,7 +1044,7 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
   const handleProviderChange = useCallback(
     (nextRaw: string | null) => {
       if (!nextRaw) return;
-      const nextCanonical = toCanonicalChiefProviderId(nextRaw);
+      const nextCanonical = normalizeChiefOptionProviderId(nextRaw);
       if (!agyAllowed && isAntigravityProviderLike(nextCanonical)) {
         openSubscriptionWaiver();
         return;
@@ -948,7 +1058,7 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
       const nextOpt = providerOptions.find((opt) => opt.value === reconciled.provider);
       activeSlotRef.current = {
         provider: reconciled.provider,
-        providerLabel: nextOpt?.label ?? formatAgentBrandName(reconciled.provider),
+        providerLabel: nextOpt?.label ?? formatChiefProviderLabel(reconciled.provider),
         model: reconciled.model,
         reasoningEffort: reconciled.reasoningEffort,
         dialMode: selectedDialRef.current,
@@ -1009,7 +1119,7 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
   }, [activeSlotRef]);
 
   const handleSaveChief = useCallback(async () => {
-    const normalizedProvider = toCanonicalChiefProviderId(effectiveSelectedProvider);
+    const normalizedProvider = normalizeChiefOptionProviderId(effectiveSelectedProvider);
     if (!agyAllowed && isAntigravityProviderLike(normalizedProvider)) {
       openSubscriptionWaiver();
       return;
@@ -1042,7 +1152,7 @@ const ChiefSlotControlsSection = memo(function ChiefSlotControlsSection({
       });
       const brandLabel =
         providerOptionsRef.current.find((opt) => opt.value === normalizedProvider)?.label ??
-        formatAgentBrandName(normalizedProvider);
+        formatChiefProviderLabel(normalizedProvider);
       const modelSummary = trimmedModel.length > 0 ? ` · 模型：${trimmedModel}` : "";
       const effortSummary =
         trimmedEffort.length > 0
@@ -1314,7 +1424,9 @@ const PrismuxMemorySyncSettingsPageShell = memo(function PrismuxMemorySyncSettin
 }: PrismuxMemorySyncSettingsPageShellProps) {
   const showSyncSection = mode === "all";
   const cachedChief = chiefStateCache.get(daemon as object);
-  const initialProvider = toCanonicalChiefProviderId(cachedChief?.provider ?? runtimeChiefProvider);
+  const initialProvider = normalizeChiefOptionProviderId(
+    cachedChief?.provider ?? runtimeChiefProvider,
+  );
 
   const [refreshTick, setRefreshTick] = useState(0);
   const [memoryRefreshTick, setMemoryRefreshTick] = useState(0);
@@ -1324,7 +1436,7 @@ const PrismuxMemorySyncSettingsPageShell = memo(function PrismuxMemorySyncSettin
     secretaryName: cachedChief?.secretaryName ?? DEFAULT_CHIEF_DISPLAY_NAME,
     agentsMdPath: cachedChief?.agentsMdPath ?? "~/.prismux/chief/AGENTS.md",
     provider: initialProvider,
-    providerLabel: formatAgentBrandName(initialProvider),
+    providerLabel: formatChiefProviderLabel(initialProvider),
     model: cachedChief?.model ?? "",
     reasoningEffort: cachedChief?.reasoningEffort ?? "",
     dialMode: cachedChief?.dialMode ?? runtimeDialMode,

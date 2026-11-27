@@ -10,6 +10,7 @@ import {
   CHIEF_IDENTITY_HEADER_END,
   ChiefThreadManager
 } from "../chief/ChiefThreadManager.js";
+import { formatProviderDisplay } from "../chief/ChiefObsidianCurator.js";
 import { HandoffEngine } from "../handoff/HandoffEngine.js";
 import { PersistentPtyPool } from "../pty/PersistentPtyPool.js";
 import { DaemonBusinessService } from "../server/DaemonBusinessRoutes.js";
@@ -44,6 +45,8 @@ describe("Chief custom identity, independent AGENTS.md & Obsidian Agent curation
     assert.ok(initialMd.content.includes(CHIEF_IDENTITY_HEADER_BEGIN));
     assert.ok(initialMd.content.includes(CHIEF_IDENTITY_HEADER_END));
     assert.ok(initialMd.content.includes(DEFAULT_CHIEF_SECRETARY_NAME));
+    assert.ok(initialMd.content.includes("Codex / Claude / Antigravity / Gemini"));
+    assert.equal(initialMd.content.includes("Claude Code"), false);
 
     // User customizes AGENTS.md prose below controlled header
     const customBodyMarker = "## 我的专属工作纪律\n- 每次部署前必须跑完回归测试并汇报摘要。\n";
@@ -93,6 +96,15 @@ describe("Chief custom identity, independent AGENTS.md & Obsidian Agent curation
     assert.equal(resetRes.ok, true);
     assert.ok(resetRes.content.includes("猫猫"));
     assert.equal(resetRes.content.includes("我的专属工作纪律"), false);
+  });
+
+  it("formats Chief Obsidian curator provider labels consistently with agent settings (Claude / DSH / Pi / custom ACP)", () => {
+    assert.equal(formatProviderDisplay("claude-code"), "Claude");
+    assert.equal(formatProviderDisplay("codex"), "Codex");
+    assert.equal(formatProviderDisplay("dsh"), "DSH");
+    assert.equal(formatProviderDisplay("pi"), "Pi");
+    assert.equal(formatProviderDisplay("glm-acp-agent"), "glm-acp-agent");
+    assert.equal(formatProviderDisplay("qwen-code"), "qwen-code");
   });
 
   it("exposes /v1/chief/profile, /v1/chief/agents-md, and /v1/memory/import-obsidian/{plan,commit} over authenticated HTTP", async () => {

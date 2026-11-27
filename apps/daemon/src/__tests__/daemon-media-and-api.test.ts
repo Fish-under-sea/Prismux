@@ -1163,25 +1163,62 @@ test("Real business HTTP APIs: chief, memory stats/search with qq_group isolatio
   assert.equal(aliasSwitched.slot.activeProvider, "gemini");
   assert.equal(aliasSwitched.slot.reasoningEffort, "high");
 
-  const retiredOmpSwitchRes = await fetch(`${ready.httpUrl}/v1/chief/switch`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      Authorization: `Bearer ${ownerToken}`
-    },
-    body: JSON.stringify({ provider: "oh-my-pi" })
-  });
-  assert.equal(retiredOmpSwitchRes.status, 400);
+  for (const [requestedProvider, expectedProvider] of [
+    ["dsh", "dsh"],
+    ["deepseek-harness", "dsh"],
+    ["pi", "pi"],
+    ["glm-acp-agent", "glm-acp-agent"],
+    ["qwen-code", "qwen-code"],
+    ["kimi-code", "kimi-code"]
+  ] as const) {
+    const dynamicSwitchRes = await fetch(`${ready.httpUrl}/v1/chief/switch`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        Authorization: `Bearer ${ownerToken}`
+      },
+      body: JSON.stringify({ provider: requestedProvider })
+    });
+    assert.equal(
+      dynamicSwitchRes.status,
+      200,
+      `expected 200 switching chief to ${requestedProvider}`
+    );
+    const dynamicSwitched = (await dynamicSwitchRes.json()) as {
+      slot: { activeProvider: string; provider?: string };
+    };
+    assert.equal(dynamicSwitched.slot.activeProvider, expectedProvider);
+    assert.equal(dynamicSwitched.slot.provider, expectedProvider);
+  }
 
-  const invalidSwitchRes = await fetch(`${ready.httpUrl}/v1/chief/switch`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      Authorization: `Bearer ${ownerToken}`
-    },
-    body: JSON.stringify({ provider: "invalid-provider-name" })
+  const persistedCustomChiefRes = await fetch(`${ready.httpUrl}/v1/chief`, {
+    headers: { Authorization: `Bearer ${ownerToken}` }
   });
-  assert.equal(invalidSwitchRes.status, 400);
+  assert.equal(persistedCustomChiefRes.status, 200);
+  const persistedCustomChief = (await persistedCustomChiefRes.json()) as {
+    slot: { activeProvider: string };
+    availableProviders: string[];
+  };
+  assert.equal(persistedCustomChief.slot.activeProvider, "kimi-code");
+  assert.ok(persistedCustomChief.availableProviders.includes("dsh"));
+  assert.ok(persistedCustomChief.availableProviders.includes("pi"));
+  assert.ok(persistedCustomChief.availableProviders.includes("kimi-code"));
+
+  for (const rejectedProvider of ["oh-my-pi", "omp", "", "bad provider!", "../etc"]) {
+    const rejectedRes = await fetch(`${ready.httpUrl}/v1/chief/switch`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        Authorization: `Bearer ${ownerToken}`
+      },
+      body: JSON.stringify({ provider: rejectedProvider })
+    });
+    assert.equal(
+      rejectedRes.status,
+      400,
+      `expected 400 rejecting chief provider "${rejectedProvider}"`
+    );
+  }
 
   const invalidEffortRes = await fetch(`${ready.httpUrl}/v1/chief/switch`, {
     method: "POST",

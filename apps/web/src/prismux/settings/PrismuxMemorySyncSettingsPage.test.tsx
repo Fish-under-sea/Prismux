@@ -52,6 +52,7 @@ import {
   PrismuxMemorySyncSettingsPage,
   buildChiefModelDropdownItems,
   buildChiefProviderOptions,
+  formatChiefProviderLabel,
   reconcileChiefSelectionOnProviderChange,
   resolveChiefEffortSpec,
 } from "./PrismuxMemorySyncSettingsPage";
@@ -252,7 +253,8 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
     const dshOpt = options.find((o) => o.value === "dsh");
 
     expect(codexOpt?.label).toBe("Codex");
-    expect(claudeOpt?.label).toBe("Claude Code");
+    expect(claudeOpt?.label).toBe("Claude");
+    expect(claudeOpt?.label).not.toBe("Claude Code");
     expect(agyOpt?.label).toBe("Antigravity");
     expect(dshOpt?.label).toBe("DeepSeek Harness");
 
@@ -343,6 +345,87 @@ describe("PrismuxMemorySyncSettingsPage Chief Thread Slot logic & rendering", ()
 
     expect(options.map((opt) => opt.value)).toEqual(["dsh", "claude-code", "codex"]);
     expect(options.map((opt) => opt.label)).toEqual(["dsh", "主力 Claude", "备用 Codex"]);
+  });
+
+  it("aligns Claude naming strictly with agent settings (Claude by default, custom rename preserved) and supports ACP/Pi/custom providers", () => {
+    expect(formatChiefProviderLabel("claude-code")).toBe("Claude");
+    expect(formatChiefProviderLabel("claudeAgent")).toBe("Claude");
+    expect(formatChiefProviderLabel("claude-code", "Claude")).toBe("Claude");
+    expect(formatChiefProviderLabel("claudeAgent", "Claude")).toBe("Claude");
+    expect(
+      formatChiefProviderLabel("claude-code", "主力 Claude", { explicitCustomName: true }),
+    ).toBe("主力 Claude");
+    expect(formatChiefProviderLabel("codex", "codex", { driverKind: "codex" })).toBe("Codex");
+    expect(formatChiefProviderLabel("pi")).toBe("Pi");
+    expect(formatChiefProviderLabel("dsh")).toBe("DeepSeek Harness");
+
+    // Cold-start fallback for claude-code uses "Claude" rather than "Claude Code"
+    const coldClaude = buildChiefProviderOptions({
+      serverProviders: [],
+      settings: null,
+      currentProvider: "claude-code",
+    });
+    expect(coldClaude).toHaveLength(1);
+    expect(coldClaude[0]?.value).toBe("claude-code");
+    expect(coldClaude[0]?.label).toBe("Claude");
+
+    // Default Claude + Pi + ACP Registry providers (GLM / Qwen / Kimi)
+    const multiAgentOptions = buildChiefProviderOptions({
+      serverProviders: [
+        makeMockProvider({
+          instanceId: "claudeAgent",
+          driver: "claudeAgent",
+          displayName: "Claude",
+          models: [
+            { slug: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", isCustom: false } as ServerProvider["models"][number],
+          ],
+        }),
+        makeMockProvider({
+          instanceId: "pi",
+          driver: "pi",
+          displayName: "Pi",
+          models: [{ slug: "pi-default", name: "Pi Default", isCustom: false } as ServerProvider["models"][number]],
+        }),
+        makeMockProvider({
+          instanceId: "acpRegistry_glm",
+          driver: "acpRegistry",
+          displayName: "GLM Agent",
+          models: [{ slug: "glm-5", name: "GLM-5", isCustom: false } as ServerProvider["models"][number]],
+        }),
+        makeMockProvider({
+          instanceId: "acpRegistry_qwen",
+          driver: "acpRegistry",
+          displayName: "Qwen Code",
+          models: [{ slug: "qwen3-coder", name: "Qwen3 Coder", isCustom: false } as ServerProvider["models"][number]],
+        }),
+        makeMockProvider({
+          instanceId: "acpRegistry_kimi",
+          driver: "acpRegistry",
+          displayName: "Kimi Code",
+          models: [{ slug: "kimi-k2", name: "Kimi K2", isCustom: false } as ServerProvider["models"][number]],
+        }),
+      ],
+      settings: null,
+    });
+    expect(multiAgentOptions.find((o) => o.value === "claude-code")?.label).toBe("Claude");
+    expect(multiAgentOptions.find((o) => o.value === "pi")?.label).toBe("Pi");
+    expect(multiAgentOptions.find((o) => o.value === "glm-acp-agent")?.label).toBe("GLM Agent");
+    expect(multiAgentOptions.find((o) => o.value === "qwen-code")?.label).toBe("Qwen Code");
+    expect(multiAgentOptions.find((o) => o.value === "kimi-code")?.label).toBe("Kimi Code");
+
+    // Rendered Chief tab shows "Claude" and never leaks "Claude Code"
+    const claudeOnlyHtml = renderToStaticMarkup(
+      <GTProvider locale="zh" translations={{}}>
+        <PrismuxMemorySyncSettingsPage
+          serverProvidersOverride={[mockProviders[1]!]}
+          settingsOverride={null}
+          daemonReadyOverride
+          initialTabOverride="chief"
+        />
+      </GTProvider>,
+    );
+    expect(claudeOnlyHtml).toContain("Claude");
+    expect(claudeOnlyHtml).not.toContain("Claude Code");
   });
 
   it("falls back gracefully ONLY to currentProvider during cold start (never dumps dead unconfigured providers) and renders empty hint when none are configured", () => {

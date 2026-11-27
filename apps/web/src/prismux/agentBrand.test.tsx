@@ -158,7 +158,8 @@ describe("agentBrand canonical naming & official logos", () => {
     expect(html).toContain('data-pmx-chief-online="1"');
     expect(html).toContain('data-agent-brand="claude-code"');
     expect(html).toContain('data-breathing="true"');
-    expect(html).toContain(">Claude Code<");
+    expect(html).toContain(">Claude<");
+    expect(html).not.toContain(">Claude Code<");
     expect(html).not.toContain(">claudeAgent<");
     expect(html).not.toContain(">Agent<");
     expect(html).not.toContain(">AGENT<");

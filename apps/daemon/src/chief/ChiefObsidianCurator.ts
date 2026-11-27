@@ -20,10 +20,10 @@ interface CliCommandPlan {
   readonly label: string;
 }
 
-function formatProviderDisplay(provider: ChiefProviderKind): string {
+export function formatProviderDisplay(provider: ChiefProviderKind): string {
   switch (provider) {
     case "claude-code":
-      return "Claude Code";
+      return "Claude";
     case "codex":
       return "Codex";
     case "antigravity":
@@ -34,8 +34,14 @@ function formatProviderDisplay(provider: ChiefProviderKind): string {
       return "OpenCode";
     case "cursor":
       return "Cursor";
+    case "dsh":
+      return "DSH";
+    case "pi":
+      return "Pi";
     case "acp":
       return "ACP";
+    default:
+      return provider;
   }
 }
 
@@ -58,7 +64,7 @@ function buildCliCommandPlan(
           ...(model ? ["--model", model] : [])
         ],
         stdinPrompt: prompt,
-        label: "Claude Code"
+        label: "Claude"
       };
     case "codex":
       return {

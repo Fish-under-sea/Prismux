@@ -34,6 +34,7 @@ import {
   DIAL_MODES,
   MEMORY_KINDS,
   RETIRED_OFFICIAL_PLUGIN_IDS,
+  isRetiredChiefProviderKind,
   isValidMemoryNamespace,
   normalizeChiefProviderKind,
   normalizeChiefReasoningEffort,
@@ -320,6 +321,13 @@ function assertOwnerChief(
 }
 
 function parseProvider(value: unknown): ChiefProviderKind {
+  if (isRetiredChiefProviderKind(value)) {
+    throw new BusinessRouteError(
+      400,
+      "INVALID_PROVIDER",
+      `provider "${String(value)}" is retired and no longer supported. Expected a valid non-retired agent identifier (builtin: ${CHIEF_PROVIDER_KINDS.join(", ")}, or a configured ACP/custom provider ID).`
+    );
+  }
   const normalized = normalizeChiefProviderKind(value);
   if (normalized !== null) {
     return normalized;
@@ -327,7 +335,7 @@ function parseProvider(value: unknown): ChiefProviderKind {
   throw new BusinessRouteError(
     400,
     "INVALID_PROVIDER",
-    `provider must be one of: ${CHIEF_PROVIDER_KINDS.join(", ")}.`
+    `Invalid provider "${String(value)}". Expected a valid non-retired agent identifier (builtin: ${CHIEF_PROVIDER_KINDS.join(", ")}, or a configured ACP/custom provider ID).`
   );
 }
 
@@ -790,7 +798,11 @@ export class DaemonBusinessService {
       secretaryName: slot.secretaryName ?? DEFAULT_CHIEF_SECRETARY_NAME,
       agentsMdPath: slot.agentsMdPath,
       dialMode,
-      availableProviders: [...CHIEF_PROVIDER_KINDS],
+      availableProviders: (CHIEF_PROVIDER_KINDS as readonly string[]).includes(
+        slot.activeProvider
+      )
+        ? [...CHIEF_PROVIDER_KINDS]
+        : [...CHIEF_PROVIDER_KINDS, slot.activeProvider],
       availableDialModes: [...DIAL_MODES],
       t3Connected: (this.ctx.coreRpcClient ?? this.ctx.t3RpcClient)?.isConnected() ?? false
     };

@@ -1,5 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
 import { formatEffortLabel } from "@prismux/appearance";
+import { providerClients } from "@prismux/client-runtime/provider-clients";
+import {
+  PROVIDER_DISPLAY_NAMES,
+  ProviderDriverKind,
+  type ServerSettings,
+} from "@prismux/core-contracts";
 import { memo, useEffect, useState } from "react";
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
@@ -10,9 +16,10 @@ import {
   disambiguateProviderInstanceDisplayNames,
   orderProviderInstanceEntries,
   resolveConfiguredProviderLabel,
+  type ProviderInstanceEntry,
 } from "../providerInstances";
 import { primaryServerProvidersAtom, primaryServerSettingsAtom } from "../state/server";
-import { AgentBrandLogo } from "./agentBrand";
+import { AgentBrandLogo, resolveAgentBrandId } from "./agentBrand";
 import { isCustomChiefDisplayName, normalizeChiefDisplayName } from "./chiefMention";
 import { useOptionalPrismuxRuntime, type PrismuxDialMode } from "./PrismuxRuntimeProvider";
 
@@ -97,6 +104,30 @@ function formatEffortForTooltip(effort: string | null | undefined): string {
   return formatEffortLabel(trimmed);
 }
 
+function resolveChiefPillProviderLabel(
+  effectiveProvider: string,
+  configuredEntries: ReadonlyArray<ProviderInstanceEntry>,
+  providerInstances: ServerSettings["providerInstances"] | undefined,
+): string {
+  const resolved = resolveConfiguredProviderLabel(effectiveProvider, configuredEntries);
+  if (resolveAgentBrandId(effectiveProvider) !== "claude-code") {
+    return resolved;
+  }
+  const hasExplicitClaudeCodeCustomName = configuredEntries.some((entry) => {
+    if (entry.driverKind !== "claudeAgent") return false;
+    const explicit = providerInstances?.[entry.instanceId]?.displayName?.trim();
+    return Boolean(explicit && explicit.toLowerCase() === "claude code");
+  });
+  if (resolved === "Claude Code" && !hasExplicitClaudeCodeCustomName) {
+    return (
+      providerClients.get(ProviderDriverKind.make("claudeAgent"))?.label ??
+      PROVIDER_DISPLAY_NAMES[ProviderDriverKind.make("claudeAgent")] ??
+      "Claude"
+    );
+  }
+  return resolved;
+}
+
 export interface PrismuxChiefStatusPillProps {
   /** Invoked when the user clicks the Chief pill (typically navigates to /settings/memory). */
   readonly onClick?: () => void;
@@ -115,7 +146,7 @@ export interface PrismuxChiefStatusPillProps {
 /**
  * Minimalist topbar Chief Thread Slot status pill:
  * - Replaces the legacy green dot with the official vendor SVG logo using gentle breathing luminance when online
- * - Shows user's custom Chief Secretary name when customized, or canonical brand name (e.g. "Codex", "Claude Code") by default
+ * - Shows user's custom Chief Secretary name when customized, or configured provider name (e.g. "Codex", "Claude") by default
  * - Removes the noisy grey "AGENT" suffix tag for a crisp, calm header chrome
  * - Rich hover tooltip displays custom identity, active engine, model, default reasoning effort, independent AGENTS.md status, and online status
  */
@@ -231,7 +262,11 @@ export const PrismuxChiefStatusPill = memo(function PrismuxChiefStatusPill({
     ),
   );
 
-  const brandName = resolveConfiguredProviderLabel(effectiveProvider, configuredEntries);
+  const brandName = resolveChiefPillProviderLabel(
+    effectiveProvider,
+    configuredEntries,
+    serverSettings.providerInstances,
+  );
   const pillLabel = hasCustomName ? effectiveSecretaryName : brandName;
   const modelLabel =
     effectiveModel && effectiveModel.trim().length > 0 ? effectiveModel.trim() : "跟随提供方默认";

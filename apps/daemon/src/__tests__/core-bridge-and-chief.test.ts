@@ -13,7 +13,11 @@ import { join } from "node:path";
 import process from "node:process";
 import type { Duplex } from "node:stream";
 import { after, describe, it } from "node:test";
-import type { CoreSupervisorState } from "@prismux/protocol";
+import {
+  isRetiredChiefProviderKind,
+  normalizeChiefProviderKind,
+  type CoreSupervisorState
+} from "@prismux/protocol";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   CHIEF_MARKER_FILENAME,
@@ -1068,7 +1072,7 @@ describe("ChiefThreadManager", () => {
     assert.equal(switchedAgy.model, undefined);
     assert.equal(switchedAgy.reasoningEffort, undefined);
 
-    // Retired omp / oh-my-pi / pi aliases are rejected cleanly.
+    // Retired omp / oh-my-pi aliases are rejected cleanly.
     await assert.rejects(
       () => restarted.switchProvider("omp" as unknown as "codex"),
       /Invalid Chief provider/
@@ -1083,5 +1087,92 @@ describe("ChiefThreadManager", () => {
 
     const legacyRestored = await new ChiefThreadManager({ dataDir }).init();
     assert.equal(legacyRestored.reasoningEffort, "xhigh");
+  });
+
+  it("supports dsh, pi, and arbitrary configured ACP/custom provider IDs across switches & disk reloads while rejecting retired/malformed IDs", async () => {
+    // Protocol normalization checks
+    assert.equal(normalizeChiefProviderKind("dsh"), "dsh");
+    assert.equal(normalizeChiefProviderKind("deepseek-harness"), "dsh");
+    assert.equal(normalizeChiefProviderKind("DeepSeek Harness"), "dsh");
+    assert.equal(normalizeChiefProviderKind("dsh-acp"), "dsh");
+    assert.equal(normalizeChiefProviderKind("dsh_acp"), "dsh");
+    assert.equal(normalizeChiefProviderKind("dsh-next"), "dsh");
+    assert.equal(normalizeChiefProviderKind("acpRegistry:dsh"), "dsh");
+    assert.equal(normalizeChiefProviderKind("acpRegistry_dsh"), "dsh");
+    assert.equal(normalizeChiefProviderKind("pi"), "pi");
+    assert.equal(normalizeChiefProviderKind("pi-acp"), "pi");
+    assert.equal(normalizeChiefProviderKind("pi_acp"), "pi");
+    assert.equal(normalizeChiefProviderKind("pi-coding-agent"), "pi");
+    assert.equal(normalizeChiefProviderKind("glm-acp-agent"), "glm-acp-agent");
+    assert.equal(normalizeChiefProviderKind("Qwen-Code"), "qwen-code");
+    assert.equal(normalizeChiefProviderKind("kimi-code"), "kimi-code");
+    assert.equal(normalizeChiefProviderKind("kiro"), "kiro");
+    assert.equal(normalizeChiefProviderKind("devin"), "devin");
+
+    for (const retired of [
+      "omp",
+      "oh-my-pi",
+      "oh_my_pi",
+      "oh my pi",
+      "omp:default",
+      "omp-custom",
+      "omp_alt",
+      "oh-my-pi-v2"
+    ]) {
+      assert.equal(isRetiredChiefProviderKind(retired), true, `expected retired: ${retired}`);
+      assert.equal(normalizeChiefProviderKind(retired), null, `expected rejected: ${retired}`);
+    }
+
+    for (const invalid of [
+      "",
+      "   ",
+      "bad provider!",
+      "../etc",
+      "foo..bar",
+      "__proto__",
+      "constructor",
+      "prototype",
+      "claude\ncode",
+      null,
+      123
+    ]) {
+      assert.equal(
+        normalizeChiefProviderKind(invalid),
+        null,
+        `expected invalid rejected: ${String(invalid)}`
+      );
+    }
+
+    const dataDir = createTempDir("prismux-chief-acp-providers-");
+    const manager = new ChiefThreadManager({ dataDir, defaultProvider: "codex" });
+    await manager.init();
+
+    const cases: ReadonlyArray<readonly [string, string]> = [
+      ["dsh", "dsh"],
+      ["deepseek-harness", "dsh"],
+      ["pi", "pi"],
+      ["pi-coding-agent", "pi"],
+      ["glm-acp-agent", "glm-acp-agent"],
+      ["qwen-code", "qwen-code"],
+      ["kimi-code", "kimi-code"]
+    ];
+
+    for (const [requested, expected] of cases) {
+      const switched = await manager.switchProvider(requested, `${expected}-model`, "high");
+      assert.equal(switched.activeProvider, expected);
+      assert.equal(switched.model, `${expected}-model`);
+
+      const reloaded = await new ChiefThreadManager({ dataDir }).init();
+      assert.equal(reloaded.activeProvider, expected);
+      assert.equal(reloaded.model, `${expected}-model`);
+      assert.equal(reloaded.switchHistory.at(-1)?.toProvider, expected);
+    }
+
+    for (const rejected of ["omp", "oh-my-pi", "", "bad provider!", "../etc", "__proto__"]) {
+      await assert.rejects(
+        () => manager.switchProvider(rejected),
+        /Invalid Chief provider/
+      );
+    }
   });
 });

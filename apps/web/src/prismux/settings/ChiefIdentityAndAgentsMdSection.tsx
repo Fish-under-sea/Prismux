@@ -305,7 +305,7 @@ export const ChiefIdentityAndAgentsMdSection = memo(function ChiefIdentityAndAge
             </Badge>
           </span>
         }
-        description="独立于底层引擎的专属人设与工作纪律，切换为 Codex、Claude Code、Antigravity 或 DeepSeek Harness 均自动沿用。"
+        description="独立于底层引擎的专属人设与工作纪律，切换为 Codex、Claude、Antigravity 或 DeepSeek Harness 均自动沿用。"
       >
         <div
           data-pmx-chief-agents-md-section=""
