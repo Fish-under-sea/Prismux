@@ -1,6 +1,6 @@
 [package]
 name = "prismux-resource-monitor"
-version = "0.2.4-rc.1"
+version = "0.2.4-rc.2"
 edition = "2024"
 license = "MIT"
 publish = false

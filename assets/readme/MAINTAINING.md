@@ -4,7 +4,7 @@
 
 ## 渲染命令
 
-在仓库根目录执行（默认从根 `package.json` 自动读取当前版本号，如 `0.2.4-rc.1`）：
+在仓库根目录执行（默认从根 `package.json` 自动读取当前版本号，如 `0.2.4-rc.2`）：
 
 ```powershell
 node scripts/render-readme.mjs
