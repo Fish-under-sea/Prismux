@@ -18,7 +18,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Fiber from "effect/Fiber";
 import * as Deferred from "effect/Deferred";
 import { subscribeChatGptHandoff } from "./CodexChatGptHandoff.ts";
-import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
+import { FetchHttpClient, HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ProviderCredentialStore from "./ProviderCredentialStore.ts";
@@ -1920,7 +1920,12 @@ it.live("the private broker refuses another environment, instance, or sign-in pr
           { ...h.request, instanceId: ProviderInstanceId.make("another-instance") },
           { ...h.request, profileKey: "0".repeat(64) },
           { ...h.request, authSecret: "f".repeat(64) },
-          { version: 1, instanceId: h.request.instanceId, environmentId: h.request.environmentId, profileKey: h.request.profileKey },
+          {
+            version: 1,
+            instanceId: h.request.instanceId,
+            environmentId: h.request.environmentId,
+            profileKey: h.request.profileKey,
+          },
         ],
         (request) =>
           Effect.scoped(
@@ -1940,4 +1945,451 @@ it.live("the private broker refuses another environment, instance, or sign-in pr
       assert.deepEqual(h.refreshTokens, ["single-use-refresh"]);
     }),
   ),
+);
+
+const makeMemorySecretStore = () => {
+  const bytes = new Map<string, Uint8Array>();
+  return ServerSecretStore.ServerSecretStore.of({
+    get: (name) => Effect.sync(() => Option.fromUndefinedOr(bytes.get(name))),
+    set: (name, value) =>
+      Effect.sync(() => {
+        bytes.set(name, value);
+      }),
+    remove: (name) =>
+      Effect.sync(() => {
+        bytes.delete(name);
+      }),
+    create: () => Effect.die("unused"),
+    getOrCreateRandom: () => Effect.die("unused"),
+  });
+};
+
+const makeOpenAiTestEnv = (
+  http: HttpClient.HttpClient,
+  authOptions?: { readonly discoveryUrl?: string },
+) =>
+  Effect.gen(function* () {
+    const environmentId = EnvironmentId.make(NodeCrypto.randomUUID());
+    const auth = yield* makeCodexChatGptAuth({
+      instanceId,
+      ...authOptions,
+    }).pipe(
+      Effect.provideService(HttpClient.HttpClient, http),
+      Effect.provideService(ServerSecretStore.ServerSecretStore, makeMemorySecretStore()),
+      Effect.provideService(ServerEnvironment.ServerEnvironmentIdentity, {
+        getEnvironmentId: Effect.succeed(environmentId),
+      }),
+    );
+    const phase = (target: string) =>
+      auth.controller.subscribe("owner").pipe(
+        Stream.filter((state) => state.phase === target),
+        Stream.runHead,
+        Effect.map(Option.getOrThrow),
+      );
+    return { auth, phase };
+  });
+
+const provisionWithMockHttp = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(
+    Effect.scoped,
+    Effect.provide(Layer.mergeAll(NodeServices.layer, NodePlatformCrypto.layer)),
+  );
+
+// regression: #12 custom discovery failures must surface distinct HTTP status, network, and format diagnostics
+it.effect(
+  "custom discovery URL surfaces distinct diagnostics for HTTP 403, HTTP 503, transport errors, and invalid JSON without falling back",
+  () =>
+    provisionWithMockHttp(
+      Effect.gen(function* () {
+        const seenHeaders: Array<Readonly<Record<string, string | undefined>>> = [];
+        let mode:
+          | "403-html"
+          | "403-status-error"
+          | "503"
+          | "transport"
+          | "tls"
+          | "bad-json"
+          | "bad-schema" = "403-html";
+        const http = HttpClient.make((request) => {
+          seenHeaders.push({
+            accept: request.headers.accept,
+            userAgent: request.headers["user-agent"],
+            traceparent: request.headers.traceparent,
+          });
+          if (mode === "403-html") {
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                new Response("<html><body>Forbidden</body></html>", {
+                  status: 403,
+                  headers: { "content-type": "text/html" },
+                }),
+              ),
+            );
+          }
+          if (mode === "403-status-error") {
+            const response = HttpClientResponse.fromWeb(
+              request,
+              new Response("Forbidden", { status: 403 }),
+            );
+            return Effect.fail(
+              new HttpClientError.HttpClientError({
+                reason: new HttpClientError.StatusCodeError({ request, response }),
+              }),
+            );
+          }
+          if (mode === "503") {
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(request, new Response("unavailable", { status: 503 })),
+            );
+          }
+          if (mode === "transport") {
+            const cause = Object.assign(new Error("connect ECONNREFUSED"), {
+              code: "ECONNREFUSED",
+            });
+            return Effect.fail(
+              new HttpClientError.HttpClientError({
+                reason: new HttpClientError.TransportError({ request, cause }),
+              }),
+            );
+          }
+          if (mode === "tls") {
+            const cause = Object.assign(new Error("unable to verify leaf signature"), {
+              code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+            });
+            return Effect.fail(
+              new HttpClientError.HttpClientError({
+                reason: new HttpClientError.TransportError({ request, cause }),
+              }),
+            );
+          }
+          if (mode === "bad-json") {
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                new Response("<html>proxy splash</html>", {
+                  status: 200,
+                  headers: { "content-type": "text/html" },
+                }),
+              ),
+            );
+          }
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(request, Response.json({ issuer: "https://mock.test" })),
+          );
+        });
+
+        const runAttempt = (nextMode: typeof mode) =>
+          Effect.gen(function* () {
+            mode = nextMode;
+            const env = yield* makeOpenAiTestEnv(http, {
+              discoveryUrl: "https://mock.test/.well-known/openid-configuration",
+            });
+            yield* env.auth.controller.start("owner", Effect.void, "chatgpt", undefined, "client");
+            const failed = yield* env.phase("failed");
+            return failed.message!;
+          });
+
+        const forbiddenHtml = yield* runAttempt("403-html");
+        assert.include(forbiddenHtml, "HTTP 403");
+        assert.include(forbiddenHtml, "auth.openai.com");
+        assert.strictEqual(seenHeaders[0]?.accept, "application/json");
+        assert.strictEqual(seenHeaders[0]?.userAgent, "Prismux");
+        assert.isUndefined(seenHeaders[0]?.traceparent);
+
+        const forbiddenStatusError = yield* runAttempt("403-status-error");
+        assert.include(forbiddenStatusError, "HTTP 403");
+
+        const unavailable = yield* runAttempt("503");
+        assert.include(unavailable, "HTTP 503");
+        assert.notInclude(unavailable, "HTTP 403");
+
+        const transport = yield* runAttempt("transport");
+        assert.include(transport, "ECONNREFUSED");
+        assert.notInclude(transport, "HTTP 403");
+
+        const tls = yield* runAttempt("tls");
+        assert.include(tls, "TLS certificate is not trusted");
+        assert.include(tls, "UNABLE_TO_VERIFY_LEAF_SIGNATURE");
+
+        const badJson = yield* runAttempt("bad-json");
+        assert.include(badJson, "invalid OpenID configuration");
+        assert.notInclude(badJson, "HTTP 403");
+
+        const badSchema = yield* runAttempt("bad-schema");
+        assert.include(badSchema, "invalid OpenID configuration");
+      }),
+    ),
+);
+
+// regression: #12 default auth.openai.com discovery falls back to verified same-origin endpoints on HTTP 403
+it.effect(
+  "default OpenAI discovery falls back to verified same-origin endpoints on HTTP 403 and completes sign-in",
+  () =>
+    provisionWithMockHttp(
+      Effect.gen(function* () {
+        const pair = NodeCrypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+        const publicJwk = {
+          ...pair.publicKey.export({ format: "jwk" }),
+          kid: "fallback-key",
+          alg: "RS256",
+          use: "sig",
+        };
+        const signIdToken = (claims: Record<string, unknown>) => {
+          const encode = (value: unknown) =>
+            Buffer.from(JSON.stringify(value)).toString("base64url");
+          const signingInput = `${encode({ alg: "RS256", kid: "fallback-key" })}.${encode(claims)}`;
+          const sig = NodeCrypto.sign("sha256", Buffer.from(signingInput), pair.privateKey);
+          return `${signingInput}.${sig.toString("base64url")}`;
+        };
+
+        let discoveryHits = 0;
+        let discoveryStatus = 403;
+        let nonceForToken = "";
+        const observedAcceptHeaders: Record<string, string | undefined> = {};
+        const http = HttpClient.make((request) =>
+          Effect.sync(() => {
+            observedAcceptHeaders[request.url] = request.headers.accept;
+            if (request.url === "https://auth.openai.com/.well-known/openid-configuration") {
+              discoveryHits += 1;
+              if (discoveryStatus !== 200) {
+                return HttpClientResponse.fromWeb(
+                  request,
+                  new Response("<html>403 Forbidden</html>", {
+                    status: discoveryStatus,
+                    headers: { "content-type": "text/html" },
+                  }),
+                );
+              }
+              return HttpClientResponse.fromWeb(
+                request,
+                Response.json({
+                  issuer: "https://auth.openai.com",
+                  authorization_endpoint: "https://auth.openai.com/api/accounts/authorize",
+                  token_endpoint: "https://auth.openai.com/api/accounts/oauth/token",
+                  jwks_uri: "https://auth.openai.com/.well-known/jwks.json",
+                  revocation_endpoint: "https://auth.openai.com/api/accounts/oauth/revoke",
+                }),
+              );
+            }
+            if (request.url === "https://auth.openai.com/api/accounts/oauth/token") {
+              const idToken = signIdToken({
+                iss: "https://auth.openai.com",
+                aud: "oaiapp_fallback",
+                sub: "user-fallback",
+                email: "fallback@example.test",
+                nonce: nonceForToken,
+                exp: 4_102_444_800,
+              });
+              return HttpClientResponse.fromWeb(
+                request,
+                Response.json({
+                  access_token: "fallback-access",
+                  refresh_token: "fallback-refresh",
+                  id_token: idToken,
+                  token_type: "Bearer",
+                  expires_in: 3600,
+                  scope:
+                    "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct",
+                }),
+              );
+            }
+            if (request.url === "https://auth.openai.com/.well-known/jwks.json") {
+              return HttpClientResponse.fromWeb(request, Response.json({ keys: [publicJwk] }));
+            }
+            return HttpClientResponse.fromWeb(request, new Response("Not Found", { status: 404 }));
+          }),
+        );
+
+        const env = yield* makeOpenAiTestEnv(http);
+        yield* env.auth.controller.start("owner", Effect.void, "chatgpt", undefined, "client");
+        const waiting = yield* env.phase("waiting");
+        const authorizeUrl = new URL(waiting.authorizationUrl!);
+        assert.strictEqual(authorizeUrl.origin, "https://auth.openai.com");
+        assert.strictEqual(authorizeUrl.pathname, "/api/accounts/authorize");
+        nonceForToken = authorizeUrl.searchParams.get("nonce")!;
+
+        const callback = new URL(authorizeUrl.searchParams.get("redirect_uri")!);
+        callback.search = new URLSearchParams({
+          code: "auth-code",
+          state: authorizeUrl.searchParams.get("state")!,
+          client_id: "oaiapp_fallback",
+        }).toString();
+        yield* env.auth.controller.complete("owner", {
+          flowId: waiting.flowId!,
+          callbackUrl: callback.toString(),
+        });
+        yield* env.phase("succeeded");
+
+        const saved = Option.getOrThrow(yield* env.auth.read);
+        assert.strictEqual(saved.clientId, "oaiapp_fallback");
+        assert.strictEqual(saved.issuer, "https://auth.openai.com");
+        assert.strictEqual(discoveryHits, 1);
+        assert.strictEqual(
+          observedAcceptHeaders["https://auth.openai.com/.well-known/openid-configuration"],
+          "application/json",
+        );
+        assert.strictEqual(
+          observedAcceptHeaders["https://auth.openai.com/api/accounts/oauth/token"],
+          "application/json",
+        );
+        assert.strictEqual(
+          observedAcceptHeaders["https://auth.openai.com/.well-known/jwks.json"],
+          "application/json",
+        );
+
+        // Fallback cache expires after 5 minutes so live discovery is retried when connectivity recovers.
+        yield* TestClock.adjust("5 minutes");
+        discoveryStatus = 200;
+        yield* env.auth.controller.start("owner", Effect.void, "chatgpt", undefined, "client");
+        const secondWaiting = yield* env.phase("waiting");
+        assert.strictEqual(discoveryHits, 2);
+        yield* env.auth.controller.cancel("owner", secondWaiting.flowId!);
+      }),
+    ),
+);
+
+// regression: #12 downstream 403 on token exchange or JWKS after fallback must surface HTTP 403 clearly
+it.effect.each(["token", "jwks"] as const)(
+  "default OpenAI discovery fallback surfaces HTTP 403 clearly when downstream %s endpoint also returns 403",
+  (blockedEndpoint) =>
+    provisionWithMockHttp(
+      Effect.gen(function* () {
+        const pair = NodeCrypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+        const signIdToken = (claims: Record<string, unknown>) => {
+          const encode = (value: unknown) =>
+            Buffer.from(JSON.stringify(value)).toString("base64url");
+          const signingInput = `${encode({ alg: "RS256", kid: "k1" })}.${encode(claims)}`;
+          const sig = NodeCrypto.sign("sha256", Buffer.from(signingInput), pair.privateKey);
+          return `${signingInput}.${sig.toString("base64url")}`;
+        };
+        let nonceForToken = "";
+        const http = HttpClient.make((request) =>
+          Effect.sync(() => {
+            if (request.url === "https://auth.openai.com/.well-known/openid-configuration") {
+              return HttpClientResponse.fromWeb(
+                request,
+                new Response("<html>Cloudflare 403</html>", {
+                  status: 403,
+                  headers: { "content-type": "text/html" },
+                }),
+              );
+            }
+            if (request.url === "https://auth.openai.com/api/accounts/oauth/token") {
+              if (blockedEndpoint === "token") {
+                return HttpClientResponse.fromWeb(
+                  request,
+                  new Response("<html>Cloudflare 403</html>", {
+                    status: 403,
+                    headers: { "content-type": "text/html" },
+                  }),
+                );
+              }
+              return HttpClientResponse.fromWeb(
+                request,
+                Response.json({
+                  access_token: "tok",
+                  refresh_token: "ref",
+                  id_token: signIdToken({
+                    iss: "https://auth.openai.com",
+                    aud: "oaiapp_fallback",
+                    sub: "user-1",
+                    nonce: nonceForToken,
+                    exp: 4_102_444_800,
+                  }),
+                  token_type: "Bearer",
+                  expires_in: 3600,
+                  scope:
+                    "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct",
+                }),
+              );
+            }
+            if (request.url === "https://auth.openai.com/.well-known/jwks.json") {
+              return HttpClientResponse.fromWeb(
+                request,
+                new Response("<html>Cloudflare 403</html>", {
+                  status: 403,
+                  headers: { "content-type": "text/html" },
+                }),
+              );
+            }
+            return HttpClientResponse.fromWeb(request, new Response("Not Found", { status: 404 }));
+          }),
+        );
+
+        const env = yield* makeOpenAiTestEnv(http);
+        yield* env.auth.controller.start("owner", Effect.void, "chatgpt", undefined, "client");
+        const waiting = yield* env.phase("waiting");
+        const authorizeUrl = new URL(waiting.authorizationUrl!);
+        nonceForToken = authorizeUrl.searchParams.get("nonce")!;
+        const callback = new URL(authorizeUrl.searchParams.get("redirect_uri")!);
+        callback.search = new URLSearchParams({
+          code: "auth-code",
+          state: authorizeUrl.searchParams.get("state")!,
+          client_id: "oaiapp_fallback",
+        }).toString();
+        yield* env.auth.controller.complete("owner", {
+          flowId: waiting.flowId!,
+          callbackUrl: callback.toString(),
+        });
+        const failed = yield* env.phase("failed");
+        assert.include(failed.message!, "HTTP 403");
+        assert.include(failed.message!, "auth.openai.com");
+      }),
+    ),
+);
+
+it.effect(
+  "default OpenAI discovery rejects cross-origin endpoints and fails directly on transport errors without falling back",
+  () =>
+    provisionWithMockHttp(
+      Effect.gen(function* () {
+        const crossOriginHttp = HttpClient.make((request) =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              Response.json({
+                issuer: "https://auth.openai.com",
+                authorization_endpoint: "https://evil.example/authorize",
+                token_endpoint: "https://auth.openai.com/api/accounts/oauth/token",
+                jwks_uri: "https://auth.openai.com/.well-known/jwks.json",
+              }),
+            ),
+          ),
+        );
+        const crossOriginEnv = yield* makeOpenAiTestEnv(crossOriginHttp);
+        yield* crossOriginEnv.auth.controller.start(
+          "owner",
+          Effect.void,
+          "chatgpt",
+          undefined,
+          "client",
+        );
+        assert.include(
+          (yield* crossOriginEnv.phase("failed")).message!,
+          "configuration could not be verified",
+        );
+
+        const transportHttp = HttpClient.make((request) =>
+          Effect.fail(
+            new HttpClientError.HttpClientError({
+              reason: new HttpClientError.TransportError({
+                request,
+                cause: Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" }),
+              }),
+            }),
+          ),
+        );
+        const transportEnv = yield* makeOpenAiTestEnv(transportHttp);
+        yield* transportEnv.auth.controller.start(
+          "owner",
+          Effect.void,
+          "chatgpt",
+          undefined,
+          "client",
+        );
+        const transportFailed = yield* transportEnv.phase("failed");
+        assert.include(transportFailed.message!, "ENOTFOUND");
+      }),
+    ),
 );

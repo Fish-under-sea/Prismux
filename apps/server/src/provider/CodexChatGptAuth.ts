@@ -26,7 +26,8 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as ProviderAuthFlow from "@prismux/provider-core/server/providerAuthFlow";
 import type { ProviderAuthFlowContext } from "@prismux/provider-core/server/providerAuthFlow";
-import { HttpClient, HttpClientRequest } from "effect/http";
+import { HttpClient, HttpClientError, HttpClientRequest } from "effect/http";
+import type { HttpClientResponse } from "effect/http";
 import * as ProviderCredentialStore from "./ProviderCredentialStore.ts";
 import { withChatGptSessionLock } from "./CodexChatGptSessionLock.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -36,7 +37,88 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 const isSetupError = Schema.is(ProviderSetupError);
 const RESOURCE = "https://api.openai.com/v1";
 const REQUIRED_SCOPE = "chatgpt.tokens.use.direct";
-const DISCOVERY = "https://auth.openai.com/.well-known/openid-configuration";
+const DEFAULT_OPENAI_ISSUER = "https://auth.openai.com";
+const DISCOVERY = `${DEFAULT_OPENAI_ISSUER}/.well-known/openid-configuration`;
+const OIDC_USER_AGENT = "Prismux";
+const DISCOVERY_TIMEOUT = "10 seconds";
+const TOKEN_EXCHANGE_TIMEOUT = "15 seconds";
+const FALLBACK_DISCOVERY_TTL_MS = 5 * 60 * 1000;
+const UNTRUSTED_CERTIFICATE_CODES = new Set([
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+]);
+const HTTP_403_GUIDANCE =
+  "Check your network, proxy, or VPN settings, confirm auth.openai.com is reachable in your browser, or use an API key or locally signed-in Codex CLI.";
+
+const nodeErrorCode = (cause: unknown): string | undefined => {
+  const queue: unknown[] = [cause];
+  let visited = 0;
+  while (queue.length > 0 && visited < 8) {
+    const current = queue.shift();
+    visited += 1;
+    if (!(current instanceof Error)) continue;
+    const code = (current as { readonly code?: unknown }).code;
+    if (typeof code === "string" && /^[A-Z0-9_]{1,64}$/u.test(code)) return code;
+    if ("cause" in current && current.cause !== undefined) queue.push(current.cause);
+    if (current instanceof AggregateError) {
+      for (const nested of current.errors) queue.push(nested);
+    }
+  }
+  return undefined;
+};
+
+type OidcHttpStage = "discover" | "jwks" | "exchange";
+
+const stageLabel = (stage: OidcHttpStage): string => {
+  switch (stage) {
+    case "discover":
+      return "ChatGPT sign-in discovery";
+    case "jwks":
+      return "ChatGPT sign-in key lookup";
+    case "exchange":
+      return "ChatGPT token exchange";
+  }
+};
+
+const describeStatusFailure = (stage: OidcHttpStage, status: number): string => {
+  const label = stageLabel(stage);
+  if (status === 403) {
+    return `${label} was rejected with HTTP 403. ${HTTP_403_GUIDANCE}`;
+  }
+  return `${label} failed with HTTP ${status}. Check your network or proxy settings and try again.`;
+};
+
+const describeTimeoutFailure = (stage: OidcHttpStage): string =>
+  `${stageLabel(stage)} timed out. Check your network, proxy, or VPN connection and try again.`;
+
+const describeTransportFailure = (stage: OidcHttpStage, code: string | undefined): string => {
+  const target = stage === "jwks" ? "ChatGPT sign-in keys" : "ChatGPT sign-in";
+  if (code !== undefined && UNTRUSTED_CERTIFICATE_CODES.has(code)) {
+    return `Could not connect to ${target} because the TLS certificate is not trusted (${code}). Check your proxy or configure NODE_EXTRA_CA_CERTS.`;
+  }
+  return code !== undefined
+    ? `Could not connect to ${target} (${code}). Check your network, proxy, or VPN settings and try again.`
+    : `Could not connect to ${target} due to a network or proxy error. Check your network settings and try again.`;
+};
+
+const describeDecodeFailure = (stage: OidcHttpStage): string => {
+  switch (stage) {
+    case "discover":
+      return "ChatGPT sign-in returned an invalid OpenID configuration response. Check if a proxy or firewall intercepted the request and try again.";
+    case "jwks":
+      return "ChatGPT sign-in returned an invalid signing key set. Check if a proxy or firewall intercepted the request and try again.";
+    case "exchange":
+      return "ChatGPT returned an invalid token response. Sign in again.";
+  }
+};
+
+const withOidcHeaders = (request: HttpClientRequest.HttpClientRequest) =>
+  request.pipe(
+    HttpClientRequest.setHeader("accept", "application/json"),
+    HttpClientRequest.setHeader("user-agent", OIDC_USER_AGENT),
+  );
 const TokenResponse = Schema.Struct({
   access_token: Schema.NonEmptyString,
   refresh_token: Schema.optionalKey(Schema.NonEmptyString),
@@ -95,6 +177,26 @@ const Discovery = Schema.Struct({
   jwks_uri: Schema.String,
   revocation_endpoint: Schema.optionalKey(Schema.String),
 });
+const DEFAULT_OPENAI_DISCOVERY: typeof Discovery.Type = {
+  issuer: DEFAULT_OPENAI_ISSUER,
+  authorization_endpoint: `${DEFAULT_OPENAI_ISSUER}/api/accounts/authorize`,
+  token_endpoint: `${DEFAULT_OPENAI_ISSUER}/api/accounts/oauth/token`,
+  jwks_uri: `${DEFAULT_OPENAI_ISSUER}/.well-known/jwks.json`,
+  revocation_endpoint: `${DEFAULT_OPENAI_ISSUER}/api/accounts/oauth/revoke`,
+};
+const isTrustedOpenAiDiscovery = (doc: typeof Discovery.Type): boolean => {
+  if (doc.issuer !== DEFAULT_OPENAI_ISSUER) return false;
+  const endpoints = [
+    doc.authorization_endpoint,
+    doc.token_endpoint,
+    doc.jwks_uri,
+    ...(doc.revocation_endpoint ? [doc.revocation_endpoint] : []),
+  ];
+  return endpoints.every((url) => {
+    const parsed = URL.parse(url);
+    return parsed !== null && parsed.origin === doc.issuer;
+  });
+};
 const OAuthError = Schema.Struct({ error: Schema.String });
 const JWKS_CACHE_TTL_MS = 10 * 60 * 1000;
 const IdTokenClaims = Schema.Struct({
@@ -185,49 +287,154 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
   const resource = options.resource ?? RESOURCE;
   const failure = (operation: string, detail: string) =>
     new ProviderSetupError({ instanceId: options.instanceId, operation, detail });
-  let metadata: typeof Discovery.Type | undefined;
-  const discover = Effect.gen(function* () {
-    if (metadata) return metadata;
-    const result = yield* http.get(options.discoveryUrl ?? DISCOVERY).pipe(
-      Effect.flatMap((response) =>
-        Effect.gen(function* () {
-          if (response.status < 200 || response.status >= 300)
-            return yield* failure("discover", "Could not reach ChatGPT sign-in. Try again.");
-          return yield* response.json;
-        }),
+  const executeOidcRequest = Effect.fnUntraced(function* (
+    request: HttpClientRequest.HttpClientRequest,
+  ) {
+    return yield* http.execute(withOidcHeaders(request)).pipe(
+      Effect.provideService(HttpClient.TracerPropagationEnabled, false),
+      Effect.catchIf(
+        (error): error is HttpClientError.HttpClientError =>
+          HttpClientError.isHttpClientError(error) && error.reason._tag === "StatusCodeError",
+        (error) =>
+          error.reason._tag === "StatusCodeError"
+            ? Effect.succeed(error.reason.response)
+            : Effect.fail(error),
       ),
-      Effect.flatMap(decodeDiscoveryEffect),
-      Effect.mapError(() => failure("discover", "Could not reach ChatGPT sign-in. Try again.")),
     );
-    if (
-      !options.discoveryUrl &&
-      (result.issuer !== "https://auth.openai.com" ||
-        [
-          result.authorization_endpoint,
-          result.token_endpoint,
-          result.jwks_uri,
-          ...(result.revocation_endpoint ? [result.revocation_endpoint] : []),
-        ].some((url) => new URL(url).origin !== result.issuer))
-    )
+  });
+  const failOidcRequestError = Effect.fnUntraced(function* (
+    stage: OidcHttpStage,
+    operation: string,
+    url: string,
+    error: unknown,
+  ) {
+    if (isSetupError(error)) return yield* error;
+    if (Cause.isTimeoutError(error)) {
+      yield* Effect.logWarning("ChatGPT OpenID request timed out", { stage, url });
+      return yield* failure(operation, describeTimeoutFailure(stage));
+    }
+    if (HttpClientError.isHttpClientError(error)) {
+      const reason = error.reason;
+      if (reason._tag === "StatusCodeError") {
+        const status = reason.response.status;
+        yield* Effect.logWarning("ChatGPT OpenID request returned non-2xx status", {
+          stage,
+          url,
+          statusCode: status,
+          contentType: reason.response.headers["content-type"] ?? null,
+        });
+        return yield* failure(operation, describeStatusFailure(stage, status));
+      }
+      if (reason._tag === "TransportError") {
+        const code = nodeErrorCode(reason.cause);
+        yield* Effect.logWarning("ChatGPT OpenID request transport failed", {
+          stage,
+          url,
+          errorCode: code ?? null,
+        });
+        return yield* failure(operation, describeTransportFailure(stage, code));
+      }
+      if (reason._tag === "DecodeError" || reason._tag === "EmptyBodyError") {
+        yield* Effect.logWarning("ChatGPT OpenID response body could not be decoded", {
+          stage,
+          url,
+          errorKind: reason._tag,
+          contentType: reason.response.headers["content-type"] ?? null,
+        });
+        return yield* failure(operation, describeDecodeFailure(stage));
+      }
+      yield* Effect.logWarning("ChatGPT OpenID request failed", {
+        stage,
+        url,
+        errorKind: reason._tag,
+      });
+      return yield* failure(operation, describeTransportFailure(stage, undefined));
+    }
+    yield* Effect.logWarning("ChatGPT OpenID response schema validation failed", {
+      stage,
+      url,
+    });
+    return yield* failure(operation, describeDecodeFailure(stage));
+  });
+  let metadata:
+    | { readonly value: typeof Discovery.Type; readonly expiresAt: number | null }
+    | undefined;
+  const discover = Effect.gen(function* () {
+    if (metadata !== undefined) {
+      if (metadata.expiresAt === null || metadata.expiresAt > (yield* Clock.currentTimeMillis)) {
+        return metadata.value;
+      }
+      metadata = undefined;
+    }
+    const discoveryUrl = options.discoveryUrl ?? DISCOVERY;
+    const isDefaultDiscovery = !options.discoveryUrl;
+    const response: HttpClientResponse.HttpClientResponse = yield* executeOidcRequest(
+      HttpClientRequest.get(discoveryUrl),
+    ).pipe(
+      Effect.timeout(DISCOVERY_TIMEOUT),
+      Effect.catch((error) => failOidcRequestError("discover", "discover", discoveryUrl, error)),
+    );
+    if (response.status < 200 || response.status >= 300) {
+      if (isDefaultDiscovery && isTrustedOpenAiDiscovery(DEFAULT_OPENAI_DISCOVERY)) {
+        yield* Effect.logWarning(
+          "OpenAI OpenID discovery returned a non-2xx status; falling back to verified default endpoints",
+          {
+            stage: "discover",
+            discoveryUrl,
+            statusCode: response.status,
+            contentType: response.headers["content-type"] ?? null,
+            fallbackIssuer: DEFAULT_OPENAI_DISCOVERY.issuer,
+          },
+        );
+        metadata = {
+          value: DEFAULT_OPENAI_DISCOVERY,
+          expiresAt: (yield* Clock.currentTimeMillis) + FALLBACK_DISCOVERY_TTL_MS,
+        };
+        return DEFAULT_OPENAI_DISCOVERY;
+      }
+      yield* Effect.logWarning("OpenAI OpenID discovery returned a non-2xx status", {
+        stage: "discover",
+        discoveryUrl,
+        statusCode: response.status,
+        contentType: response.headers["content-type"] ?? null,
+      });
+      return yield* failure("discover", describeStatusFailure("discover", response.status));
+    }
+    const result = yield* response.json.pipe(
+      Effect.flatMap(decodeDiscoveryEffect),
+      Effect.timeout(DISCOVERY_TIMEOUT),
+      Effect.catch((error) => failOidcRequestError("discover", "discover", discoveryUrl, error)),
+    );
+    if (isDefaultDiscovery && !isTrustedOpenAiDiscovery(result)) {
+      yield* Effect.logWarning("OpenAI OpenID discovery failed same-origin verification", {
+        stage: "discover",
+        discoveryUrl,
+        issuer: result.issuer,
+      });
       return yield* failure("discover", "ChatGPT sign-in configuration could not be verified.");
-    metadata = result;
+    }
+    metadata = { value: result, expiresAt: null };
     return result;
   });
   // Reused for 10 minutes like jose's remote set; an unknown kid refetches once for rotation.
   let keySet: { readonly keys: Jwks.KeySet; readonly expiresAt: number } | undefined;
   const fetchKeySet = Effect.fn("CodexChatGptAuth.fetchKeySet")(function* (jwksUri: string) {
-    return yield* http.get(jwksUri).pipe(
-      Effect.filterOrFail(
-        (response) => response.status === 200,
-        () => failure("verify", "Could not reach ChatGPT sign-in. Try again."),
-      ),
-      Effect.flatMap((response) => response.json),
-      Effect.flatMap(decodeKeySet),
+    return yield* Effect.gen(function* () {
+      const response = yield* executeOidcRequest(HttpClientRequest.get(jwksUri));
+      if (response.status !== 200) {
+        yield* Effect.logWarning("OpenAI JWKS endpoint returned a non-200 status", {
+          stage: "jwks",
+          url: jwksUri,
+          statusCode: response.status,
+          contentType: response.headers["content-type"] ?? null,
+        });
+        return yield* failure("verify", describeStatusFailure("jwks", response.status));
+      }
+      return yield* response.json.pipe(Effect.flatMap(decodeKeySet));
+    }).pipe(
       // Bounds the body read too, as jose's remote set did; a stalled endpoint fails the sign-in.
-      Effect.timeoutOrElse({
-        duration: "5 seconds",
-        orElse: () => Effect.fail(failure("verify", "Could not reach ChatGPT sign-in. Try again.")),
-      }),
+      Effect.timeout("5 seconds"),
+      Effect.catch((error) => failOidcRequestError("jwks", "verify", jwksUri, error)),
       Effect.tap((fetched) =>
         Effect.map(Clock.currentTimeMillis, (now) => {
           keySet = { keys: fetched, expiresAt: now + JWKS_CACHE_TTL_MS };
@@ -429,65 +636,88 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
   });
   const exchange = Effect.fn("CodexChatGptAuth.exchange")(function* (body: URLSearchParams) {
     const endpoints = yield* discover;
-    const response = yield* http
-      .execute(
-        HttpClientRequest.post(endpoints.token_endpoint).pipe(
-          HttpClientRequest.setHeader("accept", "application/json"),
-          HttpClientRequest.bodyText(body.toString(), "application/x-www-form-urlencoded"),
-        ),
-      )
-      .pipe(
-        Effect.flatMap((result) =>
-          result.json.pipe(
-            Effect.map((raw) => ({
-              ok: result.status >= 200 && result.status < 300,
-              status: result.status,
-              raw,
-            })),
-          ),
-        ),
-        Effect.mapError(() =>
-          failure("exchange", "ChatGPT sign-in is temporarily unavailable. Try again."),
-        ),
-      );
-    if (!response.ok) {
-      const error = yield* Effect.try({
-        try: () => decodeOAuthError(response.raw).error,
-        catch: () => failure("exchange", "ChatGPT did not accept this sign-in. Try again."),
-      });
-      if (
-        body.get("grant_type") === "refresh_token" &&
-        [
-          "invalid_grant",
-          "invalid_refresh_token",
-          "token_expired",
-          "refresh_token_expired",
-          "refresh_token_invalidated",
-          "refresh_token_reused",
-        ].includes(error)
-      ) {
-        yield* remove;
+    const response = yield* executeOidcRequest(
+      HttpClientRequest.post(endpoints.token_endpoint).pipe(
+        HttpClientRequest.bodyText(body.toString(), "application/x-www-form-urlencoded"),
+      ),
+    ).pipe(
+      Effect.timeout(TOKEN_EXCHANGE_TIMEOUT),
+      Effect.catch((error) =>
+        failOidcRequestError("exchange", "exchange", endpoints.token_endpoint, error),
+      ),
+    );
+    if (response.status < 200 || response.status >= 300) {
+      const parsedBody = yield* response.json.pipe(Effect.timeout("5 seconds"), Effect.result);
+      const oauthError =
+        parsedBody._tag === "Success"
+          ? (() => {
+              try {
+                return decodeOAuthError(parsedBody.success).error;
+              } catch {
+                return undefined;
+              }
+            })()
+          : undefined;
+      if (oauthError !== undefined) {
+        if (
+          body.get("grant_type") === "refresh_token" &&
+          [
+            "invalid_grant",
+            "invalid_refresh_token",
+            "token_expired",
+            "refresh_token_expired",
+            "refresh_token_invalidated",
+            "refresh_token_reused",
+          ].includes(oauthError)
+        ) {
+          yield* remove;
+          return yield* failure(
+            "refresh",
+            "Your ChatGPT connection expired or was disconnected. Sign in again.",
+          );
+        }
+        if (oauthError === "invalid_client")
+          return yield* failure(
+            "client",
+            "OpenAI rejected this app's client registration. Check the ChatGPT connection configuration.",
+          );
+        if (body.get("grant_type") === "authorization_code" && oauthError === "invalid_grant")
+          return yield* failure("code-expired", "This sign-in code expired. Start again.");
+        if (oauthError === "access_denied")
+          return yield* failure(
+            "exchange",
+            "ChatGPT sign-in was declined. Sign in again when you are ready.",
+          );
+        yield* Effect.logWarning("ChatGPT token exchange returned an OAuth error", {
+          stage: "exchange",
+          url: endpoints.token_endpoint,
+          statusCode: response.status,
+          oauthError,
+        });
+        if (response.status === 403) {
+          return yield* failure("exchange", describeStatusFailure("exchange", response.status));
+        }
         return yield* failure(
-          "refresh",
-          "Your ChatGPT connection expired or was disconnected. Sign in again.",
+          "exchange",
+          `ChatGPT could not complete sign-in (HTTP ${response.status}). Try again.`,
         );
       }
-      if (error === "invalid_client")
-        return yield* failure(
-          "client",
-          "OpenAI rejected this app's client registration. Check the ChatGPT connection configuration.",
-        );
-      if (body.get("grant_type") === "authorization_code" && error === "invalid_grant")
-        return yield* failure("code-expired", "This sign-in code expired. Start again.");
-      return yield* failure(
-        "exchange",
-        error === "access_denied"
-          ? "ChatGPT sign-in was declined. Sign in again when you are ready."
-          : "ChatGPT could not complete sign-in. Try again.",
-      );
+      yield* Effect.logWarning("ChatGPT token exchange returned a non-2xx status", {
+        stage: "exchange",
+        url: endpoints.token_endpoint,
+        statusCode: response.status,
+        contentType: response.headers["content-type"] ?? null,
+      });
+      return yield* failure("exchange", describeStatusFailure("exchange", response.status));
     }
+    const raw = yield* response.json.pipe(
+      Effect.timeout(TOKEN_EXCHANGE_TIMEOUT),
+      Effect.catch((error) =>
+        failOidcRequestError("exchange", "exchange", endpoints.token_endpoint, error),
+      ),
+    );
     return yield* Effect.try({
-      try: () => decodeTokens(response.raw),
+      try: () => decodeTokens(raw),
       catch: () =>
         failure("exchange", "ChatGPT returned an invalid token response. Sign in again."),
     });
@@ -697,10 +927,12 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
                 subject: claims.sub,
                 email: typeof claims.email === "string" ? claims.email : null,
               })
-            : Effect.fail(failure("verify", "identity")),
+            : Effect.fail(failure("verify", "ChatGPT sign-in could not be verified. Start again.")),
         ),
-        Effect.mapError(() =>
-          failure("verify", "ChatGPT sign-in could not be verified. Start again."),
+        Effect.mapError((error) =>
+          isSetupError(error)
+            ? error
+            : failure("verify", "ChatGPT sign-in could not be verified. Start again."),
         ),
       );
       const expectedSubject =
@@ -843,9 +1075,14 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
       Effect.interruptible,
       Effect.timeout("20 seconds"),
       Effect.mapError((error) =>
-        error._tag === "ProviderSetupError" && error.operation === "client"
-          ? error
-          : failure("refresh", "Could not renew the ChatGPT connection. Retry, or sign in again."),
+        isSetupError(error)
+          ? error.operation === "client" || error.operation === "refresh"
+            ? error
+            : failure("refresh", `Could not renew the ChatGPT connection: ${error.detail}`)
+          : failure(
+              "refresh",
+              "Could not renew the ChatGPT connection (timed out). Retry, or sign in again.",
+            ),
       ),
     );
     if (!tokens.refresh_token || tokens.token_type.toLowerCase() !== "bearer") {
@@ -875,7 +1112,7 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
         const result = yield* Effect.gen(function* () {
           const endpoints = yield* discover;
           if (!endpoints.revocation_endpoint) return { confirmed: false, retry: false };
-          const response = yield* http.execute(
+          const response = yield* executeOidcRequest(
             HttpClientRequest.post(endpoints.revocation_endpoint).pipe(
               HttpClientRequest.bodyText(
                 new URLSearchParams({
@@ -1060,8 +1297,10 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
           "The transferred ChatGPT connection is invalid or expired.",
         );
       const identity = yield* verifyIdToken(credentials.idToken, credentials.clientId).pipe(
-        Effect.mapError(() =>
-          failure("import", "The transferred ChatGPT identity could not be verified."),
+        Effect.mapError((error) =>
+          isSetupError(error)
+            ? error
+            : failure("import", "The transferred ChatGPT identity could not be verified."),
         ),
       );
       if (
