@@ -1,14 +1,33 @@
 import type { ReasoningTranslationProvider } from "@prismux/core-contracts/settings";
-import { useGT } from "gt-react";
-import { CheckIcon, CopyIcon, LanguagesIcon, Loader2Icon, RotateCcwIcon } from "lucide-react";
+import { msg, useGT, useMessages } from "gt-react";
+import {
+  CheckIcon,
+  CopyIcon,
+  LanguagesIcon,
+  Loader2Icon,
+  PowerOffIcon,
+  RotateCcwIcon,
+} from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { cn } from "../lib/utils";
 import {
+  readLastActiveReasoningTranslationProvider,
+  rememberLastActiveReasoningTranslationProvider,
+  shouldSkipReasoningTranslation,
   useReasoningTranslation,
+  type ActiveReasoningTranslationProvider,
   type ReasoningTranslateFn,
   type ReasoningTranslationMemoryCache,
 } from "./reasoningTranslation";
+
+export type ReasoningTranslationSettingsTarget = "reasoning" | "waiver";
+
+export interface ReasoningTranslationErrorHint {
+  readonly message: string;
+  readonly actionLabel?: string | undefined;
+  readonly settingsTarget?: ReasoningTranslationSettingsTarget | undefined;
+}
 
 export interface ReasoningTranslationBodyProps {
   readonly text: string;
@@ -21,14 +40,76 @@ export interface ReasoningTranslationBodyProps {
   readonly renderContent?: ((text: string) => ReactNode) | undefined;
   readonly cache?: ReasoningTranslationMemoryCache | undefined;
   readonly translate?: ReasoningTranslateFn | undefined;
+  /** Renders a subtle quick toggle in thinking cards when translation is enabled or off (zero I/O when off). */
+  readonly showQuickToggle?: boolean | undefined;
+  readonly onOpenSettings?: ((target: ReasoningTranslationSettingsTarget) => void) | undefined;
+  readonly renderSettingsLink?:
+    | ((input: {
+        readonly target: ReasoningTranslationSettingsTarget;
+        readonly label: ReactNode;
+        readonly className: string;
+        readonly dataSlot: string;
+      }) => ReactNode)
+    | undefined;
+  readonly onToggleProvider?: ((next: ReasoningTranslationProvider) => void) | undefined;
 }
 
-const PROVIDER_SHORT_LABELS: Readonly<Record<Exclude<ReasoningTranslationProvider, "off">, string>> =
-  {
-    text_model: "AI",
-  };
+const PROVIDER_SHORT_LABELS: Readonly<Record<ActiveReasoningTranslationProvider, string>> = {
+  local_nmt: msg("Local", { $context: "reasoning translation badge" }),
+  text_model: msg("AI", { $context: "reasoning translation badge" }),
+  official_api: msg("API", { $context: "reasoning translation badge" }),
+};
 
-/** DSH-parity reasoning translation wrapper; renders raw content with zero I/O when disabled. */
+export function resolveReasoningTranslationErrorHint(
+  errorCode: string | null,
+): ReasoningTranslationErrorHint {
+  switch (errorCode) {
+    case "LOCAL_NMT_NOT_INSTALLED":
+      return {
+        message: msg("Offline translation pack is not installed yet."),
+        actionLabel: msg("Download in Settings →"),
+        settingsTarget: "reasoning",
+      };
+    case "LOCAL_NMT_UNSUPPORTED_LANGUAGE":
+      return {
+        message: msg("Offline NMT only supports Simplified Chinese output; showing original."),
+      };
+    case "OFFICIAL_API_NOT_CONFIGURED":
+      return {
+        message: msg("Official translation API is not configured yet."),
+        actionLabel: msg("Configure in Settings →"),
+        settingsTarget: "reasoning",
+      };
+    case "OFFICIAL_API_AUTH_FAILED":
+      return {
+        message: msg("Translation API rejected credentials. Check your key in Settings."),
+        actionLabel: msg("Check API settings →"),
+        settingsTarget: "reasoning",
+      };
+    case "INVALID_OFFICIAL_API_ENDPOINT":
+      return {
+        message: msg("Invalid translation API endpoint URL."),
+        actionLabel: msg("Check API settings →"),
+        settingsTarget: "reasoning",
+      };
+    case "OFFICIAL_API_RATE_LIMITED":
+      return {
+        message: msg("Translation API rate limit reached; showing original."),
+      };
+    case "ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED":
+      return {
+        message: msg("Antigravity subscription waiver required; showing original."),
+        actionLabel: msg("Review waiver →"),
+        settingsTarget: "waiver",
+      };
+    default:
+      return {
+        message: msg("Translation unavailable, showing original"),
+      };
+  }
+}
+
+/** Reasoning translation wrapper; renders raw content with zero I/O when disabled. */
 export function ReasoningTranslationBody({
   text,
   running = false,
@@ -40,8 +121,13 @@ export function ReasoningTranslationBody({
   renderContent,
   cache,
   translate,
+  showQuickToggle = false,
+  onOpenSettings,
+  renderSettingsLink,
+  onToggleProvider,
 }: ReasoningTranslationBodyProps) {
   const gt = useGT();
+  const messages = useMessages();
   const [copied, setCopied] = useState(false);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const translation = useReasoningTranslation({
@@ -72,19 +158,108 @@ export function ReasoningTranslationBody({
       <div className="whitespace-pre-wrap break-words text-foreground/90">{content}</div>
     );
 
+  const applyProviderToggle = (next: ReasoningTranslationProvider) => {
+    if (onToggleProvider) {
+      onToggleProvider(next);
+      return;
+    }
+    void import("../hooks/useSettings")
+      .then((mod) => mod.persistClientSettingsPatch?.({ reasoningTranslationProvider: next }))
+      .catch(() => undefined);
+  };
+
+  const renderSettingsAction = (input: {
+    readonly target: ReasoningTranslationSettingsTarget;
+    readonly label: ReactNode;
+    readonly className: string;
+    readonly dataSlot: string;
+  }): ReactNode => {
+    if (onOpenSettings) {
+      return (
+        <button
+          type="button"
+          data-slot={input.dataSlot}
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenSettings(input.target);
+          }}
+          className={input.className}
+        >
+          {input.label}
+        </button>
+      );
+    }
+    if (renderSettingsLink) {
+      return renderSettingsLink(input);
+    }
+    return null;
+  };
+
   if (!translation.enabled || translation.provider === "off") {
-    return className ? (
-      <div className={className}>{renderBody(text)}</div>
+    const canShowOffQuickToggle =
+      showQuickToggle &&
+      translation.provider === "off" &&
+      !shouldSkipReasoningTranslation(text, targetLanguage);
+    if (!canShowOffQuickToggle) {
+      return className ? (
+        <div className={className}>{renderBody(text)}</div>
+      ) : (
+        <>{renderBody(text)}</>
+      );
+    }
+
+    const lastActiveProvider = readLastActiveReasoningTranslationProvider();
+    const quickToggleClassName =
+      "inline-flex cursor-pointer items-center gap-1 rounded-md border border-transparent px-1.5 py-0.5 text-2xs font-medium text-muted-foreground transition-colors hover:border-border/50 hover:bg-accent/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 motion-reduce:transition-none";
+    const quickToggleContent = (
+      <>
+        <LanguagesIcon className="size-3 shrink-0 text-primary/80" aria-hidden="true" />
+        <span>{lastActiveProvider ? gt("Translate reasoning") : gt("Reasoning translation")}</span>
+      </>
+    );
+
+    const quickControl = lastActiveProvider ? (
+      <button
+        type="button"
+        data-slot="reasoning-translation-quick-toggle"
+        data-quick-toggle-mode="resume"
+        onClick={(event) => {
+          event.stopPropagation();
+          applyProviderToggle(lastActiveProvider);
+        }}
+        className={quickToggleClassName}
+      >
+        {quickToggleContent}
+      </button>
     ) : (
-      <>{renderBody(text)}</>
+      renderSettingsAction({
+        target: "reasoning",
+        label: quickToggleContent,
+        className: quickToggleClassName,
+        dataSlot: "reasoning-translation-quick-toggle",
+      })
+    );
+
+    if (!quickControl) {
+      return className ? (
+        <div className={className}>{renderBody(text)}</div>
+      ) : (
+        <>{renderBody(text)}</>
+      );
+    }
+
+    return (
+      <div className={cn("flex min-w-0 flex-col gap-1.5", className)}>
+        <div className="flex items-center justify-end">{quickControl}</div>
+        <div className="min-w-0 text-foreground/90">{renderBody(text)}</div>
+      </div>
     );
   }
 
   const activeProvider = translation.provider;
   const hasTranslatedContent = translation.translatedFragmentCount > 0;
   const hasError = translation.error !== null;
-  const isComplianceBlocked =
-    translation.errorCode === "ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED";
+  const errorHint = hasError ? resolveReasoningTranslationErrorHint(translation.errorCode) : null;
 
   const handleCopyDisplayed = () => {
     if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) return;
@@ -101,6 +276,11 @@ export function ReasoningTranslationBody({
         }, 1_500);
       })
       .catch(() => undefined);
+  };
+
+  const handleQuickPause = () => {
+    rememberLastActiveReasoningTranslationProvider(activeProvider);
+    applyProviderToggle("off");
   };
 
   return (
@@ -120,12 +300,13 @@ export function ReasoningTranslationBody({
         <span className="inline-flex items-center gap-1.5 text-foreground/85">
           <LanguagesIcon className="size-3 shrink-0 text-primary/85" aria-hidden="true" />
           <span
+            data-slot="reasoning-translation-provider-badge"
             className={cn(
               "inline-flex items-center rounded border border-border/50 bg-background/70 px-1.5 py-0.5 text-2xs font-medium tracking-tight text-foreground/85",
               "[[data-pmx-glass='1']_&]:bg-background/45",
             )}
           >
-            {PROVIDER_SHORT_LABELS[activeProvider]}
+            {messages(PROVIDER_SHORT_LABELS[activeProvider])}
           </span>
         </span>
 
@@ -148,17 +329,26 @@ export function ReasoningTranslationBody({
           </span>
         ) : null}
 
-        {hasError ? (
-          <span className="inline-flex flex-wrap items-center gap-1.5 text-warning">
-            <span>
-              {isComplianceBlocked
-                ? gt("Antigravity subscription waiver required; showing original.")
-                : gt("Translation unavailable, showing original")}
-            </span>
+        {errorHint ? (
+          <span
+            data-slot="reasoning-translation-error"
+            data-error-code={translation.errorCode ?? undefined}
+            className="inline-flex flex-wrap items-center gap-1.5 text-warning-foreground"
+          >
+            <span>{messages(errorHint.message)}</span>
+            {errorHint.actionLabel && errorHint.settingsTarget
+              ? renderSettingsAction({
+                  target: errorHint.settingsTarget,
+                  label: messages(errorHint.actionLabel),
+                  dataSlot: "reasoning-translation-settings-hint",
+                  className:
+                    "inline-flex cursor-pointer items-center font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
+                })
+              : null}
             <button
               type="button"
               onClick={translation.retry}
-              className="inline-flex items-center gap-1 rounded border border-border/50 bg-background/70 px-1.5 py-0.5 font-medium text-foreground transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 motion-reduce:transition-none [[data-pmx-glass='1']_&]:bg-background/45"
+              className="inline-flex cursor-pointer items-center gap-1 rounded border border-border/50 bg-background/70 px-1.5 py-0.5 font-medium text-foreground transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 motion-reduce:transition-none [[data-pmx-glass='1']_&]:bg-background/45"
             >
               <RotateCcwIcon className="size-2.5 shrink-0" aria-hidden="true" />
               <span>{gt("Retry")}</span>
@@ -173,7 +363,7 @@ export function ReasoningTranslationBody({
               onClick={translation.toggleShowOriginal}
               aria-pressed={translation.showOriginal}
               className={cn(
-                "inline-flex items-center rounded border border-border/50 bg-background/70 px-1.5 py-0.5 text-2xs font-medium text-foreground/85 transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 motion-reduce:transition-none",
+                "inline-flex cursor-pointer items-center rounded border border-border/50 bg-background/70 px-1.5 py-0.5 text-2xs font-medium text-foreground/85 transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 motion-reduce:transition-none",
                 "[[data-pmx-glass='1']_&]:bg-background/45 [[data-pmx-glass='1']_&]:hover:bg-card/75",
               )}
               data-slot="reasoning-translation-toggle"
@@ -182,12 +372,32 @@ export function ReasoningTranslationBody({
             </button>
           ) : null}
 
+          {showQuickToggle ? (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                handleQuickPause();
+              }}
+              aria-label={gt("Turn off reasoning translation")}
+              data-slot="reasoning-translation-quick-toggle"
+              data-quick-toggle-mode="pause"
+              className={cn(
+                "inline-flex cursor-pointer items-center gap-1 rounded border border-transparent px-1.5 py-0.5 text-2xs font-medium text-muted-foreground transition-colors hover:border-border/50 hover:bg-background/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 motion-reduce:transition-none",
+                "[[data-pmx-glass='1']_&]:hover:bg-background/45",
+              )}
+            >
+              <PowerOffIcon className="size-2.5 shrink-0" aria-hidden="true" />
+              <span>{gt("Off")}</span>
+            </button>
+          ) : null}
+
           <button
             type="button"
             onClick={handleCopyDisplayed}
             aria-label={copied ? gt("Copied") : gt("Copy")}
             className={cn(
-              "inline-flex items-center gap-1 rounded border border-transparent px-1.5 py-0.5 text-2xs font-medium text-muted-foreground transition-colors hover:border-border/50 hover:bg-background/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 motion-reduce:transition-none",
+              "inline-flex cursor-pointer items-center gap-1 rounded border border-transparent px-1.5 py-0.5 text-2xs font-medium text-muted-foreground transition-colors hover:border-border/50 hover:bg-background/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 motion-reduce:transition-none",
               "[[data-pmx-glass='1']_&]:hover:bg-background/45",
             )}
             data-slot="reasoning-translation-copy"

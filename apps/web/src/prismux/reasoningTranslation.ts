@@ -1,5 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { ReasoningTranslationProvider } from "@prismux/core-contracts/settings";
+import type {
+  ReasoningTranslationLocalModelMirror,
+  ReasoningTranslationProvider,
+  ServerSettings,
+} from "@prismux/core-contracts/settings";
 import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { resolvePrimaryEnvironmentHttpUrl } from "../environments/primary";
@@ -9,13 +13,26 @@ import { primaryServerSettingsAtom } from "../state/server";
 
 export {
   ReasoningTranslationBody,
+  resolveReasoningTranslationErrorHint,
   type ReasoningTranslationBodyProps,
+  type ReasoningTranslationErrorHint,
 } from "./ReasoningTranslationBody";
 
 export const REASONING_TRANSLATION_MAX_TEXT_CHARS = 4_000;
 export const DEFAULT_REASONING_TRANSLATION_TARGET_LANGUAGE = "zh-Hans";
 export const DEFAULT_REASONING_TRANSLATION_SOURCE_LANGUAGE = "auto";
+export const LOCAL_NMT_MODEL_ID = "mozilla-bergamot-enzh-v2.2";
 export const REASONING_TRANSLATION_ENDPOINT = "/api/reasoning/translate";
+export const REASONING_TRANSLATION_LOCAL_MODEL_STATUS_ENDPOINT =
+  "/api/reasoning/translation/local-model/status";
+export const REASONING_TRANSLATION_LOCAL_MODEL_DOWNLOAD_ENDPOINT =
+  "/api/reasoning/translation/local-model/download";
+export const REASONING_TRANSLATION_LOCAL_MODEL_CANCEL_ENDPOINT =
+  "/api/reasoning/translation/local-model/cancel";
+export const REASONING_TRANSLATION_LOCAL_MODEL_ENDPOINT = "/api/reasoning/translation/local-model";
+export const REASONING_TRANSLATION_TEST_ENDPOINT = "/api/reasoning/translation/test";
+
+const LAST_ACTIVE_PROVIDER_STORAGE_KEY = "prismux:last-reasoning-translation-provider";
 
 export type ActiveReasoningTranslationProvider = Exclude<ReasoningTranslationProvider, "off">;
 
@@ -31,6 +48,37 @@ export interface ReasoningTranslationResponse {
   readonly provider: ActiveReasoningTranslationProvider;
   readonly cached: boolean;
   readonly modelKey?: string | undefined;
+}
+
+export interface LocalNmtModelStatus {
+  readonly installed: boolean;
+  readonly downloading: boolean;
+  readonly progressPercent: number;
+  readonly downloadedBytes: number;
+  readonly totalBytes: number;
+  readonly modelId: string;
+  readonly modelDir: string;
+  readonly mirror: ReasoningTranslationLocalModelMirror;
+  readonly version: string;
+  readonly error: string | null;
+  readonly sizeBytes: number;
+}
+
+export interface ReasoningTranslationTestInput {
+  readonly provider: ActiveReasoningTranslationProvider;
+  readonly text?: string | undefined;
+  readonly targetLanguage?: string | undefined;
+  readonly sourceLanguage?: string | undefined;
+}
+
+export interface ReasoningTranslationTestResult {
+  readonly ok: boolean;
+  readonly translatedText: string | null;
+  readonly latencyMs: number;
+  readonly provider: ActiveReasoningTranslationProvider;
+  readonly modelKey: string | null;
+  readonly error: string | null;
+  readonly errorCode: string | null;
 }
 
 export interface ReasoningTranslationRequestOptions {
@@ -56,6 +104,55 @@ export class ReasoningTranslationRequestError extends Error {
     this.status = options.status;
     this.code = options.code;
   }
+}
+
+export function isActiveReasoningTranslationProvider(
+  value: unknown,
+): value is ActiveReasoningTranslationProvider {
+  return value === "local_nmt" || value === "text_model" || value === "official_api";
+}
+
+export function rememberLastActiveReasoningTranslationProvider(
+  provider: ActiveReasoningTranslationProvider,
+): void {
+  try {
+    globalThis.localStorage?.setItem(LAST_ACTIVE_PROVIDER_STORAGE_KEY, provider);
+  } catch {
+    // Storage may be unavailable in restricted contexts.
+  }
+}
+
+export function readLastActiveReasoningTranslationProvider(): ActiveReasoningTranslationProvider | null {
+  try {
+    const raw = globalThis.localStorage?.getItem(LAST_ACTIVE_PROVIDER_STORAGE_KEY);
+    return isActiveReasoningTranslationProvider(raw) ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+export function resolveReasoningTranslationModelKey(
+  provider: ReasoningTranslationProvider,
+  serverSettings: Pick<
+    ServerSettings,
+    | "textGenerationModelSelection"
+    | "reasoningTranslationModelSelection"
+    | "reasoningTranslationOfficialApi"
+  >,
+): string {
+  if (provider === "off") return "";
+  if (provider === "local_nmt") {
+    return `local_nmt:${LOCAL_NMT_MODEL_ID}`;
+  }
+  if (provider === "text_model") {
+    const selection =
+      serverSettings.reasoningTranslationModelSelection ??
+      serverSettings.textGenerationModelSelection;
+    return `${selection.instanceId}:${selection.model}`;
+  }
+  const official = serverSettings.reasoningTranslationOfficialApi;
+  const detail = official.model.trim() || official.endpoint.trim();
+  return detail ? `official_api:${official.vendor}:${detail}` : `official_api:${official.vendor}`;
 }
 
 const PARAGRAPH_BOUNDARY_RE = /\r?\n(?:[\t ]*\r?\n)+/g;
@@ -205,12 +302,7 @@ export function makeReasoningTranslationCacheKey(input: {
   readonly targetLanguage: string;
   readonly fragmentText: string;
 }): string {
-  return JSON.stringify([
-    input.provider,
-    input.provider === "text_model" ? input.modelKey : "",
-    input.targetLanguage,
-    input.fragmentText,
-  ]);
+  return JSON.stringify([input.provider, input.modelKey, input.targetLanguage, input.fragmentText]);
 }
 
 export class ReasoningTranslationMemoryCache {
@@ -267,28 +359,31 @@ function isSameOriginBrowserEndpoint(url: string): boolean {
   }
 }
 
-function resolveReasoningTranslateUrl(baseUrl?: string): string {
+function resolveReasoningEndpointUrl(endpoint: string, baseUrl?: string): string {
   if (baseUrl !== undefined) {
     const trimmed = baseUrl.replace(/\/+$/, "");
-    return `${trimmed}${REASONING_TRANSLATION_ENDPOINT}`;
+    return `${trimmed}${endpoint}`;
   }
   try {
-    return resolvePrimaryEnvironmentHttpUrl(REASONING_TRANSLATION_ENDPOINT);
+    return resolvePrimaryEnvironmentHttpUrl(endpoint);
   } catch {
-    return REASONING_TRANSLATION_ENDPOINT;
+    return endpoint;
   }
 }
 
-export async function requestReasoningTranslation(
-  input: ReasoningTranslationRequestInput,
-  options: ReasoningTranslationRequestOptions = {},
-): Promise<ReasoningTranslationResponse> {
+async function fetchReasoningEndpointJson(input: {
+  readonly endpoint: string;
+  readonly method: "GET" | "POST" | "DELETE";
+  readonly body?: Record<string, unknown> | undefined;
+  readonly options?: ReasoningTranslationRequestOptions | undefined;
+}): Promise<unknown> {
+  const options = input.options ?? {};
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
-  const url = resolveReasoningTranslateUrl(options.baseUrl);
+  const url = resolveReasoningEndpointUrl(input.endpoint, options.baseUrl);
   const sameOrigin = isSameOriginBrowserEndpoint(url);
   const headers: Record<string, string> = {
-    "content-type": "application/json",
     accept: "application/json",
+    ...(input.body !== undefined ? { "content-type": "application/json" } : {}),
   };
 
   if (!sameOrigin) {
@@ -300,16 +395,11 @@ export async function requestReasoningTranslation(
   }
 
   const response = await fetchImpl(url, {
-    method: "POST",
+    method: input.method,
     headers,
     credentials: sameOrigin ? "include" : "omit",
     ...(options.signal ? { signal: options.signal } : {}),
-    body: JSON.stringify({
-      provider: input.provider,
-      text: input.text,
-      ...(input.targetLanguage ? { targetLanguage: input.targetLanguage } : {}),
-      ...(input.sourceLanguage ? { sourceLanguage: input.sourceLanguage } : {}),
-    }),
+    ...(input.body !== undefined ? { body: JSON.stringify(input.body) } : {}),
   });
 
   let parsed: unknown = null;
@@ -335,6 +425,56 @@ export async function requestReasoningTranslation(
     throw new ReasoningTranslationRequestError(detail, { status: response.status, code });
   }
 
+  return parsed;
+}
+
+function parseLocalNmtModelStatus(parsed: unknown): LocalNmtModelStatus {
+  if (typeof parsed !== "object" || parsed === null) {
+    throw new ReasoningTranslationRequestError("Invalid local NMT status response payload.", {
+      status: 502,
+      code: "INVALID_RESPONSE",
+    });
+  }
+  const record = parsed as Record<string, unknown>;
+  if (typeof record.installed !== "boolean" || typeof record.downloading !== "boolean") {
+    throw new ReasoningTranslationRequestError("Invalid local NMT status response payload.", {
+      status: 502,
+      code: "INVALID_RESPONSE",
+    });
+  }
+  const mirror: ReasoningTranslationLocalModelMirror =
+    record.mirror === "huggingface" ? "huggingface" : "hf_mirror";
+  return {
+    installed: record.installed,
+    downloading: record.downloading,
+    progressPercent: typeof record.progressPercent === "number" ? record.progressPercent : 0,
+    downloadedBytes: typeof record.downloadedBytes === "number" ? record.downloadedBytes : 0,
+    totalBytes: typeof record.totalBytes === "number" ? record.totalBytes : 0,
+    modelId: typeof record.modelId === "string" ? record.modelId : LOCAL_NMT_MODEL_ID,
+    modelDir: typeof record.modelDir === "string" ? record.modelDir : "",
+    mirror,
+    version: typeof record.version === "string" ? record.version : "",
+    error: typeof record.error === "string" && record.error.trim().length > 0 ? record.error : null,
+    sizeBytes: typeof record.sizeBytes === "number" ? record.sizeBytes : 0,
+  };
+}
+
+export async function requestReasoningTranslation(
+  input: ReasoningTranslationRequestInput,
+  options: ReasoningTranslationRequestOptions = {},
+): Promise<ReasoningTranslationResponse> {
+  const parsed = await fetchReasoningEndpointJson({
+    endpoint: REASONING_TRANSLATION_ENDPOINT,
+    method: "POST",
+    body: {
+      provider: input.provider,
+      text: input.text,
+      ...(input.targetLanguage ? { targetLanguage: input.targetLanguage } : {}),
+      ...(input.sourceLanguage ? { sourceLanguage: input.sourceLanguage } : {}),
+    },
+    options,
+  });
+
   if (
     typeof parsed !== "object" ||
     parsed === null ||
@@ -354,9 +494,101 @@ export async function requestReasoningTranslation(
   };
   return {
     translatedText: payload.translatedText,
-    provider: payload.provider ?? input.provider,
+    provider: isActiveReasoningTranslationProvider(payload.provider)
+      ? payload.provider
+      : input.provider,
     cached: payload.cached === true,
     ...(typeof payload.modelKey === "string" ? { modelKey: payload.modelKey } : {}),
+  };
+}
+
+export async function getLocalNmtStatus(
+  options: ReasoningTranslationRequestOptions = {},
+): Promise<LocalNmtModelStatus> {
+  const parsed = await fetchReasoningEndpointJson({
+    endpoint: REASONING_TRANSLATION_LOCAL_MODEL_STATUS_ENDPOINT,
+    method: "GET",
+    options,
+  });
+  return parseLocalNmtModelStatus(parsed);
+}
+
+export async function startLocalNmtDownload(
+  mirror?: ReasoningTranslationLocalModelMirror,
+  options: ReasoningTranslationRequestOptions = {},
+): Promise<LocalNmtModelStatus> {
+  const parsed = await fetchReasoningEndpointJson({
+    endpoint: REASONING_TRANSLATION_LOCAL_MODEL_DOWNLOAD_ENDPOINT,
+    method: "POST",
+    body: mirror ? { mirror } : {},
+    options,
+  });
+  return parseLocalNmtModelStatus(parsed);
+}
+
+export async function cancelLocalNmtDownload(
+  options: ReasoningTranslationRequestOptions = {},
+): Promise<LocalNmtModelStatus> {
+  const parsed = await fetchReasoningEndpointJson({
+    endpoint: REASONING_TRANSLATION_LOCAL_MODEL_CANCEL_ENDPOINT,
+    method: "POST",
+    body: {},
+    options,
+  });
+  return parseLocalNmtModelStatus(parsed);
+}
+
+export async function deleteLocalNmtModel(
+  options: ReasoningTranslationRequestOptions = {},
+): Promise<LocalNmtModelStatus> {
+  const parsed = await fetchReasoningEndpointJson({
+    endpoint: REASONING_TRANSLATION_LOCAL_MODEL_ENDPOINT,
+    method: "DELETE",
+    options,
+  });
+  return parseLocalNmtModelStatus(parsed);
+}
+
+export async function testReasoningTranslation(
+  providerOrInput: ActiveReasoningTranslationProvider | ReasoningTranslationTestInput,
+  options: ReasoningTranslationRequestOptions = {},
+): Promise<ReasoningTranslationTestResult> {
+  const input: ReasoningTranslationTestInput =
+    typeof providerOrInput === "string" ? { provider: providerOrInput } : providerOrInput;
+  const parsed = await fetchReasoningEndpointJson({
+    endpoint: REASONING_TRANSLATION_TEST_ENDPOINT,
+    method: "POST",
+    body: {
+      provider: input.provider,
+      ...(input.text ? { text: input.text } : {}),
+      ...(input.targetLanguage ? { targetLanguage: input.targetLanguage } : {}),
+      ...(input.sourceLanguage ? { sourceLanguage: input.sourceLanguage } : {}),
+    },
+    options,
+  });
+
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    typeof (parsed as { ok?: unknown }).ok !== "boolean"
+  ) {
+    throw new ReasoningTranslationRequestError("Invalid reasoning translation test response.", {
+      status: 502,
+      code: "INVALID_RESPONSE",
+    });
+  }
+
+  const record = parsed as Record<string, unknown>;
+  return {
+    ok: record.ok === true,
+    translatedText: typeof record.translatedText === "string" ? record.translatedText : null,
+    latencyMs: typeof record.latencyMs === "number" ? record.latencyMs : 0,
+    provider: isActiveReasoningTranslationProvider(record.provider)
+      ? record.provider
+      : input.provider,
+    modelKey: typeof record.modelKey === "string" ? record.modelKey : null,
+    error: typeof record.error === "string" ? record.error : null,
+    errorCode: typeof record.errorCode === "string" ? record.errorCode : null,
   };
 }
 
@@ -594,7 +826,7 @@ export class ReasoningTranslationController {
       }
     }
 
-    const maxConcurrency = provider === "text_model" ? 2 : 3;
+    const maxConcurrency = provider === "official_api" ? 3 : 2;
     for (const entry of entries) {
       if (this.inFlight.size >= maxConcurrency) break;
       if (entry.deferred || entry.skipped) continue;
@@ -653,12 +885,13 @@ export class ReasoningTranslationController {
   }
 
   /** Pure derivation safe to invoke during React render for frame-0 cache hydration. */
-  computeSnapshotFor = (rawInput: ReasoningTranslationControllerInput): ReasoningTranslationSnapshot => {
+  computeSnapshotFor = (
+    rawInput: ReasoningTranslationControllerInput,
+  ): ReasoningTranslationSnapshot => {
     const input = this.normalizeInput(rawInput);
     const { provider, text } = input;
     const targetLanguage = input.targetLanguage ?? DEFAULT_REASONING_TRANSLATION_TARGET_LANGUAGE;
-    const enabled =
-      provider !== "off" && !shouldSkipReasoningTranslation(text, targetLanguage);
+    const enabled = provider !== "off" && !shouldSkipReasoningTranslation(text, targetLanguage);
     if (!enabled) {
       return {
         enabled: false,
@@ -719,8 +952,7 @@ export class ReasoningTranslationController {
       status = "partial";
     }
 
-    const displayText =
-      this.showOriginal || translatedFragmentCount === 0 ? text : translatedText;
+    const displayText = this.showOriginal || translatedFragmentCount === 0 ? text : translatedText;
 
     return {
       enabled: true,
@@ -766,10 +998,7 @@ export function useReasoningTranslation(
   const effectiveProvider: ReasoningTranslationProvider =
     options.enabled === false ? "off" : (options.provider ?? configuredProvider);
   const effectiveModelKey =
-    options.modelKey ??
-    (effectiveProvider === "text_model"
-      ? `${serverSettings.textGenerationModelSelection.instanceId}:${serverSettings.textGenerationModelSelection.model}`
-      : "");
+    options.modelKey ?? resolveReasoningTranslationModelKey(effectiveProvider, serverSettings);
 
   const [controller] = useState(
     () =>

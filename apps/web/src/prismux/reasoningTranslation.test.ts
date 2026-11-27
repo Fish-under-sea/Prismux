@@ -1,3 +1,4 @@
+import { DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@prismux/core-contracts";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -7,20 +8,30 @@ vi.mock("gt-react", async (importOriginal) => {
   return {
     ...actual,
     useGT: () => (text: string) => text,
+    useMessages: () => (text: string) => text,
+    msg: (text: string) => text,
   };
 });
 
 import {
+  LOCAL_NMT_MODEL_ID,
   REASONING_TRANSLATION_MAX_TEXT_CHARS,
   ReasoningTranslationBody,
   ReasoningTranslationController,
   ReasoningTranslationMemoryCache,
   ReasoningTranslationRequestError,
+  cancelLocalNmtDownload,
+  deleteLocalNmtModel,
+  getLocalNmtStatus,
   isAlreadyChineseReasoning,
   makeReasoningTranslationCacheKey,
   reasoningFragments,
   requestReasoningTranslation,
+  resolveReasoningTranslationErrorHint,
+  resolveReasoningTranslationModelKey,
   shouldSkipReasoningTranslation,
+  startLocalNmtDownload,
+  testReasoningTranslation,
   type ReasoningTranslateFn,
 } from "./reasoningTranslation";
 
@@ -51,7 +62,8 @@ describe("reasoningFragments", () => {
     const emojis = "🚀".repeat(50);
     const emojiChunks = reasoningFragments(emojis, { maxTextChars: 11 });
     expect(emojiChunks.length).toBeGreaterThan(4);
-    const loneSurrogateRe = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    const loneSurrogateRe =
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
     for (const chunk of emojiChunks) {
       expect(chunk.length).toBeLessThanOrEqual(11);
       // Every chunk is well-formed UTF-16 with no lone surrogates.
@@ -75,9 +87,9 @@ describe("Smart Chinese reasoning detection", () => {
 
     // Pure Chinese -> skip
     expect(isAlreadyChineseReasoning("先检查设置模式，确认默认翻译引擎是否已启用。")).toBe(true);
-    expect(shouldSkipReasoningTranslation("先检查设置模式，确认默认翻译引擎是否已启用。", "zh-Hans")).toBe(
-      true,
-    );
+    expect(
+      shouldSkipReasoningTranslation("先检查设置模式，确认默认翻译引擎是否已启用。", "zh-Hans"),
+    ).toBe(true);
 
     // Chinese with fenced code blocks, inline code, URLs, Windows/POSIX paths, and identifiers -> skip
     const chineseWithCode = [
@@ -98,7 +110,10 @@ describe("Smart Chinese reasoning detection", () => {
       ),
     ).toBe(false);
     expect(
-      shouldSkipReasoningTranslation("Update the 思考过程汉化 label in SettingsPanels.tsx.", "zh-Hans"),
+      shouldSkipReasoningTranslation(
+        "Update the 思考过程汉化 label in SettingsPanels.tsx.",
+        "zh-Hans",
+      ),
     ).toBe(false);
 
     // Non-Chinese target language -> do not skip Chinese source
@@ -390,5 +405,232 @@ describe("ReasoningTranslationBody SSR rendering", () => {
     expect(enabledHtml).toContain('data-slot="reasoning-translation-copy"');
     expect(enabledHtml).toContain("motion-reduce:transition-none");
     expect(enabledHtml).toContain("正在检查布局结构");
+  });
+
+  it("renders localized short badges for local_nmt, text_model, official_api and subtle quick toggle when enabled or off", () => {
+    const localCache = new ReasoningTranslationMemoryCache();
+    localCache.set(
+      makeReasoningTranslationCacheKey({
+        provider: "local_nmt",
+        modelKey: `local_nmt:${LOCAL_NMT_MODEL_ID}`,
+        targetLanguage: "zh-Hans",
+        fragmentText: "Inspecting local cache",
+      }),
+      "正在检查本地缓存",
+    );
+    const localHtml = renderToStaticMarkup(
+      createElement(ReasoningTranslationBody, {
+        text: "Inspecting local cache",
+        provider: "local_nmt",
+        modelKey: `local_nmt:${LOCAL_NMT_MODEL_ID}`,
+        cache: localCache,
+        showQuickToggle: true,
+      }),
+    );
+    expect(localHtml).toContain('data-translation-provider="local_nmt"');
+    expect(localHtml).toContain('data-slot="reasoning-translation-provider-badge"');
+    expect(localHtml).toContain(">Local<");
+    expect(localHtml).toContain('data-slot="reasoning-translation-quick-toggle"');
+    expect(localHtml).toContain('data-quick-toggle-mode="pause"');
+
+    const officialCache = new ReasoningTranslationMemoryCache();
+    officialCache.set(
+      makeReasoningTranslationCacheKey({
+        provider: "official_api",
+        modelKey: "official_api:deepl",
+        targetLanguage: "zh-Hans",
+        fragmentText: "Inspecting remote API",
+      }),
+      "正在检查远端接口",
+    );
+    const officialHtml = renderToStaticMarkup(
+      createElement(ReasoningTranslationBody, {
+        text: "Inspecting remote API",
+        provider: "official_api",
+        modelKey: "official_api:deepl",
+        cache: officialCache,
+      }),
+    );
+    expect(officialHtml).toContain('data-translation-provider="official_api"');
+    expect(officialHtml).toContain(">API<");
+
+    // Off mode with showQuickToggle renders subtle quick trigger for English text and zero toolbar/fetches.
+    const offQuickHtml = renderToStaticMarkup(
+      createElement(ReasoningTranslationBody, {
+        text: "Checking the file path before editing.",
+        provider: "off",
+        showQuickToggle: true,
+        onOpenSettings: () => {},
+      }),
+    );
+    expect(offQuickHtml).toContain('data-slot="reasoning-translation-quick-toggle"');
+    expect(offQuickHtml).not.toContain('data-slot="reasoning-translation-toolbar"');
+
+    // Already-Chinese reasoning does not render quick toggle clutter even when showQuickToggle is on.
+    const offChineseHtml = renderToStaticMarkup(
+      createElement(ReasoningTranslationBody, {
+        text: "先检查当前文件路径，然后确认是否需要修改。",
+        provider: "off",
+        showQuickToggle: true,
+        onOpenSettings: () => {},
+      }),
+    );
+    expect(offChineseHtml).not.toContain('data-slot="reasoning-translation-quick-toggle"');
+  });
+});
+
+describe("A/B/C model keys, error hints, and local NMT / test HTTP helpers", () => {
+  it("resolves accurate cache model keys across off, local_nmt, text_model, and official_api", () => {
+    expect(resolveReasoningTranslationModelKey("off", DEFAULT_SERVER_SETTINGS)).toBe("");
+    expect(resolveReasoningTranslationModelKey("local_nmt", DEFAULT_SERVER_SETTINGS)).toBe(
+      `local_nmt:${LOCAL_NMT_MODEL_ID}`,
+    );
+
+    // text_model falls back to textGenerationModelSelection when reasoningTranslationModelSelection is null
+    expect(resolveReasoningTranslationModelKey("text_model", DEFAULT_SERVER_SETTINGS)).toBe(
+      `${DEFAULT_SERVER_SETTINGS.textGenerationModelSelection.instanceId}:${DEFAULT_SERVER_SETTINGS.textGenerationModelSelection.model}`,
+    );
+
+    // text_model prefers dedicated reasoningTranslationModelSelection when set
+    expect(
+      resolveReasoningTranslationModelKey("text_model", {
+        ...DEFAULT_SERVER_SETTINGS,
+        reasoningTranslationModelSelection: {
+          instanceId: ProviderInstanceId.make("dsh"),
+          model: "deepseek-v4-flash",
+        },
+      }),
+    ).toBe("dsh:deepseek-v4-flash");
+
+    // official_api includes vendor + model or endpoint
+    expect(
+      resolveReasoningTranslationModelKey("official_api", {
+        ...DEFAULT_SERVER_SETTINGS,
+        reasoningTranslationOfficialApi: {
+          ...DEFAULT_SERVER_SETTINGS.reasoningTranslationOfficialApi,
+          vendor: "openai_compatible",
+          endpoint: "http://127.0.0.1:11434/v1",
+          model: "qwen2.5:7b",
+        },
+      }),
+    ).toBe("official_api:openai_compatible:qwen2.5:7b");
+    expect(
+      resolveReasoningTranslationModelKey("official_api", {
+        ...DEFAULT_SERVER_SETTINGS,
+        reasoningTranslationOfficialApi: {
+          ...DEFAULT_SERVER_SETTINGS.reasoningTranslationOfficialApi,
+          vendor: "deepl",
+          endpoint: "",
+          model: "",
+        },
+      }),
+    ).toBe("official_api:deepl");
+
+    // Cache key isolates official_api vendors/models cleanly
+    const deeplKey = makeReasoningTranslationCacheKey({
+      provider: "official_api",
+      modelKey: "official_api:deepl",
+      targetLanguage: "zh-Hans",
+      fragmentText: "Check file",
+    });
+    const azureKey = makeReasoningTranslationCacheKey({
+      provider: "official_api",
+      modelKey: "official_api:azure",
+      targetLanguage: "zh-Hans",
+      fragmentText: "Check file",
+    });
+    expect(deeplKey).not.toBe(azureKey);
+  });
+
+  it("maps structured backend error codes to localized hints and settings targets", () => {
+    expect(resolveReasoningTranslationErrorHint("LOCAL_NMT_NOT_INSTALLED")).toMatchObject({
+      settingsTarget: "reasoning",
+    });
+    expect(resolveReasoningTranslationErrorHint("OFFICIAL_API_NOT_CONFIGURED")).toMatchObject({
+      settingsTarget: "reasoning",
+    });
+    expect(resolveReasoningTranslationErrorHint("OFFICIAL_API_AUTH_FAILED")).toMatchObject({
+      settingsTarget: "reasoning",
+    });
+    expect(
+      resolveReasoningTranslationErrorHint("ERR_SUBSCRIPTION_ORCHESTRATION_BLOCKED"),
+    ).toMatchObject({
+      settingsTarget: "waiver",
+    });
+    expect(resolveReasoningTranslationErrorHint("UNKNOWN_CODE").settingsTarget).toBeUndefined();
+  });
+
+  it("calls local-model status/download/cancel/delete and test endpoints with bearer auth", async () => {
+    const calls: Array<{ url: string; method: string | undefined; body: string | undefined }> = [];
+    const sampleStatus = {
+      installed: false,
+      downloading: true,
+      progressPercent: 35,
+      downloadedBytes: 20_000_000,
+      totalBytes: 56_995_684,
+      modelId: LOCAL_NMT_MODEL_ID,
+      modelDir: "/tmp/models/reasoning-translate/mozilla-bergamot-enzh-v2.2",
+      mirror: "hf_mirror",
+      version: "2.2.0",
+      error: null,
+      sizeBytes: 0,
+    };
+
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      calls.push({
+        url,
+        method: init?.method,
+        body: typeof init?.body === "string" ? init.body : undefined,
+      });
+      if (url.endsWith("/api/reasoning/translation/test")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            translatedText: "在应用修复前检查文件路径。",
+            latencyMs: 42,
+            provider: "local_nmt",
+            modelKey: LOCAL_NMT_MODEL_ID,
+            error: null,
+            errorCode: null,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify(sampleStatus), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const opts = {
+      baseUrl: "http://127.0.0.1:3773",
+      fetchImpl,
+      readBearerToken: async () => "token-123",
+    };
+
+    const status = await getLocalNmtStatus(opts);
+    expect(status.progressPercent).toBe(35);
+
+    await startLocalNmtDownload("huggingface", opts);
+    await cancelLocalNmtDownload(opts);
+    await deleteLocalNmtModel(opts);
+    const testResult = await testReasoningTranslation("local_nmt", opts);
+    expect(testResult).toMatchObject({
+      ok: true,
+      translatedText: "在应用修复前检查文件路径。",
+      latencyMs: 42,
+      provider: "local_nmt",
+    });
+
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+      "GET http://127.0.0.1:3773/api/reasoning/translation/local-model/status",
+      "POST http://127.0.0.1:3773/api/reasoning/translation/local-model/download",
+      "POST http://127.0.0.1:3773/api/reasoning/translation/local-model/cancel",
+      "DELETE http://127.0.0.1:3773/api/reasoning/translation/local-model",
+      "POST http://127.0.0.1:3773/api/reasoning/translation/test",
+    ]);
+    expect(calls[1]?.body).toBe(JSON.stringify({ mirror: "huggingface" }));
+    expect(calls[4]?.body).toBe(JSON.stringify({ provider: "local_nmt" }));
   });
 });

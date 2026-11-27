@@ -193,12 +193,7 @@ const ALL_SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
   {
     id: "extensions-data",
     heading: msg("Extensions & connections"),
-    paths: [
-      "/settings/plugins",
-      "/settings/sync",
-      "/settings/connections",
-      "/settings/secrets",
-    ],
+    paths: ["/settings/plugins", "/settings/sync", "/settings/connections", "/settings/secrets"],
   },
   {
     id: "system-about",
@@ -231,8 +226,7 @@ const CACHED_NAV_GROUPS = {
 /** Sidebar groups; Secrets requires server support and SnapShots shows on macOS only by default. */
 export function settingsNavGroups(
   hasSecretProvidersEnvironment: boolean,
-  showSnapShots: boolean =
-    typeof navigator !== "undefined" && isMacPlatform(navigator.platform),
+  showSnapShots: boolean = typeof navigator !== "undefined" && isMacPlatform(navigator.platform),
 ): ReadonlyArray<SettingsNavGroup> {
   const key = `${hasSecretProvidersEnvironment ? "1" : "0"}${showSnapShots ? "1" : "0"}` as const;
   return CACHED_NAV_GROUPS[key];
@@ -440,8 +434,10 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: msg("Reasoning translation"),
     to: "/settings/chat",
     searchTerms: [
-      msg("reasoning thinking cot chain of thought translate chinese bing google text model"),
-      "思考过程汉化 思考汉化 思维链翻译 思考翻译 汉化",
+      msg(
+        "reasoning thinking cot chain of thought translate chinese local offline nmt bergamot deepl azure volcano tencent openai api text model",
+      ),
+      "思考过程汉化 思考汉化 思维链翻译 思考翻译 汉化 本地离线 离线翻译 火山 腾讯 翻译 API",
     ],
   },
   {
@@ -454,7 +450,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "work-steps-display",
     title: msg("Work steps display"),
     to: "/settings/chat",
-    searchTerms: [msg("work steps concise standard detailed expanded tool calls commands edits activity")],
+    searchTerms: [
+      msg("work steps concise standard detailed expanded tool calls commands edits activity"),
+    ],
   },
   {
     id: "work-steps-collapse-timing",
@@ -859,7 +857,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: msg("Provider update checks"),
     to: "/settings/providers",
     searchTerms: [
-      msg("installed cli versions newer available codex claude cursor grok kiro opencode antigravity pi dsh"),
+      msg(
+        "installed cli versions newer available codex claude cursor grok kiro opencode antigravity pi dsh",
+      ),
     ],
     scope: "environment-defaults",
   },
@@ -1359,7 +1359,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "project-actions",
     title: msg("Actions"),
     to: "/settings/projects",
-    searchTerms: [msg("commands scripts setup run dev server checkout worktree prismux.json t3.json import")],
+    searchTerms: [
+      msg("commands scripts setup run dev server checkout worktree prismux.json t3.json import"),
+    ],
   },
   {
     id: "project-repositories",
@@ -1504,9 +1506,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "prismux-plugins",
     title: msg("Plugin Center"),
     to: "/settings/plugins",
-    searchTerms: [
-      msg("plugins extensions qq cordis npm marketplace official zero preinstalled"),
-    ],
+    searchTerms: [msg("plugins extensions qq cordis npm marketplace official zero preinstalled")],
   },
   {
     id: "prismux-memory",
