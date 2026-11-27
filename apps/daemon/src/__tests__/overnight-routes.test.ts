@@ -1715,12 +1715,24 @@ describe("OvernightRouteService & /v1/overnight/* API (encrypted credentials, OA
       assert.equal(afterStrategy.config.strategy.triggerTag, "#nightly");
       assert.equal(afterStrategy.config.testRecipient, "owner-test@qq.com");
 
-      // 4. Invalid non-empty non-email value does not clobber valid saved testRecipient
+      // 4. Invalid non-empty values (missing @ or internal whitespace) do not clobber valid saved testRecipient
       const afterInvalid = await svc1.updateConfig(
         { testRecipient: "not-an-email" },
         "owner_chief",
       );
       assert.equal(afterInvalid.config.testRecipient, "owner-test@qq.com");
+
+      const afterWhitespaceInvalid = await svc1.updateConfig(
+        { testRecipient: "bad user@qq.com" },
+        "owner_chief",
+      );
+      assert.equal(afterWhitespaceInvalid.config.testRecipient, "owner-test@qq.com");
+
+      await assert.rejects(
+        () => svc1.sendTestMorningReport({ recipient: "bad user@qq.com" }, "owner_chief"),
+        (err: unknown) =>
+          err instanceof Error && (err as { code?: string }).code === "RECIPIENT_MISSING",
+      );
 
       // 5. Background probeAgentMailStatus auto-persisting a new agentMailAddress MUST preserve testRecipient
       probedAgentEmail = "fishundersea@agent.qq.com";

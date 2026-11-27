@@ -47,10 +47,12 @@ import {
   isValidPersistedTestRecipient,
   parseAgentMailTestResponse,
   resolveDefaultTestRecipient,
+  resolveEffectiveTestRecipientForSave,
   resolveFallbackTestRecipient,
   resolveMailSectionViewMode,
   resolveNextTestRecipientInputOnBackgroundSync,
   resolveNextTestRecipientInputOnSnapshot,
+  resolveTestReportRecipientState,
   shouldAutoCollapseAgentMailSetup,
   shouldDefaultExpandMailChannel,
   toggleMailSectionState,
@@ -827,5 +829,57 @@ describe("overnightFactory.logic — 6-card presets, NetEase 163/126 & Tencent A
         agentMailAuthorizedEmail: "fishundersea@agent.qq.com",
       }),
     ).toBe("owner-test@qq.com");
+
+    // 6. Stale-closure race protection: onBlur save before handleSaveMail & clear before handleSendTestReport
+    // (a) onBlur already persisted "new@qq.com" and reset isDirty=false while React closure still held stale draft
+    expect(
+      resolveEffectiveTestRecipientForSave({
+        currentInput: "new@qq.com",
+        isDirty: false,
+        userCleared: false,
+        lastPersisted: "new@qq.com",
+      }),
+    ).toBe("new@qq.com");
+    // (b) User explicitly cleared recipient before clicking Save Mail
+    expect(
+      resolveEffectiveTestRecipientForSave({
+        currentInput: "",
+        isDirty: false,
+        userCleared: true,
+        lastPersisted: "stale@qq.com",
+      }),
+    ).toBe("");
+    // (c) User cleared persisted recipient and clicked Send Test Report: MUST send "" (fallback to default mailbox, never stale old email)
+    expect(
+      resolveTestReportRecipientState({
+        currentInput: "",
+        isDirty: false,
+        userCleared: true,
+        lastPersisted: "",
+        fallbackRecipient: "fishundersea@agent.qq.com",
+        hasConfiguredMailboxAddr: true,
+      }),
+    ).toEqual({
+      explicitInput: "",
+      hasCustomRecipient: false,
+      effectiveTestRecipient: "",
+      recipientToPass: "",
+    });
+    // (d) User edited to "new@qq.com" and onBlur persisted it right before Send Test Report
+    expect(
+      resolveTestReportRecipientState({
+        currentInput: "new@qq.com",
+        isDirty: false,
+        userCleared: false,
+        lastPersisted: "new@qq.com",
+        fallbackRecipient: "fishundersea@agent.qq.com",
+        hasConfiguredMailboxAddr: true,
+      }),
+    ).toEqual({
+      explicitInput: "new@qq.com",
+      hasCustomRecipient: true,
+      effectiveTestRecipient: "new@qq.com",
+      recipientToPass: "new@qq.com",
+    });
   });
 });

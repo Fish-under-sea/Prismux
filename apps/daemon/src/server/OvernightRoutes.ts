@@ -892,6 +892,10 @@ function normalizeTestRecipient(raw: unknown): string {
   return raw.replace(/[\r\n]+/g, "").trim();
 }
 
+function isValidTestRecipientEmail(value: string): boolean {
+  return value.length > 0 && value.includes("@") && !/\s/.test(value);
+}
+
 export function normalizeAllowedSenders(raw: unknown): string[] {
   const list: string[] = [];
   if (Array.isArray(raw)) {
@@ -1069,7 +1073,7 @@ function normalizePersistedConfig(raw: unknown): OvernightFactoryPersistedConfig
       : base.agentMailAddress;
   const rawTestRecipient = normalizeTestRecipient(raw["testRecipient"]);
   const testRecipient =
-    rawTestRecipient.length === 0 || rawTestRecipient.includes("@")
+    rawTestRecipient.length === 0 || isValidTestRecipientEmail(rawTestRecipient)
       ? rawTestRecipient
       : base.testRecipient;
 
@@ -2935,7 +2939,10 @@ export class OvernightRouteService {
     }
     if (typeof rawBody["testRecipient"] === "string") {
       const normalizedTestRecipient = normalizeTestRecipient(rawBody["testRecipient"]);
-      if (normalizedTestRecipient.length === 0 || normalizedTestRecipient.includes("@")) {
+      if (
+        normalizedTestRecipient.length === 0 ||
+        isValidTestRecipientEmail(normalizedTestRecipient)
+      ) {
         next.testRecipient = normalizedTestRecipient;
       }
     }
@@ -3500,7 +3507,10 @@ export class OvernightRouteService {
     }
     if (typeof rawOverride["testRecipient"] === "string") {
       const normalizedTestRecipient = normalizeTestRecipient(rawOverride["testRecipient"]);
-      if (normalizedTestRecipient.length === 0 || normalizedTestRecipient.includes("@")) {
+      if (
+        normalizedTestRecipient.length === 0 ||
+        isValidTestRecipientEmail(normalizedTestRecipient)
+      ) {
         merged.testRecipient = normalizedTestRecipient;
       }
     }
@@ -4713,7 +4723,7 @@ export class OvernightRouteService {
           ? config.gmail.boundEmail || config.strategy.allowedSenders[0] || ""
           : config.imapSmtp.email || config.strategy.allowedSenders[0] || "");
     const recipient = explicitRecipient || defaultRecipient;
-    if (!recipient || !recipient.includes("@")) {
+    if (!isValidTestRecipientEmail(recipient)) {
       throw new BusinessRouteError(
         400,
         "RECIPIENT_MISSING",
@@ -4722,8 +4732,7 @@ export class OvernightRouteService {
     }
 
     if (
-      explicitRecipient.length > 0 &&
-      explicitRecipient.includes("@") &&
+      isValidTestRecipientEmail(explicitRecipient) &&
       explicitRecipient !== this.config.testRecipient
     ) {
       this.config.testRecipient = explicitRecipient;

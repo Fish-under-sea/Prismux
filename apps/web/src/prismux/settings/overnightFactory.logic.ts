@@ -1579,6 +1579,64 @@ export function resolveNextTestRecipientInputOnBackgroundSync(input: {
   return input.agentMailAuthorizedEmail?.trim() ?? "";
 }
 
+export function resolveEffectiveTestRecipientForSave(input: {
+  readonly currentInput: string;
+  readonly isDirty: boolean;
+  readonly userCleared: boolean;
+  readonly lastPersisted: string;
+}): string {
+  const trimmed = input.currentInput.trim();
+  if (trimmed.length === 0 && input.userCleared) {
+    return "";
+  }
+  if (input.isDirty && isValidPersistedTestRecipient(trimmed)) {
+    return trimmed;
+  }
+  return input.lastPersisted.trim();
+}
+
+export function resolveTestReportRecipientState(input: {
+  readonly currentInput: string;
+  readonly isDirty: boolean;
+  readonly userCleared: boolean;
+  readonly lastPersisted: string;
+  readonly fallbackRecipient: string;
+  readonly hasConfiguredMailboxAddr: boolean;
+}): {
+  readonly explicitInput: string;
+  readonly hasCustomRecipient: boolean;
+  readonly effectiveTestRecipient: string;
+  readonly recipientToPass: string;
+} {
+  const explicitInput = input.currentInput.trim();
+  const persisted = input.lastPersisted.trim();
+  if (explicitInput.length === 0 && input.userCleared) {
+    return {
+      explicitInput: "",
+      hasCustomRecipient: false,
+      effectiveTestRecipient: "",
+      recipientToPass: !input.hasConfiguredMailboxAddr ? input.fallbackRecipient : "",
+    };
+  }
+  const hasCustomRecipient =
+    explicitInput.length > 0 &&
+    (input.isDirty || persisted.length > 0 || explicitInput !== input.fallbackRecipient);
+  const validExplicitCustom =
+    hasCustomRecipient && isValidPersistedTestRecipient(explicitInput) && explicitInput.length > 0;
+  const effectiveTestRecipient = validExplicitCustom ? explicitInput : persisted;
+  const recipientToPass = hasCustomRecipient
+    ? explicitInput
+    : !input.hasConfiguredMailboxAddr
+      ? explicitInput || input.fallbackRecipient
+      : "";
+  return {
+    explicitInput,
+    hasCustomRecipient,
+    effectiveTestRecipient,
+    recipientToPass,
+  };
+}
+
 export type OvernightChecklistStepStatus = "passed" | "pending" | "warning" | "error";
 
 export interface OvernightConnectionChecklistStep {

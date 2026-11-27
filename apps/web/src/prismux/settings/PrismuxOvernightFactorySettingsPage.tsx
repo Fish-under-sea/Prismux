@@ -121,11 +121,13 @@ import {
   parseAgentMailTestResponse,
   parseAllowedSendersInput,
   resolveDefaultTestRecipient,
+  resolveEffectiveTestRecipientForSave,
   resolveFallbackTestRecipient,
   resolveGmailOAuthRedirectUri,
   resolveMailSectionViewMode,
   resolveNextTestRecipientInputOnBackgroundSync,
   resolveNextTestRecipientInputOnSnapshot,
+  resolveTestReportRecipientState,
   shouldAutoCollapseAgentMailSetup,
   shouldDefaultExpandMailChannel,
   shouldDefaultExpandStrategy,
@@ -921,10 +923,12 @@ function PrismuxOvernightFactoryShell({
     setStatusMsg(null);
     try {
       const trimmedRecipientInput = testRecipientInputRef.current.trim();
-      const effectiveTestRecipient =
-        testRecipientDirtyRef.current && isValidPersistedTestRecipient(trimmedRecipientInput)
-          ? trimmedRecipientInput
-          : draft.testRecipient;
+      const effectiveTestRecipient = resolveEffectiveTestRecipientForSave({
+        currentInput: testRecipientInputRef.current,
+        isDirty: testRecipientDirtyRef.current,
+        userCleared: userClearedTestRecipientRef.current,
+        lastPersisted: lastPersistedTestRecipientRef.current,
+      });
       const payload = toDaemonOvernightPatch(
         buildOvernightMailSavePayload(draft, effectiveTestRecipient),
       );
@@ -1076,8 +1080,8 @@ function PrismuxOvernightFactoryShell({
     try {
       const explicitInput = testRecipientInputRef.current.trim();
       if (
-        testRecipientDirtyRef.current &&
         explicitInput.length === 0 &&
+        userClearedTestRecipientRef.current &&
         lastPersistedTestRecipientRef.current.length > 0
       ) {
         await daemon.updateOvernightConfig({ testRecipient: "" }).catch(() => undefined);
@@ -1087,37 +1091,37 @@ function PrismuxOvernightFactoryShell({
       }
 
       const fallbackRecipient = resolveFallbackTestRecipient(draft);
-      const hasCustomRecipient =
-        explicitInput.length > 0 &&
-        (testRecipientDirtyRef.current ||
-          draft.testRecipient.trim().length > 0 ||
-          explicitInput !== fallbackRecipient);
-      const effectiveTestRecipient =
-        hasCustomRecipient && explicitInput.includes("@") ? explicitInput : draft.testRecipient;
-
-      if (hasCustomRecipient && explicitInput.includes("@")) {
-        setDraft((prev) =>
-          prev.testRecipient === explicitInput ? prev : { ...prev, testRecipient: explicitInput },
-        );
-      }
-
       const hasConfiguredMailboxAddr = Boolean(
         draft.email.trim() ||
         draft.gmailBoundEmail.trim() ||
         (draft.agentMailAuthorizedEmail || draft.agentMailAddress).trim(),
       );
-      const recipientToPass = hasCustomRecipient
-        ? explicitInput
-        : !hasConfiguredMailboxAddr
-          ? explicitInput || fallbackRecipient
-          : "";
+      const { hasCustomRecipient, effectiveTestRecipient, recipientToPass } =
+        resolveTestReportRecipientState({
+          currentInput: testRecipientInputRef.current,
+          isDirty: testRecipientDirtyRef.current,
+          userCleared: userClearedTestRecipientRef.current,
+          lastPersisted: lastPersistedTestRecipientRef.current,
+          fallbackRecipient,
+          hasConfiguredMailboxAddr,
+        });
+
+      const isValidCustomEmail =
+        hasCustomRecipient &&
+        isValidPersistedTestRecipient(explicitInput) &&
+        explicitInput.length > 0;
+      if (isValidCustomEmail) {
+        setDraft((prev) =>
+          prev.testRecipient === explicitInput ? prev : { ...prev, testRecipient: explicitInput },
+        );
+      }
 
       const payload = toDaemonOvernightPatch({
         ...buildOvernightMailSavePayload(draft, effectiveTestRecipient),
         ...(recipientToPass ? { recipient: recipientToPass } : {}),
       });
       const res = await daemon.sendOvernightTestReport(payload);
-      if (hasCustomRecipient && explicitInput.includes("@")) {
+      if (isValidCustomEmail) {
         const persistedRecipient = res.testRecipient?.trim() || explicitInput;
         lastPersistedTestRecipientRef.current = persistedRecipient;
         setDraft((prev) => ({ ...prev, testRecipient: persistedRecipient }));
