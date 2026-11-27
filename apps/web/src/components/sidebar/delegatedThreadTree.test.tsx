@@ -721,16 +721,47 @@ describe("DelegatedSubthreadTree & SidebarThreadRow SSR rendering", () => {
       onToggleDelegatedTree: vi.fn(),
     };
 
+    const extractHoverActionsMarkup = (html: string): string => {
+      const match = html.match(
+        /<span\b[^>]*data-testid="sidebar-row-hover-actions"[^>]*>[\s\S]*?<\/span><\/span>/,
+      );
+      expect(match).not.toBeNull();
+      return match![0];
+    };
+
     const collapsedHtml = wrap(
       <ul>
         <SidebarThreadRow {...baseRowProps} delegatedTreeExpanded={false} />
       </ul>,
       "zh",
     );
-    expect(collapsedHtml).toContain('data-testid="sidebar-delegated-tree-toggle"');
+    // Static state: leading green circle reuses the 24x24 r=10 outer ring and replaces checkmark with count `1`.
+    expect(collapsedHtml).toContain(
+      'data-orca-status="done" data-orca-delegated-count="1" data-orca-delegated-running="0"',
+    );
+    expect(collapsedHtml).toContain("text-success/80");
+    expect(collapsedHtml).toContain('<circle cx="12" cy="12" r="10"');
+    expect(collapsedHtml).toContain(">1</text>");
+    expect(collapsedHtml).not.toContain("m9 12 2 2 4-4");
+
+    // Toggle pill lives strictly inside the hover-only actions container, never squeezing the title at rest.
+    const collapsedHoverActions = extractHoverActionsMarkup(collapsedHtml);
+    expect(collapsedHoverActions).toContain("opacity-0");
+    expect(collapsedHoverActions).toContain("pointer-events-none");
+    expect(collapsedHoverActions).toContain("absolute");
+    expect(collapsedHoverActions).toContain("group-any-hover/sidebar-row:opacity-100");
+    expect(collapsedHoverActions).toContain("group-any-hover/sidebar-row:static");
+    expect(collapsedHoverActions).toContain("has-[:focus-visible]:opacity-100");
+    expect(collapsedHoverActions).not.toContain("focus-within");
+    expect(collapsedHoverActions).toContain('data-testid="sidebar-delegated-tree-toggle"');
     expect(collapsedHtml).toContain('aria-expanded="false"');
     expect(collapsedHtml).toContain(">1<");
     expect(collapsedHtml).not.toContain('data-testid="delegated-subthread-tree"');
+
+    // Confirm toggle button does not appear before `sidebar-row-hover-actions` (i.e. not permanently adjacent to title).
+    expect(collapsedHtml.indexOf('data-testid="sidebar-delegated-tree-toggle"')).toBeGreaterThan(
+      collapsedHtml.indexOf('data-testid="sidebar-row-hover-actions"'),
+    );
 
     const expandedHtml = wrap(
       <ul>
@@ -742,6 +773,352 @@ describe("DelegatedSubthreadTree & SidebarThreadRow SSR rendering", () => {
     expect(expandedHtml).toContain('aria-expanded="true"');
     expect(expandedHtml).toContain('data-testid="delegated-subthread-tree"');
     expect(expandedHtml).toContain("Fix unit test");
+  });
+
+  it("reuses leading status circle with count across unread, done, idle, overflow (9+), running-child, and preserves high-priority parent states", () => {
+    const parentId = ThreadId.make("parent-status-circle");
+    const makeChild = (idx: number, status: "completed" | "running" = "completed") =>
+      makeShell({
+        id: ThreadId.make(`child-circle-${idx}`),
+        title: `Child ${idx}`,
+        creationSource: "mcp",
+        latestRunId: RunId.make(`run-circle-${idx}`),
+        status,
+        lineage: {
+          rootThreadId: parentId,
+          parentThreadId: parentId,
+          relationshipToParent: "subagent",
+        },
+      });
+
+    const baseProps = {
+      variant: "orca-compact" as const,
+      inWorkspaceCard: true,
+      variantAction: "settle" as const,
+      settlementSupported: false,
+      snoozeSupported: false,
+      pinningSupported: false,
+      isPinned: false,
+      dropVerb: null,
+      dragOverPinned: false,
+      sweepAction: null,
+      snoozeWakeLabelText: null,
+      wokeAt: null,
+      isActive: false,
+      isRouteThread: false,
+      readOpensPullRequestsInRightPanel: () => true,
+      jumpLabel: null,
+      environmentLabel: "Local",
+      environmentMachine: "desktop" as const,
+      project: null,
+      projectDisplayName: "Prismux",
+      providerEntryByInstanceId: providerMap,
+      timestampFormat: "24-hour" as const,
+      onThreadClick: vi.fn(),
+      onThreadActivate: vi.fn(),
+      onStartRename: vi.fn(),
+      onRenameTitleChange: vi.fn(),
+      onCommitRename: vi.fn(),
+      onCancelRename: vi.fn(),
+      isRenaming: false,
+      renamingTitle: "",
+      onContextMenu: vi.fn(),
+      onSettle: vi.fn(),
+      onActionSweepStart: vi.fn(),
+      onUnsettle: vi.fn(),
+      onSnooze: vi.fn(),
+      onUnsnooze: vi.fn(),
+      onUnpin: vi.fn(),
+      onAcknowledgeWoke: vi.fn(),
+      onToggleDelegatedTree: vi.fn(),
+    };
+
+    const extractLeadingIconMarkup = (html: string): string => {
+      const match = html.match(/<svg\b[^>]*data-orca-status="[^"]*"[^>]*>[\s\S]*?<\/svg>/);
+      expect(match).not.toBeNull();
+      return match![0];
+    };
+
+    // 1. Unread completed parent with 2 completed children -> bright green `text-success` ring + `2`
+    const unreadParent = makeShell({
+      id: parentId,
+      title: "Unread parent",
+      latestRunId: RunId.make("run-unread"),
+      status: "completed",
+      latestRunCompletedAt: DateTime.makeUnsafe("2026-11-26T10:10:00.000Z"),
+      updatedAt: DateTime.makeUnsafe("2026-11-26T10:10:00.000Z"),
+      lastVisitedAt: DateTime.makeUnsafe("2026-11-26T10:01:00.000Z"),
+    });
+    const unreadHtml = wrap(
+      <ul>
+        <SidebarThreadRow
+          {...baseProps}
+          thread={unreadParent}
+          delegatedChildren={[makeChild(1), makeChild(2)]}
+          delegatedTreeExpanded={false}
+          delegatedTreeHasRunning={false}
+        />
+      </ul>,
+      "zh",
+    );
+    const unreadIcon = extractLeadingIconMarkup(unreadHtml);
+    expect(unreadIcon).toContain('data-orca-status="unread"');
+    expect(unreadIcon).toContain('data-orca-delegated-count="2"');
+    expect(unreadIcon).toContain('data-orca-delegated-running="0"');
+    expect(unreadIcon).toContain("text-success");
+    expect(unreadIcon).not.toContain("text-success/80");
+    expect(unreadIcon).toContain(">2</text>");
+
+    // Even with zero settle/snooze/archive/delete permissions, delegatedChildren still enables hover actions + hides model/time on hover.
+    expect(unreadHtml).toContain('data-testid="sidebar-row-hover-actions"');
+    expect(unreadHtml).toContain('data-testid="sidebar-delegated-tree-toggle"');
+    expect(unreadHtml).toContain("group-any-hover/sidebar-row:opacity-0");
+
+    // 2. Idle parent (no runs yet) with 1 child -> muted circle + `1`
+    const idleParent = makeShell({
+      id: parentId,
+      title: "Idle parent",
+      latestRunId: null,
+      status: "idle",
+    });
+    const idleIcon = extractLeadingIconMarkup(
+      wrap(
+        <ul>
+          <SidebarThreadRow
+            {...baseProps}
+            thread={idleParent}
+            delegatedChildren={[makeChild(1)]}
+            delegatedTreeExpanded={false}
+            delegatedTreeHasRunning={false}
+          />
+        </ul>,
+        "zh",
+      ),
+    );
+    expect(idleIcon).toContain('data-orca-status="idle"');
+    expect(idleIcon).toContain('data-orca-delegated-count="1"');
+    expect(idleIcon).toContain("text-sidebar-muted-foreground/45");
+    expect(idleIcon).toContain(">1</text>");
+
+    // 3. Overflow count (>9) -> `9+` with compact font-size so text never overflows the circle
+    const visitedDoneParent = makeShell({
+      id: parentId,
+      title: "Many children parent",
+      latestRunId: RunId.make("run-many"),
+      status: "completed",
+    });
+    const manyChildren = Array.from({ length: 12 }, (_, idx) => makeChild(idx + 1));
+    const overflowIcon = extractLeadingIconMarkup(
+      wrap(
+        <ul>
+          <SidebarThreadRow
+            {...baseProps}
+            thread={visitedDoneParent}
+            delegatedChildren={manyChildren}
+            delegatedTreeExpanded={false}
+            delegatedTreeHasRunning={false}
+          />
+        </ul>,
+        "zh",
+      ),
+    );
+    expect(overflowIcon).toContain('data-orca-status="done"');
+    expect(overflowIcon).toContain('data-orca-delegated-count="12"');
+    expect(overflowIcon).toContain("text-success/80");
+    expect(overflowIcon).toContain('font-size="10.5"');
+    expect(overflowIcon).toContain(">9+</text>");
+
+    // 4. Parent completed/idle while delegated child is still running -> warning spinning ring with motion-reduce fallback + stationary count
+    const childRunningIcon = extractLeadingIconMarkup(
+      wrap(
+        <ul>
+          <SidebarThreadRow
+            {...baseProps}
+            thread={visitedDoneParent}
+            delegatedChildren={[makeChild(1, "running"), makeChild(2, "completed")]}
+            delegatedTreeExpanded
+            delegatedTreeHasRunning
+          />
+        </ul>,
+        "zh",
+      ),
+    );
+    expect(childRunningIcon).toContain('data-orca-status="done"');
+    expect(childRunningIcon).toContain('data-orca-delegated-count="2"');
+    expect(childRunningIcon).toContain('data-orca-delegated-running="1"');
+    expect(childRunningIcon).toContain("text-warning");
+    expect(childRunningIcon).toContain("animate-spin");
+    expect(childRunningIcon).toContain("motion-reduce:animate-none");
+    expect(childRunningIcon).toContain(">2</text>");
+
+    // 5. High-priority parent states (`working`, `failed`) keep their own status icons intact
+    const workingParent = makeShell({
+      id: parentId,
+      title: "Working parent",
+      latestRunId: RunId.make("run-working"),
+      status: "running",
+    });
+    const workingIcon = extractLeadingIconMarkup(
+      wrap(
+        <ul>
+          <SidebarThreadRow
+            {...baseProps}
+            thread={workingParent}
+            delegatedChildren={[makeChild(1, "running")]}
+            delegatedTreeExpanded
+            delegatedTreeHasRunning
+          />
+        </ul>,
+        "zh",
+      ),
+    );
+    expect(workingIcon).toContain('data-orca-status="working"');
+    expect(workingIcon).not.toContain("data-orca-delegated-count");
+
+    const failedParent = makeShell({
+      id: parentId,
+      title: "Failed parent",
+      latestRunId: RunId.make("run-failed"),
+      status: "failed",
+      latestRunCompletedAt: DateTime.makeUnsafe("2026-11-26T10:10:00.000Z"),
+      updatedAt: DateTime.makeUnsafe("2026-11-26T10:10:00.000Z"),
+      lastVisitedAt: DateTime.makeUnsafe("2026-11-26T10:01:00.000Z"),
+    });
+    const failedIcon = extractLeadingIconMarkup(
+      wrap(
+        <ul>
+          <SidebarThreadRow
+            {...baseProps}
+            thread={failedParent}
+            delegatedChildren={[makeChild(1)]}
+            delegatedTreeExpanded={false}
+            delegatedTreeHasRunning={false}
+          />
+        </ul>,
+        "zh",
+      ),
+    );
+    expect(failedIcon).toContain('data-orca-status="failed"');
+    expect(failedIcon).not.toContain("data-orca-delegated-count");
+
+    // 6. Zero delegated children -> preserves standard CircleCheckIcon without delegated count attribute
+    const noChildrenHtml = wrap(
+      <ul>
+        <SidebarThreadRow
+          {...baseProps}
+          thread={visitedDoneParent}
+          delegatedChildren={[]}
+          delegatedTreeExpanded={false}
+          delegatedTreeHasRunning={false}
+        />
+      </ul>,
+      "zh",
+    );
+    const noChildrenIcon = extractLeadingIconMarkup(noChildrenHtml);
+    expect(noChildrenIcon).toContain('data-orca-status="done"');
+    expect(noChildrenIcon).not.toContain("data-orca-delegated-count");
+    expect(noChildrenHtml).not.toContain('data-testid="sidebar-delegated-tree-toggle"');
+    expect(noChildrenHtml).not.toContain('data-testid="sidebar-row-hover-actions"');
+  });
+
+  it("places delegated toggle inside hover-only actions for folder, folder-multiline, and card variants without squeezing titles", () => {
+    const parentId = ThreadId.make("parent-variants");
+    const parentThread = makeShell({
+      id: parentId,
+      title: "Variant regression parent",
+      latestRunId: RunId.make("run-var-p"),
+      status: "completed",
+    });
+    const childDone = makeShell({
+      id: ThreadId.make("child-var-1"),
+      title: "Variant delegated child",
+      creationSource: "mcp",
+      latestRunId: RunId.make("run-var-c"),
+      status: "completed",
+      lineage: {
+        rootThreadId: parentId,
+        parentThreadId: parentId,
+        relationshipToParent: "subagent",
+      },
+    });
+
+    const sharedProps = {
+      thread: parentThread,
+      variantAction: "settle" as const,
+      settlementSupported: false,
+      snoozeSupported: false,
+      pinningSupported: false,
+      isPinned: false,
+      dropVerb: null,
+      dragOverPinned: false,
+      sweepAction: null,
+      snoozeWakeLabelText: null,
+      wokeAt: null,
+      isActive: false,
+      isRouteThread: false,
+      readOpensPullRequestsInRightPanel: () => true,
+      jumpLabel: null,
+      environmentLabel: "Local",
+      environmentMachine: "desktop" as const,
+      project: null,
+      projectDisplayName: "Prismux",
+      providerEntryByInstanceId: providerMap,
+      timestampFormat: "24-hour" as const,
+      onThreadClick: vi.fn(),
+      onThreadActivate: vi.fn(),
+      onStartRename: vi.fn(),
+      onRenameTitleChange: vi.fn(),
+      onCommitRename: vi.fn(),
+      onCancelRename: vi.fn(),
+      isRenaming: false,
+      renamingTitle: "",
+      onContextMenu: vi.fn(),
+      onSettle: vi.fn(),
+      onActionSweepStart: vi.fn(),
+      onUnsettle: vi.fn(),
+      onSnooze: vi.fn(),
+      onUnsnooze: vi.fn(),
+      onUnpin: vi.fn(),
+      onAcknowledgeWoke: vi.fn(),
+      delegatedChildren: [childDone],
+      delegatedTreeHasRunning: false,
+      onToggleDelegatedTree: vi.fn(),
+    };
+
+    for (const variant of ["folder", "folder-multiline", "card"] as const) {
+      const collapsedHtml = wrap(
+        <ul>
+          <SidebarThreadRow {...sharedProps} variant={variant} delegatedTreeExpanded={false} />
+        </ul>,
+        "zh",
+      );
+      const hoverActionsIndex = collapsedHtml.indexOf('data-testid="sidebar-row-hover-actions"');
+      const toggleIndex = collapsedHtml.indexOf('data-testid="sidebar-delegated-tree-toggle"');
+      expect(hoverActionsIndex).toBeGreaterThan(-1);
+      expect(toggleIndex).toBeGreaterThan(hoverActionsIndex);
+
+      const hoverSlotMatch = collapsedHtml.match(
+        /<span\b[^>]*data-testid="sidebar-row-hover-actions"[^>]*>[\s\S]*?<\/button>/,
+      );
+      expect(hoverSlotMatch).not.toBeNull();
+      expect(hoverSlotMatch![0]).toContain("opacity-0");
+      expect(hoverSlotMatch![0]).toContain("pointer-events-none");
+      expect(hoverSlotMatch![0]).toContain("absolute");
+      expect(hoverSlotMatch![0]).toContain("group-any-hover/sidebar-row:opacity-100");
+      expect(hoverSlotMatch![0]).toContain("has-[:focus-visible]:opacity-100");
+      expect(hoverSlotMatch![0]).toContain('data-testid="sidebar-delegated-tree-toggle"');
+      expect(collapsedHtml).not.toContain('data-testid="delegated-subthread-tree"');
+
+      const expandedHtml = wrap(
+        <ul>
+          <SidebarThreadRow {...sharedProps} variant={variant} delegatedTreeExpanded />
+        </ul>,
+        "zh",
+      );
+      expect(expandedHtml).toContain('aria-expanded="true"');
+      expect(expandedHtml).toContain('data-testid="delegated-subthread-tree"');
+      expect(expandedHtml).toContain("Variant delegated child");
+    }
   });
 
   it("renders refined dynamic-accent full-pill toggle with rotating chevron and breathing dot across idle-collapsed, idle-expanded, and running states", () => {

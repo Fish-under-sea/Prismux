@@ -681,8 +681,17 @@ function OrcaCompactStatusIcon(props: {
   readonly isUnread: boolean;
   readonly isWoke: boolean;
   readonly hasRun: boolean;
+  readonly delegatedCount?: number | undefined;
+  readonly delegatedHasRunning?: boolean | undefined;
 }) {
-  const { status, isUnread, isWoke, hasRun } = props;
+  const {
+    status,
+    isUnread,
+    isWoke,
+    hasRun,
+    delegatedCount = 0,
+    delegatedHasRunning = false,
+  } = props;
   if (status === "working" || status === "preparing") {
     return (
       <svg
@@ -754,10 +763,71 @@ function OrcaCompactStatusIcon(props: {
       />
     );
   }
+  const circleStatus = isUnread ? "unread" : hasRun ? "done" : "idle";
+  if (delegatedCount > 0) {
+    const delegatedCountLabel = delegatedCount > 9 ? "9+" : String(delegatedCount);
+    return (
+      <svg
+        aria-hidden
+        data-orca-status={circleStatus}
+        data-orca-delegated-count={delegatedCount}
+        data-orca-delegated-running={delegatedHasRunning ? "1" : "0"}
+        viewBox="0 0 24 24"
+        fill="none"
+        className={cn(
+          "size-3 shrink-0",
+          delegatedHasRunning
+            ? "text-warning"
+            : isUnread
+              ? "text-success"
+              : hasRun
+                ? "text-success/80"
+                : "text-sidebar-muted-foreground/45",
+        )}
+      >
+        {delegatedHasRunning ? (
+          <g
+            className="animate-spin motion-reduce:animate-none"
+            style={{ transformOrigin: "12px 12px" }}
+          >
+            <circle
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeOpacity="0.28"
+            />
+            <path
+              d="M12 2A10 10 0 1 1 2 12"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+          </g>
+        ) : (
+          <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
+        )}
+        <text
+          x="12"
+          y="12"
+          textAnchor="middle"
+          dominantBaseline="central"
+          fill="currentColor"
+          fontSize={delegatedCount > 9 ? "10.5" : "14"}
+          fontWeight="700"
+          letterSpacing={delegatedCount > 9 ? "-0.5" : undefined}
+          className="font-sans tabular-nums"
+        >
+          {delegatedCountLabel}
+        </text>
+      </svg>
+    );
+  }
   return (
     <CircleCheckIcon
       aria-hidden
-      data-orca-status={isUnread ? "unread" : hasRun ? "done" : "idle"}
+      data-orca-status={circleStatus}
       className={cn(
         "size-3 shrink-0",
         isUnread ? "text-success" : hasRun ? "text-success/80" : "text-sidebar-muted-foreground/45",
@@ -1688,6 +1758,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                 event.preventDefault();
                 event.stopPropagation();
                 props.onToggleDelegatedTree?.(threadKey, delegatedHasRunning);
+                if (event.detail > 0) event.currentTarget.blur();
               }}
               style={delegatedPillStyle}
               className={cn(
@@ -1806,6 +1877,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
 
   if (variant === "orca-compact") {
     const hasHoverRowAction =
+      delegatedCount > 0 ||
       (variantAction === "unsnooze" && props.snoozeSupported) ||
       (variantAction !== "unsnooze" && props.settlementSupported) ||
       canArchiveAction ||
@@ -1866,6 +1938,8 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               isUnread={isUnread}
               isWoke={isWoke}
               hasRun={thread.latestRun !== null}
+              delegatedCount={delegatedCount}
+              delegatedHasRunning={delegatedHasRunning}
             />
             <span aria-hidden className="inline-flex size-3.5 shrink-0 items-center justify-center">
               {providerEntry !== null ? (
@@ -1917,7 +1991,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                 ) : null}
               </span>
             )}
-            {delegatedTreeBadge}
             {pinIndicator}
             {isRegeneratingTitle ? (
               <span role="status" className="sr-only">
@@ -1936,7 +2009,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               >
                 <span
                   className={cn(
-                    "inline-flex items-center justify-end gap-1.5 transition-opacity",
+                    "inline-flex items-center justify-end gap-1.5 transition-opacity motion-reduce:transition-none",
                     hasHoverRowAction &&
                       "group-has-[:focus-visible]/sidebar-status-slot:pointer-events-none group-has-[:focus-visible]/sidebar-status-slot:absolute group-has-[:focus-visible]/sidebar-status-slot:right-0 group-has-[:focus-visible]/sidebar-status-slot:opacity-0 group-any-hover/sidebar-row:pointer-events-none group-any-hover/sidebar-row:absolute group-any-hover/sidebar-row:right-0 group-any-hover/sidebar-row:opacity-0",
                   )}
@@ -1965,8 +2038,9 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                 {hasHoverRowAction ? (
                   <span
                     data-testid="sidebar-row-hover-actions"
-                    className="pointer-events-none absolute inset-y-0 right-0 inline-flex items-center gap-0.5 opacity-0 transition-opacity has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:static has-[:focus-visible]:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:static group-any-hover/sidebar-row:opacity-100"
+                    className="pointer-events-none absolute inset-y-0 right-0 inline-flex items-center gap-0.5 opacity-0 transition-opacity motion-reduce:transition-none has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:static has-[:focus-visible]:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:static group-any-hover/sidebar-row:opacity-100"
                   >
+                    {delegatedTreeBadge}
                     {variantAction === "unsnooze" ? (
                       !props.snoozeSupported ? null : (
                         <button
@@ -2037,6 +2111,12 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   if (variant !== "card") {
     const multiline = variant === "folder-multiline";
     const inFolder = variant === "folder" || multiline;
+    const hasHoverRowAction =
+      delegatedCount > 0 ||
+      (variantAction === "unsnooze" && props.snoozeSupported) ||
+      (variantAction !== "unsnooze" && props.settlementSupported) ||
+      canArchiveAction ||
+      canDeleteAction;
     return (
       <li
         data-thread-item={threadKey}
@@ -2103,7 +2183,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               )}
               {draftIndicator}
               {title}
-              {delegatedTreeBadge}
               {multiline ? titleLineIcons : null}
               {pinIndicator}
               {multiline ? null : portMicroBadge}
@@ -2126,8 +2205,9 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                 >
                   <span
                     className={cn(
-                      "inline-flex justify-end tabular-nums text-secondary-label transition-opacity",
+                      "inline-flex justify-end tabular-nums text-secondary-label transition-opacity motion-reduce:transition-none",
                       !isWoke &&
+                        hasHoverRowAction &&
                         "group-has-[:focus-visible]/sidebar-status-slot:pointer-events-none group-has-[:focus-visible]/sidebar-status-slot:absolute group-has-[:focus-visible]/sidebar-status-slot:right-0 group-has-[:focus-visible]/sidebar-status-slot:opacity-0 group-any-hover/sidebar-row:pointer-events-none group-any-hover/sidebar-row:absolute group-any-hover/sidebar-row:right-0 group-any-hover/sidebar-row:opacity-0",
                     )}
                   >
@@ -2181,17 +2261,15 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                       </span>
                     )}
                   </span>
-                  {(variantAction === "unsnooze" && props.snoozeSupported) ||
-                  (variantAction !== "unsnooze" && props.settlementSupported) ||
-                  canArchiveAction ||
-                  canDeleteAction ? (
+                  {hasHoverRowAction ? (
                     <span
                       data-testid="sidebar-row-hover-actions"
                       className={cn(
-                        "pointer-events-none absolute inset-y-0 right-0 inline-flex items-center gap-0.5 opacity-0 transition-opacity has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:static has-[:focus-visible]:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:static group-any-hover/sidebar-row:opacity-100",
+                        "pointer-events-none absolute inset-y-0 right-0 inline-flex items-center gap-0.5 opacity-0 transition-opacity motion-reduce:transition-none has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:static has-[:focus-visible]:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:static group-any-hover/sidebar-row:opacity-100",
                         isWoke && "ml-1",
                       )}
                     >
+                      {delegatedTreeBadge}
                       {variantAction === "unsnooze" ? (
                         !props.snoozeSupported ? null : (
                           <button
@@ -2260,6 +2338,14 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
       </li>
     );
   }
+
+  const hasCardHoverAction =
+    delegatedCount > 0 ||
+    props.settlementSupported ||
+    showSnoozeButton ||
+    hasUnsentDraft ||
+    canArchiveAction ||
+    canDeleteAction;
 
   return (
     <li
@@ -2338,7 +2424,9 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                     className={cn(
                       isWokeStatus
                         ? "pointer-events-auto"
-                        : "pointer-events-none group-has-[:focus-visible]/sidebar-status-slot:absolute group-has-[:focus-visible]/sidebar-status-slot:right-0 group-has-[:focus-visible]/sidebar-status-slot:opacity-0 group-any-hover/sidebar-row:absolute group-any-hover/sidebar-row:right-0 group-any-hover/sidebar-row:opacity-0",
+                        : hasCardHoverAction
+                          ? "pointer-events-none group-has-[:focus-visible]/sidebar-status-slot:absolute group-has-[:focus-visible]/sidebar-status-slot:right-0 group-has-[:focus-visible]/sidebar-status-slot:opacity-0 group-any-hover/sidebar-row:absolute group-any-hover/sidebar-row:right-0 group-any-hover/sidebar-row:opacity-0"
+                          : "pointer-events-none",
                       "flex items-center self-center justify-self-end tabular-nums text-secondary-label",
                       snoozeMenuOpen && "pointer-events-none absolute right-0 opacity-0",
                     )}
@@ -2399,20 +2487,18 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                       <RelativeTimeLabel timestamp={resolveThreadActivityTimestamp(thread)} />
                     )}
                   </span>
-                  {props.settlementSupported ||
-                  showSnoozeButton ||
-                  hasUnsentDraft ||
-                  canArchiveAction ||
-                  canDeleteAction ? (
+                  {hasCardHoverAction ? (
                     <span
                       data-testid="sidebar-row-hover-actions"
                       className={cn(
                         // Mouse clicks leave Settle focused; focus-within would pin controls over
                         // the status label after the pointer leaves. Use focus-visible instead.
-                        "pointer-events-none absolute inset-y-0 right-0 flex items-center gap-0.5 opacity-0 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:static has-[:focus-visible]:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:static group-any-hover/sidebar-row:opacity-100",
+                        "pointer-events-none absolute inset-y-0 right-0 flex items-center gap-0.5 opacity-0 transition-opacity motion-reduce:transition-none has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:static has-[:focus-visible]:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:static group-any-hover/sidebar-row:opacity-100",
+                        isWokeStatus && "ml-1",
                         snoozeMenuOpen && "pointer-events-auto static opacity-100",
                       )}
                     >
+                      {delegatedTreeBadge}
                       {hasUnsentDraft ? (
                         <Tooltip>
                           <TooltipTrigger
@@ -2472,7 +2558,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
             </div>
             <div className="mt-1 flex min-w-0 items-center gap-1.5">
               {title}
-              {delegatedTreeBadge}
               {isRegeneratingTitle ? (
                 <span role="status" className="sr-only">
                   <T>Regenerating title</T>
