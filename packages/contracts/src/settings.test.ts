@@ -579,8 +579,12 @@ describe("Prismux privacy-safe default server settings", () => {
     expect(client.collapsedAssistantReplyMode).toBe("all");
     expect(client.reasoningTranslationProvider).toBe("off");
     // Legacy saved Bing/Google translation providers must decode gracefully to "off".
-    expect(decodeClientSettings({ reasoningTranslationProvider: "bing" }).reasoningTranslationProvider).toBe("off");
-    expect(decodeClientSettings({ reasoningTranslationProvider: "google" }).reasoningTranslationProvider).toBe("off");
+    expect(
+      decodeClientSettings({ reasoningTranslationProvider: "bing" }).reasoningTranslationProvider,
+    ).toBe("off");
+    expect(
+      decodeClientSettings({ reasoningTranslationProvider: "google" }).reasoningTranslationProvider,
+    ).toBe("off");
 
     const clientPatch = decodeClientSettingsPatch({
       workStepsDisplay: "expanded",
@@ -603,12 +607,62 @@ describe("Prismux privacy-safe default server settings", () => {
     expect(decodeClientSettingsPatch({ reasoningTranslationProvider: "text_model" })).toEqual({
       reasoningTranslationProvider: "text_model",
     });
+    expect(decodeClientSettingsPatch({ reasoningTranslationProvider: "local_nmt" })).toEqual({
+      reasoningTranslationProvider: "local_nmt",
+    });
+    expect(decodeClientSettingsPatch({ reasoningTranslationProvider: "official_api" })).toEqual({
+      reasoningTranslationProvider: "official_api",
+    });
     expect(() => decodeClientSettingsPatch({ workStepsDisplay: "invalid" })).toThrow();
-    expect(() =>
-      decodeClientSettingsPatch({ reasoningTranslationProvider: "deepl" }),
-    ).toThrow();
+    expect(() => decodeClientSettingsPatch({ reasoningTranslationProvider: "deepl" })).toThrow();
 
     const server = decodeServerSettings({});
+    expect(server.reasoningTranslationModelSelection).toBeNull();
+    expect(server.reasoningTranslationLocalModelMirror).toBe("hf_mirror");
+    expect(server.reasoningTranslationOfficialApi).toEqual({
+      vendor: "openai_compatible",
+      apiKey: "",
+      apiSecret: "",
+      region: "",
+      endpoint: "",
+      model: "",
+    });
+    expect(
+      decodeServerSettingsPatch({
+        reasoningTranslationModelSelection: {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "claude-haiku-4-5",
+        },
+        reasoningTranslationLocalModelMirror: "huggingface",
+        reasoningTranslationOfficialApi: {
+          vendor: "volcano",
+          apiKey: "ak-123",
+          apiSecret: "sk-456",
+          region: "cn-north-1",
+          endpoint: "https://translate.volcengineapi.com/",
+          model: "",
+        },
+      }),
+    ).toEqual({
+      reasoningTranslationModelSelection: {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-haiku-4-5",
+      },
+      reasoningTranslationLocalModelMirror: "huggingface",
+      reasoningTranslationOfficialApi: {
+        vendor: "volcano",
+        apiKey: "ak-123",
+        apiSecret: "sk-456",
+        region: "cn-north-1",
+        endpoint: "https://translate.volcengineapi.com/",
+        model: "",
+      },
+    });
+    expect(() =>
+      decodeServerSettingsPatch({
+        reasoningTranslationOfficialApi: { vendor: "bing" },
+      }),
+    ).toThrow();
     expect(server.branchNamePrefix).toBe("prismux");
     expect(server.promptSuggestionsEnabled).toBe(true);
     expect(server.enableDeviceSupport).toBe(true);

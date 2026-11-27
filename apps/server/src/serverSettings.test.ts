@@ -3611,3 +3611,85 @@ it.effect(
       ),
     ),
 );
+
+it.effect(
+  "stores reasoningTranslationOfficialApi credentials in ServerSecretStore, redacts them for clients, and replaces reasoningTranslationModelSelection whole",
+  () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+
+      const saved = yield* serverSettings.updateSettings({
+        reasoningTranslationModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.4-mini",
+          options: [{ id: "reasoningEffort", value: "low" }],
+        },
+        reasoningTranslationLocalModelMirror: "huggingface",
+        reasoningTranslationOfficialApi: {
+          vendor: "volcano",
+          apiKey: "AKLT-super-secret-key",
+          apiSecret: "SK-super-secret-value",
+          region: "cn-north-1",
+          endpoint: "https://translate.volcengineapi.com/",
+          model: "",
+        },
+      });
+
+      assert.equal(saved.reasoningTranslationLocalModelMirror, "huggingface");
+      assert.equal(saved.reasoningTranslationOfficialApi.apiKey, "AKLT-super-secret-key");
+      assert.equal(saved.reasoningTranslationOfficialApi.apiSecret, "SK-super-secret-value");
+
+      // Disk JSON must NEVER hold plaintext apiKey / apiSecret.
+      const diskJson = yield* fs.readFileString(serverConfig.settingsPath);
+      assert.notInclude(diskJson, "AKLT-super-secret-key");
+      assert.notInclude(diskJson, "SK-super-secret-value");
+      assert.include(diskJson, SECRET_REDACTED);
+
+      // Client redaction masks both credentials.
+      const redacted = ServerSettingsModule.redactServerSettingsForClient(saved, {
+        secretReferences: true,
+      });
+      assert.equal(redacted.reasoningTranslationOfficialApi.apiKey, SECRET_REDACTED);
+      assert.equal(redacted.reasoningTranslationOfficialApi.apiSecret, SECRET_REDACTED);
+      assert.equal(redacted.reasoningTranslationOfficialApi.vendor, "volcano");
+
+      // Echoing SECRET_REDACTED back while editing region preserves stored credentials;
+      // replacing reasoningTranslationModelSelection drops prior options cleanly.
+      const updated = yield* serverSettings.updateSettings({
+        reasoningTranslationModelSelection: {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "claude-haiku-4-5",
+        },
+        reasoningTranslationOfficialApi: {
+          ...redacted.reasoningTranslationOfficialApi,
+          region: "cn-beijing",
+        },
+      });
+      assert.deepEqual(updated.reasoningTranslationModelSelection, {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-haiku-4-5",
+      });
+      assert.equal(updated.reasoningTranslationOfficialApi.region, "cn-beijing");
+      assert.equal(updated.reasoningTranslationOfficialApi.apiKey, "AKLT-super-secret-key");
+      assert.equal(updated.reasoningTranslationOfficialApi.apiSecret, "SK-super-secret-value");
+
+      // Clearing apiSecret removes it cleanly while leaving apiKey intact.
+      const cleared = yield* serverSettings.updateSettings({
+        reasoningTranslationModelSelection: null,
+        reasoningTranslationOfficialApi: {
+          apiSecret: "",
+        },
+      });
+      assert.isNull(cleared.reasoningTranslationModelSelection);
+      assert.equal(cleared.reasoningTranslationOfficialApi.apiKey, "AKLT-super-secret-key");
+      assert.equal(cleared.reasoningTranslationOfficialApi.apiSecret, "");
+    }).pipe(
+      Effect.provide(
+        layerServerSettings().pipe(
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        ),
+      ),
+    ),
+);

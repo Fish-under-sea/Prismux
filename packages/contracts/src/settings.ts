@@ -358,7 +358,12 @@ export const EffortDisplay = Schema.Literals(["label", "bars"]);
 export type EffortDisplay = typeof EffortDisplay.Type;
 
 /** Real-time Chinese translation provider for model reasoning / chain-of-thought. */
-export const ReasoningTranslationProvider = Schema.Literals(["off", "text_model"]);
+export const ReasoningTranslationProvider = Schema.Literals([
+  "off",
+  "local_nmt",
+  "text_model",
+  "official_api",
+]);
 export type ReasoningTranslationProvider = typeof ReasoningTranslationProvider.Type;
 export const DEFAULT_REASONING_TRANSLATION_PROVIDER: ReasoningTranslationProvider = "off";
 
@@ -367,16 +372,61 @@ const LegacyReasoningTranslationProvider = Schema.Literals([
   "off",
   "bing",
   "google",
+  "local_nmt",
   "text_model",
+  "official_api",
 ]).pipe(
   Schema.decodeTo(
     ReasoningTranslationProvider,
-    SchemaTransformation.transform<ReasoningTranslationProvider, "off" | "bing" | "google" | "text_model">({
-      decode: (value) => (value === "text_model" ? "text_model" : "off"),
+    SchemaTransformation.transform<
+      ReasoningTranslationProvider,
+      "off" | "bing" | "google" | "local_nmt" | "text_model" | "official_api"
+    >({
+      decode: (value) =>
+        value === "local_nmt" || value === "text_model" || value === "official_api" ? value : "off",
       encode: (value) => value,
     }),
   ),
 );
+
+/** Download mirror for the optional local offline neural translation pack. */
+export const ReasoningTranslationLocalModelMirror = Schema.Literals(["huggingface", "hf_mirror"]);
+export type ReasoningTranslationLocalModelMirror = typeof ReasoningTranslationLocalModelMirror.Type;
+export const DEFAULT_REASONING_TRANSLATION_LOCAL_MODEL_MIRROR: ReasoningTranslationLocalModelMirror =
+  "hf_mirror";
+
+/** Official user-keyed translation API vendors (strictly opt-in, zero undocumented endpoints). */
+export const OfficialTranslationApiVendor = Schema.Literals([
+  "deepl",
+  "azure",
+  "volcano",
+  "tencent",
+  "openai_compatible",
+]);
+export type OfficialTranslationApiVendor = typeof OfficialTranslationApiVendor.Type;
+export const DEFAULT_OFFICIAL_TRANSLATION_API_VENDOR: OfficialTranslationApiVendor =
+  "openai_compatible";
+
+export const ReasoningTranslationOfficialApiSettings = Schema.Struct({
+  vendor: OfficialTranslationApiVendor.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_OFFICIAL_TRANSLATION_API_VENDOR)),
+  ),
+  apiKey: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("")), secretSetting),
+  apiSecret: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("")), secretSetting),
+  region: TrimmedString.check(Schema.isMaxLength(128)).pipe(
+    Schema.withDecodingDefault(Effect.succeed("")),
+  ),
+  endpoint: TrimmedString.check(Schema.isMaxLength(2048)).pipe(
+    Schema.withDecodingDefault(Effect.succeed("")),
+  ),
+  model: TrimmedString.check(Schema.isMaxLength(200)).pipe(
+    Schema.withDecodingDefault(Effect.succeed("")),
+  ),
+});
+export type ReasoningTranslationOfficialApiSettings =
+  typeof ReasoningTranslationOfficialApiSettings.Type;
+export const DEFAULT_REASONING_TRANSLATION_OFFICIAL_API_SETTINGS: ReasoningTranslationOfficialApiSettings =
+  Schema.decodeSync(ReasoningTranslationOfficialApiSettings)({});
 
 export const DEFAULT_REASONING_EFFORT_LEVELS = ["low", "medium", "high", "max"] as const;
 export const ReasoningEffortLevel = Schema.Literals(DEFAULT_REASONING_EFFORT_LEVELS);
@@ -1434,7 +1484,9 @@ export const ServerSettings = Schema.Struct({
   ),
   // Prismux defaults provider update checks OFF so zero silent outbound version
   // polls fire on startup; users can opt in explicitly in Settings.
-  enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  enableProviderUpdateChecks: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
   continueThreadsAfterServerUpdate: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),
@@ -1463,6 +1515,16 @@ export const ServerSettings = Schema.Struct({
   // Null follows textGenerationModelSelection; a selection pins transcript cleanup to its own model.
   speechPostProcessingModelSelection: Schema.NullOr(ModelSelection).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  // Null follows textGenerationModelSelection; a selection pins reasoning translation to its own model.
+  reasoningTranslationModelSelection: Schema.NullOr(ModelSelection).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  reasoningTranslationLocalModelMirror: ReasoningTranslationLocalModelMirror.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_REASONING_TRANSLATION_LOCAL_MODEL_MIRROR)),
+  ),
+  reasoningTranslationOfficialApi: ReasoningTranslationOfficialApiSettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_REASONING_TRANSLATION_OFFICIAL_API_SETTINGS)),
   ),
   projectAgentBrowserAccessOverrides: Schema.Record(ProjectId, Schema.Boolean).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
@@ -1960,6 +2022,18 @@ export const ServerSettingsPatch = Schema.Struct({
   speechModelUnloadTimeout: Schema.optionalKey(SpeechModelUnloadTimeout),
   speechProjectCustomWords: Schema.optionalKey(SpeechCustomWords),
   speechPostProcessingModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+  reasoningTranslationModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+  reasoningTranslationLocalModelMirror: Schema.optionalKey(ReasoningTranslationLocalModelMirror),
+  reasoningTranslationOfficialApi: Schema.optionalKey(
+    Schema.Struct({
+      vendor: Schema.optionalKey(OfficialTranslationApiVendor),
+      apiKey: Schema.optionalKey(TrimmedString),
+      apiSecret: Schema.optionalKey(TrimmedString),
+      region: Schema.optionalKey(TrimmedString.check(Schema.isMaxLength(128))),
+      endpoint: Schema.optionalKey(TrimmedString.check(Schema.isMaxLength(2048))),
+      model: Schema.optionalKey(TrimmedString.check(Schema.isMaxLength(200))),
+    }),
+  ),
   projectAgentBrowserAccessOverrides: Schema.optionalKey(
     Schema.Record(ProjectId, Schema.NullOr(Schema.Boolean)),
   ),
