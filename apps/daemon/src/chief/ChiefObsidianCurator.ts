@@ -6,6 +6,7 @@ import {
   type ObsidianAgentCurator
 } from "@prismux/memory-core";
 import {
+  CANONICAL_PROVIDER_DISPLAY_NAMES,
   DEFAULT_CHIEF_SECRETARY_NAME,
   normalizeChiefProviderKind,
   type ChiefProviderKind
@@ -23,21 +24,21 @@ interface CliCommandPlan {
 export function formatProviderDisplay(provider: ChiefProviderKind): string {
   switch (provider) {
     case "claude-code":
-      return "Claude";
+      return CANONICAL_PROVIDER_DISPLAY_NAMES.claudeAgent;
     case "codex":
-      return "Codex";
+      return CANONICAL_PROVIDER_DISPLAY_NAMES.codex;
     case "antigravity":
-      return "Antigravity";
+      return CANONICAL_PROVIDER_DISPLAY_NAMES.antigravity;
     case "gemini":
-      return "Gemini CLI";
+      return CANONICAL_PROVIDER_DISPLAY_NAMES.gemini;
     case "opencode":
-      return "OpenCode";
+      return CANONICAL_PROVIDER_DISPLAY_NAMES.opencode;
     case "cursor":
-      return "Cursor";
+      return CANONICAL_PROVIDER_DISPLAY_NAMES.cursor;
     case "dsh":
       return "DSH";
     case "pi":
-      return "Pi";
+      return CANONICAL_PROVIDER_DISPLAY_NAMES.pi;
     case "acp":
       return "ACP";
     default:
@@ -64,7 +65,7 @@ function buildCliCommandPlan(
           ...(model ? ["--model", model] : [])
         ],
         stdinPrompt: prompt,
-        label: "Claude"
+        label: CANONICAL_PROVIDER_DISPLAY_NAMES.claudeAgent
       };
     case "codex":
       return {
@@ -76,14 +77,14 @@ function buildCliCommandPlan(
           "-"
         ],
         stdinPrompt: prompt,
-        label: "Codex"
+        label: CANONICAL_PROVIDER_DISPLAY_NAMES.codex
       };
     case "gemini":
       return {
         command: ext("gemini"),
         args: [...(model ? ["-m", model] : []), "-p", prompt],
         stdinPrompt: "",
-        label: "Gemini CLI"
+        label: CANONICAL_PROVIDER_DISPLAY_NAMES.gemini
       };
     default:
       return null;

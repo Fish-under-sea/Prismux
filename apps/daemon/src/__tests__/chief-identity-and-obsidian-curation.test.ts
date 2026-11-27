@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { SqliteMemoryStore } from "@prismux/memory-core";
-import { DEFAULT_CHIEF_SECRETARY_NAME } from "@prismux/protocol";
+import {
+  CANONICAL_PROVIDER_DISPLAY_NAMES,
+  DEFAULT_CHIEF_SECRETARY_NAME
+} from "@prismux/protocol";
 import {
   CHIEF_IDENTITY_HEADER_BEGIN,
   CHIEF_IDENTITY_HEADER_END,
@@ -144,7 +147,7 @@ describe("Chief custom identity, independent AGENTS.md & Obsidian Agent curation
       memoryStore,
       memoryDbPath: join(dataDir, "memory.db"),
       obsidianAgentCurator: async () => ({
-        curatorLabel: "小棱 · Claude Code",
+        curatorLabel: `小棱 · ${CANONICAL_PROVIDER_DISPLAY_NAMES.claudeAgent}`,
         items: [
           {
             title: "Monorepo 包管理偏好",
@@ -264,7 +267,7 @@ describe("Chief custom identity, independent AGENTS.md & Obsidian Agent curation
       };
       assert.equal(planJson.ok, true);
       assert.equal(planJson.curationSource, "agent");
-      assert.equal(planJson.curatorLabel, "小棱 · Claude Code");
+      assert.equal(planJson.curatorLabel, `小棱 · ${CANONICAL_PROVIDER_DISPLAY_NAMES.claudeAgent}`);
       assert.equal(planJson.stats.scannedFiles, 2);
       assert.equal(planJson.stats.filteredNoiseCount, 1);
       assert.equal(planJson.stats.redactedSecretCount, 1);

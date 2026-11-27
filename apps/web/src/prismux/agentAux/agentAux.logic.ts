@@ -10,6 +10,7 @@ import {
   type ProviderInstanceEntry,
 } from "../../providerInstances";
 import {
+  CANONICAL_PROVIDER_DISPLAY_NAMES,
   acpBrandKeyToAgentBrandId,
   formatAgentBrandName,
   inferAgentBrandFromModel,
@@ -2838,7 +2839,7 @@ function collectDelegatedChildren(input: {
           roleLabel: formatAuxRoleLabel(sub.role || "subagent", false, input.locale),
           title: sub.role || handle,
           brief: sub.activity || sub.role,
-          model: "Antigravity",
+          model: CANONICAL_PROVIDER_DISPLAY_NAMES.antigravity,
           providerBrand: "antigravity",
           sourceKind: "native-subagent",
           status,
@@ -2873,7 +2874,7 @@ function collectDelegatedChildren(input: {
         startedAt: sub.transcriptMtime > 0 ? sub.transcriptMtime - 30_000 : null,
         completedAt: sub.transcriptMtime > 0 ? sub.transcriptMtime : null,
         runId: null,
-        driverLabel: "Antigravity",
+        driverLabel: CANONICAL_PROVIDER_DISPLAY_NAMES.antigravity,
         parentName: "coordinator",
       });
     }
@@ -2901,7 +2902,7 @@ function collectDelegatedChildren(input: {
         roleLabel: formatAuxRoleLabel(child.role || "subagent", false, input.locale),
         title: brief,
         brief,
-        model: "Antigravity",
+        model: CANONICAL_PROVIDER_DISPLAY_NAMES.antigravity,
         providerBrand: "antigravity",
         sourceKind: input.asAbsorbedAcp ? "acp-delegated" : "native-subagent",
         status,
@@ -2936,7 +2937,7 @@ function collectDelegatedChildren(input: {
       startedAt: null,
       completedAt: null,
       runId: null,
-      driverLabel: "Antigravity",
+      driverLabel: CANONICAL_PROVIDER_DISPLAY_NAMES.antigravity,
       parentName: "coordinator",
     });
   }
@@ -2958,7 +2959,7 @@ function collectDelegatedChildren(input: {
           roleLabel: formatAuxRoleLabel(sp.role || "subagent", false, input.locale),
           title: sp.title || displayName,
           brief: sp.title || displayName,
-          model: sp.model || "Codex",
+          model: sp.model || CANONICAL_PROVIDER_DISPLAY_NAMES.codex,
           providerBrand: "codex",
           sourceKind: "codex",
           status,
@@ -2992,7 +2993,7 @@ function collectDelegatedChildren(input: {
         startedAt: sp.updatedAtMs > 0 ? sp.updatedAtMs - 15_000 : null,
         completedAt: sp.updatedAtMs > 0 ? sp.updatedAtMs : null,
         runId: null,
-        driverLabel: "Codex",
+        driverLabel: CANONICAL_PROVIDER_DISPLAY_NAMES.codex,
         parentName: "coordinator",
       });
     }
@@ -4021,7 +4022,7 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
   }
 
   // =========================================================================
-  // 2. Claude Code Native Agent Team — Unified 4 Tabs (+ optional Tasks)
+  // 2. Claude Native Agent Team — Unified 4 Tabs (+ optional Tasks)
   // =========================================================================
   if (snap?.active && snap.kind === "claude-team" && snap.claudeTeam) {
     const team = snap.claudeTeam;
@@ -4162,6 +4163,10 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
         : []),
     ];
 
+    const claudeTeamPrefix = hasCustomBrandName
+      ? brandDisplayName
+      : CANONICAL_PROVIDER_DISPLAY_NAMES.claudeAgent;
+
     return {
       active: true,
       hasLiveActivity,
@@ -4171,8 +4176,11 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
       hasAbsorbedAcpAgents: false,
       provider: provider ?? "claudeAgent",
       providerBrand: "claude-code",
-      title: team.teamName || (locale === "zh" ? "Claude 智能体团队" : "Claude Agent Team"),
-      badgeLabel: locale === "zh" ? "Claude 智能体团队" : "Claude Agent Team",
+      title:
+        team.teamName ||
+        (locale === "zh" ? `${claudeTeamPrefix} 智能体团队` : `${claudeTeamPrefix} Agent Team`),
+      badgeLabel:
+        locale === "zh" ? `${claudeTeamPrefix} 智能体团队` : `${claudeTeamPrefix} Agent Team`,
       entryLabel: s.entryClaudeTeam,
       activationKey: snap.activationKey ?? `claude-team:${team.teamName}`,
       selfMember: "team-lead",
@@ -4287,19 +4295,25 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
   let title: string;
 
   if (brand === "antigravity" || snap?.kind === "agy-subagents") {
-    const labelPrefix = hasCustomBrandName ? brandDisplayName : "Antigravity";
+    const labelPrefix = hasCustomBrandName
+      ? brandDisplayName
+      : CANONICAL_PROVIDER_DISPLAY_NAMES.antigravity;
     kind = "agy-subagents";
     badgeLabel = locale === "zh" ? `${labelPrefix} 子智能体` : `${labelPrefix} Subagents`;
     entryLabel = s.entryAgySubagents;
     title = badgeLabel;
   } else if (brand === "claude-code") {
-    const labelPrefix = hasCustomBrandName ? brandDisplayName : "Claude";
+    const labelPrefix = hasCustomBrandName
+      ? brandDisplayName
+      : CANONICAL_PROVIDER_DISPLAY_NAMES.claudeAgent;
     kind = "claude-subagents";
     badgeLabel = locale === "zh" ? `${labelPrefix} 协同` : `${labelPrefix} Collaboration`;
     entryLabel = s.entryCollab;
     title = badgeLabel;
   } else if (brand === "codex" || snap?.kind === "codex-collab") {
-    const labelPrefix = hasCustomBrandName ? brandDisplayName : "Codex";
+    const labelPrefix = hasCustomBrandName
+      ? brandDisplayName
+      : CANONICAL_PROVIDER_DISPLAY_NAMES.codex;
     kind = "codex-collab";
     badgeLabel = locale === "zh" ? `${labelPrefix} 协同` : `${labelPrefix} Collaboration`;
     entryLabel = s.entryCollab;

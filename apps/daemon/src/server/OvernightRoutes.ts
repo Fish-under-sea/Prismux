@@ -11,6 +11,7 @@ import type { EncryptedPluginCredentialStore } from "@prismux/cordis-kernel";
 import type { SqliteMemoryStore } from "@prismux/memory-core";
 import {
   BRAND,
+  CANONICAL_PROVIDER_DISPLAY_NAMES,
   isAntigravityProvider,
   type CallerScope,
   type DispatchCallerKind,
@@ -5086,7 +5087,7 @@ export class OvernightRouteService {
       throw new BusinessRouteError(
         403,
         "AGY_UNATTENDED_FORBIDDEN",
-        "24h 无人值守夜间工场严禁使用个人版 Antigravity（AGY），请改选 Codex / Claude Code / OpenCode / DSH 等合规代理。",
+        `24h 无人值守夜间工场严禁使用个人版 ${CANONICAL_PROVIDER_DISPLAY_NAMES.antigravity}（AGY），请改选 ${CANONICAL_PROVIDER_DISPLAY_NAMES.codex} / ${CANONICAL_PROVIDER_DISPLAY_NAMES.claudeAgent} / ${CANONICAL_PROVIDER_DISPLAY_NAMES.opencode} / DSH 等合规代理。`,
       );
     }
   }

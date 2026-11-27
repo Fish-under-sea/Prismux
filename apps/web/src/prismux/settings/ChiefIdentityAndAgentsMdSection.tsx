@@ -23,6 +23,7 @@ import type {
   PrismuxDaemonClient,
 } from "../daemonClient";
 import { emitChiefSlotUpdated } from "../PrismuxChiefStatusPill";
+import { useResolveConfiguredProviderDisplayName } from "../providerDisplayName";
 
 export interface ActiveChiefSlotSnapshot {
   readonly provider: string;
@@ -224,6 +225,8 @@ export const ChiefIdentityAndAgentsMdSection = memo(function ChiefIdentityAndAge
 
   const previewName = normalizeChiefDisplayName(nameInput);
   const mdDirty = mdContent !== savedMdContent;
+  const { resolveName } = useResolveConfiguredProviderDisplayName();
+  const chiefEngineListLabel = `${resolveName("codex")}、${resolveName("claudeAgent")}、${resolveName("antigravity")} 或 ${resolveName("dsh")}`;
 
   return (
     <>
@@ -305,7 +308,7 @@ export const ChiefIdentityAndAgentsMdSection = memo(function ChiefIdentityAndAge
             </Badge>
           </span>
         }
-        description="独立于底层引擎的专属人设与工作纪律，切换为 Codex、Claude、Antigravity 或 DeepSeek Harness 均自动沿用。"
+        description={`独立于底层引擎的专属人设与工作纪律，切换为 ${chiefEngineListLabel} 均自动沿用。`}
       >
         <div
           data-pmx-chief-agents-md-section=""

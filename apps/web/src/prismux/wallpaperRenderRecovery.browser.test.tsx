@@ -447,4 +447,132 @@ describe("Wallpaper render loss & recovery regression guards (browser)", () => {
       }),
     );
   });
+
+  it("guards PrismuxRuntimeProvider against stale cold-boot getWindowOcclusion and late getAppearance selectedId races", async () => {
+    let resolveOcclusion!: (value: { occluded: boolean }) => void;
+    const occlusionPromise = new Promise<{ occluded: boolean }>((resolve) => {
+      resolveOcclusion = resolve;
+    });
+    let occlusionListener: ((payload: { occluded: boolean }) => void) | null = null;
+
+    let resolveAppearance!: (value: Record<string, unknown>) => void;
+    const appearancePromise = new Promise<Record<string, unknown>>((resolve) => {
+      resolveAppearance = resolve;
+    });
+
+    const prevDesktopBridge = window.desktopBridge;
+    const mockPrismuxBridge = {
+      getWindowOcclusion: () => occlusionPromise,
+      onWindowOcclusionChange: (cb: (payload: { occluded: boolean }) => void) => {
+        occlusionListener = cb;
+        return () => {
+          occlusionListener = null;
+        };
+      },
+    };
+    Object.defineProperty(window, "desktopBridge", {
+      value: {
+        ...prevDesktopBridge,
+        prismux: {
+          ...prevDesktopBridge?.prismux,
+          ...mockPrismuxBridge,
+        },
+      },
+      configurable: true,
+    });
+
+    const connSpy = vi.spyOn(prismuxDaemonClient, "getConnectionInfo").mockResolvedValue({
+      ready: true,
+      baseUrl: "http://127.0.0.1:47910",
+      token: "tok-race",
+    });
+    const appearanceSpy = vi
+      .spyOn(prismuxDaemonClient, "getAppearance")
+      .mockReturnValue(appearancePromise);
+    const saveSpy = vi.spyOn(prismuxDaemonClient, "saveAppearance").mockResolvedValue({} as never);
+    const invSpy = vi.spyOn(prismuxDaemonClient, "getWallpaperInventory").mockResolvedValue({
+      schemaVersion: 1,
+      scannedAt: Date.now(),
+      customWallpaperDir: "/custom",
+      customDirs: [],
+      steamRootOverride: "",
+      steamRoots: [],
+      workshopDirs: [],
+      totalCount: 0,
+      items: [],
+    });
+    const fontsSpy = vi
+      .spyOn(prismuxDaemonClient, "getSystemFonts")
+      .mockResolvedValue({ fonts: [] });
+    const chiefSpy = vi.spyOn(prismuxDaemonClient, "getChief").mockRejectedValue(new Error("skip"));
+    const updaterSpy = vi
+      .spyOn(prismuxDaemonClient, "fetchUpdaterStatus")
+      .mockRejectedValue(new Error("skip"));
+    const sseSpy = vi
+      .spyOn(prismuxDaemonClient, "subscribeUpdaterEvents")
+      .mockReturnValue(() => {});
+
+    const capturedRuntimes: Array<ReturnType<typeof usePrismuxRuntime>> = [];
+    function Probe() {
+      capturedRuntimes.push(usePrismuxRuntime());
+      return null;
+    }
+
+    try {
+      await using _screen = await render(
+        <PrismuxRuntimeProvider>
+          <Probe />
+        </PrismuxRuntimeProvider>,
+        { router: false },
+      );
+
+      expect(capturedRuntimes.at(-1)).toBeDefined();
+      expect(occlusionListener).not.toBeNull();
+
+      // 1. Live occlusion event arrives ({ occluded: false }) BEFORE slow cold-boot getWindowOcclusion resolves ({ occluded: true })
+      await act(() => {
+        occlusionListener?.({ occluded: false });
+      });
+      await act(async () => {
+        resolveOcclusion({ occluded: true });
+        await Promise.resolve();
+      });
+      expect(capturedRuntimes.at(-1)!.occluded).toBe(false);
+      expect(capturedRuntimes.at(-1)!.wallpaperStore.getSnapshot().occluded).toBe(false);
+
+      // 2. User picks a wallpaper locally BEFORE slow initial getAppearance() resolves with a stale selectedId
+      await act(() => {
+        capturedRuntimes.at(-1)!.wallpaperStore.updateSettings({ selectedId: "user-picked-wp" });
+      });
+      expect(capturedRuntimes.at(-1)!.wallpaperStore.getSnapshot().settings.selectedId).toBe(
+        "user-picked-wp",
+      );
+
+      await act(async () => {
+        resolveAppearance({
+          wallpaper: { selectedId: "stale-daemon-wp", playing: true },
+        });
+        await Promise.resolve();
+      });
+
+      await vi.waitFor(() => {
+        expect(capturedRuntimes.at(-1)!.wallpaperStore.getSnapshot().settings.selectedId).toBe(
+          "user-picked-wp",
+        );
+      });
+    } finally {
+      Object.defineProperty(window, "desktopBridge", {
+        value: prevDesktopBridge,
+        configurable: true,
+      });
+      connSpy.mockRestore();
+      appearanceSpy.mockRestore();
+      saveSpy.mockRestore();
+      invSpy.mockRestore();
+      fontsSpy.mockRestore();
+      chiefSpy.mockRestore();
+      updaterSpy.mockRestore();
+      sseSpy.mockRestore();
+    }
+  });
 });

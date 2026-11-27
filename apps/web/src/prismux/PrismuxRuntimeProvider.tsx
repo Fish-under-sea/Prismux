@@ -712,6 +712,7 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
   daemonReadyRef.current = daemonInfo.ready;
 
   const hydratedFromDaemonRef = useRef<boolean>(false);
+  const userMutatedSelectedIdRef = useRef<boolean>(false);
   const syncingRef = useRef<boolean>(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -873,6 +874,9 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       if (nextWs === prevWs) {
         return;
       }
+      if (nextWs.selectedId !== prevWs.selectedId) {
+        userMutatedSelectedIdRef.current = true;
+      }
       lastSyncedWallpaperRef.current = nextWs;
 
       const { changed, next: nextAppearance } = diffWallpaperToAppearance(
@@ -1030,6 +1034,7 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
   // Subscribe to Electron window occlusion + browser document.visibilitychange to enforce 0 FPS pause.
   useEffect(() => {
     let bridgeOccluded = false;
+    let receivedLiveOcclusionEvent = false;
     let docHidden =
       typeof document !== "undefined" ? document.visibilityState === "hidden" : false;
 
@@ -1042,6 +1047,7 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
     const handleVisibility = () => {
       docHidden = document.visibilityState === "hidden";
       if (!docHidden) {
+        receivedLiveOcclusionEvent = true;
         bridgeOccluded = false;
       }
       recompute();
@@ -1051,6 +1057,7 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       docHidden =
         typeof document !== "undefined" ? document.visibilityState === "hidden" : false;
       if (!docHidden) {
+        receivedLiveOcclusionEvent = true;
         bridgeOccluded = false;
       }
       recompute();
@@ -1066,24 +1073,25 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
     const prismuxBridge =
       typeof window !== "undefined" ? window.desktopBridge?.prismux : undefined;
 
+    let unsubscribeOcclusion: (() => void) | undefined;
+    if (prismuxBridge && typeof prismuxBridge.onWindowOcclusionChange === "function") {
+      unsubscribeOcclusion = prismuxBridge.onWindowOcclusionChange((payload) => {
+        receivedLiveOcclusionEvent = true;
+        bridgeOccluded = Boolean(payload?.occluded);
+        recompute();
+      });
+    }
+
     let cancelled = false;
     if (prismuxBridge && typeof prismuxBridge.getWindowOcclusion === "function") {
       void prismuxBridge
         .getWindowOcclusion()
         .then((res) => {
-          if (cancelled) return;
+          if (cancelled || receivedLiveOcclusionEvent) return;
           bridgeOccluded = Boolean(res?.occluded);
           recompute();
         })
         .catch(() => {});
-    }
-
-    let unsubscribeOcclusion: (() => void) | undefined;
-    if (prismuxBridge && typeof prismuxBridge.onWindowOcclusionChange === "function") {
-      unsubscribeOcclusion = prismuxBridge.onWindowOcclusionChange((payload) => {
-        bridgeOccluded = Boolean(payload?.occluded);
-        recompute();
-      });
     }
 
     recompute();
@@ -1382,11 +1390,18 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
             syncHostPolarity(remoteAppearance);
 
             const currentWs = wallpaperStore.getSnapshot().settings;
+            // Guard against stale initial getAppearance() response clobbering a wallpaper
+            // selectedId the user already chose locally before Daemon hydration settled.
+            let safeWallpaperPatch: Partial<WallpaperSettingsState> | null = wallpaperPatch;
+            if (userMutatedSelectedIdRef.current && wallpaperPatch) {
+              const { selectedId: _ignoredSelectedId, ...restPatch } = wallpaperPatch;
+              safeWallpaperPatch = restPatch;
+            }
             const mergedPatch: Partial<WallpaperSettingsState> = {
-              ...(wallpaperPatch ?? {}),
+              ...(safeWallpaperPatch ?? {}),
               ...appearanceToWallpaperPatch(remoteAppearance, {
                 ...currentWs,
-                ...(wallpaperPatch ?? {}),
+                ...(safeWallpaperPatch ?? {}),
               }),
             };
             if (Object.keys(mergedPatch).length > 0) {
@@ -1408,8 +1423,8 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       if (cancelled) return;
 
       // Persist self-healed legacy wallpaper values (e.g. wallpaperOpacity: 100 → 0, scrim: 35 → 0.35)
-      // back to Daemon so future boots start cleanly.
-      if (migratedWallpaperConfig) {
+      // or a user-selected wallpaper chosen before initial hydration settled back to Daemon.
+      if (migratedWallpaperConfig || userMutatedSelectedIdRef.current) {
         scheduleDaemonSave(appearanceRef.current, wallpaperStore.getSnapshot().settings);
       }
 

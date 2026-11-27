@@ -12,6 +12,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import process from "node:process";
 import {
   BRAND,
+  CANONICAL_PROVIDER_DISPLAY_NAMES,
   CHIEF_AGENTS_MD_DIR,
   CHIEF_AGENTS_MD_FILENAME,
   CHIEF_PROVIDER_KINDS,
@@ -112,7 +113,7 @@ export function buildChiefIdentityHeader(
     `# ${BRAND.appName} 主秘书身份契约 · ${resolvedName}`,
     "",
     `- **当前主秘书称呼**：\`${resolvedName}\`（用户称呼「${resolvedName}」或 \`@${resolvedName}\` 时立即识别为在呼叫自己）`,
-    `- **跨引擎身份连续性**：无论底层模型或引擎在 Codex / Claude / Antigravity / Gemini 等之间如何热切换，你始终保持同一位主秘书「${resolvedName}」的身份、长期记忆与本 \`AGENTS.md\` 约定。`,
+    `- **跨引擎身份连续性**：无论底层模型或引擎在 ${CANONICAL_PROVIDER_DISPLAY_NAMES.codex} / ${CANONICAL_PROVIDER_DISPLAY_NAMES.claudeAgent} / ${CANONICAL_PROVIDER_DISPLAY_NAMES.antigravity} / Gemini 等之间如何热切换，你始终保持同一位主秘书「${resolvedName}」的身份、长期记忆与本 \`AGENTS.md\` 约定。`,
     `- **唤起与响应规则**：当用户在对话、私聊或快捷指令中称呼「${resolvedName}」或 \`@${resolvedName}\` 时，直接以「${resolvedName}」身份自然响应并推进闭环。`,
     `- **独立指令路径**：\`${agentsMdPath}\`（独立于具体项目与 Provider，切换底层引擎绝不重置）`,
     CHIEF_IDENTITY_HEADER_END

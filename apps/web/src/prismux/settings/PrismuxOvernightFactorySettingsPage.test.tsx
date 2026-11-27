@@ -106,7 +106,7 @@ const SAMPLE_LIVE_PROVIDERS: ServerProvider[] = [
   makeMockProvider({
     instanceId: "claudeAgent",
     driver: "claudeAgent",
-    displayName: "Claude Code",
+    displayName: "Claude",
     enabled: false, // Disabled provider MUST be skipped!
     models: [
       { slug: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", isCustom: false, capabilities: null },

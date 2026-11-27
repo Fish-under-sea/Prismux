@@ -29,10 +29,10 @@ describe("agentBrand canonical naming & official logos", () => {
     expect(formatAgentBrandName("openai-codex")).toBe("Codex");
     expect(formatAgentBrandName("CODEX")).toBe("Codex");
 
-    expect(formatAgentBrandName("claude")).toBe("Claude Code");
-    expect(formatAgentBrandName("claudeAgent")).toBe("Claude Code");
-    expect(formatAgentBrandName("claude-code")).toBe("Claude Code");
-    expect(formatAgentBrandName("claudeCode")).toBe("Claude Code");
+    expect(formatAgentBrandName("claude")).toBe("Claude");
+    expect(formatAgentBrandName("claudeAgent")).toBe("Claude");
+    expect(formatAgentBrandName("claude-code")).toBe("Claude");
+    expect(formatAgentBrandName("claudeCode")).toBe("Claude");
 
     expect(formatAgentBrandName("antigravity")).toBe("Antigravity");
     expect(formatAgentBrandName("antigravity-cli")).toBe("Antigravity");
@@ -50,7 +50,7 @@ describe("agentBrand canonical naming & official logos", () => {
 
   it("preserves user custom display names while Title-Casing raw unknown ACP IDs", () => {
     expect(formatAgentBrandName("acpRegistry:team", "DeepSeek Internal")).toBe("DeepSeek Internal");
-    expect(formatAgentBrandName("claudeAgent", "Claude")).toBe("Claude Code");
+    expect(formatAgentBrandName("claudeAgent", "Claude")).toBe("Claude");
     expect(formatAgentBrandName("my-custom-acp")).toBe("My Custom ACP");
     expect(formatAgentBrandName("acmeCodeAgent")).toBe("Acme Code Agent");
     expect(formatAgentBrandName("  ")).toBe("Agent");
@@ -61,7 +61,7 @@ describe("agentBrand canonical naming & official logos", () => {
     expect(formatAgentBrandName("codex-048c43c3-0798-480e-bc42-1a2b3c4d5e6f")).toBe("Codex");
     expect(formatAgentBrandName("codex", "Codex 048c43c3 0798 480e Bc42 1...")).toBe("Codex");
     expect(formatAgentBrandName("claudeAgent_048c43c3-0798-480e-bc42-1a2b3c4d5e6f")).toBe(
-      "Claude Code",
+      "Claude",
     );
     expect(formatAgentBrandName("048c43c3-0798-480e-bc42-1a2b3c4d5e6f")).toBe("Agent");
     expect(formatAgentBrandName("codex", "主力 Codex")).toBe("主力 Codex");
@@ -96,7 +96,7 @@ describe("agentBrand canonical naming & official logos", () => {
         displayName: "Claude",
         hasCustomDisplayName: false,
       }),
-    ).toBe("Claude Code");
+    ).toBe("Claude");
     expect(containsUuidNoise("Codex 048c43c3 0798 480e Bc42 1...")).toBe(true);
     expect(stripUuidNoise("Codex 048c43c3 0798 480e Bc42 1...")).toBe("Codex");
   });
