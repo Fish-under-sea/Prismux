@@ -117,11 +117,15 @@ import {
   hydrateOvernightDraftFromSnapshot,
   isMailChannelConfigured,
   isSafeHttpsUrl,
+  isValidPersistedTestRecipient,
   parseAgentMailTestResponse,
   parseAllowedSendersInput,
   resolveDefaultTestRecipient,
+  resolveFallbackTestRecipient,
   resolveGmailOAuthRedirectUri,
   resolveMailSectionViewMode,
+  resolveNextTestRecipientInputOnBackgroundSync,
+  resolveNextTestRecipientInputOnSnapshot,
   shouldAutoCollapseAgentMailSetup,
   shouldDefaultExpandMailChannel,
   shouldDefaultExpandStrategy,
@@ -375,6 +379,12 @@ function PrismuxOvernightFactoryShell({
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastFocusProbeAtRef = useRef<number>(0);
+  const testRecipientSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const testRecipientInputRef = useRef<string>(testRecipientInput);
+  const lastPersistedTestRecipientRef = useRef<string>(draft.testRecipient.trim());
+  const testRecipientDirtyRef = useRef<boolean>(false);
+  const userClearedTestRecipientRef = useRef<boolean>(false);
+  const inFlightTestRecipientRef = useRef<string | null>(null);
 
   const [loading, setLoading] = useState<boolean>(false);
   const [detectingEnv, setDetectingEnv] = useState<boolean>(false);
@@ -413,14 +423,99 @@ function PrismuxOvernightFactoryShell({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
-  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- cleanup pending clipboard copy badge timer on unmount
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- cleanup pending clipboard copy & test recipient debounce timers on unmount
   useEffect(() => {
     return () => {
       if (copiedTimerRef.current !== null) {
         clearTimeout(copiedTimerRef.current);
       }
+      if (testRecipientSaveTimerRef.current !== null) {
+        clearTimeout(testRecipientSaveTimerRef.current);
+      }
     };
   }, []);
+
+  const updateTestRecipientInput = (nextValue: string) => {
+    testRecipientInputRef.current = nextValue;
+    setTestRecipientInput(nextValue);
+  };
+
+  const fillTestRecipientIfEmpty = (candidate: string) => {
+    const trimmed = candidate.trim();
+    if (!trimmed || testRecipientDirtyRef.current || userClearedTestRecipientRef.current) return;
+    setTestRecipientInput((prev) => {
+      const next = prev.trim().length > 0 ? prev : trimmed;
+      testRecipientInputRef.current = next;
+      return next;
+    });
+  };
+
+  const persistTestRecipient = async (
+    rawValue: string,
+    options: { readonly strictDomain?: boolean } = {},
+  ) => {
+    if (testRecipientSaveTimerRef.current !== null) {
+      clearTimeout(testRecipientSaveTimerRef.current);
+      testRecipientSaveTimerRef.current = null;
+    }
+    const trimmed = rawValue.trim();
+    if (!isValidPersistedTestRecipient(trimmed, options)) {
+      return;
+    }
+    if (trimmed === lastPersistedTestRecipientRef.current) {
+      if (trimmed === testRecipientInputRef.current.trim()) {
+        testRecipientDirtyRef.current = false;
+      }
+      return;
+    }
+    if (inFlightTestRecipientRef.current === trimmed) {
+      return;
+    }
+    inFlightTestRecipientRef.current = trimmed;
+    try {
+      const updated = await daemon.updateOvernightConfig({ testRecipient: trimmed });
+      const saved =
+        typeof updated.config.testRecipient === "string"
+          ? updated.config.testRecipient.trim()
+          : trimmed;
+      lastPersistedTestRecipientRef.current = saved;
+      setDraft((prev) => ({ ...prev, testRecipient: saved }));
+      if (testRecipientInputRef.current.trim() === trimmed) {
+        testRecipientDirtyRef.current = false;
+      }
+    } catch {
+      // Keep user's typed recipient intact on transient daemon errors.
+    } finally {
+      if (inFlightTestRecipientRef.current === trimmed) {
+        inFlightTestRecipientRef.current = null;
+      }
+    }
+  };
+
+  const handleTestRecipientChange = (nextValue: string) => {
+    testRecipientDirtyRef.current = true;
+    userClearedTestRecipientRef.current = nextValue.trim().length === 0;
+    updateTestRecipientInput(nextValue);
+    if (testRecipientSaveTimerRef.current !== null) {
+      clearTimeout(testRecipientSaveTimerRef.current);
+      testRecipientSaveTimerRef.current = null;
+    }
+    const trimmed = nextValue.trim();
+    if (
+      isValidPersistedTestRecipient(trimmed, { strictDomain: true }) &&
+      trimmed !== lastPersistedTestRecipientRef.current
+    ) {
+      testRecipientSaveTimerRef.current = setTimeout(() => {
+        testRecipientSaveTimerRef.current = null;
+        void persistTestRecipient(testRecipientInputRef.current, { strictDomain: true });
+      }, 800);
+    }
+  };
+
+  const handleTestRecipientBlur = () => {
+    if (!testRecipientDirtyRef.current) return;
+    void persistTestRecipient(testRecipientInputRef.current, { strictDomain: false });
+  };
 
   const handleOpenWaiverSettings = () => {
     void navigate({
@@ -466,9 +561,22 @@ function PrismuxOvernightFactoryShell({
     if (snapshot.runtime.lastTestResult) {
       setTestResult(snapshot.runtime.lastTestResult);
     }
-    const defaultRecipient = resolveDefaultTestRecipient(nextDraft);
-    if (defaultRecipient) {
-      setTestRecipientInput((prev) => (prev.trim().length > 0 ? prev : defaultRecipient));
+    const persistedTestRecipient = nextDraft.testRecipient.trim();
+    lastPersistedTestRecipientRef.current = persistedTestRecipient;
+    const recipientResolution = resolveNextTestRecipientInputOnSnapshot({
+      currentInput: testRecipientInputRef.current,
+      isDirty: testRecipientDirtyRef.current,
+      userCleared: userClearedTestRecipientRef.current,
+      nextDraft,
+    });
+    if (recipientResolution.clearDirty) {
+      testRecipientDirtyRef.current = false;
+    }
+    if (recipientResolution.clearUserCleared) {
+      userClearedTestRecipientRef.current = false;
+    }
+    if (recipientResolution.nextInput !== testRecipientInputRef.current) {
+      updateTestRecipientInput(recipientResolution.nextInput);
     }
     if (nextDraft.targetWorkspaceDir) {
       setTaskWorkspaceDir((prev) => (prev.trim().length > 0 ? prev : nextDraft.targetWorkspaceDir));
@@ -550,9 +658,23 @@ function PrismuxOvernightFactoryShell({
         if (snap.runtime.lastTestResult) {
           setTestResult(snap.runtime.lastTestResult);
         }
-        const defaultRecipient = resolveDefaultTestRecipient(nextDraft);
-        if (defaultRecipient) {
-          setTestRecipientInput((prev) => (prev.trim().length > 0 ? prev : defaultRecipient));
+        const persistedTestRecipient = nextDraft.testRecipient.trim();
+        lastPersistedTestRecipientRef.current = persistedTestRecipient;
+        const recipientResolution = resolveNextTestRecipientInputOnSnapshot({
+          currentInput: testRecipientInputRef.current,
+          isDirty: testRecipientDirtyRef.current,
+          userCleared: userClearedTestRecipientRef.current,
+          nextDraft,
+        });
+        if (recipientResolution.clearDirty) {
+          testRecipientDirtyRef.current = false;
+        }
+        if (recipientResolution.clearUserCleared) {
+          userClearedTestRecipientRef.current = false;
+        }
+        if (recipientResolution.nextInput !== testRecipientInputRef.current) {
+          testRecipientInputRef.current = recipientResolution.nextInput;
+          setTestRecipientInput(recipientResolution.nextInput);
         }
         if (nextDraft.targetWorkspaceDir) {
           setTaskWorkspaceDir((prev) =>
@@ -590,6 +712,17 @@ function PrismuxOvernightFactoryShell({
           const snap = await daemon.fetchOvernightConfig(true);
           if (cancelled) return;
           const am = extractAgentMailStatusFromSnapshot(snap);
+          const snapTestRecipient =
+            typeof snap.config.testRecipient === "string"
+              ? snap.config.testRecipient.trim()
+              : undefined;
+          if (
+            snapTestRecipient !== undefined &&
+            !testRecipientDirtyRef.current &&
+            inFlightTestRecipientRef.current === null
+          ) {
+            lastPersistedTestRecipientRef.current = snapTestRecipient;
+          }
           setDraft((prev) => {
             const hasTypedImapSecret = prev.imapPasswordInput.trim().length > 0;
             const hasTypedSmtpSecret = prev.smtpPasswordInput.trim().length > 0;
@@ -609,6 +742,11 @@ function PrismuxOvernightFactoryShell({
                     emailProvider: "agent_mail" as const,
                     preset: "agent_mail" as const,
                   }
+                : {}),
+              ...(snapTestRecipient !== undefined &&
+              !testRecipientDirtyRef.current &&
+              inFlightTestRecipientRef.current === null
+                ? { testRecipient: snapTestRecipient }
                 : {}),
               agentMailCliInstalled: am.cliInstalled,
               agentMailVersion: am.version ?? prev.agentMailVersion,
@@ -633,8 +771,16 @@ function PrismuxOvernightFactoryShell({
               hasGmailRefreshToken: snap.secrets.hasGmailRefreshToken,
             };
           });
-          if (am.authorizedEmail) {
-            setTestRecipientInput((prev) => (prev.trim().length > 0 ? prev : am.authorizedEmail!));
+          const nextFocusRecipient = resolveNextTestRecipientInputOnBackgroundSync({
+            currentInput: testRecipientInputRef.current,
+            isDirty: testRecipientDirtyRef.current,
+            userCleared: userClearedTestRecipientRef.current,
+            snapshotTestRecipient: snapTestRecipient ?? null,
+            agentMailAuthorizedEmail: am.authorizedEmail,
+          });
+          if (nextFocusRecipient !== testRecipientInputRef.current) {
+            testRecipientInputRef.current = nextFocusRecipient;
+            setTestRecipientInput(nextFocusRecipient);
           }
         } catch {
           // Ignore transient background focus refresh failures.
@@ -688,9 +834,21 @@ function PrismuxOvernightFactoryShell({
           }));
           if (!am.authInProgress) {
             if (am.authorizedEmail) {
-              setTestRecipientInput((prev) =>
-                prev.trim().length > 0 ? prev : am.authorizedEmail!,
-              );
+              const snapTestRecipient =
+                typeof snap.config.testRecipient === "string"
+                  ? snap.config.testRecipient.trim()
+                  : "";
+              const nextOauthRecipient = resolveNextTestRecipientInputOnBackgroundSync({
+                currentInput: testRecipientInputRef.current,
+                isDirty: testRecipientDirtyRef.current,
+                userCleared: userClearedTestRecipientRef.current,
+                snapshotTestRecipient: snapTestRecipient || null,
+                agentMailAuthorizedEmail: am.authorizedEmail,
+              });
+              if (nextOauthRecipient !== testRecipientInputRef.current) {
+                testRecipientInputRef.current = nextOauthRecipient;
+                setTestRecipientInput(nextOauthRecipient);
+              }
               setStatusMsg(`邮箱地址 ${am.authorizedEmail} 已授权并配置完成，可以直接收发邮件了。`);
               setErrorMsg(null);
             } else if (am.lastError) {
@@ -754,12 +912,26 @@ function PrismuxOvernightFactoryShell({
   });
 
   const handleSaveMail = async () => {
+    if (testRecipientSaveTimerRef.current !== null) {
+      clearTimeout(testRecipientSaveTimerRef.current);
+      testRecipientSaveTimerRef.current = null;
+    }
     setSavingMail(true);
     setErrorMsg(null);
     setStatusMsg(null);
     try {
-      const payload = toDaemonOvernightPatch(buildOvernightMailSavePayload(draft));
+      const trimmedRecipientInput = testRecipientInputRef.current.trim();
+      const effectiveTestRecipient =
+        testRecipientDirtyRef.current && isValidPersistedTestRecipient(trimmedRecipientInput)
+          ? trimmedRecipientInput
+          : draft.testRecipient;
+      const payload = toDaemonOvernightPatch(
+        buildOvernightMailSavePayload(draft, effectiveTestRecipient),
+      );
       const updated = await daemon.updateOvernightConfig(payload);
+      if (testRecipientInputRef.current.trim() === trimmedRecipientInput) {
+        testRecipientDirtyRef.current = false;
+      }
       applySnapshot(updated, false);
       setStatusMsg(
         draft.preset === "agent_mail"
@@ -799,7 +971,7 @@ function PrismuxOvernightFactoryShell({
       agentMailLastError: parsed.ok ? null : parsed.message,
     }));
     if (parsed.authorizedEmail) {
-      setTestRecipientInput((prev) => (prev.trim().length > 0 ? prev : parsed.authorizedEmail!));
+      fillTestRecipientIfEmpty(parsed.authorizedEmail);
     }
   };
 
@@ -894,16 +1066,65 @@ function PrismuxOvernightFactoryShell({
   };
 
   const handleSendTestReport = async () => {
+    if (testRecipientSaveTimerRef.current !== null) {
+      clearTimeout(testRecipientSaveTimerRef.current);
+      testRecipientSaveTimerRef.current = null;
+    }
     setSendingReport(true);
     setErrorMsg(null);
     setStatusMsg(null);
     try {
-      const recipient = testRecipientInput.trim() || resolveDefaultTestRecipient(draft);
+      const explicitInput = testRecipientInputRef.current.trim();
+      if (
+        testRecipientDirtyRef.current &&
+        explicitInput.length === 0 &&
+        lastPersistedTestRecipientRef.current.length > 0
+      ) {
+        await daemon.updateOvernightConfig({ testRecipient: "" }).catch(() => undefined);
+        lastPersistedTestRecipientRef.current = "";
+        setDraft((prev) => ({ ...prev, testRecipient: "" }));
+        testRecipientDirtyRef.current = false;
+      }
+
+      const fallbackRecipient = resolveFallbackTestRecipient(draft);
+      const hasCustomRecipient =
+        explicitInput.length > 0 &&
+        (testRecipientDirtyRef.current ||
+          draft.testRecipient.trim().length > 0 ||
+          explicitInput !== fallbackRecipient);
+      const effectiveTestRecipient =
+        hasCustomRecipient && explicitInput.includes("@") ? explicitInput : draft.testRecipient;
+
+      if (hasCustomRecipient && explicitInput.includes("@")) {
+        setDraft((prev) =>
+          prev.testRecipient === explicitInput ? prev : { ...prev, testRecipient: explicitInput },
+        );
+      }
+
+      const hasConfiguredMailboxAddr = Boolean(
+        draft.email.trim() ||
+        draft.gmailBoundEmail.trim() ||
+        (draft.agentMailAuthorizedEmail || draft.agentMailAddress).trim(),
+      );
+      const recipientToPass = hasCustomRecipient
+        ? explicitInput
+        : !hasConfiguredMailboxAddr
+          ? explicitInput || fallbackRecipient
+          : "";
+
       const payload = toDaemonOvernightPatch({
-        ...buildOvernightMailSavePayload(draft),
-        ...(recipient ? { recipient } : {}),
+        ...buildOvernightMailSavePayload(draft, effectiveTestRecipient),
+        ...(recipientToPass ? { recipient: recipientToPass } : {}),
       });
       const res = await daemon.sendOvernightTestReport(payload);
+      if (hasCustomRecipient && explicitInput.includes("@")) {
+        const persistedRecipient = res.testRecipient?.trim() || explicitInput;
+        lastPersistedTestRecipientRef.current = persistedRecipient;
+        setDraft((prev) => ({ ...prev, testRecipient: persistedRecipient }));
+        if (testRecipientInputRef.current.trim() === explicitInput) {
+          testRecipientDirtyRef.current = false;
+        }
+      }
       setStatusMsg(`${res.message}（Message-ID: ${res.messageId}）`);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "发送测试早报失败。");
@@ -1232,7 +1453,7 @@ function PrismuxOvernightFactoryShell({
     setUserExpandedSetup(next.userExpandedSetup);
   };
   const connectionChecklist = buildOvernightConnectionChecklist(draft, testResult);
-  const defaultTestRecipient = resolveDefaultTestRecipient(draft);
+  const fallbackTestRecipient = resolveFallbackTestRecipient(draft);
   const isAgentMailSelected =
     draft.mode === "imap" &&
     (draft.preset === "agent_mail" || draft.emailProvider === "agent_mail");
@@ -1534,8 +1755,9 @@ function PrismuxOvernightFactoryShell({
           data-testid="overnight-test-recipient-input"
           data-pmx-work-panel-control="1"
           value={testRecipientInput}
-          onChange={(e) => setTestRecipientInput(e.target.value)}
-          placeholder={defaultTestRecipient || "留空默认发往当前配置邮箱"}
+          onChange={(e) => handleTestRecipientChange(e.target.value)}
+          onBlur={handleTestRecipientBlur}
+          placeholder={fallbackTestRecipient || "留空默认发往当前配置邮箱"}
           className="min-w-0 flex-1"
         />
       </div>

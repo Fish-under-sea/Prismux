@@ -530,6 +530,7 @@ export interface OvernightFactoryPersistedConfig {
   mode: FactoryInboundMode;
   emailProvider: OvernightEmailProvider;
   agentMailAddress: string;
+  testRecipient: string;
   gmail: OvernightGmailConfig;
   imapSmtp: OvernightImapSmtpConfig;
   strategy: OvernightStrategyConfig;
@@ -690,6 +691,7 @@ export interface OvernightTestReportResult {
   ok: true;
   messageId: string;
   recipient: string;
+  testRecipient: string;
   provider: string;
   sentAt: number;
   subject: string;
@@ -885,6 +887,11 @@ export function extractEmailAddress(raw: string): string {
   return (angleMatch?.[1] ?? raw).trim().toLowerCase();
 }
 
+function normalizeTestRecipient(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  return raw.replace(/[\r\n]+/g, "").trim();
+}
+
 export function normalizeAllowedSenders(raw: unknown): string[] {
   const list: string[] = [];
   if (Array.isArray(raw)) {
@@ -966,6 +973,7 @@ export function createDefaultOvernightConfig(): OvernightFactoryPersistedConfig 
     mode: "imap",
     emailProvider: "imap_smtp",
     agentMailAddress: "",
+    testRecipient: "",
     gmail: {
       clientId: "",
       redirectUri: "",
@@ -1059,6 +1067,11 @@ function normalizePersistedConfig(raw: unknown): OvernightFactoryPersistedConfig
     typeof raw["agentMailAddress"] === "string"
       ? raw["agentMailAddress"].trim()
       : base.agentMailAddress;
+  const rawTestRecipient = normalizeTestRecipient(raw["testRecipient"]);
+  const testRecipient =
+    rawTestRecipient.length === 0 || rawTestRecipient.includes("@")
+      ? rawTestRecipient
+      : base.testRecipient;
 
   const imapSmtp: OvernightImapSmtpConfig = {
     preset: emailProvider === "agent_mail" ? "agent_mail" : preset,
@@ -1152,6 +1165,7 @@ function normalizePersistedConfig(raw: unknown): OvernightFactoryPersistedConfig
     mode,
     emailProvider,
     agentMailAddress,
+    testRecipient,
     gmail,
     imapSmtp,
     strategy,
@@ -2919,6 +2933,12 @@ export class OvernightRouteService {
     if (typeof rawBody["agentMailAddress"] === "string") {
       next.agentMailAddress = rawBody["agentMailAddress"].trim();
     }
+    if (typeof rawBody["testRecipient"] === "string") {
+      const normalizedTestRecipient = normalizeTestRecipient(rawBody["testRecipient"]);
+      if (normalizedTestRecipient.length === 0 || normalizedTestRecipient.includes("@")) {
+        next.testRecipient = normalizedTestRecipient;
+      }
+    }
 
     if (isPlainRecord(rawBody["gmail"])) {
       const g = rawBody["gmail"];
@@ -3477,6 +3497,12 @@ export class OvernightRouteService {
     }
     if (typeof rawOverride["agentMailAddress"] === "string") {
       merged.agentMailAddress = rawOverride["agentMailAddress"].trim();
+    }
+    if (typeof rawOverride["testRecipient"] === "string") {
+      const normalizedTestRecipient = normalizeTestRecipient(rawOverride["testRecipient"]);
+      if (normalizedTestRecipient.length === 0 || normalizedTestRecipient.includes("@")) {
+        merged.testRecipient = normalizedTestRecipient;
+      }
     }
     if (isPlainRecord(rawOverride["gmail"])) {
       const g = rawOverride["gmail"];
@@ -4675,18 +4701,17 @@ export class OvernightRouteService {
     }
 
     const explicitRecipient =
-      typeof body["recipient"] === "string" && body["recipient"].trim().length > 0
-        ? body["recipient"].trim()
-        : "";
+      typeof body["recipient"] === "string" ? normalizeTestRecipient(body["recipient"]) : "";
     const defaultRecipient =
-      config.emailProvider === "agent_mail"
+      config.testRecipient.trim() ||
+      (config.emailProvider === "agent_mail"
         ? config.agentMailAddress ||
           this.agentMailProbeCache?.authorizedEmail ||
           config.strategy.allowedSenders[0] ||
           ""
         : config.mode === "gmail-oauth2"
           ? config.gmail.boundEmail || config.strategy.allowedSenders[0] || ""
-          : config.imapSmtp.email || config.strategy.allowedSenders[0] || "";
+          : config.imapSmtp.email || config.strategy.allowedSenders[0] || "");
     const recipient = explicitRecipient || defaultRecipient;
     if (!recipient || !recipient.includes("@")) {
       throw new BusinessRouteError(
@@ -4694,6 +4719,16 @@ export class OvernightRouteService {
         "RECIPIENT_MISSING",
         "请先配置绑定邮箱或填写测试收件人邮箱地址。",
       );
+    }
+
+    if (
+      explicitRecipient.length > 0 &&
+      explicitRecipient.includes("@") &&
+      explicitRecipient !== this.config.testRecipient
+    ) {
+      this.config.testRecipient = explicitRecipient;
+      this.persistConfig();
+      this.onConfigChanged?.();
     }
 
     const sampleThreadId = `overnight-test-${this.now()}`;
@@ -4749,6 +4784,7 @@ export class OvernightRouteService {
       ok: true,
       messageId: receipt.messageId,
       recipient,
+      testRecipient: this.config.testRecipient,
       provider: receipt.provider,
       sentAt: receipt.acceptedAt,
       subject,

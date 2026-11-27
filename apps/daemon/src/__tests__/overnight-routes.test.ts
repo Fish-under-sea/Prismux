@@ -1584,4 +1584,195 @@ describe("OvernightRouteService & /v1/overnight/* API (encrypted credentials, OA
       NodeFS.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("persists testRecipient across partial patches, strategy saves, Agent Mail probes, sendTestMorningReport, restarts, and legacy JSON configs", async () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pmx-overnight-recipient-"));
+    try {
+      const store = new EncryptedPluginCredentialStore({
+        dataDir: dir,
+        masterKey: NodeCrypto.randomBytes(32),
+      });
+
+      // 1. Backwards-compatible load of legacy overnight-factory.json WITHOUT `testRecipient`
+      const legacyConfigPath = NodePath.join(dir, "overnight-factory.json");
+      NodeFS.writeFileSync(
+        legacyConfigPath,
+        `${JSON.stringify(
+          {
+            schemaVersion: 1,
+            updatedAt: FIXED_TEST_EPOCH_MS,
+            enabled: false,
+            mode: "imap",
+            emailProvider: "agent_mail",
+            agentMailAddress: "legacy@agent.qq.com",
+            gmail: {
+              clientId: "",
+              redirectUri: "",
+              boundEmail: "",
+              connected: false,
+              connectedAt: null,
+            },
+            imapSmtp: {
+              preset: "agent_mail",
+              email: "",
+              imapHost: "",
+              imapPort: 993,
+              imapSecure: true,
+              imapUsername: "",
+              mailbox: "INBOX",
+              smtpHost: "",
+              smtpPort: 465,
+              smtpSecure: true,
+              smtpUsername: "",
+              fromName: "Prismux Overnight Factory",
+            },
+            strategy: {
+              triggerTag: "#factory",
+              allowedSenders: ["legacy@agent.qq.com"],
+              windowMode: "scheduled",
+              windowStart: "23:00",
+              windowEnd: "07:00",
+              pollIntervalMinutes: 5,
+              targetWorkspaceDir: "",
+              agentProvider: "codex",
+              agentModel: "",
+              oracleReviewEnabled: true,
+              localWorktreeOnlyNoPush: true,
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      let probedAgentEmail = "legacy@agent.qq.com";
+      const sentTargets: string[] = [];
+      const createSvc = () =>
+        new OvernightRouteService({
+          dataDir: dir,
+          credentialStore: store,
+          networkHooks: {
+            now: () => FIXED_TEST_EPOCH_MS,
+            findAgentMailCli: () => "/usr/local/bin/agently-cli",
+            runAgentMailCli: async (_cli, args) => {
+              if (args[0] === "--version") {
+                return { exitCode: 0, stdout: "agently-cli v1.0.18", stderr: "" };
+              }
+              if (args[0] === "+me") {
+                return {
+                  exitCode: 0,
+                  stdout: JSON.stringify({
+                    ok: true,
+                    data: {
+                      aliases: [{ id: "a1", email: probedAgentEmail, is_default: true }],
+                      scopes: ["mail:read", "mail:send"],
+                      daily_send_quota: 50,
+                    },
+                  }),
+                  stderr: "",
+                };
+              }
+              if (args[0] === "message" && args[1] === "+send") {
+                const toIdx = args.indexOf("--to");
+                if (toIdx >= 0 && args[toIdx + 1]) {
+                  sentTargets.push(args[toIdx + 1]!);
+                }
+                return {
+                  exitCode: 0,
+                  stdout: JSON.stringify({ ok: true, data: { message_id: "agm-test-persist-1" } }),
+                  stderr: "",
+                };
+              }
+              return { exitCode: 0, stdout: "{}", stderr: "" };
+            },
+          },
+        });
+
+      const svc1 = createSvc();
+      const legacySnap = await svc1.getConfigSnapshot("owner_chief");
+      assert.equal(legacySnap.config.testRecipient, "");
+      assert.equal(legacySnap.config.agentMailAddress, "legacy@agent.qq.com");
+      assert.equal(legacySnap.config.strategy.triggerTag, "#factory");
+
+      // 2. PUT /v1/overnight/config persists normalized testRecipient (trimming spaces & stripping CR/LF)
+      const savedRecipientSnap = await svc1.updateConfig(
+        { testRecipient: "  owner-test@qq.com \r\n" },
+        "owner_chief",
+      );
+      assert.equal(savedRecipientSnap.config.testRecipient, "owner-test@qq.com");
+      assert.equal(savedRecipientSnap.config.agentMailAddress, "legacy@agent.qq.com");
+
+      // 3. Partial strategy update & master toggle switch MUST preserve testRecipient untouched
+      const afterStrategy = await svc1.updateConfig(
+        {
+          enabled: true,
+          strategy: { triggerTag: "#nightly", pollIntervalMinutes: 15 },
+        },
+        "owner_chief",
+      );
+      assert.equal(afterStrategy.config.enabled, true);
+      assert.equal(afterStrategy.config.strategy.triggerTag, "#nightly");
+      assert.equal(afterStrategy.config.testRecipient, "owner-test@qq.com");
+
+      // 4. Invalid non-empty non-email value does not clobber valid saved testRecipient
+      const afterInvalid = await svc1.updateConfig(
+        { testRecipient: "not-an-email" },
+        "owner_chief",
+      );
+      assert.equal(afterInvalid.config.testRecipient, "owner-test@qq.com");
+
+      // 5. Background probeAgentMailStatus auto-persisting a new agentMailAddress MUST preserve testRecipient
+      probedAgentEmail = "fishundersea@agent.qq.com";
+      const afterProbe = await svc1.getConfigSnapshot("owner_chief", { forceProbe: true });
+      assert.equal(afterProbe.config.agentMailAddress, "fishundersea@agent.qq.com");
+      assert.equal(afterProbe.config.testRecipient, "owner-test@qq.com");
+
+      // 6. sendTestMorningReport({}) without explicit recipient defaults to persisted testRecipient
+      const reportDefault = await svc1.sendTestMorningReport({}, "owner_chief");
+      assert.equal(reportDefault.ok, true);
+      assert.equal(reportDefault.recipient, "owner-test@qq.com");
+      assert.equal(reportDefault.testRecipient, "owner-test@qq.com");
+      assert.equal(sentTargets.at(-1), "owner-test@qq.com");
+
+      // 7. sendTestMorningReport with a new explicit valid recipient auto-persists it to overnight-factory.json
+      const reportExplicit = await svc1.sendTestMorningReport(
+        { recipient: "  boss-override@qq.com  " },
+        "owner_chief",
+      );
+      assert.equal(reportExplicit.ok, true);
+      assert.equal(reportExplicit.recipient, "boss-override@qq.com");
+      assert.equal(reportExplicit.testRecipient, "boss-override@qq.com");
+      assert.equal(sentTargets.at(-1), "boss-override@qq.com");
+
+      const rawDiskJson = JSON.parse(NodeFS.readFileSync(legacyConfigPath, "utf8")) as {
+        testRecipient?: string;
+        agentMailAddress?: string;
+        strategy?: { triggerTag?: string };
+      };
+      assert.equal(rawDiskJson.testRecipient, "boss-override@qq.com");
+      assert.equal(rawDiskJson.agentMailAddress, "fishundersea@agent.qq.com");
+      assert.equal(rawDiskJson.strategy?.triggerTag, "#nightly");
+      svc1.stop();
+
+      // 8. Brand-new OvernightRouteService instance (simulating app restart / software update) restores testRecipient
+      const svc2 = createSvc();
+      const afterRestart = await svc2.getConfigSnapshot("owner_chief");
+      assert.equal(afterRestart.config.testRecipient, "boss-override@qq.com");
+      assert.equal(afterRestart.config.agentMailAddress, "fishundersea@agent.qq.com");
+      assert.equal(afterRestart.config.strategy.triggerTag, "#nightly");
+
+      // 9. Explicit empty string clears testRecipient and persists cleanly
+      const cleared = await svc2.updateConfig({ testRecipient: "   " }, "owner_chief");
+      assert.equal(cleared.config.testRecipient, "");
+      svc2.stop();
+
+      const svc3 = createSvc();
+      const afterClearRestart = await svc3.getConfigSnapshot("owner_chief");
+      assert.equal(afterClearRestart.config.testRecipient, "");
+      svc3.stop();
+    } finally {
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

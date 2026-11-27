@@ -624,6 +624,7 @@ export interface DaemonOvernightConfigDto {
   mode: DaemonOvernightInboundMode;
   emailProvider?: DaemonOvernightEmailProvider;
   agentMailAddress?: string;
+  testRecipient?: string;
   gmail: DaemonOvernightGmailConfigDto;
   imapSmtp: DaemonOvernightImapSmtpConfigDto;
   strategy: DaemonOvernightStrategyConfigDto;
@@ -723,6 +724,7 @@ export interface DaemonOvernightConfigPatch {
   mode?: DaemonOvernightInboundMode;
   emailProvider?: DaemonOvernightEmailProvider;
   agentMailAddress?: string;
+  testRecipient?: string;
   agentMailAction?: "status" | "install" | "login";
   gmail?: Partial<Pick<DaemonOvernightGmailConfigDto, "clientId" | "redirectUri" | "boundEmail">>;
   imapSmtp?: Partial<DaemonOvernightImapSmtpConfigDto>;
@@ -745,6 +747,7 @@ export interface DaemonOvernightTestReportResponse {
   ok: true;
   messageId: string;
   recipient: string;
+  testRecipient?: string;
   provider: string;
   sentAt: number;
   subject: string;

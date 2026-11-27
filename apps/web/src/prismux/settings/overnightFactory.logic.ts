@@ -662,6 +662,7 @@ export interface OvernightFactoryDraft {
   mode: DaemonOvernightInboundMode;
   emailProvider: OvernightEmailProvider;
   agentMailAddress: string;
+  testRecipient: string;
   agentMailCliInstalled: boolean;
   agentMailVersion: string | null;
   agentMailCliPath: string;
@@ -717,6 +718,7 @@ export interface OvernightFactoryDraft {
 export interface OvernightMailSavePayload extends Omit<DaemonOvernightConfigPatch, "imapSmtp"> {
   emailProvider?: OvernightEmailProvider;
   agentMailAddress?: string;
+  testRecipient?: string;
   imapSmtp?: Omit<Partial<DaemonOvernightImapSmtpConfigDto>, "preset"> & {
     preset?: OvernightMailboxPresetId | DaemonOvernightMailPreset;
   };
@@ -1008,6 +1010,7 @@ export function createDefaultOvernightDraft(): OvernightFactoryDraft {
     mode: "imap",
     emailProvider: "imap_smtp",
     agentMailAddress: "",
+    testRecipient: "",
     agentMailCliInstalled: false,
     agentMailVersion: null,
     agentMailCliPath: "",
@@ -1085,6 +1088,8 @@ export function hydrateOvernightDraftFromSnapshot(
   const cfgRecord = asRecord(config);
   const rawAgentMailAddr =
     typeof cfgRecord?.["agentMailAddress"] === "string" ? cfgRecord["agentMailAddress"].trim() : "";
+  const rawTestRecipient =
+    typeof cfgRecord?.["testRecipient"] === "string" ? cfgRecord["testRecipient"].trim() : "";
 
   const imapConfiguredOnDisk = Boolean(config.imapSmtp.email.trim()) || secrets.hasImapPassword;
   const gmailConfiguredOnDisk = hasSavedGmailOAuthConfig(snapshot);
@@ -1130,6 +1135,7 @@ export function hydrateOvernightDraftFromSnapshot(
     mode: effectiveMode,
     emailProvider: effectiveMode === "gmail-oauth2" ? "gmail_oauth2" : emailProvider,
     agentMailAddress: resolvedAgentMailAddr,
+    testRecipient: rawTestRecipient,
     agentMailCliInstalled: agentMail.cliInstalled,
     agentMailVersion: agentMail.version ?? null,
     agentMailCliPath: agentMail.cliPath ?? "",
@@ -1290,6 +1296,7 @@ function parsePollMinutes(raw: string, fallback = 5): number {
  */
 export function buildOvernightMailSavePayload(
   draft: OvernightFactoryDraft,
+  testRecipientOverride?: string,
 ): OvernightMailSavePayload {
   const secrets: NonNullable<DaemonOvernightConfigPatch["secrets"]> = {};
   if (draft.gmailClientSecretInput.trim().length > 0) {
@@ -1308,11 +1315,15 @@ export function buildOvernightMailSavePayload(
       : draft.preset === "agent_mail" || draft.emailProvider === "agent_mail"
         ? "agent_mail"
         : "imap_smtp";
+  const resolvedTestRecipient = (
+    testRecipientOverride !== undefined ? testRecipientOverride : draft.testRecipient
+  ).trim();
 
   return {
     mode: resolvedProvider === "gmail_oauth2" ? "gmail-oauth2" : "imap",
     emailProvider: resolvedProvider,
     agentMailAddress: (draft.agentMailAuthorizedEmail || draft.agentMailAddress).trim(),
+    testRecipient: resolvedTestRecipient,
     gmail: {
       clientId: draft.gmailClientId.trim(),
       redirectUri: draft.gmailRedirectUri.trim(),
@@ -1480,7 +1491,20 @@ export function toggleMailSectionState(input: {
   };
 }
 
-export function resolveDefaultTestRecipient(draft: OvernightFactoryDraft): string {
+export function isValidPersistedTestRecipient(
+  raw: string,
+  options: { readonly strictDomain?: boolean } = {},
+): boolean {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return true;
+  if (/\s/.test(trimmed)) return false;
+  if (options.strictDomain) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed);
+  }
+  return trimmed.includes("@");
+}
+
+export function resolveFallbackTestRecipient(draft: OvernightFactoryDraft): string {
   if (draft.mode === "gmail-oauth2" || draft.emailProvider === "gmail_oauth2") {
     if (draft.gmailBoundEmail.trim()) return draft.gmailBoundEmail.trim();
   } else if (draft.preset === "agent_mail" || draft.emailProvider === "agent_mail") {
@@ -1491,6 +1515,68 @@ export function resolveDefaultTestRecipient(draft: OvernightFactoryDraft): strin
   }
   const senders = parseAllowedSendersInput(draft.allowedSendersText);
   return senders.find((s) => !s.startsWith("*@")) ?? "";
+}
+
+export function resolveDefaultTestRecipient(draft: OvernightFactoryDraft): string {
+  const persisted = draft.testRecipient.trim();
+  if (persisted) return persisted;
+  return resolveFallbackTestRecipient(draft);
+}
+
+export function resolveNextTestRecipientInputOnSnapshot(input: {
+  readonly currentInput: string;
+  readonly isDirty: boolean;
+  readonly userCleared: boolean;
+  readonly nextDraft: OvernightFactoryDraft;
+}): {
+  readonly nextInput: string;
+  readonly clearDirty: boolean;
+  readonly clearUserCleared: boolean;
+} {
+  const persisted = input.nextDraft.testRecipient.trim();
+  if (input.isDirty) {
+    return {
+      nextInput: input.currentInput,
+      clearDirty: persisted === input.currentInput.trim(),
+      clearUserCleared: false,
+    };
+  }
+  if (persisted.length > 0) {
+    return {
+      nextInput: persisted,
+      clearDirty: false,
+      clearUserCleared: true,
+    };
+  }
+  if (input.userCleared || input.currentInput.trim().length > 0) {
+    return {
+      nextInput: input.currentInput,
+      clearDirty: false,
+      clearUserCleared: false,
+    };
+  }
+  return {
+    nextInput: resolveDefaultTestRecipient(input.nextDraft),
+    clearDirty: false,
+    clearUserCleared: false,
+  };
+}
+
+export function resolveNextTestRecipientInputOnBackgroundSync(input: {
+  readonly currentInput: string;
+  readonly isDirty: boolean;
+  readonly userCleared: boolean;
+  readonly snapshotTestRecipient?: string | null;
+  readonly agentMailAuthorizedEmail?: string | null;
+}): string {
+  if (input.isDirty || input.userCleared || input.currentInput.trim().length > 0) {
+    return input.currentInput;
+  }
+  const persisted = input.snapshotTestRecipient?.trim() ?? "";
+  if (persisted.length > 0) {
+    return persisted;
+  }
+  return input.agentMailAuthorizedEmail?.trim() ?? "";
 }
 
 export type OvernightChecklistStepStatus = "passed" | "pending" | "warning" | "error";

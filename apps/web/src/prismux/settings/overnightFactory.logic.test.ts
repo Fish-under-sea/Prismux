@@ -44,9 +44,13 @@ import {
   hydrateOvernightDraftFromSnapshot,
   isAgentMailVerified,
   isMailChannelConfigured,
+  isValidPersistedTestRecipient,
   parseAgentMailTestResponse,
   resolveDefaultTestRecipient,
+  resolveFallbackTestRecipient,
   resolveMailSectionViewMode,
+  resolveNextTestRecipientInputOnBackgroundSync,
+  resolveNextTestRecipientInputOnSnapshot,
   shouldAutoCollapseAgentMailSetup,
   shouldDefaultExpandMailChannel,
   toggleMailSectionState,
@@ -682,5 +686,146 @@ describe("overnightFactory.logic — 6-card presets, NetEase 163/126 & Tencent A
         userExpandedSetup: afterCollapse.userExpandedSetup,
       }),
     ).toBe("agent_mail_verified_compact");
+  });
+
+  it("hydrates persisted testRecipient with highest priority, carries it in mail save payloads, and protects input during background syncs", () => {
+    // 1. Legacy snapshot without testRecipient defaults safely to ""
+    const legacyAgentSnap = makeBaseSnapshot(
+      {
+        emailProvider: "agent_mail",
+        agentMailAddress: "fishundersea@agent.qq.com",
+      },
+      {
+        agentMail: {
+          cliInstalled: true,
+          installed: true,
+          loggedIn: true,
+          configured: true,
+          authorizedEmail: "fishundersea@agent.qq.com",
+          address: "fishundersea@agent.qq.com",
+          authInProgress: false,
+          pendingAuthUrl: null,
+          lastError: null,
+        },
+      },
+    );
+    const legacyDraft = hydrateOvernightDraftFromSnapshot(legacyAgentSnap);
+    expect(legacyDraft.testRecipient).toBe("");
+    expect(resolveDefaultTestRecipient(legacyDraft)).toBe("fishundersea@agent.qq.com");
+    expect(resolveFallbackTestRecipient(legacyDraft)).toBe("fishundersea@agent.qq.com");
+
+    // 2. Snapshot with persisted testRecipient hydrates accurately and takes HIGHEST priority over Agent Mail / Gmail / IMAP / allowedSenders
+    const persistedSnap = makeBaseSnapshot(
+      {
+        emailProvider: "agent_mail",
+        agentMailAddress: "fishundersea@agent.qq.com",
+        testRecipient: "  owner-test@qq.com  ",
+        strategy: {
+          triggerTag: "#factory",
+          allowedSenders: ["other@qq.com"],
+          windowMode: "scheduled",
+          windowStart: "23:00",
+          windowEnd: "07:00",
+          pollIntervalMinutes: 5,
+          targetWorkspaceDir: "",
+          agentProvider: "codex",
+          agentModel: "",
+          oracleReviewEnabled: true,
+          localWorktreeOnlyNoPush: true,
+        },
+      },
+      {
+        agentMail: {
+          cliInstalled: true,
+          installed: true,
+          loggedIn: true,
+          configured: true,
+          authorizedEmail: "fishundersea@agent.qq.com",
+          address: "fishundersea@agent.qq.com",
+          authInProgress: false,
+          pendingAuthUrl: null,
+          lastError: null,
+        },
+      },
+    );
+    const persistedDraft = hydrateOvernightDraftFromSnapshot(persistedSnap);
+    expect(persistedDraft.testRecipient).toBe("owner-test@qq.com");
+    expect(resolveDefaultTestRecipient(persistedDraft)).toBe("owner-test@qq.com");
+    expect(resolveFallbackTestRecipient(persistedDraft)).toBe("fishundersea@agent.qq.com");
+
+    // 3. buildOvernightMailSavePayload includes draft.testRecipient and supports explicit input override
+    const saveFromDraft = buildOvernightMailSavePayload(persistedDraft);
+    expect(saveFromDraft.testRecipient).toBe("owner-test@qq.com");
+
+    const saveWithOverride = buildOvernightMailSavePayload(
+      persistedDraft,
+      "  custom-override@qq.com  ",
+    );
+    expect(saveWithOverride.testRecipient).toBe("custom-override@qq.com");
+
+    // 4. Validation helper allows empty string (clear) and valid emails, rejects incomplete/whitespace strings
+    expect(isValidPersistedTestRecipient("")).toBe(true);
+    expect(isValidPersistedTestRecipient("owner-test@qq.com", { strictDomain: true })).toBe(true);
+    expect(isValidPersistedTestRecipient("owner-test@localhost", { strictDomain: false })).toBe(
+      true,
+    );
+    expect(isValidPersistedTestRecipient("owner-test@localhost", { strictDomain: true })).toBe(
+      false,
+    );
+    expect(isValidPersistedTestRecipient("owner-test", { strictDomain: false })).toBe(false);
+    expect(isValidPersistedTestRecipient("a b@qq.com", { strictDomain: false })).toBe(false);
+
+    // 5. Snapshot & focus/visibilitychange reconciliation NEVER overwrites user-typed or saved input
+    expect(
+      resolveNextTestRecipientInputOnSnapshot({
+        currentInput: "typing-new@qq.com",
+        isDirty: true,
+        userCleared: false,
+        nextDraft: persistedDraft,
+      }),
+    ).toEqual({
+      nextInput: "typing-new@qq.com",
+      clearDirty: false,
+      clearUserCleared: false,
+    });
+    expect(
+      resolveNextTestRecipientInputOnSnapshot({
+        currentInput: "fishundersea@agent.qq.com",
+        isDirty: false,
+        userCleared: false,
+        nextDraft: persistedDraft,
+      }),
+    ).toEqual({
+      nextInput: "owner-test@qq.com",
+      clearDirty: false,
+      clearUserCleared: true,
+    });
+    expect(
+      resolveNextTestRecipientInputOnBackgroundSync({
+        currentInput: "owner-test@qq.com",
+        isDirty: false,
+        userCleared: false,
+        snapshotTestRecipient: "",
+        agentMailAuthorizedEmail: "fishundersea@agent.qq.com",
+      }),
+    ).toBe("owner-test@qq.com");
+    expect(
+      resolveNextTestRecipientInputOnBackgroundSync({
+        currentInput: "",
+        isDirty: false,
+        userCleared: true,
+        snapshotTestRecipient: "",
+        agentMailAuthorizedEmail: "fishundersea@agent.qq.com",
+      }),
+    ).toBe("");
+    expect(
+      resolveNextTestRecipientInputOnBackgroundSync({
+        currentInput: "",
+        isDirty: false,
+        userCleared: false,
+        snapshotTestRecipient: "owner-test@qq.com",
+        agentMailAuthorizedEmail: "fishundersea@agent.qq.com",
+      }),
+    ).toBe("owner-test@qq.com");
   });
 });

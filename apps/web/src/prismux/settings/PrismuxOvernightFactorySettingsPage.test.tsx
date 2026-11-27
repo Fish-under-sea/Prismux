@@ -1239,5 +1239,30 @@ describe("PrismuxOvernightFactorySettingsPage & overnightFactory.logic", () => {
       embeddedVerifiedHtml.indexOf('data-testid="overnight-mail-band"'),
     );
     expect(embeddedVerifiedHtml).toContain('data-mail-view-mode="agent_mail_verified_compact"');
+
+    // 6. Verified Agent Mail compact view preserves persisted custom testRecipient instead of resetting to agentMailAddress
+    const verifiedAgentWithCustomRecipientSnap: DaemonOvernightConfigSnapshot = {
+      ...verifiedAgentSnap,
+      config: {
+        ...verifiedAgentSnap.config,
+        emailProvider: "agent_mail",
+        agentMailAddress: "fishundersea@agent.qq.com",
+        testRecipient: "owner-test@qq.com",
+      },
+    };
+    const customRecipientCompactHtml = renderPage({
+      standalone: true,
+      initialSnapshotOverride: verifiedAgentWithCustomRecipientSnap,
+    });
+    expect(customRecipientCompactHtml).toContain(
+      'data-mail-view-mode="agent_mail_verified_compact"',
+    );
+    expect(customRecipientCompactHtml).toContain('data-testid="overnight-test-recipient-group"');
+    expect(customRecipientCompactHtml).toContain('data-testid="overnight-test-recipient-input"');
+    const recipientInputMatch = customRecipientCompactHtml.match(
+      /<input[^>]*data-testid="overnight-test-recipient-input"[^>]*>/,
+    );
+    expect(recipientInputMatch?.[0]).toContain('value="owner-test@qq.com"');
+    expect(recipientInputMatch?.[0]).toContain('placeholder="fishundersea@agent.qq.com"');
   });
 });
