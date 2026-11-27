@@ -417,11 +417,67 @@ const normalizeServerSettings = (
     ),
   );
 
+const REASONING_TRANSLATION_OFFICIAL_API_SECRET_SLOTS = [
+  { field: "apiKey", secretName: "reasoning-translation-official-api-key" },
+  { field: "apiSecret", secretName: "reasoning-translation-official-api-secret" },
+] as const;
+
+function mapAllSettingsSecrets(
+  settings: ServerSettings,
+  map: (secret: SettingsSecret) => Pick<SettingsSecret, "value" | "redacted">,
+): ServerSettings {
+  const mapped = mapSettingsSecrets(settings, map);
+  const officialApi = mapped.reasoningTranslationOfficialApi;
+  let apiKey = officialApi.apiKey;
+  let apiSecret = officialApi.apiSecret;
+  for (const slot of REASONING_TRANSLATION_OFFICIAL_API_SECRET_SLOTS) {
+    const currentValue = slot.field === "apiKey" ? apiKey : apiSecret;
+    const result = map({
+      secretName: slot.secretName,
+      kind: "field",
+      value: currentValue,
+      redacted: currentValue === SECRET_REDACTED,
+      sensitive: true,
+    });
+    const nextValue = result.redacted ? SECRET_REDACTED : result.value;
+    if (slot.field === "apiKey") {
+      apiKey = nextValue;
+    } else {
+      apiSecret = nextValue;
+    }
+  }
+  if (apiKey === officialApi.apiKey && apiSecret === officialApi.apiSecret) {
+    return mapped;
+  }
+  return {
+    ...mapped,
+    reasoningTranslationOfficialApi: {
+      ...officialApi,
+      apiKey,
+      apiSecret,
+    },
+  };
+}
+
+function applyServerSettingsPatchWithReasoningSelection(
+  current: ServerSettings,
+  patch: ServerSettingsPatch,
+): ServerSettings {
+  const next = applyServerSettingsPatch(current, patch);
+  if (patch.reasoningTranslationModelSelection !== undefined) {
+    return {
+      ...next,
+      reasoningTranslationModelSelection: patch.reasoningTranslationModelSelection,
+    };
+  }
+  return next;
+}
+
 export function redactServerSettingsForClient(
   settings: ServerSettings,
   client: { readonly secretReferences: boolean },
 ): ServerSettings {
-  const redacted = mapSettingsSecrets(settings, (secret) =>
+  const redacted = mapAllSettingsSecrets(settings, (secret) =>
     secret.sensitive
       ? { value: "", redacted: secret.redacted || secret.value.length > 0 }
       : { value: secret.value, redacted: false },
@@ -616,13 +672,13 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     getSettings,
     updateSettings: (patch) =>
       updateTestSettings((currentSettings) =>
-        Effect.succeed(applyServerSettingsPatch(currentSettings, patch)),
+        Effect.succeed(applyServerSettingsPatchWithReasoningSelection(currentSettings, patch)),
       ),
     updateProviderInstance: (mutation, patch = {}) =>
       updateTestSettings((currentSettings) =>
         Effect.gen(function* () {
           yield* ensureProviderInstanceMutationAllowed(currentSettings, mutation, "test settings");
-          const patched = applyServerSettingsPatch(currentSettings, patch);
+          const patched = applyServerSettingsPatchWithReasoningSelection(currentSettings, patch);
           return applyProviderInstanceMutation(patched, mutation);
         }),
       ),
@@ -1064,7 +1120,7 @@ const make = Effect.gen(function* () {
   const moveInlineSettingsSecrets = Effect.fn("serverSettings.moveInlineSettingsSecrets")(
     function* (settings: ServerSettings) {
       const pending: SettingsSecret[] = [];
-      mapSettingsSecrets(settings, (secret) => {
+      mapAllSettingsSecrets(settings, (secret) => {
         if (secret.kind === "field" && !secret.redacted && secret.value.length > 0) {
           pending.push(secret);
         }
@@ -1085,7 +1141,7 @@ const make = Effect.gen(function* () {
         if (stored) moved.add(secret.secretName);
       }
       if (moved.size === 0) return settings;
-      return mapSettingsSecrets(settings, (secret) =>
+      return mapAllSettingsSecrets(settings, (secret) =>
         moved.has(secret.secretName) ? { value: "", redacted: true } : secret,
       );
     },
@@ -1255,7 +1311,7 @@ const make = Effect.gen(function* () {
     function* (settings: ServerSettings): Effect.fn.Return<ServerSettings, ServerSettingsError> {
       const storedSecrets = new Map<string, string>();
       const pending = new Map<string, SettingsSecret>();
-      mapSettingsSecrets(settings, (secret) => {
+      mapAllSettingsSecrets(settings, (secret) => {
         if (secret.sensitive && secret.redacted) pending.set(secret.secretName, secret);
         return secret;
       });
@@ -1277,7 +1333,7 @@ const make = Effect.gen(function* () {
           Option.isSome(value) ? textDecoder.decode(value.value) : "",
         );
       }
-      return mapSettingsSecrets(settings, (secret) => ({
+      return mapAllSettingsSecrets(settings, (secret) => ({
         value:
           secret.sensitive && secret.redacted
             ? (storedSecrets.get(secret.secretName) ?? "")
@@ -1343,7 +1399,7 @@ const make = Effect.gen(function* () {
       // Only sensitive rows own a stored secret; a plain duplicate must not hide one from cleanup.
       const previous = new Map<string, SettingsSecret>();
       const inlineValues = new Map<string, string>();
-      mapSettingsSecrets(current, (secret) => {
+      mapAllSettingsSecrets(current, (secret) => {
         if (!secret.sensitive) return secret;
         previous.set(secret.secretName, secret);
         if (!secret.redacted && secret.value.length > 0) {
@@ -1356,7 +1412,7 @@ const make = Effect.gen(function* () {
       const keptSecretNames = new Set<string>();
       const writtenSecretNames = new Set<string>();
       const inlineWrites = new Map<string, SecretChange>();
-      const settings = mapSettingsSecrets(withEchoedSecretReferences(current, next), (secret) => {
+      const settings = mapAllSettingsSecrets(withEchoedSecretReferences(current, next), (secret) => {
         const metadata = {
           secretName: secret.secretName,
           ...(secret.providerInstanceId !== undefined
@@ -1839,7 +1895,7 @@ const make = Effect.gen(function* () {
     updateSettings: (patch) =>
       updateAndPersistSettings(patch, (current) =>
         ensureSecretProviderWritesAllowed(patch, settingsPath).pipe(
-          Effect.as(applyServerSettingsPatch(current, patch)),
+          Effect.as(applyServerSettingsPatchWithReasoningSelection(current, patch)),
         ),
       ),
     updateProviderInstance: (mutation, patch = {}) =>
@@ -1847,7 +1903,7 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           yield* ensureSecretProviderWritesAllowed(patch, settingsPath);
           yield* ensureProviderInstanceMutationAllowed(current, mutation, settingsPath);
-          const patched = applyServerSettingsPatch(current, patch);
+          const patched = applyServerSettingsPatchWithReasoningSelection(current, patch);
           return applyProviderInstanceMutation(patched, mutation);
         }),
       ).pipe(Effect.tap(() => recordAutoSeedProviderMutation(mutation))),

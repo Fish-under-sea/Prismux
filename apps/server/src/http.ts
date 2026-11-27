@@ -2,10 +2,16 @@ import * as Mime from "effect/http/Mime";
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  EnvironmentAuthInvalidError,
   EnvironmentHttpApi,
+  EnvironmentInternalError,
+  EnvironmentScopeRequiredError,
 } from "@prismux/core-contracts";
 import { isDevProxiedPath } from "@prismux/core-shared/devProxy";
-import { injectMcpAppCookieBootstrap, injectMcpAppThemeBootstrap } from "@prismux/core-shared/mcpApp";
+import {
+  injectMcpAppCookieBootstrap,
+  injectMcpAppThemeBootstrap,
+} from "@prismux/core-shared/mcpApp";
 import { FILE_PREVIEW_SCROLL_SCRIPT } from "@prismux/core-shared/htmlRender";
 import {
   decodeOtlpTraceRecords,
@@ -64,9 +70,24 @@ import { requestUrl } from "./requestUrl.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 export const REASONING_TRANSLATE_PATH = "/api/reasoning/translate";
+export const REASONING_TRANSLATION_LOCAL_MODEL_STATUS_PATH =
+  "/api/reasoning/translation/local-model/status";
+export const REASONING_TRANSLATION_LOCAL_MODEL_DOWNLOAD_PATH =
+  "/api/reasoning/translation/local-model/download";
+export const REASONING_TRANSLATION_LOCAL_MODEL_CANCEL_PATH =
+  "/api/reasoning/translation/local-model/cancel";
+export const REASONING_TRANSLATION_LOCAL_MODEL_PATH = "/api/reasoning/translation/local-model";
+export const REASONING_TRANSLATION_TEST_PATH = "/api/reasoning/translation/test";
 const REASONING_TRANSLATE_MAX_REQUEST_BYTES = 64 * 1024;
+const decodeUnknownJsonString = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeReasoningTranslationRequest = Schema.decodeUnknownEffect(
   ReasoningTranslation.ReasoningTranslationRequest,
+);
+const decodeReasoningTranslationLocalModelDownloadRequest = Schema.decodeUnknownEffect(
+  ReasoningTranslation.ReasoningTranslationLocalModelDownloadRequest,
+);
+const decodeReasoningTranslationTestRequest = Schema.decodeUnknownEffect(
+  ReasoningTranslation.ReasoningTranslationTestRequest,
 );
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
@@ -313,7 +334,7 @@ export const layerBrowserApiCors = Layer.unwrap(
     const cors = HttpMiddleware.cors({
       allowedOrigins,
       ...(devOrigin ? { credentials: true } : {}),
-      allowedMethods: browserApiCorsAllowedMethods,
+      allowedMethods: [...browserApiCorsAllowedMethods, "DELETE"],
       allowedHeaders: browserApiCorsAllowedHeaders,
       maxAge: 600,
     });
@@ -459,45 +480,18 @@ export const layerReasoningTranslationRoute = Layer.unwrap(
   Effect.gen(function* () {
     const service = yield* ReasoningTranslation.ReasoningTranslation;
     const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
-    return HttpRouter.add(
-      "POST",
-      REASONING_TRANSLATE_PATH,
-      Effect.gen(function* () {
-        const session = yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        const rawBody = yield* request.json.pipe(
-          Effect.provideService(
-            HttpServerRequest.MaxBodySize,
-            ByteSize.bytes(REASONING_TRANSLATE_MAX_REQUEST_BYTES),
-          ),
-          Effect.mapError(
-            () =>
-              new ReasoningTranslation.ReasoningTranslationError({
-                status: 400,
-                code: "INVALID_REQUEST",
-                detail: "Request body must be valid JSON.",
-              }),
-          ),
-        );
-        const payload = yield* decodeReasoningTranslationRequest(rawBody).pipe(
-          Effect.mapError(
-            () =>
-              new ReasoningTranslation.ReasoningTranslationError({
-                status: 400,
-                code: "INVALID_REQUEST",
-                detail: `Invalid reasoning translation request. Provider must be bing, google, or text_model and text length must be 1..${ReasoningTranslation.REASONING_TRANSLATION_MAX_TEXT_CHARS}.`,
-              }),
-          ),
-        );
-        if (
-          payload.provider === "text_model" &&
-          !session.scopes.includes(AuthOrchestrationOperateScope)
-        ) {
-          return yield* failEnvironmentScopeRequired(AuthOrchestrationOperateScope);
-        }
-        const result = yield* service.translate(payload);
-        return jsonResponse(result, 200);
-      }).pipe(
+
+    const handleReasoningRoute = <R>(
+      handler: Effect.Effect<
+        HttpServerResponse.HttpServerResponse,
+        | ReasoningTranslation.ReasoningTranslationError
+        | EnvironmentAuthInvalidError
+        | EnvironmentInternalError
+        | EnvironmentScopeRequiredError,
+        R
+      >,
+    ) =>
+      handler.pipe(
         Effect.provideService(EnvironmentAuth.EnvironmentAuth, serverAuth),
         Effect.catchTags({
           ReasoningTranslationError: (error) =>
@@ -514,6 +508,167 @@ export const layerReasoningTranslationRoute = Layer.unwrap(
           EnvironmentInternalError: HttpServerRespondable.toResponse,
           EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
         }),
+      );
+
+    const readJsonBody = (request: HttpServerRequest.HttpServerRequest) =>
+      request.json.pipe(
+        Effect.provideService(
+          HttpServerRequest.MaxBodySize,
+          ByteSize.bytes(REASONING_TRANSLATE_MAX_REQUEST_BYTES),
+        ),
+        Effect.mapError(
+          () =>
+            new ReasoningTranslation.ReasoningTranslationError({
+              status: 400,
+              code: "INVALID_REQUEST",
+              detail: "Request body must be valid JSON.",
+            }),
+        ),
+      );
+
+    const readOptionalJsonBody = (request: HttpServerRequest.HttpServerRequest) =>
+      request.text.pipe(
+        Effect.provideService(
+          HttpServerRequest.MaxBodySize,
+          ByteSize.bytes(REASONING_TRANSLATE_MAX_REQUEST_BYTES),
+        ),
+        Effect.mapError(
+          () =>
+            new ReasoningTranslation.ReasoningTranslationError({
+              status: 400,
+              code: "INVALID_REQUEST",
+              detail: "Failed to read request body.",
+            }),
+        ),
+        Effect.flatMap((rawText) => {
+          if (rawText.trim().length === 0) {
+            return Effect.succeed<unknown>({});
+          }
+          return decodeUnknownJsonString(rawText).pipe(
+            Effect.mapError(
+              () =>
+                new ReasoningTranslation.ReasoningTranslationError({
+                  status: 400,
+                  code: "INVALID_REQUEST",
+                  detail: "Request body must be valid JSON.",
+                }),
+            ),
+          );
+        }),
+      );
+
+    return Layer.mergeAll(
+      HttpRouter.add(
+        "POST",
+        REASONING_TRANSLATE_PATH,
+        handleReasoningRoute(
+          Effect.gen(function* () {
+            const session = yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
+            const request = yield* HttpServerRequest.HttpServerRequest;
+            const rawBody = yield* readJsonBody(request);
+            const payload = yield* decodeReasoningTranslationRequest(rawBody).pipe(
+              Effect.mapError(
+                () =>
+                  new ReasoningTranslation.ReasoningTranslationError({
+                    status: 400,
+                    code: "INVALID_REQUEST",
+                    detail: `Invalid reasoning translation request. Provider must be local_nmt, text_model, or official_api and text length must be 1..${ReasoningTranslation.REASONING_TRANSLATION_MAX_TEXT_CHARS}.`,
+                  }),
+              ),
+            );
+            if (
+              (payload.provider === "text_model" || payload.provider === "official_api") &&
+              !session.scopes.includes(AuthOrchestrationOperateScope)
+            ) {
+              return yield* failEnvironmentScopeRequired(AuthOrchestrationOperateScope);
+            }
+            const result = yield* service.translate(payload);
+            return jsonResponse(result, 200);
+          }),
+        ),
+      ),
+      HttpRouter.add(
+        "GET",
+        REASONING_TRANSLATION_LOCAL_MODEL_STATUS_PATH,
+        handleReasoningRoute(
+          Effect.gen(function* () {
+            yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
+            const status = yield* service.getLocalModelStatus();
+            return jsonResponse(status, 200);
+          }),
+        ),
+      ),
+      HttpRouter.add(
+        "POST",
+        REASONING_TRANSLATION_LOCAL_MODEL_DOWNLOAD_PATH,
+        handleReasoningRoute(
+          Effect.gen(function* () {
+            yield* authenticateRawRouteWithScope(AuthOrchestrationOperateScope);
+            const request = yield* HttpServerRequest.HttpServerRequest;
+            const rawBody = yield* readOptionalJsonBody(request);
+            const payload = yield* decodeReasoningTranslationLocalModelDownloadRequest(
+              rawBody,
+            ).pipe(
+              Effect.mapError(
+                () =>
+                  new ReasoningTranslation.ReasoningTranslationError({
+                    status: 400,
+                    code: "INVALID_REQUEST",
+                    detail:
+                      'Invalid download request. Mirror must be "huggingface" or "hf_mirror".',
+                  }),
+              ),
+            );
+            const status = yield* service.startLocalModelDownload(payload);
+            return jsonResponse(status, status.installed ? 200 : 202);
+          }),
+        ),
+      ),
+      HttpRouter.add(
+        "POST",
+        REASONING_TRANSLATION_LOCAL_MODEL_CANCEL_PATH,
+        handleReasoningRoute(
+          Effect.gen(function* () {
+            yield* authenticateRawRouteWithScope(AuthOrchestrationOperateScope);
+            const status = yield* service.cancelLocalModelDownload();
+            return jsonResponse(status, 200);
+          }),
+        ),
+      ),
+      HttpRouter.add(
+        "DELETE",
+        REASONING_TRANSLATION_LOCAL_MODEL_PATH,
+        handleReasoningRoute(
+          Effect.gen(function* () {
+            yield* authenticateRawRouteWithScope(AuthOrchestrationOperateScope);
+            const status = yield* service.removeLocalModel();
+            return jsonResponse(status, 200);
+          }),
+        ),
+      ),
+      HttpRouter.add(
+        "POST",
+        REASONING_TRANSLATION_TEST_PATH,
+        handleReasoningRoute(
+          Effect.gen(function* () {
+            yield* authenticateRawRouteWithScope(AuthOrchestrationOperateScope);
+            const request = yield* HttpServerRequest.HttpServerRequest;
+            const rawBody = yield* readJsonBody(request);
+            const payload = yield* decodeReasoningTranslationTestRequest(rawBody).pipe(
+              Effect.mapError(
+                () =>
+                  new ReasoningTranslation.ReasoningTranslationError({
+                    status: 400,
+                    code: "INVALID_REQUEST",
+                    detail:
+                      "Invalid reasoning translation test request. Provider must be local_nmt, text_model, or official_api.",
+                  }),
+              ),
+            );
+            const result = yield* service.testProvider(payload);
+            return jsonResponse(result, 200);
+          }),
+        ),
       ),
     );
   }),
