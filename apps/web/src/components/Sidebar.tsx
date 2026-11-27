@@ -50,6 +50,7 @@ import {
 import {
   AuthOrchestrationOperateScope,
   AuthSourceControlWriteScope,
+  DEFAULT_SERVER_SETTINGS,
   type ContextMenuSource,
   type EnvironmentId,
   ProjectId,
@@ -62,6 +63,8 @@ import {
 import { canCreateProjectInEnvironment } from "@prismux/client-runtime/operations/projects";
 import { findProjectByPath, inferProjectTitleFromPath } from "@prismux/client-runtime/state/projects";
 import { createModelSelection } from "@prismux/core-shared/model";
+import { resolveProjectSettings } from "@prismux/core-shared/projectSettings";
+import { applyDefaultReasoningEffortToSelection } from "../modelSelection";
 import {
   resolveListedAncestorThreadRef,
   type OlderSettledScope,
@@ -132,6 +135,7 @@ import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
 import {
+  readEnvironmentProviders,
   useEnvironments,
   useEnvironmentIdentities,
   useConnectedEnvironmentIds,
@@ -3599,10 +3603,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
 
       // Custom workspace title or "Create more" batch flow materializes a named server thread directly.
       if (payload.workspaceName !== null || payload.createMore) {
+        const targetServerConfig = serverConfigs.get(targetProjectRef.environmentId);
+        const targetProviders = readEnvironmentProviders(targetProjectRef.environmentId) ?? [];
+        const targetDefaultEffort = resolveProjectSettings(
+          targetServerConfig?.settings ?? DEFAULT_SERVER_SETTINGS,
+          targetProjectRef.projectId,
+        ).settings.defaultReasoningEffort;
         const envProviders =
-          providerEntriesByEnvironment.get(targetProjectRef.environmentId) ?? EMPTY_PROVIDER_ENTRIES;
+          providerEntriesByEnvironment.get(targetProjectRef.environmentId) ??
+          EMPTY_PROVIDER_ENTRIES;
         const firstProvider = [...envProviders.values()].find((entry) => entry.enabled) ?? null;
-        const fallbackModelSelection =
+        const baseFallbackModelSelection =
           explicitModelSelection ??
           (firstProvider && firstProvider.models[0]
             ? createModelSelection(
@@ -3610,6 +3621,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 firstProvider.models[0].slug,
               )
             : createModelSelection(ProviderInstanceId.make("claudeAgent"), "claude-opus-4-6"));
+        const fallbackModelSelection = applyDefaultReasoningEffortToSelection(
+          baseFallbackModelSelection,
+          targetProviders,
+          targetDefaultEffort,
+        );
 
         const threadId = newThreadId();
         const created = await createThreadCommand({

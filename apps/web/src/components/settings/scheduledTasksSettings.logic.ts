@@ -32,7 +32,9 @@ import {
   type LegacyProjectSettingsFields,
 } from "@prismux/core-shared/projectSettings";
 import { getActiveLocale, m, type MessageResolver } from "../../i18n/messages";
+import { applyDefaultReasoningEffortToSelection } from "../../modelSelection";
 import type { ProviderInstanceEntry } from "../../providerInstances";
+import { resolveProjectDefaultModelSelectionForDraft } from "../../reasoningEffort";
 import { formatDateTimeTimestamp, formatTimeOfDay } from "../../timestampFormat";
 
 import type { ResolvedSettingsScope } from "./settingsScope";
@@ -437,8 +439,10 @@ export function scheduledTaskDefaultModel(
       entry.isAvailable &&
       entry.snapshot.auth.status !== "unauthenticated",
   );
-  const configured = resolveProjectSettings(settings, project?.id ?? null, project).settings
-    .defaultModelSelection;
+  const resolvedProject = resolveProjectSettings(settings, project?.id ?? null, project);
+  const providers = entries.map((entry) => entry.snapshot);
+  const configured = resolveProjectDefaultModelSelectionForDraft(resolvedProject, providers);
+  const defaultEffort = resolvedProject.settings.defaultReasoningEffort;
   for (const selection of [configured, settings.defaultModelSelection]) {
     if (
       selection &&
@@ -448,7 +452,7 @@ export function scheduledTaskDefaultModel(
           entry.models.find((model) => model.slug === selection.model)?.isLegacy !== true,
       )
     )
-      return selection;
+      return applyDefaultReasoningEffortToSelection(selection, providers, defaultEffort);
   }
   const models = available.flatMap((entry) =>
     entry.models
@@ -456,7 +460,13 @@ export function scheduledTaskDefaultModel(
       .map((model) => ({ instanceId: entry.instanceId, model })),
   );
   const fallback = models.find(({ model }) => model.isDefault) ?? models[0];
-  return fallback ? { instanceId: fallback.instanceId, model: fallback.model.slug } : null;
+  return fallback
+    ? applyDefaultReasoningEffortToSelection(
+        { instanceId: fallback.instanceId, model: fallback.model.slug },
+        providers,
+        defaultEffort,
+      )
+    : null;
 }
 
 /**

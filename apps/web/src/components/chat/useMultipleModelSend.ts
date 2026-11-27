@@ -11,6 +11,7 @@ import { scopeThreadRef } from "@prismux/client-runtime/environment";
 import { deriveThreadTitleSeed } from "@prismux/client-runtime/operations";
 import { settlePromise, squashAtomCommandFailure } from "@prismux/client-runtime/state/runtime";
 import type { EnvironmentProject } from "@prismux/client-runtime/state/shell";
+import { resolveProjectSettings } from "@prismux/core-shared/projectSettings";
 import { useNavigate } from "@tanstack/react-router";
 import { newMessageId } from "~/lib/utils";
 import { collapseExpandedComposerCursor } from "../../composer-logic";
@@ -23,7 +24,9 @@ import {
 import type { ComposerHandleRef } from "../../composerHandleContext";
 import { releaseDraftAttachments } from "../../lib/attachmentUploadQueue";
 import type { buildMessageContext } from "../../lib/composerContextRecords";
+import { applyDefaultReasoningEffortToSelection } from "../../modelSelection";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { environmentServerConfigsAtom } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { buildThreadRouteParams } from "../../threadRoutes";
@@ -161,15 +164,26 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
           clearedDraftSnapshot &&
         appAtomRegistry.get(fanoutSelectionsAtom) === submittedSelections;
       setThreadError(threadId, null);
+      const envConfig = appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId);
+      const defaultEffort = envConfig
+        ? resolveProjectSettings(envConfig.settings, project.id, project).settings
+            .defaultReasoningEffort
+        : undefined;
+      const envProviders = envConfig?.providers ?? [];
       const starts = Promise.all(
         targets.map(async (target) => {
+          const resolvedSelection = applyDefaultReasoningEffortToSelection(
+            target.selection,
+            envProviders,
+            defaultEffort,
+          );
           const started = await startFanoutThread({
             retryKey: JSON.stringify([
               routeThreadKey,
-              target.selection.instanceId,
-              target.selection.model,
+              resolvedSelection.instanceId,
+              resolvedSelection.model,
             ]),
-            model: target.selection.model,
+            model: resolvedSelection.model,
             uncertainSubmissions: uncertainSubmissionsRef.current,
             start: (targetThreadId) => {
               return startThreadTurn({
@@ -185,7 +199,7 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
                       context,
                     }),
                   },
-                  modelSelection: target.selection,
+                  modelSelection: resolvedSelection,
                   titleSeed: title,
                   runtimeMode,
                   interactionMode: DEFAULT_INTERACTION_MODE,
@@ -193,7 +207,7 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
                     createThread: {
                       projectId: project.id,
                       title,
-                      modelSelection: target.selection,
+                      modelSelection: resolvedSelection,
                       runtimeMode,
                       interactionMode: DEFAULT_INTERACTION_MODE,
                       branch,

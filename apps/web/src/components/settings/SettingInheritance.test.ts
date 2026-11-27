@@ -99,4 +99,29 @@ describe("settingInheritanceLayers", () => {
       ["Current checkout", false],
     ]);
   });
+
+  it("formats defaultReasoningEffort values cleanly across project, environment, and built-in layers", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      defaultReasoningEffort: "medium" as const,
+      projectSettingsOverrides: {
+        [projectId]: { defaultReasoningEffort: "max" as const },
+      },
+    };
+    const layers = settingInheritanceLayers(
+      {
+        environmentId,
+        label: "Laptop",
+        projectId,
+        ...resolveProjectSettings(settings, projectId),
+      },
+      settings,
+      "defaultReasoningEffort",
+    );
+    expect(layers.map((layer) => [layer.key, layer.value, layer.effective])).toEqual([
+      ["project", "Max", true],
+      ["environment", "Medium", false],
+      ["built-in", "High", false],
+    ]);
+  });
 });

@@ -27,7 +27,10 @@ import {
   selectProjectGroupingSettings,
   type ProjectGroupingSettings,
 } from "@prismux/client-runtime/state/project-grouping";
-import { resolveNewThreadEnvMode, resolveProjectSettings } from "@prismux/core-shared/projectSettings";
+import {
+  resolveNewThreadEnvMode,
+  resolveProjectSettings,
+} from "@prismux/core-shared/projectSettings";
 import {
   readProject,
   readProjects,
@@ -58,6 +61,10 @@ import { defaultProjectFallbackReadyAtom } from "../state/projects";
 import { useThreadRouteTarget } from "./useThreadRouteTarget";
 import { readUnloadedThreadCount } from "../state/olderSettledShelf";
 import { resolveProjectDefaultProviderModelSelection } from "../providerInstances";
+import {
+  resolveProjectDefaultModelSelectionForDraft,
+  stripReasoningEffortFromSelection,
+} from "../reasoningEffort";
 import { resolveNewThreadModelSelection } from "@prismux/core-shared/usageLimits";
 
 export const LAST_USED_PROJECT_STORAGE_KEY = "prismux:last-used-project:v1";
@@ -161,7 +168,11 @@ export function createNewThreadHandler(router: AnyRouter) {
     const composerModelSelection = composerActiveProvider
       ? (carrySourceComposer?.modelSelectionByProvider[composerActiveProvider] ?? null)
       : null;
-    const carryModelSelection = composerModelSelection ?? carrySourceShell?.modelSelection ?? null;
+    const rawCarryModelSelection =
+      composerModelSelection ?? carrySourceShell?.modelSelection ?? null;
+    const carryModelSelection = rawCarryModelSelection
+      ? stripReasoningEffortFromSelection(rawCarryModelSelection)
+      : null;
     const carryInteractionMode =
       carrySourceComposer?.interactionMode ??
       carrySourceShell?.interactionMode ??
@@ -180,19 +191,23 @@ export function createNewThreadHandler(router: AnyRouter) {
       project?.id ?? null,
       project,
     );
-    const configuredDefaultModelSelection = projectSettings.settings.defaultModelSelection ?? null;
+    const targetProviders = environmentServerConfigs.get(projectRef.environmentId)?.providers ?? [];
+    const configuredDefaultModelSelection = resolveProjectDefaultModelSelectionForDraft(
+      projectSettings,
+      targetProviders,
+    );
     const fallbackResolution = resolveNewThreadModelSelection({
       defaultSelection:
         configuredDefaultModelSelection ??
         (carryModelSelection || useComposerDraftStore.getState().stickyActiveProvider !== null
           ? null
           : resolveProjectDefaultProviderModelSelection(
-              environmentServerConfigs.get(projectRef.environmentId)?.providers ?? [],
+              targetProviders,
               targetServerSettings,
               projectRef.projectId,
             )),
       fallbackSelection: targetServerSettings.fallbackModelSelection ?? null,
-      providers: environmentServerConfigs.get(projectRef.environmentId)?.providers ?? [],
+      providers: targetProviders,
       settings: targetServerSettings,
       projectId: projectRef.projectId,
       now: Date.now(),
@@ -339,7 +354,7 @@ export function createNewThreadHandler(router: AnyRouter) {
         const storedDraft = getComposerDraft(emptyStoredDraftThread.draftId);
         const storedDraftHasExplicitModelPick = hasExplicitComposerModelSelection(storedDraft);
         if (!storedDraftHasExplicitModelPick) {
-          applyStickyState(emptyStoredDraftThread.draftId);
+          applyStickyState(emptyStoredDraftThread.draftId, { stripReasoningEffort: true });
           const modelSelectionOverride = resolveModelSelectionOverride(
             emptyStoredDraftThread.draftId,
           );
@@ -466,7 +481,7 @@ export function createNewThreadHandler(router: AnyRouter) {
           replaceOptions: true,
         });
       } else {
-        applyStickyState(draftId);
+        applyStickyState(draftId, { stripReasoningEffort: true });
         const modelSelectionOverride = resolveModelSelectionOverride(draftId);
         if (modelSelectionOverride) {
           setModelSelection(draftId, modelSelectionOverride, { replaceOptions: true });

@@ -259,6 +259,7 @@ import {
   resolveProjectDefaultProviderModelSelection,
   shouldShowInstanceBadge,
 } from "../providerInstances";
+import { resolveProjectDefaultModelSelectionForDraft } from "../reasoningEffort";
 import {
   useClientSettings,
   useClientSettingsHydrated,
@@ -909,24 +910,30 @@ export default function ChatView(props: ChatViewProps) {
     }
   }
   const nowMinute = useNowMinute();
+  const draftProviders = draftThread
+    ? (providersByEnvironment.get(draftThread.environmentId) ?? [])
+    : [];
   const draftDefaultModelSelection = draftThread
-    ? resolveProjectSettings(
-        settings,
-        fallbackDraftProject?.id ?? null,
-        fallbackDraftProject ?? undefined,
-      ).settings.defaultModelSelection
+    ? resolveProjectDefaultModelSelectionForDraft(
+        resolveProjectSettings(
+          settings,
+          fallbackDraftProject?.id ?? null,
+          fallbackDraftProject ?? undefined,
+        ),
+        draftProviders,
+      )
     : null;
   const draftModelResolution = draftThread
     ? resolveNewThreadModelSelection({
         defaultSelection:
           draftDefaultModelSelection ??
           resolveProjectDefaultProviderModelSelection(
-            providersByEnvironment.get(draftThread.environmentId) ?? [],
+            draftProviders,
             settings,
             draftThread.projectId,
           ),
         fallbackSelection: settings.fallbackModelSelection,
-        providers: providersByEnvironment.get(draftThread.environmentId) ?? [],
+        providers: draftProviders,
         settings,
         projectId: draftThread.projectId,
         now: Date.parse(`${nowMinute}:00Z`),
@@ -1280,7 +1287,9 @@ export default function ChatView(props: ChatViewProps) {
   const activeProjectDefaultModelSelection =
     !isServerThread && draftFallback
       ? draftFallback.selection
-      : activeProjectSettings.settings.defaultModelSelection;
+      : !isServerThread
+        ? resolveProjectDefaultModelSelectionForDraft(activeProjectSettings, draftProviders)
+        : activeProjectSettings.settings.defaultModelSelection;
   const handleNewThreadInActiveProject = () => {
     startNewThreadForProject(activeProjectRef, handleNewThread);
   };

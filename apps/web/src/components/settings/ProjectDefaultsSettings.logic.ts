@@ -1,19 +1,74 @@
-import type { ModelSelection, ProjectId, ServerProvider } from "@prismux/core-contracts";
+import type {
+  ModelSelection,
+  ProjectId,
+  ReasoningEffortLevel,
+  ServerProvider,
+  ServerSettingsPatch,
+} from "@prismux/core-contracts";
 import type { UnifiedSettings } from "@prismux/core-contracts/settings";
 import { msg } from "gt-react";
 
-import { resolveEffectiveDefaultModelSelection } from "../../modelSelection";
+import {
+  resolveEffectiveDefaultModelSelection,
+  stripReasoningEffortFromSelection,
+} from "../../modelSelection";
 import {
   resolveDefaultProviderModelSelection,
   resolveProjectDefaultProviderModelSelection,
   type ProviderInstanceEntry,
 } from "../../providerInstances";
 import { m, type MessageResolver } from "../../i18n/messages";
+import type { ScopedSettingSource } from "./scopedSettings";
 
 export interface DefaultModelSettingsPresentation {
   readonly selection: ModelSelection | null;
   /** Set when the saved model's provider cannot run; effort stays hidden until it can. */
   readonly providerNote: string | null;
+}
+
+export function buildDefaultReasoningEffortUpdatePatch(input: {
+  readonly nextEffort: ReasoningEffortLevel;
+  readonly isProjectScope: boolean;
+  readonly modelSource: ScopedSettingSource;
+  readonly mixedModel: boolean;
+  readonly mixedFallback: boolean;
+  readonly defaultModelSelection: ModelSelection | null;
+  readonly fallbackModelSelection: ModelSelection | null;
+  readonly providers: ReadonlyArray<ServerProvider>;
+}): ServerSettingsPatch {
+  const patch: {
+    defaultReasoningEffort: ReasoningEffortLevel;
+    defaultModelSelection?: ModelSelection;
+    fallbackModelSelection?: ModelSelection;
+  } = {
+    defaultReasoningEffort: input.nextEffort,
+  };
+
+  if (
+    !input.mixedModel &&
+    input.defaultModelSelection !== null &&
+    (!input.isProjectScope || input.modelSource === "project")
+  ) {
+    const strippedDefault = stripReasoningEffortFromSelection(
+      input.defaultModelSelection,
+      input.providers,
+    );
+    if (strippedDefault !== input.defaultModelSelection) {
+      patch.defaultModelSelection = strippedDefault;
+    }
+  }
+
+  if (!input.isProjectScope && !input.mixedFallback && input.fallbackModelSelection !== null) {
+    const strippedFallback = stripReasoningEffortFromSelection(
+      input.fallbackModelSelection,
+      input.providers,
+    );
+    if (strippedFallback !== input.fallbackModelSelection) {
+      patch.fallbackModelSelection = strippedFallback;
+    }
+  }
+
+  return patch;
 }
 
 export function resolveDefaultModelSettingsPresentation(
@@ -22,6 +77,8 @@ export function resolveDefaultModelSettingsPresentation(
     readonly providers: ReadonlyArray<ServerProvider>;
     readonly settings: UnifiedSettings;
     readonly projectId: ProjectId | null;
+    readonly inheritDefaultModelFromEnvironment?: boolean;
+    readonly projectOverridesDefaultReasoningEffort?: boolean;
   },
   resolve: MessageResolver = m,
 ): DefaultModelSettingsPresentation {
@@ -50,8 +107,17 @@ export function resolveDefaultModelSettingsPresentation(
   ) {
     return { selection: saved, providerNote: providerNote(savedEntry, resolve) };
   }
+  const baseSelection =
+    input.projectOverridesDefaultReasoningEffort === true &&
+    input.inheritDefaultModelFromEnvironment === true
+      ? stripReasoningEffortFromSelection(resolved, input.providers)
+      : resolved;
   return {
-    selection: resolveEffectiveDefaultModelSelection(input.settings, input.providers, resolved),
+    selection: resolveEffectiveDefaultModelSelection(
+      input.settings,
+      input.providers,
+      baseSelection,
+    ),
     providerNote: null,
   };
 }

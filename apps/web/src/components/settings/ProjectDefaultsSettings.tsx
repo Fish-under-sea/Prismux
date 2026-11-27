@@ -15,6 +15,7 @@ import { type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { T, useGT, useMessages } from "gt-react";
 
+import { useComposerDraftStore } from "../../composerDraftStore";
 import { useClientSettings } from "../../hooks/useSettings";
 import {
   applyDefaultReasoningEffortToSelection,
@@ -35,7 +36,10 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { toastManager } from "../ui/toast";
 import { Switch } from "../ui/switch";
 import { AdvancedSettings } from "./AdvancedSettings";
-import { resolveDefaultModelSettingsPresentation } from "./ProjectDefaultsSettings.logic";
+import {
+  buildDefaultReasoningEffortUpdatePatch,
+  resolveDefaultModelSettingsPresentation,
+} from "./ProjectDefaultsSettings.logic";
 import type { ProjectSettingsCategory } from "./ProjectSettingsPanel";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { useSearchableSetting } from "./settingsSearch";
@@ -48,6 +52,7 @@ import {
 } from "./settingsLayout";
 import { useScopedModelDisabledReason } from "./useScopedModelAvailability";
 import {
+  useClearScopedSettings,
   useScopedSettings,
   useScopedSettingsMixed,
   useScopedSettingSource,
@@ -67,9 +72,7 @@ const REASONING_EFFORT_LABELS: Readonly<Record<ReasoningEffortLevel, string>> = 
 };
 
 function isReasoningEffortLevel(value: string | null): value is ReasoningEffortLevel {
-  return (
-    value !== null && (DEFAULT_REASONING_EFFORT_LEVELS as readonly string[]).includes(value)
-  );
+  return value !== null && (DEFAULT_REASONING_EFFORT_LEVELS as readonly string[]).includes(value);
 }
 
 export type ProjectDefaultsSettingsCategory = ProjectSettingsCategory | "models";
@@ -92,6 +95,7 @@ export function ProjectDefaultsSettings({
   const settings = useScopedSettings();
   const clientSettings = useClientSettings();
   const updateSettings = useUpdateScopedSettings();
+  const clearScopedSettings = useClearScopedSettings();
   const navigate = useNavigate();
   const { environments } = useEnvironments();
   const providersByEnvironment = useEnvironmentProviders();
@@ -103,12 +107,17 @@ export function ProjectDefaultsSettings({
       ? providersByEnvironment.get(representative.environmentId)
       : undefined) ?? EMPTY_SERVER_PROVIDERS;
   const entries = providerInstanceEntriesFor(providers, settings, target?.projectId ?? null);
+  const modelSource = useScopedSettingSource(["defaultModelSelection"]);
+  const effortSource = useScopedSettingSource(["defaultReasoningEffort"]);
+  const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
   const presentation = resolveDefaultModelSettingsPresentation(
     {
       entries,
       providers,
       settings,
       projectId: target?.projectId ?? null,
+      inheritDefaultModelFromEnvironment: isProjectScope && modelSource !== "project",
+      projectOverridesDefaultReasoningEffort: isProjectScope && effortSource === "project",
     },
     m,
   );
@@ -154,8 +163,6 @@ export function ProjectDefaultsSettings({
   const mixedAutoPull = useScopedSettingsMixed(["defaultAutoPull"]);
   const mixedAgentCredits = useScopedSettingsMixed(["removeAgentCreditsOnMerge"]);
   const mixedMergeMethod = useScopedSettingsMixed(["pullRequestMergeMethod"]);
-  const modelSource = useScopedSettingSource(["defaultModelSelection"]);
-  const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
   const unavailable = connectedEnvironments.length === 0;
   const effective = target
     ? resolveProjectSettings(target.settings, null, null, null).settings
@@ -395,11 +402,31 @@ export function ProjectDefaultsSettings({
     />
   ) : null;
 
+  const setDefaultReasoningEffort = (value: ReasoningEffortLevel) => {
+    updateSettings(
+      buildDefaultReasoningEffortUpdatePatch({
+        nextEffort: value,
+        isProjectScope,
+        modelSource,
+        mixedModel,
+        mixedFallback,
+        defaultModelSelection: settings.defaultModelSelection,
+        fallbackModelSelection: settings.fallbackModelSelection,
+        providers,
+      }),
+    );
+    useComposerDraftStore.getState().clearStickyReasoningEffortOptions();
+  };
+
   const defaultReasoningEffortRow = (
     <SettingsRow
       serverScoped
       settingKeys={["defaultReasoningEffort"]}
       mixed={mixedDefaultReasoningEffort}
+      onResetOverride={() => {
+        clearScopedSettings(["defaultReasoningEffort"]);
+        useComposerDraftStore.getState().clearStickyReasoningEffortOptions();
+      }}
       {...searchableSetting("default-reasoning-effort")}
       description={
         isProjectScope
@@ -415,9 +442,7 @@ export function ProjectDefaultsSettings({
           <SettingResetButton
             ariaLabel={gt("Reset default reasoning effort to default")}
             onClick={() =>
-              updateSettings({
-                defaultReasoningEffort: DEFAULT_SERVER_SETTINGS.defaultReasoningEffort,
-              })
+              setDefaultReasoningEffort(DEFAULT_SERVER_SETTINGS.defaultReasoningEffort)
             }
           />
         ) : null
@@ -427,7 +452,7 @@ export function ProjectDefaultsSettings({
           value={mixedDefaultReasoningEffort ? null : settings.defaultReasoningEffort}
           onValueChange={(value) => {
             if (isReasoningEffortLevel(value)) {
-              updateSettings({ defaultReasoningEffort: value });
+              setDefaultReasoningEffort(value);
             }
           }}
         >
@@ -524,7 +549,11 @@ export function ProjectDefaultsSettings({
                   if (value) updateSettings({ defaultRuntimeMode: value });
                 }}
               >
-                <SelectTrigger size="sm" className="w-full sm:w-48" aria-label={gt("Default permissions")}>
+                <SelectTrigger
+                  size="sm"
+                  className="w-full sm:w-48"
+                  aria-label={gt("Default permissions")}
+                >
                   {!mixedPermissions && (
                     <PermissionIcon className="size-3.5 shrink-0 text-muted-foreground" />
                   )}
@@ -741,7 +770,11 @@ export function WorktreeSubmodulesRow() {
             if (isWorktreeSubmodules(value)) updateSettings({ worktreeSubmodules: value });
           }}
         >
-          <SelectTrigger size="sm" className="w-full sm:w-48" aria-label={gt("Worktree submodules")}>
+          <SelectTrigger
+            size="sm"
+            className="w-full sm:w-48"
+            aria-label={gt("Worktree submodules")}
+          >
             <SelectValue>
               {(value: string | null) =>
                 isWorktreeSubmodules(value)
@@ -784,8 +817,7 @@ export function NewProjectsSettingsSection() {
         {...setting("add-project-starts-in")}
         description={gt('Leave empty to use "~/" when the Add Project browser opens.')}
         resetAction={
-          settings.addProjectBaseDirectory !==
-          DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory ? (
+          settings.addProjectBaseDirectory !== DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory ? (
             <SettingResetButton
               ariaLabel={gt("Reset add project base directory to default")}
               onClick={() =>

@@ -4,6 +4,7 @@ import { resolveNewThreadModelSelection } from "@prismux/core-shared/usageLimits
 
 import { type DraftId, useComposerDraftStore } from "../composerDraftStore";
 import { resolveProjectDefaultProviderModelSelection } from "../providerInstances";
+import { resolveProjectDefaultModelSelectionForDraft } from "../reasoningEffort";
 import { readProject } from "../state/entities";
 import { readEnvironment, readEnvironmentProviders } from "../state/environments";
 import { hasExplicitComposerModelSelection } from "./chatThreadActions";
@@ -12,13 +13,15 @@ import { hasExplicitComposerModelSelection } from "./chatThreadActions";
 export function seedDraftModelSelection(draftId: DraftId, projectRef: ScopedProjectRef): void {
   const store = useComposerDraftStore.getState();
   if (hasExplicitComposerModelSelection(store.getComposerDraft(draftId))) return;
-  store.applyStickyState(draftId);
+  store.applyStickyState(draftId, { stripReasoningEffort: true });
   const project = readProject(projectRef);
   const settings = readEnvironment(projectRef.environmentId)?.serverConfig?.settings;
   const providers = readEnvironmentProviders(projectRef.environmentId) ?? [];
   const defaultSelection = settings
-    ? resolveProjectSettings(settings, projectRef.projectId, project ?? undefined).settings
-        .defaultModelSelection
+    ? resolveProjectDefaultModelSelectionForDraft(
+        resolveProjectSettings(settings, projectRef.projectId, project ?? undefined),
+        providers,
+      )
     : (project?.defaultModelSelection ?? null);
   const resolution = resolveNewThreadModelSelection({
     defaultSelection:

@@ -32,7 +32,10 @@ import {
   resolveAppModelSelectionState,
   resolveClosestReasoningEffortOption,
   resolveEffectiveDefaultModelSelection,
+  resolveProjectDefaultModelSelectionForDraft,
   resolveTextGenerationProviders,
+  stripReasoningEffortFromSelection,
+  stripReasoningEffortOptions,
 } from "./modelSelection";
 import { resolveModelPickerTriggerTitle } from "./components/chat/ProviderModelPicker";
 
@@ -1713,38 +1716,52 @@ describe("defaultReasoningEffort resolution and clamping across providers", () =
 
   it("maps defaultReasoningEffort cleanly to each provider's closest supported concrete level", () => {
     // Codex: exact match for low/medium/high, clamps max -> xhigh
-    expect(resolveClosestReasoningEffortOption(codexProvider.models[0]!.capabilities, "high")).toEqual({
+    expect(
+      resolveClosestReasoningEffortOption(codexProvider.models[0]!.capabilities, "high"),
+    ).toEqual({
       id: "reasoningEffort",
       value: "high",
     });
-    expect(resolveClosestReasoningEffortOption(codexProvider.models[0]!.capabilities, "max")).toEqual({
+    expect(
+      resolveClosestReasoningEffortOption(codexProvider.models[0]!.capabilities, "max"),
+    ).toEqual({
       id: "reasoningEffort",
       value: "xhigh",
     });
 
     // DSH: strips phantom _t3/empty, maps medium -> high, high -> high, max -> max
-    expect(resolveClosestReasoningEffortOption(dshProvider.models[0]!.capabilities, "medium")).toEqual({
+    expect(
+      resolveClosestReasoningEffortOption(dshProvider.models[0]!.capabilities, "medium"),
+    ).toEqual({
       id: "reasoning_effort",
       value: "high",
     });
-    expect(resolveClosestReasoningEffortOption(dshProvider.models[0]!.capabilities, "high")).toEqual({
+    expect(
+      resolveClosestReasoningEffortOption(dshProvider.models[0]!.capabilities, "high"),
+    ).toEqual({
       id: "reasoning_effort",
       value: "high",
     });
-    expect(resolveClosestReasoningEffortOption(dshProvider.models[0]!.capabilities, "max")).toEqual({
-      id: "reasoning_effort",
-      value: "max",
-    });
+    expect(resolveClosestReasoningEffortOption(dshProvider.models[0]!.capabilities, "max")).toEqual(
+      {
+        id: "reasoning_effort",
+        value: "max",
+      },
+    );
 
     // Antigravity: clamps max -> high, keeps low -> low (never turns off)
-    expect(resolveClosestReasoningEffortOption(agyProvider.models[0]!.capabilities, "max")).toEqual({
-      id: "thought_level",
-      value: "high",
-    });
-    expect(resolveClosestReasoningEffortOption(agyProvider.models[0]!.capabilities, "low")).toEqual({
-      id: "thought_level",
-      value: "low",
-    });
+    expect(resolveClosestReasoningEffortOption(agyProvider.models[0]!.capabilities, "max")).toEqual(
+      {
+        id: "thought_level",
+        value: "high",
+      },
+    );
+    expect(resolveClosestReasoningEffortOption(agyProvider.models[0]!.capabilities, "low")).toEqual(
+      {
+        id: "thought_level",
+        value: "low",
+      },
+    );
 
     // Two-tier Claude: clamps low -> medium and max -> high
     expect(
@@ -1787,12 +1804,237 @@ describe("defaultReasoningEffort resolution and clamping across providers", () =
     const phantomDsh = createModelSelection(ProviderInstanceId.make("dsh"), "deepseek-v4.1-flash", [
       { id: "reasoning_effort", value: "_t3/empty" },
     ]);
-    expect(
-      applyDefaultReasoningEffortToSelection(phantomDsh, providers, "high"),
-    ).toEqual(
+    expect(applyDefaultReasoningEffortToSelection(phantomDsh, providers, "high")).toEqual(
       createModelSelection(ProviderInstanceId.make("dsh"), "deepseek-v4.1-flash", [
         { id: "reasoning_effort", value: "high" },
       ]),
+    );
+  });
+
+  it("maps boolean thinking models and strips reasoning options while preserving non-reasoning options", () => {
+    const booleanProvider: ServerProvider = {
+      ...provider({ provider: ProviderDriverKind.make("claudeAgent"), instanceId: "claude_bool" }),
+      models: [
+        {
+          slug: "claude-sonnet-bool",
+          name: "Claude Sonnet Bool",
+          isCustom: false,
+          capabilities: {
+            optionDescriptors: [
+              { id: "thinking", label: "Thinking", type: "boolean", currentValue: false },
+              { id: "fastMode", label: "Fast Mode", type: "boolean", currentValue: false },
+            ],
+          },
+        },
+      ],
+    };
+
+    expect(
+      resolveClosestReasoningEffortOption(booleanProvider.models[0]!.capabilities, "low"),
+    ).toEqual({ id: "thinking", value: false });
+    expect(
+      resolveClosestReasoningEffortOption(booleanProvider.models[0]!.capabilities, "high"),
+    ).toEqual({ id: "thinking", value: true });
+    expect(
+      resolveClosestReasoningEffortOption(booleanProvider.models[0]!.capabilities, "max"),
+    ).toEqual({ id: "thinking", value: true });
+
+    expect(
+      stripReasoningEffortOptions([
+        { id: "reasoningEffort", value: "low" },
+        { id: "serviceTier", value: "fast" },
+      ]),
+    ).toEqual([{ id: "serviceTier", value: "fast" }]);
+
+    const selectionWithCustomReasoning = createModelSelection(
+      ProviderInstanceId.make("claude_bool"),
+      "claude-sonnet-bool",
+      [
+        { id: "thinking", value: true },
+        { id: "fastMode", value: true },
+      ],
+    );
+    expect(
+      stripReasoningEffortFromSelection(selectionWithCustomReasoning, [booleanProvider]),
+    ).toEqual(
+      createModelSelection(ProviderInstanceId.make("claude_bool"), "claude-sonnet-bool", [
+        { id: "fastMode", value: true },
+      ]),
+    );
+  });
+
+  it("applies defaultReasoningEffort to new drafts across providers, async provider hydration, and preserves manual/existing thread effort", () => {
+    const codexId = ProviderInstanceId.make("codex");
+    const claudeId = ProviderInstanceId.make("claudeAgent");
+    const agyId = ProviderInstanceId.make("antigravity");
+    const maxSettings: UnifiedSettings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      defaultReasoningEffort: "max",
+    };
+    const lowSettings: UnifiedSettings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      defaultReasoningEffort: "low",
+    };
+
+    // 1. Before providers hydrate (providers = []), draft gracefully returns no options without crashing.
+    const beforeHydration = deriveEffectiveComposerModelState({
+      draft: null,
+      threadStarted: false,
+      providers: [],
+      selectedProvider: ProviderDriverKind.make("codex"),
+      selectedInstanceId: codexId,
+      threadModelSelection: null,
+      projectModelSelection: null,
+      settings: maxSettings,
+      applyDefaultReasoningEffort: true,
+    });
+    expect(beforeHydration.modelOptions).toBeNull();
+
+    // 2. After providers hydrate, blank draft immediately resolves defaultReasoningEffort ("max" -> Codex "xhigh").
+    const afterHydration = deriveEffectiveComposerModelState({
+      draft: null,
+      threadStarted: false,
+      providers,
+      selectedProvider: ProviderDriverKind.make("codex"),
+      selectedInstanceId: codexId,
+      threadModelSelection: null,
+      projectModelSelection: null,
+      settings: maxSettings,
+      applyDefaultReasoningEffort: true,
+    });
+    expect(afterHydration.modelOptions?.[codexId]).toEqual([
+      { id: "reasoningEffort", value: "xhigh" },
+    ]);
+    const codexDispatch = getComposerProviderState({
+      provider: ProviderDriverKind.make("codex"),
+      model: afterHydration.selectedModel,
+      models: codexProvider.models,
+      modelOptions: afterHydration.modelOptions?.[codexId],
+    });
+    expect(codexDispatch.promptEffort).toBe("xhigh");
+    expect(codexDispatch.modelOptionsForDispatch).toEqual([
+      { id: "reasoningEffort", value: "xhigh" },
+    ]);
+
+    // 3. Changing settings.defaultReasoningEffort immediately reflects on an untouched draft and across providers.
+    const lowDraftCodex = deriveEffectiveComposerModelState({
+      draft: null,
+      threadStarted: false,
+      providers,
+      selectedProvider: ProviderDriverKind.make("codex"),
+      selectedInstanceId: codexId,
+      threadModelSelection: null,
+      projectModelSelection: null,
+      settings: lowSettings,
+      applyDefaultReasoningEffort: true,
+    });
+    expect(lowDraftCodex.modelOptions?.[codexId]).toEqual([
+      { id: "reasoningEffort", value: "low" },
+    ]);
+
+    const maxDraftClaude = deriveEffectiveComposerModelState({
+      draft: null,
+      threadStarted: false,
+      providers,
+      selectedProvider: ProviderDriverKind.make("claudeAgent"),
+      selectedInstanceId: claudeId,
+      threadModelSelection: null,
+      projectModelSelection: null,
+      settings: maxSettings,
+      applyDefaultReasoningEffort: true,
+    });
+    expect(maxDraftClaude.modelOptions?.[claudeId]).toEqual([{ id: "effort", value: "high" }]);
+
+    const maxDraftAgy = deriveEffectiveComposerModelState({
+      draft: null,
+      threadStarted: false,
+      providers,
+      selectedProvider: ProviderDriverKind.make("antigravity"),
+      selectedInstanceId: agyId,
+      threadModelSelection: null,
+      projectModelSelection: null,
+      settings: maxSettings,
+      applyDefaultReasoningEffort: true,
+    });
+    expect(maxDraftAgy.modelOptions?.[agyId]).toEqual([{ id: "thought_level", value: "high" }]);
+
+    // 4. Explicit project-level defaultReasoningEffort argument overrides global settings.defaultReasoningEffort.
+    const projectLowDraft = deriveEffectiveComposerModelState({
+      draft: null,
+      threadStarted: false,
+      providers,
+      selectedProvider: ProviderDriverKind.make("codex"),
+      selectedInstanceId: codexId,
+      threadModelSelection: null,
+      projectModelSelection: null,
+      settings: maxSettings,
+      applyDefaultReasoningEffort: true,
+      defaultReasoningEffort: "low",
+    });
+    expect(projectLowDraft.modelOptions?.[codexId]).toEqual([
+      { id: "reasoningEffort", value: "low" },
+    ]);
+
+    // 5. Manual user override in the draft is never clobbered by defaultReasoningEffort.
+    const manualDraft = deriveEffectiveComposerModelState({
+      draft: {
+        activeProvider: codexId,
+        modelSelectionExplicit: true,
+        modelSelectionByProvider: {
+          [codexId]: createModelSelection(codexId, "gpt-6.2-astra", [
+            { id: "reasoningEffort", value: "low" },
+          ]),
+        },
+      },
+      threadStarted: false,
+      providers,
+      selectedProvider: ProviderDriverKind.make("codex"),
+      selectedInstanceId: codexId,
+      threadModelSelection: null,
+      projectModelSelection: null,
+      settings: maxSettings,
+      applyDefaultReasoningEffort: true,
+    });
+    expect(manualDraft.modelOptions?.[codexId]).toEqual([{ id: "reasoningEffort", value: "low" }]);
+
+    // 6. Existing started threads are NEVER overwritten by defaultReasoningEffort.
+    const existingStartedThread = deriveEffectiveComposerModelState({
+      draft: null,
+      threadStarted: true,
+      providers,
+      selectedProvider: ProviderDriverKind.make("codex"),
+      selectedInstanceId: codexId,
+      threadModelSelection: createModelSelection(codexId, "gpt-6.2-astra", [
+        { id: "reasoningEffort", value: "low" },
+      ]),
+      projectModelSelection: null,
+      settings: maxSettings,
+      applyDefaultReasoningEffort: true,
+    });
+    expect(existingStartedThread.modelOptions?.[codexId]).toEqual([
+      { id: "reasoningEffort", value: "low" },
+    ]);
+
+    // 7. Project defaultReasoningEffort override strips inherited environment reasoning effort.
+    const envSelectionWithLow = createModelSelection(codexId, "gpt-6.2-astra", [
+      { id: "reasoningEffort", value: "low" },
+      { id: "serviceTier", value: "fast" },
+    ]);
+    expect(
+      resolveProjectDefaultModelSelectionForDraft(
+        {
+          settings: {
+            defaultModelSelection: envSelectionWithLow,
+          },
+          sources: {
+            defaultModelSelection: "environment",
+            defaultReasoningEffort: "project",
+          },
+        },
+        providers,
+      ),
+    ).toEqual(
+      createModelSelection(codexId, "gpt-6.2-astra", [{ id: "serviceTier", value: "fast" }]),
     );
   });
 
@@ -1851,7 +2093,11 @@ describe("defaultReasoningEffort resolution and clamping across providers", () =
     const claudeId = ProviderInstanceId.make("claudeAgent");
     const dshId = ProviderInstanceId.make("acpRegistry_dsh");
     const providers: ServerProvider[] = [
-      provider({ instanceId: codexId, provider: ProviderDriverKind.make("codex"), models: ["gpt-5.4"] }),
+      provider({
+        instanceId: codexId,
+        provider: ProviderDriverKind.make("codex"),
+        models: ["gpt-5.4"],
+      }),
       provider({
         instanceId: claudeId,
         provider: ProviderDriverKind.make("claudeAgent"),
@@ -1890,11 +2136,9 @@ describe("defaultReasoningEffort resolution and clamping across providers", () =
       claudeId,
       codexId,
     ]);
-    expect([...getTextGenerationModelOptionsByInstance(orderedSettings, providers).keys()]).toEqual([
-      dshId,
-      claudeId,
-      codexId,
-    ]);
+    expect([...getTextGenerationModelOptionsByInstance(orderedSettings, providers).keys()]).toEqual(
+      [dshId, claudeId, codexId],
+    );
     expect(resolveAppModelSelectionState(orderedSettings, providers).instanceId).toBe(dshId);
   });
 });

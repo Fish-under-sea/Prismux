@@ -416,6 +416,74 @@ describe("scheduled task model defaults", () => {
       }),
     ).toEqual(environmentSelection);
   });
+
+  it("applies defaultReasoningEffort and honors project-level overrides on scheduled task defaults", () => {
+    const effortConfig = {
+      settings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        defaultReasoningEffort: "high" as const,
+        defaultModelSelection: {
+          instanceId,
+          model: "catalog-default",
+          options: [{ id: "reasoningEffort", value: "low" }],
+        },
+        projectSettingsOverrides: {
+          [projectId]: {
+            defaultReasoningEffort: "max" as const,
+          },
+        },
+      },
+      providers: [
+        {
+          ...config.providers[0]!,
+          models: [
+            {
+              slug: "catalog-default",
+              name: "Default",
+              isDefault: true,
+              isCustom: false,
+              capabilities: {
+                optionDescriptors: [
+                  {
+                    id: "reasoningEffort",
+                    label: "Reasoning",
+                    type: "select",
+                    role: "reasoning",
+                    options: [
+                      { id: "low", label: "Low" },
+                      { id: "medium", label: "Medium", isDefault: true },
+                      { id: "high", label: "High" },
+                      { id: "xhigh", label: "Extra High" },
+                    ],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    } as unknown as ServerConfig;
+
+    expect(
+      resolve(
+        {
+          ...effortConfig,
+          settings: { ...effortConfig.settings, defaultModelSelection: null },
+        },
+        null,
+      ),
+    ).toEqual({
+      instanceId,
+      model: "catalog-default",
+      options: [{ id: "reasoningEffort", value: "high" }],
+    });
+
+    expect(resolve(effortConfig, { id: projectId })).toEqual({
+      instanceId,
+      model: "catalog-default",
+      options: [{ id: "reasoningEffort", value: "xhigh" }],
+    });
+  });
 });
 
 it("rejects dedupe templates without a request placeholder", () => {

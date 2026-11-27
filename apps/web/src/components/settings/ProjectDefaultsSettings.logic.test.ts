@@ -1,10 +1,17 @@
-import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@prismux/core-contracts";
+import {
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+} from "@prismux/core-contracts";
 import { DEFAULT_UNIFIED_SETTINGS, type UnifiedSettings } from "@prismux/core-contracts/settings";
 import { createModelSelection } from "@prismux/core-shared/model";
 import { describe, expect, it } from "vite-plus/test";
 
 import { providerInstanceEntriesFor } from "../../providerInstances";
-import { resolveDefaultModelSettingsPresentation } from "./ProjectDefaultsSettings.logic";
+import {
+  buildDefaultReasoningEffortUpdatePatch,
+  resolveDefaultModelSettingsPresentation,
+} from "./ProjectDefaultsSettings.logic";
 
 const claudeId = ProviderInstanceId.make("claudeAgent");
 const high = [{ id: "effort", value: "high" }];
@@ -108,5 +115,163 @@ describe("resolveDefaultModelSettingsPresentation", () => {
     );
     expect(row.providerNote).toBeNull();
     expect(row.selection).toMatchObject({ instanceId: claudeId, model: "claude-sonnet-5" });
+  });
+
+  it("lets a project-level defaultReasoningEffort override an inherited environment model effort", () => {
+    const codexId = ProviderInstanceId.make("codex");
+    const codexProvider: ServerProvider = {
+      ...provider({ instanceId: "codex", driver: "codex", models: ["gpt-5.6"] }),
+      models: [
+        {
+          slug: "gpt-5.6",
+          name: "GPT-5.6",
+          isCustom: false,
+          isDefault: true,
+          capabilities: {
+            optionDescriptors: [
+              {
+                id: "reasoningEffort",
+                label: "Reasoning effort",
+                type: "select",
+                role: "reasoning",
+                options: ["low", "medium", "high", "xhigh"].map((id) => ({
+                  id,
+                  label: id,
+                  isDefault: id === "medium",
+                })),
+              },
+              {
+                id: "serviceTier",
+                label: "Speed",
+                type: "select",
+                options: [
+                  { id: "default", label: "Standard", isDefault: true },
+                  { id: "fast", label: "Fast" },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const settings: UnifiedSettings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      defaultModelSelection: createModelSelection(codexId, "gpt-5.6", [
+        { id: "reasoningEffort", value: "low" },
+        { id: "serviceTier", value: "fast" },
+      ]),
+      defaultReasoningEffort: "max",
+    };
+
+    const row = resolveDefaultModelSettingsPresentation({
+      entries: providerInstanceEntriesFor([codexProvider], settings, null),
+      providers: [codexProvider],
+      settings,
+      projectId: null,
+      inheritDefaultModelFromEnvironment: true,
+      projectOverridesDefaultReasoningEffort: true,
+    });
+
+    expect(row.providerNote).toBeNull();
+    expect(row.selection).toEqual(
+      createModelSelection(codexId, "gpt-5.6", [
+        { id: "serviceTier", value: "fast" },
+        { id: "reasoningEffort", value: "xhigh" },
+      ]),
+    );
+  });
+});
+
+describe("buildDefaultReasoningEffortUpdatePatch", () => {
+  const codexId = ProviderInstanceId.make("codex");
+  const claudeIdLocal = ProviderInstanceId.make("claudeAgent");
+
+  it("strips stale reasoning effort from defaultModelSelection and fallbackModelSelection while preserving other options", () => {
+    const patch = buildDefaultReasoningEffortUpdatePatch({
+      nextEffort: "max",
+      isProjectScope: false,
+      modelSource: "environment",
+      mixedModel: false,
+      mixedFallback: false,
+      defaultModelSelection: createModelSelection(codexId, "gpt-5.6", [
+        { id: "reasoningEffort", value: "medium" },
+        { id: "serviceTier", value: "fast" },
+      ]),
+      fallbackModelSelection: createModelSelection(claudeIdLocal, "claude-opus-4-8", [
+        { id: "effort", value: "low" },
+        { id: "fastMode", value: true },
+      ]),
+      providers: claudeAndCodex,
+    });
+
+    expect(patch).toEqual({
+      defaultReasoningEffort: "max",
+      defaultModelSelection: createModelSelection(codexId, "gpt-5.6", [
+        { id: "serviceTier", value: "fast" },
+      ]),
+      fallbackModelSelection: createModelSelection(claudeIdLocal, "claude-opus-4-8", [
+        { id: "fastMode", value: true },
+      ]),
+    });
+  });
+
+  it("does not create a project-level defaultModelSelection override when defaultModelSelection is inherited", () => {
+    const patch = buildDefaultReasoningEffortUpdatePatch({
+      nextEffort: "low",
+      isProjectScope: true,
+      modelSource: "environment",
+      mixedModel: false,
+      mixedFallback: false,
+      defaultModelSelection: createModelSelection(codexId, "gpt-5.6", [
+        { id: "reasoningEffort", value: "high" },
+      ]),
+      fallbackModelSelection: createModelSelection(claudeIdLocal, "claude-opus-4-8", [
+        { id: "effort", value: "high" },
+      ]),
+      providers: claudeAndCodex,
+    });
+
+    expect(patch).toEqual({ defaultReasoningEffort: "low" });
+  });
+
+  it("strips stale reasoning effort from a project-owned defaultModelSelection without touching fallbackModelSelection", () => {
+    const patch = buildDefaultReasoningEffortUpdatePatch({
+      nextEffort: "low",
+      isProjectScope: true,
+      modelSource: "project",
+      mixedModel: false,
+      mixedFallback: false,
+      defaultModelSelection: createModelSelection(codexId, "gpt-5.6", [
+        { id: "reasoningEffort", value: "high" },
+      ]),
+      fallbackModelSelection: createModelSelection(claudeIdLocal, "claude-opus-4-8", [
+        { id: "effort", value: "high" },
+      ]),
+      providers: claudeAndCodex,
+    });
+
+    expect(patch).toEqual({
+      defaultReasoningEffort: "low",
+      defaultModelSelection: createModelSelection(codexId, "gpt-5.6"),
+    });
+  });
+
+  it("does not overwrite mixed default or fallback models across environments", () => {
+    const patch = buildDefaultReasoningEffortUpdatePatch({
+      nextEffort: "medium",
+      isProjectScope: false,
+      modelSource: "environment",
+      mixedModel: true,
+      mixedFallback: true,
+      defaultModelSelection: createModelSelection(codexId, "gpt-5.6", [
+        { id: "reasoningEffort", value: "high" },
+      ]),
+      fallbackModelSelection: createModelSelection(claudeIdLocal, "claude-opus-4-8", [
+        { id: "effort", value: "high" },
+      ]),
+      providers: claudeAndCodex,
+    });
+
+    expect(patch).toEqual({ defaultReasoningEffort: "medium" });
   });
 });

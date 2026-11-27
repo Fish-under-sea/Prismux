@@ -13,6 +13,7 @@ import {
   ElementContextDetails,
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_REASONING_EFFORT,
   defaultInstanceIdForDriver,
   EnvironmentId,
   ModelSelection,
@@ -26,6 +27,7 @@ import {
   PreviewAnnotationPayloadSchema,
   PastedTextAttachmentSource,
   type PreviewAnnotationPayload,
+  type ReasoningEffortLevel,
   RuntimeMode,
   ThreadContextRecord,
   EnvironmentContextRecord,
@@ -63,9 +65,12 @@ import { waitForDraftHeroTransition } from "./components/chat/draftHeroTransitio
 import { getLocalStorageItem } from "./hooks/useLocalStorage";
 import { readThreadPreviewState } from "./previewStateStore";
 import {
+  applyDefaultReasoningEffortToSelection,
   readInstanceCustomModels,
   resolveAppModelSelection,
   resolveAppModelSelectionForInstance,
+  stripReasoningEffortFromSelection,
+  stripReasoningEffortOptions,
 } from "./modelSelection";
 import {
   DEFAULT_INTERACTION_MODE,
@@ -672,7 +677,11 @@ interface ComposerDraftStoreState {
   ) => void;
   /** Lets the thread's model show again once the server accepted this exact pick. */
   releaseModelSelection: (threadRef: ScopedThreadRef, modelSelection: ModelSelection) => void;
-  applyStickyState: (threadRef: ComposerThreadTarget) => void;
+  applyStickyState: (
+    threadRef: ComposerThreadTarget,
+    options?: { readonly stripReasoningEffort?: boolean },
+  ) => void;
+  clearStickyReasoningEffortOptions: () => void;
   setProviderModelOptions: (
     threadRef: ComposerThreadTarget,
     provider: ProviderDriverKind,
@@ -1317,6 +1326,10 @@ export function deriveEffectiveComposerModelState(input: {
   threadModelSelection: ModelSelection | null | undefined;
   projectModelSelection: ModelSelection | null | undefined;
   settings: UnifiedSettings;
+  /** Apply global/project `defaultReasoningEffort` for untouched new-thread drafts. */
+  applyDefaultReasoningEffort?: boolean;
+  /** Project-resolved `defaultReasoningEffort` override; falls back to `settings.defaultReasoningEffort`. */
+  defaultReasoningEffort?: ReasoningEffortLevel;
 }): EffectiveComposerModelState {
   const draft = draftModelSelectionApplies(input.draft, input.threadStarted) ? input.draft : null;
   const baseSelection = input.threadModelSelection ?? input.projectModelSelection;
@@ -1406,9 +1419,37 @@ export function deriveEffectiveComposerModelState(input: {
       : null,
   );
 
+  const baseModelOptions =
+    draftOptions || storedOptions ? { ...storedOptions, ...draftOptions } : null;
+
+  if (
+    input.applyDefaultReasoningEffort === true &&
+    !input.threadStarted &&
+    input.selectedInstanceId &&
+    selectedModel.length > 0
+  ) {
+    const currentOptions = baseModelOptions?.[input.selectedInstanceId];
+    const withDefaultEffort = applyDefaultReasoningEffortToSelection(
+      createModelSelection(input.selectedInstanceId, selectedModel, currentOptions),
+      input.providers,
+      input.defaultReasoningEffort ??
+        input.settings.defaultReasoningEffort ??
+        DEFAULT_REASONING_EFFORT,
+    );
+    if (withDefaultEffort.options && withDefaultEffort.options.length > 0) {
+      return {
+        selectedModel,
+        modelOptions: {
+          ...baseModelOptions,
+          [input.selectedInstanceId]: withDefaultEffort.options,
+        },
+      };
+    }
+  }
+
   return {
     selectedModel,
-    modelOptions: draftOptions || storedOptions ? { ...storedOptions, ...draftOptions } : null,
+    modelOptions: baseModelOptions,
   };
 }
 
@@ -3339,7 +3380,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             };
           });
         },
-        applyStickyState: (threadRef) => {
+        applyStickyState: (threadRef, options) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
           if (threadKey.length === 0) {
             return;
@@ -3349,7 +3390,17 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             const stickyActiveProvider = state.stickyActiveProvider;
             const existing = state.draftsByThreadKey[threadKey];
             const base = existing ?? createEmptyThreadDraft();
-            const nextMap = compactModelSelectionByProvider(stickyMap);
+            const sourceMap =
+              options?.stripReasoningEffort === true
+                ? (Object.fromEntries(
+                    Object.entries(stickyMap).flatMap(([providerKey, selection]) =>
+                      selection
+                        ? [[providerKey, stripReasoningEffortFromSelection(selection)] as const]
+                        : [],
+                    ),
+                  ) as Partial<Record<ProviderInstanceId, ModelSelection>>)
+                : stickyMap;
+            const nextMap = compactModelSelectionByProvider(sourceMap);
             if (
               Equal.equals(base.modelSelectionByProvider, nextMap) &&
               base.activeProvider === stickyActiveProvider &&
@@ -3370,6 +3421,84 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftsByThreadKey[threadKey] = nextDraft;
             }
             return { draftsByThreadKey: nextDraftsByThreadKey };
+          });
+        },
+        clearStickyReasoningEffortOptions: () => {
+          set((state) => {
+            let changed = false;
+
+            const nextStickyMap: Partial<Record<ProviderInstanceId, ModelSelection>> = {};
+            for (const [providerKey, selection] of Object.entries(
+              state.stickyModelSelectionByProvider,
+            )) {
+              if (!selection) continue;
+              const stripped = stripReasoningEffortFromSelection(selection);
+              if (stripped !== selection) changed = true;
+              nextStickyMap[providerKey as ProviderInstanceId] = stripped;
+            }
+
+            const nextStickyOptionsByModel: Partial<
+              Record<
+                ProviderInstanceId,
+                Partial<Record<string, ReadonlyArray<ProviderOptionSelection>>>
+              >
+            > = {};
+            for (const [providerKey, byModel] of Object.entries(
+              state.stickyOptionsByModelByProvider,
+            )) {
+              if (!byModel) continue;
+              const nextByModel: Partial<Record<string, ReadonlyArray<ProviderOptionSelection>>> =
+                {};
+              for (const [modelSlug, opts] of Object.entries(byModel)) {
+                if (!opts) continue;
+                const remaining = stripReasoningEffortOptions(opts);
+                if ((remaining?.length ?? 0) !== opts.length) {
+                  changed = true;
+                }
+                if (remaining && remaining.length > 0) {
+                  nextByModel[modelSlug] = remaining;
+                }
+              }
+              if (Object.keys(nextByModel).length > 0) {
+                nextStickyOptionsByModel[providerKey as ProviderInstanceId] = nextByModel;
+              }
+            }
+
+            const nextDraftsByThreadKey: Record<string, ComposerThreadDraftState> = {
+              ...state.draftsByThreadKey,
+            };
+            for (const [threadKey, draft] of Object.entries(state.draftsByThreadKey)) {
+              if (draft.modelSelectionExplicit === true) continue;
+              let draftChanged = false;
+              const nextByProvider: Partial<Record<ProviderInstanceId, ModelSelection>> = {};
+              for (const [providerKey, selection] of Object.entries(
+                draft.modelSelectionByProvider,
+              )) {
+                if (!selection) continue;
+                const stripped = stripReasoningEffortFromSelection(selection);
+                if (stripped !== selection) draftChanged = true;
+                nextByProvider[providerKey as ProviderInstanceId] = stripped;
+              }
+              if (draftChanged) {
+                changed = true;
+                const nextDraft: ComposerThreadDraftState = {
+                  ...draft,
+                  modelSelectionByProvider: nextByProvider,
+                };
+                if (shouldRemoveDraft(nextDraft)) {
+                  delete nextDraftsByThreadKey[threadKey];
+                } else {
+                  nextDraftsByThreadKey[threadKey] = nextDraft;
+                }
+              }
+            }
+
+            if (!changed) return state;
+            return {
+              stickyModelSelectionByProvider: nextStickyMap,
+              stickyOptionsByModelByProvider: nextStickyOptionsByModel,
+              draftsByThreadKey: nextDraftsByThreadKey,
+            };
           });
         },
         setPrompt: (threadRef, prompt) => {

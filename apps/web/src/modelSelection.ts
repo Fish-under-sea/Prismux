@@ -52,6 +52,12 @@ import {
 } from "./providerInstances";
 import { sortModelsForProviderInstance } from "./modelOrdering";
 import { resolveModelShortName } from "@prismux/client-runtime/provider-clients";
+export {
+  isReasoningEffortOptionId,
+  resolveProjectDefaultModelSelectionForDraft,
+  stripReasoningEffortFromSelection,
+  stripReasoningEffortOptions,
+} from "./reasoningEffort";
 
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
 const DEFAULT_TEXT_GENERATION_INSTANCE_ID = ProviderInstanceId.make("codex");
@@ -337,6 +343,8 @@ const REASONING_EFFORT_RANK: Readonly<Record<string, number>> = {
   max: 4,
   maximum: 4,
   highest: 4,
+  ultra: 4,
+  extreme: 4,
   ultrathink: 4,
   ultracode: 4,
 };
@@ -400,8 +408,9 @@ export function resolveClosestReasoningEffortOption(
       index,
       rank: readReasoningChoiceRank(choice),
     }))
-    .filter((entry): entry is { choice: (typeof concrete)[number]; index: number; rank: number } =>
-      entry.rank !== null,
+    .filter(
+      (entry): entry is { choice: (typeof concrete)[number]; index: number; rank: number } =>
+        entry.rank !== null,
     );
 
   if (ranked.length > 0) {

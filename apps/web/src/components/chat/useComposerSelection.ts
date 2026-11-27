@@ -22,7 +22,10 @@ import { scopeThreadRef } from "@prismux/client-runtime/environment";
 import { type SetStateAction } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { toastManager } from "../ui/toast";
-import { resolveAppModelSelectionForInstance } from "../../modelSelection";
+import {
+  resolveAppModelSelectionForInstance,
+  stripReasoningEffortOptions,
+} from "../../modelSelection";
 import {
   draftModelSelectionApplies,
   resolveNewDraftStartFromOrigin,
@@ -95,12 +98,18 @@ export function resolveModelSwitchOptions(input: {
   readonly threadOptions: ReadonlyArray<ProviderOptionSelection> | undefined;
   readonly previousOptions: ReadonlyArray<ProviderOptionSelection> | undefined;
   readonly sameInstance: boolean;
+  /** Strip stale remembered reasoning effort when switching models in a blank local draft. */
+  readonly stripRememberedReasoningEffort?: boolean;
 }): ReadonlyArray<ProviderOptionSelection> | undefined {
   const descriptors = input.targetModel?.capabilities?.optionDescriptors;
   const sanitize = (options: ReadonlyArray<ProviderOptionSelection> | undefined) =>
     descriptors !== undefined ? filterValidModelOptions(options, descriptors) : options;
 
-  const remembered = sanitize(input.rememberedOptions);
+  const candidateRemembered =
+    input.stripRememberedReasoningEffort === true
+      ? stripReasoningEffortOptions(input.rememberedOptions, input.targetModel?.capabilities)
+      : input.rememberedOptions;
+  const remembered = sanitize(candidateRemembered);
   if (remembered !== undefined && remembered.length > 0) return remembered;
 
   const fromThread = sanitize(input.threadOptions);
@@ -262,8 +271,7 @@ export function useComposerSelection(input: ComposerSelectionInput) {
       useComposerDraftStore.getState().stickyOptionsByModelByProvider[instanceId]?.[resolvedModel];
     const threadSelection = activeThread.modelSelection;
     const targetModel = entry?.models.find(
-      (candidate) =>
-        candidate.slug === resolvedModel || candidate.aliases?.includes(resolvedModel),
+      (candidate) => candidate.slug === resolvedModel || candidate.aliases?.includes(resolvedModel),
     );
     const threadOptionsForModel =
       threadSelection.instanceId === instanceId &&
@@ -283,6 +291,7 @@ export function useComposerSelection(input: ComposerSelectionInput) {
       threadOptions: threadOptionsForModel,
       previousOptions: shownSelection.options,
       sameInstance: shownSelection.instanceId === instanceId,
+      stripRememberedReasoningEffort: isLocalDraftThread,
     });
     const nextModelSelection: ModelSelection =
       pickOptions !== undefined && pickOptions.length > 0

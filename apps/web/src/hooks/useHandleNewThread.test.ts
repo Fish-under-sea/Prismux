@@ -398,6 +398,9 @@ describe("useNewThreadHandler", () => {
 
     expect(opened).toEqual({ draftId: "draft-delayed", threadId: "thread-delayed" });
     expect(testState.router.navigate).toHaveBeenCalledOnce();
+    expect(testState.draftStore.applyStickyState).toHaveBeenCalledWith("draft-delayed", {
+      stripReasoningEffort: true,
+    });
   });
 
   it("allocates an independent draft and preserves the previous empty draft when forceNew and modelSelection are passed", async () => {

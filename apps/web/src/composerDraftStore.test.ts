@@ -2182,6 +2182,70 @@ describe("composerDraftStore sticky composer settings", () => {
 
     expect(draftByKey(draftId)).toBeUndefined();
   });
+
+  it("strips stale reasoning effort while preserving non-reasoning options when applyStickyState strips effort", () => {
+    const store = useComposerDraftStore.getState();
+    const draftId = DraftId.make("draft-strip-sticky-effort");
+
+    store.setStickyModelSelection(
+      modelSelection(CODEX_DRIVER, "gpt-5.4", {
+        reasoningEffort: "low",
+        serviceTier: "fast",
+      }),
+    );
+    store.applyStickyState(draftId, { stripReasoningEffort: true });
+
+    expect(draftByKey(draftId)).toMatchObject({
+      activeProvider: CODEX_INSTANCE,
+      modelSelectionByProvider: {
+        [CODEX_INSTANCE]: modelSelection(CODEX_DRIVER, "gpt-5.4", {
+          serviceTier: "fast",
+        }),
+      },
+    });
+  });
+
+  it("clears sticky and non-explicit draft reasoning effort while preserving explicit drafts and non-reasoning options", () => {
+    const store = useComposerDraftStore.getState();
+    const seededDraftId = DraftId.make("draft-non-explicit");
+    const explicitDraftId = DraftId.make("draft-explicit-effort");
+
+    store.setStickyModelSelection(
+      modelSelection(CODEX_DRIVER, "gpt-5.4", {
+        reasoningEffort: "low",
+        serviceTier: "fast",
+      }),
+    );
+    store.setProviderModelOptions(
+      explicitDraftId,
+      CODEX_DRIVER,
+      toSelections({ reasoningEffort: "low", serviceTier: "fast" }),
+      { instanceId: CODEX_INSTANCE, model: "gpt-5.4", persistSticky: true },
+    );
+    store.setModelSelection(
+      seededDraftId,
+      modelSelection(CODEX_DRIVER, "gpt-5.4", {
+        reasoningEffort: "low",
+        serviceTier: "fast",
+      }),
+    );
+
+    store.clearStickyReasoningEffortOptions();
+
+    const state = useComposerDraftStore.getState();
+    expect(state.stickyModelSelectionByProvider[CODEX_INSTANCE]).toEqual(
+      modelSelection(CODEX_DRIVER, "gpt-5.4", { serviceTier: "fast" }),
+    );
+    expect(state.stickyOptionsByModelByProvider[CODEX_INSTANCE]?.["gpt-5.4"]).toEqual(
+      toSelections({ serviceTier: "fast" }),
+    );
+    expect(draftByKey(seededDraftId)?.modelSelectionByProvider[CODEX_INSTANCE]).toEqual(
+      modelSelection(CODEX_DRIVER, "gpt-5.4", { serviceTier: "fast" }),
+    );
+    expect(draftByKey(explicitDraftId)?.modelSelectionByProvider[CODEX_INSTANCE]).toEqual(
+      modelSelection(CODEX_DRIVER, "gpt-5.4", { reasoningEffort: "low", serviceTier: "fast" }),
+    );
+  });
 });
 
 describe("composerDraftStore model seed migration", () => {
@@ -2562,7 +2626,8 @@ describe("composerDraftStore inline context references", () => {
     screenshot: null,
     createdAt: "2026-01-01T00:00:00.000Z",
   };
-  const annotationLink = "[Bigger](prismux-context://v1/preview-annotation/preview-annotation_ann-1)";
+  const annotationLink =
+    "[Bigger](prismux-context://v1/preview-annotation/preview-annotation_ann-1)";
 
   beforeEach(() => {
     resetComposerDraftStore();

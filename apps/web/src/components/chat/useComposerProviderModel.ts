@@ -17,6 +17,7 @@ import {
   type ProviderInstanceEntry,
 } from "../../providerInstances";
 import { type UnifiedSettings } from "@prismux/core-contracts/settings";
+import { resolveProjectSettings } from "@prismux/core-shared/projectSettings";
 import { getComposerPromptInjectionState, getComposerProviderState } from "./composerProviderState";
 import { resolveComposerProviderSelection } from "../ChatView.logic";
 
@@ -37,6 +38,7 @@ export function useComposerProviderModel(
     readonly projectModelSelection: ModelSelection | null | undefined;
     readonly promptInjectionState: ReturnType<typeof getComposerPromptInjectionState>;
     readonly threadStarted: boolean;
+    readonly applyDefaultReasoningEffort?: boolean;
   },
 ) {
   const {
@@ -51,10 +53,16 @@ export function useComposerProviderModel(
     lockedProvider,
     lockedInstanceId,
     threadStarted,
+    applyDefaultReasoningEffort = typeof threadRef === "string",
   } = input;
   const draftModelState = useComposerDraftModelState(threadRef);
-  const providerInstanceEntries: ReadonlyArray<ProviderInstanceEntry> =
-    providerInstanceEntriesFor(providerStatuses, settings, activeProjectId);
+  const effectiveDefaultReasoningEffort = resolveProjectSettings(settings, activeProjectId).settings
+    .defaultReasoningEffort;
+  const providerInstanceEntries: ReadonlyArray<ProviderInstanceEntry> = providerInstanceEntriesFor(
+    providerStatuses,
+    settings,
+    activeProjectId,
+  );
   const selection = resolveComposerProviderSelection({
     entries: providerInstanceEntries,
     candidateInstanceIds: [
@@ -80,6 +88,8 @@ export function useComposerProviderModel(
     threadModelSelection,
     projectModelSelection,
     settings,
+    applyDefaultReasoningEffort,
+    defaultReasoningEffort: effectiveDefaultReasoningEffort,
   });
   const selectedProviderModels = selection.selectedProviderEntry?.models ?? NO_PROVIDER_MODELS;
   const composerProviderState = getComposerProviderState({

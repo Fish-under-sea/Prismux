@@ -65,6 +65,7 @@ import {
 } from "~/state/session";
 import { environmentIdsKey } from "~/state/environmentAtomList";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { useComposerDraftStore } from "~/composerDraftStore";
 
 const CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE = "[CLIENT_SETTINGS]";
 
@@ -669,6 +670,9 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
       });
     }
     if (Object.keys(serverPatch).length > 0 && canWriteServerPatch) {
+      if (serverPatch.defaultReasoningEffort !== undefined) {
+        useComposerDraftStore.getState().clearStickyReasoningEffortOptions();
+      }
       const { sharedPatch, localPatch } = splitSharedServerPatch(serverPatch);
       // Dropping the write silently leaves the control looking saved.
       const warnUnsaved = (description = m(PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE)) => {

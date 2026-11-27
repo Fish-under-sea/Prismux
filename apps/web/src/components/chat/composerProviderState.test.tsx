@@ -499,6 +499,31 @@ describe("resolveModelSwitchOptions and unobserved effort display", () => {
     ).toBeUndefined();
   });
 
+  it("strips remembered reasoning effort on blank local draft model switches while keeping non-reasoning options", () => {
+    const modelWithFast: ServerProviderModel = {
+      ...argonModel,
+      capabilities: {
+        optionDescriptors: [
+          ...argonModel.capabilities!.optionDescriptors!,
+          { id: "fastMode", label: "Fast Mode", type: "boolean", currentValue: false },
+        ],
+      },
+    };
+    expect(
+      resolveModelSwitchOptions({
+        targetModel: modelWithFast,
+        rememberedOptions: [
+          { id: "thought_level", value: "low" },
+          { id: "fastMode", value: true },
+        ],
+        threadOptions: undefined,
+        previousOptions: undefined,
+        sameInstance: false,
+        stripRememberedReasoningEffort: true,
+      }),
+    ).toEqual([{ id: "fastMode", value: true }]);
+  });
+
   it("carries a compatible reasoning level onto a model whose thought_level default is unobserved", () => {
     expect(
       resolveModelSwitchOptions({

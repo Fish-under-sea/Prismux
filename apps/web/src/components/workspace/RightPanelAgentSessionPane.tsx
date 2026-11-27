@@ -14,6 +14,8 @@ import {
   type ScopedThreadRef,
 } from "@prismux/core-contracts";
 import { createModelSelection } from "@prismux/core-shared/model";
+import { resolveProjectSettings } from "@prismux/core-shared/projectSettings";
+import { applyDefaultReasoningEffortToSelection } from "../../modelSelection";
 import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowUpRightIcon,
@@ -44,19 +46,9 @@ import {
   resolveProviderEntryDisplayName,
 } from "../../prismux/agentBrand";
 import { LocalizedErrorCard } from "../../prismux/LocalizedErrorCard";
-import {
-  providerInstanceEntriesFor,
-  type ProviderInstanceEntry,
-} from "../../providerInstances";
-import {
-  useRightPanelStore,
-  type AgentSessionSurface,
-} from "../../rightPanelStore";
-import {
-  useProjects,
-  useVisibleThreadShells,
-  waitForThreadShell,
-} from "../../state/entities";
+import { providerInstanceEntriesFor, type ProviderInstanceEntry } from "../../providerInstances";
+import { useRightPanelStore, type AgentSessionSurface } from "../../rightPanelStore";
+import { useProjects, useVisibleThreadShells, waitForThreadShell } from "../../state/entities";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
@@ -79,9 +71,7 @@ export interface RightPanelAgentSessionPaneProps {
   readonly surface: AgentSessionSurface;
   readonly activeProjectRef: ScopedProjectRef | null;
   readonly sideChatParentPanel: SideChatParentPanel | null;
-  readonly onUpdateSurface: (
-    patch: Partial<Omit<AgentSessionSurface, "id" | "kind">>,
-  ) => void;
+  readonly onUpdateSurface: (patch: Partial<Omit<AgentSessionSurface, "id" | "kind">>) => void;
   readonly onClose: () => void;
 }
 
@@ -293,7 +283,18 @@ export const RightPanelAgentSessionPane = memo(function RightPanelAgentSessionPa
       const targetThreadId = newThreadId();
       const createdAt = new Date().toISOString();
       const title = trimmed.length > 44 ? `${trimmed.slice(0, 44)}…` : trimmed;
-      const modelSelection = createModelSelection(activeInstanceId, activeModel || DEFAULT_MODEL);
+      const targetServerConfig =
+        environmentServerConfigs.get(projectRef.environmentId) ??
+        [...environmentServerConfigs.values()][0];
+      const targetDefaultEffort = resolveProjectSettings(
+        targetServerConfig?.settings ?? DEFAULT_SERVER_SETTINGS,
+        projectRef.projectId,
+      ).settings.defaultReasoningEffort;
+      const modelSelection = applyDefaultReasoningEffortToSelection(
+        createModelSelection(activeInstanceId, activeModel || DEFAULT_MODEL),
+        targetServerConfig?.providers ?? [],
+        targetDefaultEffort,
+      );
 
       const result = await startThreadTurn({
         environmentId: projectRef.environmentId,

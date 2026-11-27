@@ -46,6 +46,13 @@ const BACKGROUND_ACTIVITY_PROFILE_LABELS: Record<string, string> = {
   custom: msg("Advanced", { $context: "background activity power profile" }),
 };
 
+const REASONING_EFFORT_LABELS: Record<string, string> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  max: "Max",
+};
+
 function formatValue(
   key: keyof ServerSettings,
   value: unknown,
@@ -77,6 +84,9 @@ function formatValue(
       : String(value);
   }
   if (typeof value === "string") {
+    if (key === "defaultReasoningEffort" && value in REASONING_EFFORT_LABELS) {
+      return REASONING_EFFORT_LABELS[value]!;
+    }
     if (key === "defaultThreadEnvMode" && (value === "local" || value === "worktree")) {
       return resolveEnvModeLabel(value, resolve);
     }
