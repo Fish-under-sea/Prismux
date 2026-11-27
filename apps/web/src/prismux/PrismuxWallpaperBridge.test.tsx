@@ -26,7 +26,9 @@ import {
 import { TooltipProvider } from "../components/ui/tooltip";
 import {
   PrismuxTopbarControls,
+  PrismuxWallpaperBackdrop,
   PrismuxWallpaperQuickPanel,
+  buildFreshWallpaperMediaUrl,
   createEngineAwareWallpaperHost,
   resolveWallpaperLiveRuntimeUrl,
 } from "./PrismuxWallpaperBridge";
@@ -335,7 +337,8 @@ describe("PrismuxWallpaperBridge — In-place InlineAppearanceStudio & Topbar Ch
 
   it("rewrites web wallpaper URLs to zero-cookie URL-path token route /v1/wallpapers/web-t/<token>/<id>/...", async () => {
     const prevUrl = (globalThis as { __PRISMUX_DAEMON_URL__?: unknown }).__PRISMUX_DAEMON_URL__;
-    const prevToken = (globalThis as { __PRISMUX_DAEMON_TOKEN__?: unknown }).__PRISMUX_DAEMON_TOKEN__;
+    const prevToken = (globalThis as { __PRISMUX_DAEMON_TOKEN__?: unknown })
+      .__PRISMUX_DAEMON_TOKEN__;
     (globalThis as { __PRISMUX_DAEMON_URL__?: unknown }).__PRISMUX_DAEMON_URL__ =
       "http://127.0.0.1:47910";
     (globalThis as { __PRISMUX_DAEMON_TOKEN__?: unknown }).__PRISMUX_DAEMON_TOKEN__ =
@@ -348,18 +351,16 @@ describe("PrismuxWallpaperBridge — In-place InlineAppearanceStudio & Topbar Ch
         "http://127.0.0.1:47910/v1/wallpapers/web-t/secret-wp-token/3650874083/index.html",
       );
       expect(
-        client.resolveMediaUrl("http://127.0.0.1:47910/v1/wallpapers/web/3650874083/index.html?token=old"),
-      ).toBe(
-        "http://127.0.0.1:47910/v1/wallpapers/web-t/secret-wp-token/3650874083/index.html",
-      );
+        client.resolveMediaUrl(
+          "http://127.0.0.1:47910/v1/wallpapers/web/3650874083/index.html?token=old",
+        ),
+      ).toBe("http://127.0.0.1:47910/v1/wallpapers/web-t/secret-wp-token/3650874083/index.html");
       // Idempotent if already tokenized in path
       expect(
         client.resolveMediaUrl(
           "http://127.0.0.1:47910/v1/wallpapers/web-t/secret-wp-token/3650874083/index.html",
         ),
-      ).toBe(
-        "http://127.0.0.1:47910/v1/wallpapers/web-t/secret-wp-token/3650874083/index.html",
-      );
+      ).toBe("http://127.0.0.1:47910/v1/wallpapers/web-t/secret-wp-token/3650874083/index.html");
       expect(client.buildMediaUrl("web", "3650874083")).toBe(
         "http://127.0.0.1:47910/v1/wallpapers/web-t/secret-wp-token/3650874083/index.html",
       );
@@ -382,16 +383,12 @@ describe("PrismuxWallpaperBridge — In-place InlineAppearanceStudio & Topbar Ch
       // Idempotent when already tokenized in path
       expect(
         client.resolveMediaUrl("/v1/wallpapers/scene-t/secret-wp-token/2966081148/index.html"),
-      ).toBe(
-        "http://127.0.0.1:47910/v1/wallpapers/scene-t/secret-wp-token/2966081148/index.html",
-      );
+      ).toBe("http://127.0.0.1:47910/v1/wallpapers/scene-t/secret-wp-token/2966081148/index.html");
       expect(
         client.resolveMediaUrl(
           "http://127.0.0.1:47910/v1/wallpapers/scene-t/secret-wp-token/2966081148/index.html",
         ),
-      ).toBe(
-        "http://127.0.0.1:47910/v1/wallpapers/scene-t/secret-wp-token/2966081148/index.html",
-      );
+      ).toBe("http://127.0.0.1:47910/v1/wallpapers/scene-t/secret-wp-token/2966081148/index.html");
       expect(client.buildMediaUrl("scene", "2966081148")).toBe(
         "http://127.0.0.1:47910/v1/wallpapers/scene-t/secret-wp-token/2966081148/index.html",
       );
@@ -417,7 +414,8 @@ describe("PrismuxWallpaperBridge — In-place InlineAppearanceStudio & Topbar Ch
 
   it("maps sceneLiveSupported Steam Scene wallpapers to /v1/wallpapers/scene-t/<token>/... and mounts WebWallpaperStage", async () => {
     const prevUrl = (globalThis as { __PRISMUX_DAEMON_URL__?: unknown }).__PRISMUX_DAEMON_URL__;
-    const prevToken = (globalThis as { __PRISMUX_DAEMON_TOKEN__?: unknown }).__PRISMUX_DAEMON_TOKEN__;
+    const prevToken = (globalThis as { __PRISMUX_DAEMON_TOKEN__?: unknown })
+      .__PRISMUX_DAEMON_TOKEN__;
     (globalThis as { __PRISMUX_DAEMON_URL__?: unknown }).__PRISMUX_DAEMON_URL__ =
       "http://127.0.0.1:47910";
     (globalThis as { __PRISMUX_DAEMON_TOKEN__?: unknown }).__PRISMUX_DAEMON_TOKEN__ =
@@ -601,6 +599,87 @@ describe("PrismuxWallpaperBridge — In-place InlineAppearanceStudio & Topbar Ch
       } finally {
         uiStore.dispose();
       }
+    } finally {
+      (globalThis as { __PRISMUX_DAEMON_URL__?: unknown }).__PRISMUX_DAEMON_URL__ = prevUrl;
+      (globalThis as { __PRISMUX_DAEMON_TOKEN__?: unknown }).__PRISMUX_DAEMON_TOKEN__ = prevToken;
+    }
+  });
+
+  it("rebuilds fresh authenticated media URLs after daemon token/port rotation and preserves blob/data URLs", async () => {
+    const prevUrl = (globalThis as { __PRISMUX_DAEMON_URL__?: unknown }).__PRISMUX_DAEMON_URL__;
+    const prevToken = (globalThis as { __PRISMUX_DAEMON_TOKEN__?: unknown })
+      .__PRISMUX_DAEMON_TOKEN__;
+    (globalThis as { __PRISMUX_DAEMON_URL__?: unknown }).__PRISMUX_DAEMON_URL__ =
+      "http://127.0.0.1:47999";
+    (globalThis as { __PRISMUX_DAEMON_TOKEN__?: unknown }).__PRISMUX_DAEMON_TOKEN__ =
+      "rotated-token-v2";
+    try {
+      const client = new PrismuxDaemonClient();
+      await client.getConnectionInfo(true);
+
+      // Video wallpaper holding an old port & old token gets rebuilt with the new port & token
+      expect(
+        buildFreshWallpaperMediaUrl(client, {
+          id: "steam:3839308585",
+          type: "video",
+          source: "steam",
+          mediaUrl:
+            "http://127.0.0.1:47910/v1/wallpapers/media/steam%3A3839308585?token=stale-token-v1",
+        }),
+      ).toBe(
+        "http://127.0.0.1:47999/v1/wallpapers/media/steam%3A3839308585?token=rotated-token-v2",
+      );
+
+      // Web & live Scene wallpapers rebuild fresh path-tokenized URLs
+      expect(
+        buildFreshWallpaperMediaUrl(client, {
+          id: "steam:3650874083",
+          type: "web",
+          source: "steam",
+          mediaUrl:
+            "http://127.0.0.1:47910/v1/wallpapers/web-t/stale-token-v1/steam%3A3650874083/index.html",
+        }),
+      ).toBe(
+        "http://127.0.0.1:47999/v1/wallpapers/web-t/rotated-token-v2/steam%3A3650874083/index.html",
+      );
+      expect(
+        buildFreshWallpaperMediaUrl(client, {
+          id: "steam:2966081148",
+          type: "scene",
+          source: "steam",
+          sceneLiveSupported: true,
+          mediaUrl:
+            "http://127.0.0.1:47910/v1/wallpapers/scene-t/stale-token-v1/steam%3A2966081148/index.html",
+        }),
+      ).toBe(
+        "http://127.0.0.1:47999/v1/wallpapers/scene-t/rotated-token-v2/steam%3A2966081148/index.html",
+      );
+
+      // Offline blob:/data: URLs stay untouched
+      expect(
+        buildFreshWallpaperMediaUrl(client, {
+          id: "local-1",
+          type: "video",
+          source: "custom",
+          mediaUrl: "blob:http://localhost/local-clip",
+        }),
+      ).toBe("blob:http://localhost/local-clip");
+      expect(
+        buildFreshWallpaperMediaUrl(client, {
+          id: "local-2",
+          type: "image",
+          source: "custom",
+          mediaUrl: "data:image/png;base64,AAAA",
+        }),
+      ).toBe("data:image/png;base64,AAAA");
+
+      // SSR sanity check: PrismuxWallpaperBackdrop stays empty when no wallpaper is selected
+      const emptyHtml = renderToStaticMarkup(
+        <PrismuxRuntimeProvider>
+          <PrismuxWallpaperBackdrop />
+        </PrismuxRuntimeProvider>,
+      );
+      expect(emptyHtml).toBe("");
     } finally {
       (globalThis as { __PRISMUX_DAEMON_URL__?: unknown }).__PRISMUX_DAEMON_URL__ = prevUrl;
       (globalThis as { __PRISMUX_DAEMON_TOKEN__?: unknown }).__PRISMUX_DAEMON_TOKEN__ = prevToken;

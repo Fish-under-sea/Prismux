@@ -1,11 +1,6 @@
 /**
- * Single-slot metadata-only video prewarm queue (ported from dsh-wallpaper-engine video-layer.js).
- *
- * Invariants:
- *   1. Never calls `play()` or enables `autoplay` — prewarm warms only moov/demuxer metadata
- *      (`preload = "metadata"`, muted) without spinning up a second hardware video decoder.
- *   2. Idempotent for the same URL.
- *   3. Single slot + 20s TTL: switching candidate disposes the previous element cleanly.
+ * Single-slot metadata-only video prewarm queue (20s TTL, muted, no autoplay/play()).
+ * Skips blob: URLs and never tears down an element already attached to the live DOM.
  */
 
 const VIDEO_WARM_TTL_MS = 20_000;
@@ -31,6 +26,10 @@ export function disposePrewarmedVideo(): void {
   if (entry.timer !== null) {
     clearTimeout(entry.timer);
   }
+  // Never tear down an element that has already been mounted into the live DOM stage
+  if (entry.el.isConnected) {
+    return;
+  }
   try {
     entry.el.pause();
     const startedLoading = entry.el.readyState > 0 || entry.el.networkState === 2;
@@ -46,7 +45,12 @@ export function disposePrewarmedVideo(): void {
 
 export function prewarmVideo(url: string | null | undefined): void {
   const normalized = typeof url === "string" ? url.trim() : "";
-  if (!normalized || typeof document === "undefined" || typeof document.createElement !== "function") {
+  if (
+    !normalized ||
+    /^blob:/i.test(normalized) ||
+    typeof document === "undefined" ||
+    typeof document.createElement !== "function"
+  ) {
     return;
   }
   if (warmEntry && warmEntry.url === normalized) {

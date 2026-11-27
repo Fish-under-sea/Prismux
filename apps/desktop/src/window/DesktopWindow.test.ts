@@ -44,10 +44,11 @@ import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
+import * as ElectronPowerMonitor from "../electron/ElectronPowerMonitor.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
-import { SNAP_SHOT_EVENT_CHANNEL } from "../ipc/channels.ts";
+import { PRISMUX_WINDOW_OCCLUSION_CHANNEL, SNAP_SHOT_EVENT_CHANNEL } from "../ipc/channels.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
 import {
@@ -882,127 +883,129 @@ describe("DesktopWindow", () => {
     }),
   );
 
-  it.effect("triggers force reload and DevTools directly on Ctrl+Shift+R / Ctrl+Shift+I (win32) and Cmd+Shift+R / Alt+Cmd+I (darwin)", () =>
-    Effect.gen(function* () {
-      assert.equal(
-        DesktopWindow.matchMainWindowContentsShortcut(
-          {
-            type: "keyDown",
-            key: "R",
-            code: "KeyR",
-            control: true,
-            shift: true,
-            alt: false,
-            meta: false,
-            isAutoRepeat: false,
-          },
-          "win32",
-        ),
-        "forceReload",
-      );
-      assert.equal(
-        DesktopWindow.matchMainWindowContentsShortcut(
-          {
-            type: "keyDown",
-            key: "I",
-            code: "KeyI",
-            control: true,
-            shift: true,
-            alt: false,
-            meta: false,
-            isAutoRepeat: false,
-          },
-          "win32",
-        ),
-        "toggleDevTools",
-      );
-      assert.equal(
-        DesktopWindow.matchMainWindowContentsShortcut(
-          {
-            type: "keyDown",
-            key: "r",
-            code: "KeyR",
-            control: false,
-            shift: true,
-            alt: false,
-            meta: true,
-            isAutoRepeat: false,
-          },
-          "darwin",
-        ),
-        "forceReload",
-      );
-      assert.equal(
-        DesktopWindow.matchMainWindowContentsShortcut(
-          {
-            type: "keyDown",
-            key: "i",
-            code: "KeyI",
-            control: false,
-            shift: false,
-            alt: true,
-            meta: true,
-            isAutoRepeat: false,
-          },
-          "darwin",
-        ),
-        "toggleDevTools",
-      );
-
-      const fakeWindow = makeFakeBrowserWindow();
-      const createCount = yield* Ref.make(0);
-      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
-      const layer = layerTest({
-        window: fakeWindow.window,
-        createCount,
-        mainWindow,
-        platform: "win32",
-      });
-
-      yield* Effect.gen(function* () {
-        const desktopWindow = yield* DesktopWindow.DesktopWindow;
-        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
-
-        const beforeInput = fakeWindow.webContentsListeners.get("before-input-event");
-        if (!beforeInput) {
-          return yield* Effect.die("before-input-event listener was not registered");
-        }
-
-        let preventedReload = false;
-        beforeInput(
-          { preventDefault: () => (preventedReload = true) },
-          {
-            type: "keyDown",
-            isAutoRepeat: false,
-            key: "R",
-            code: "KeyR",
-            control: true,
-            shift: true,
-            alt: false,
-            meta: false,
-          },
+  it.effect(
+    "triggers force reload and DevTools directly on Ctrl+Shift+R / Ctrl+Shift+I (win32) and Cmd+Shift+R / Alt+Cmd+I (darwin)",
+    () =>
+      Effect.gen(function* () {
+        assert.equal(
+          DesktopWindow.matchMainWindowContentsShortcut(
+            {
+              type: "keyDown",
+              key: "R",
+              code: "KeyR",
+              control: true,
+              shift: true,
+              alt: false,
+              meta: false,
+              isAutoRepeat: false,
+            },
+            "win32",
+          ),
+          "forceReload",
         );
-        assert.isTrue(preventedReload);
-        assert.equal(fakeWindow.reloadIgnoringCache.mock.calls.length, 1);
-
-        let preventedDevTools = false;
-        beforeInput(
-          { preventDefault: () => (preventedDevTools = true) },
-          {
-            type: "keyDown",
-            isAutoRepeat: false,
-            key: "I",
-            code: "KeyI",
-            control: true,
-            shift: true,
-            alt: false,
-            meta: false,
-          },
+        assert.equal(
+          DesktopWindow.matchMainWindowContentsShortcut(
+            {
+              type: "keyDown",
+              key: "I",
+              code: "KeyI",
+              control: true,
+              shift: true,
+              alt: false,
+              meta: false,
+              isAutoRepeat: false,
+            },
+            "win32",
+          ),
+          "toggleDevTools",
         );
-        assert.isTrue(preventedDevTools);
-        assert.equal(fakeWindow.toggleDevTools.mock.calls.length, 1);
-      }).pipe(Effect.provide(layer));
-    }),
+        assert.equal(
+          DesktopWindow.matchMainWindowContentsShortcut(
+            {
+              type: "keyDown",
+              key: "r",
+              code: "KeyR",
+              control: false,
+              shift: true,
+              alt: false,
+              meta: true,
+              isAutoRepeat: false,
+            },
+            "darwin",
+          ),
+          "forceReload",
+        );
+        assert.equal(
+          DesktopWindow.matchMainWindowContentsShortcut(
+            {
+              type: "keyDown",
+              key: "i",
+              code: "KeyI",
+              control: false,
+              shift: false,
+              alt: true,
+              meta: true,
+              isAutoRepeat: false,
+            },
+            "darwin",
+          ),
+          "toggleDevTools",
+        );
+
+        const fakeWindow = makeFakeBrowserWindow();
+        const createCount = yield* Ref.make(0);
+        const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+        const layer = layerTest({
+          window: fakeWindow.window,
+          createCount,
+          mainWindow,
+          platform: "win32",
+        });
+
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+          const beforeInput = fakeWindow.webContentsListeners.get("before-input-event");
+          if (!beforeInput) {
+            return yield* Effect.die("before-input-event listener was not registered");
+          }
+
+          let preventedReload = false;
+          beforeInput(
+            { preventDefault: () => (preventedReload = true) },
+            {
+              type: "keyDown",
+              isAutoRepeat: false,
+              key: "R",
+              code: "KeyR",
+              control: true,
+              shift: true,
+              alt: false,
+              meta: false,
+            },
+          );
+          assert.isTrue(preventedReload);
+          assert.equal(fakeWindow.reloadIgnoringCache.mock.calls.length, 1);
+
+          let preventedDevTools = false;
+          beforeInput(
+            { preventDefault: () => (preventedDevTools = true) },
+            {
+              type: "keyDown",
+              isAutoRepeat: false,
+              key: "I",
+              code: "KeyI",
+              control: true,
+              shift: true,
+              alt: false,
+              meta: false,
+            },
+          );
+          assert.isTrue(preventedDevTools);
+          assert.equal(fakeWindow.toggleDevTools.mock.calls.length, 1);
+        }).pipe(Effect.provide(layer));
+      }),
   );
 
   it.effect("reloads only the browser page selected through its context menu", () =>
@@ -1836,6 +1839,7 @@ describe("DesktopWindow", () => {
         fakeWindow.windowListeners.get("ready-to-show")?.();
         yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
         operations.length = 0;
+        fakeWindow.send.mockClear();
         foreground = "Discord";
         yield* desktopWindow.dispatchSnapShotEvent({ type: "started", id: captureOne });
         assert.equal(foreground, "Prismux");
@@ -1874,5 +1878,115 @@ describe("DesktopWindow", () => {
         assert.equal(onReveal.mock.calls.length, 0);
       }).pipe(Effect.provide(layer));
     }),
+  );
+
+  it.effect(
+    "emits authoritative occlusion recovery on reveal, restore/maximize/move, and powerMonitor unlock/resume without getting stuck true",
+    () =>
+      Effect.gen(function* () {
+        const fakeWindow = makeFakeBrowserWindow();
+        const createCount = yield* Ref.make(0);
+        const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+        const powerListeners = new Map<string, Set<() => void>>();
+        const powerMonitorLayer = Layer.succeed(ElectronPowerMonitor.ElectronPowerMonitor, {
+          isOnBatteryPower: Effect.succeed(false),
+          getSystemIdleTime: Effect.succeed(0),
+          getSystemIdleState: () => Effect.succeed("active" as const),
+          getCurrentThermalState: Effect.succeed("nominal" as const),
+          onSimpleEvent: (eventName, listener) =>
+            Effect.acquireRelease(
+              Effect.sync(() => {
+                let set = powerListeners.get(eventName);
+                if (!set) {
+                  set = new Set();
+                  powerListeners.set(eventName, set);
+                }
+                set.add(listener);
+              }),
+              () =>
+                Effect.sync(() => {
+                  powerListeners.get(eventName)?.delete(listener);
+                }),
+            ).pipe(Effect.asVoid),
+          onThermalStateChange: () => Effect.void,
+          onSpeedLimitChange: () => Effect.void,
+        });
+        const layer = layerTest({
+          window: fakeWindow.window,
+          createCount,
+          mainWindow,
+          platform: "win32",
+        }).pipe(Layer.provide(powerMonitorLayer));
+
+        const readOcclusionEvents = () =>
+          fakeWindow.send.mock.calls
+            .filter(([channel]) => channel === PRISMUX_WINDOW_OCCLUSION_CHANNEL)
+            .map(([, payload]) => payload);
+
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+          // 1. Cold-boot reveal clears initial show:false occlusion
+          fakeWindow.windowListeners.get("ready-to-show")?.();
+          yield* Effect.yieldNow;
+          assert.deepEqual(readOcclusionEvents().at(-1), {
+            occluded: false,
+            reason: "revealed",
+          });
+
+          // 2. Minimize -> occluded: true; taskbar maximize/move without `restore` recovers occluded: false
+          fakeWindow.isMinimized.mockReturnValue(true);
+          fakeWindow.windowListeners.get("minimize")?.();
+          assert.deepEqual(readOcclusionEvents().at(-1), {
+            occluded: true,
+            reason: "minimized",
+          });
+
+          fakeWindow.isMinimized.mockReturnValue(false);
+          fakeWindow.windowListeners.get("move")?.();
+          assert.deepEqual(readOcclusionEvents().at(-1), {
+            occluded: false,
+            reason: "visible-bounds-change",
+          });
+
+          // 3. Screen lock -> occluded: true; unlock -> occluded: false when window is visible
+          for (const listener of powerListeners.get("lock-screen") ?? []) listener();
+          assert.deepEqual(readOcclusionEvents().at(-1), {
+            occluded: true,
+            reason: "lock-screen",
+          });
+          for (const listener of powerListeners.get("unlock-screen") ?? []) listener();
+          assert.deepEqual(readOcclusionEvents().at(-1), {
+            occluded: false,
+            reason: "unlock-screen",
+          });
+
+          // 4. Suspend while minimized -> resume keeps occluded: true until unminimized
+          fakeWindow.isMinimized.mockReturnValue(true);
+          for (const listener of powerListeners.get("suspend") ?? []) listener();
+          assert.deepEqual(readOcclusionEvents().at(-1), {
+            occluded: true,
+            reason: "suspend",
+          });
+          for (const listener of powerListeners.get("resume") ?? []) listener();
+          assert.deepEqual(readOcclusionEvents().at(-1), {
+            occluded: true,
+            reason: "resume",
+          });
+          fakeWindow.isMinimized.mockReturnValue(false);
+          fakeWindow.windowListeners.get("maximize")?.();
+          assert.deepEqual(readOcclusionEvents().at(-1), {
+            occluded: false,
+            reason: "maximized",
+          });
+
+          // 5. Window close cleans up powerMonitor subscriptions cleanly
+          fakeWindow.windowListeners.get("closed")?.();
+          yield* Effect.yieldNow;
+          assert.equal(powerListeners.get("lock-screen")?.size ?? 0, 0);
+          assert.equal(powerListeners.get("resume")?.size ?? 0, 0);
+        }).pipe(Effect.provide(layer));
+      }),
   );
 });

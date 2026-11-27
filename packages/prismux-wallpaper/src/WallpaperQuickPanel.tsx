@@ -14,10 +14,7 @@ import {
   TYPE_TIER_VALUES,
 } from "./defaults.js";
 import { cardKeyDown, SectionHead, SwitchRow } from "./renderers/controls.js";
-import {
-  PlaybackAudioSection,
-  PlaybackEffectsSection,
-} from "./renderers/PlaybackSections.js";
+import { PlaybackAudioSection, PlaybackEffectsSection } from "./renderers/PlaybackSections.js";
 import type { WallpaperStore } from "./store.js";
 import {
   computeVirtualWindow,
@@ -65,9 +62,7 @@ export function resolveQuickPanelTab(tab: QuickPanelTabId | string | undefined):
   return "wallpaper";
 }
 
-export function openInlineAppearanceInStore(
-  store: Pick<WallpaperStore, "setUiState">,
-): void {
+export function openInlineAppearanceInStore(store: Pick<WallpaperStore, "setUiState">): void {
   store.setUiState("qpTab", "appearance");
 }
 
@@ -336,13 +331,8 @@ export function WallpaperQuickPanel({
     }
   }, [listActive, shouldVirtualize]);
 
-  const isMeasured =
-    shouldVirtualize && vwin.measured && vwin.cards === cardsView && vwin.cols > 0;
-  const vStart = shouldVirtualize
-    ? isMeasured
-      ? Math.min(vwin.start, filtered.length)
-      : 0
-    : 0;
+  const isMeasured = shouldVirtualize && vwin.measured && vwin.cards === cardsView && vwin.cols > 0;
+  const vStart = shouldVirtualize ? (isMeasured ? Math.min(vwin.start, filtered.length) : 0) : 0;
   const vEnd = shouldVirtualize
     ? isMeasured
       ? Math.max(vStart, Math.min(vwin.end, filtered.length))
@@ -352,7 +342,10 @@ export function WallpaperQuickPanel({
   const vTopH = isMeasured ? vwin.topSpacerHeight : 0;
   const vBtmH = isMeasured ? vwin.bottomSpacerHeight : 0;
 
-  const tabIdx = Math.max(0, QP_TABS.findIndex((t) => t.id === effectiveTab));
+  const tabIdx = Math.max(
+    0,
+    QP_TABS.findIndex((t) => t.id === effectiveTab),
+  );
 
   const inlineAppearanceSlot =
     renderInlineAppearance ??
@@ -392,7 +385,12 @@ export function WallpaperQuickPanel({
 
   // Prewarm single metadata slot ONLY on intentional pointer-down (never on hover to prevent D3D11 flicker)
   const handleCardPointerDown = (w: WallpaperItem) => {
-    if (w.type === "video" && w.mediaUrl) {
+    if (
+      w.type === "video" &&
+      w.mediaUrl &&
+      w.id !== settings.selectedId &&
+      !isWallpaperGatedByEngine(w, settings)
+    ) {
       schedulePrewarmVideo(w.mediaUrl, true);
     }
   };
@@ -482,9 +480,7 @@ export function WallpaperQuickPanel({
         </span>
         <span className="pmx-wp-qp__item-title">{w.title}</span>
         {isGated ? (
-          <span className="pmx-wp-qp__item-badge pmx-wp-qp__item-badge--gated">
-            渲染引擎未开启
-          </span>
+          <span className="pmx-wp-qp__item-badge pmx-wp-qp__item-badge--gated">渲染引擎未开启</span>
         ) : isCurrent ? (
           <span className="pmx-wp-qp__item-badge">当前</span>
         ) : (
@@ -516,12 +512,7 @@ export function WallpaperQuickPanel({
       >
         <span className="pmx-wp-qp__thumb">
           {current?.previewUrl ? (
-            <img
-              src={current.previewUrl}
-              alt=""
-              loading="lazy"
-              decoding="async"
-            />
+            <img src={current.previewUrl} alt="" loading="lazy" decoding="async" />
           ) : null}
         </span>
         <div className="pmx-wp-qp__current-info">
@@ -534,9 +525,7 @@ export function WallpaperQuickPanel({
               ? `${formatTypeMeta(current, settings)} · ${playbackLive ? "播放中" : "已暂停"}`
               : "从下方列表挑一张"}
           </div>
-          {snap.videoError ? (
-            <div className="pmx-wp-error">{snap.videoError}</div>
-          ) : null}
+          {snap.videoError ? <div className="pmx-wp-error">{snap.videoError}</div> : null}
         </div>
         <div className="pmx-wp-qp__current-actions">
           <button
@@ -702,243 +691,244 @@ export function WallpaperQuickPanel({
         ) : (
           /* 壁纸库（搜索 + 分级/类型/方向筛选 + 列表/卡片切换 + 虚拟滚动列表） */
           <div className="pmx-wp-glass-card pmx-wp-qp__library">
-              {snap.inventoryError ? (
-                <div className="pmx-wp-qp__error-box">
-                  <div className="pmx-wp-error">壁纸库扫描失败：{snap.inventoryError}</div>
-                  <button
-                    type="button"
-                    className="pmx-wp-btn"
-                    disabled={snap.loading}
-                    onClick={() => void store.refreshLibrary(adapter, true)}
-                  >
-                    {snap.loading ? "刷新中…" : "重试"}
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <div className="pmx-wp-qp__viewbar">
-                    <input
-                      type="text"
-                      className="pmx-wp-text pmx-wp-qp__search"
-                      value={snap.qpSearch}
-                      placeholder="搜索壁纸标题…"
-                      aria-label="搜索壁纸标题"
-                      onChange={(e) => store.setQpSearch(e.target.value)}
-                    />
+            {snap.inventoryError ? (
+              <div className="pmx-wp-qp__error-box">
+                <div className="pmx-wp-error">壁纸库扫描失败：{snap.inventoryError}</div>
+                <button
+                  type="button"
+                  className="pmx-wp-btn"
+                  disabled={snap.loading}
+                  onClick={() => void store.refreshLibrary(adapter, true)}
+                >
+                  {snap.loading ? "刷新中…" : "重试"}
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="pmx-wp-qp__viewbar">
+                  <input
+                    type="text"
+                    className="pmx-wp-text pmx-wp-qp__search"
+                    value={snap.qpSearch}
+                    placeholder="搜索壁纸标题…"
+                    aria-label="搜索壁纸标题"
+                    onChange={(e) => store.setQpSearch(e.target.value)}
+                  />
 
-                    {/* 多选内容分级 */}
-                    <details className="pmx-wp-menu pmx-wp-qp__rating-menu">
-                      <summary className="pmx-wp-menu-btn pmx-wp-qp__rating-btn" aria-label="内容分级">
-                        <span className="pmx-wp-menu-text">内容分级</span>
-                        <span className="pmx-wp-menu-caret" aria-hidden="true">▾</span>
-                      </summary>
-                      <div className="pmx-wp-menu-list">
-                        {RATING_TIER_VALUES.map((r) => (
-                          <label
-                            key={r}
-                            className={
-                              "pmx-wp-menu-item" + (ratingSet.has(r) ? " pmx-wp-menu-item--on" : "")
-                            }
-                          >
-                            <input
-                              type="checkbox"
-                              checked={ratingSet.has(r)}
-                              onChange={() => store.toggleRatingFilter(r)}
-                            />
-                            <span>{RATING_LABELS[r]}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </details>
-
-                    {/* 多选类型 */}
-                    <details className="pmx-wp-menu pmx-wp-qp__type-menu">
-                      <summary className="pmx-wp-menu-btn pmx-wp-qp__type-btn" aria-label="类型">
-                        <span className="pmx-wp-menu-text">类型</span>
-                        <span className="pmx-wp-menu-caret" aria-hidden="true">▾</span>
-                      </summary>
-                      <div className="pmx-wp-menu-list">
-                        {TYPE_TIER_VALUES.map((t) => (
-                          <label
-                            key={t}
-                            className={
-                              "pmx-wp-menu-item" + (typeSet.has(t) ? " pmx-wp-menu-item--on" : "")
-                            }
-                          >
-                            <input
-                              type="checkbox"
-                              checked={typeSet.has(t)}
-                              onChange={() => store.toggleTypeFilter(t)}
-                            />
-                            <span>{CARD_TYPE_LABELS[t]}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </details>
-
-                    {/* 单选方向 */}
-                    <details className="pmx-wp-menu pmx-wp-qp__type-menu">
-                      <summary className="pmx-wp-menu-btn pmx-wp-qp__type-btn" aria-label="壁纸方向">
-                        <span className="pmx-wp-menu-text">方向</span>
-                        <span className="pmx-wp-menu-caret" aria-hidden="true">▾</span>
-                      </summary>
-                      <div className="pmx-wp-menu-list">
-                        {(
-                          [
-                            { id: "all", label: "全部方向" },
-                            { id: "landscape", label: "横屏" },
-                            { id: "portrait", label: "竖屏" },
-                          ] as Array<{ id: OrientationFilter; label: string }>
-                        ).map((opt) => (
-                          <label
-                            key={opt.id}
-                            className={
-                              "pmx-wp-menu-item" +
-                              (settings.orientationFilter === opt.id ? " pmx-wp-menu-item--on" : "")
-                            }
-                          >
-                            <input
-                              type="radio"
-                              name="pmx-wp-qp-orientation"
-                              checked={settings.orientationFilter === opt.id}
-                              onChange={() => store.setSetting("orientationFilter", opt.id)}
-                            />
-                            <span>{opt.label}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </details>
-
-                    {/* 列表 / 卡片滑动胶囊切换 */}
-                    <div className="pmx-wp-tabs pmx-wp-qp__viewtabs" role="group" aria-label="视图">
-                      <span
-                        className="pmx-wp-tabs__pill"
-                        aria-hidden="true"
-                        style={{
-                          width: "calc((100% - 6px) / 2)",
-                          transform: `translateX(${cardsView ? 100 : 0}%)`,
-                        }}
-                      />
-                      <button
-                        type="button"
-                        className={
-                          "pmx-wp-tabs__tab pmx-wp-qp__viewtab" +
-                          (!cardsView ? " pmx-wp-tabs__tab--active" : "")
-                        }
-                        aria-pressed={!cardsView}
-                        onClick={() => store.setUiState("qpView", "list")}
-                      >
-                        列表
-                      </button>
-                      <button
-                        type="button"
-                        className={
-                          "pmx-wp-tabs__tab pmx-wp-qp__viewtab" +
-                          (cardsView ? " pmx-wp-tabs__tab--active" : "")
-                        }
-                        aria-pressed={cardsView}
-                        onClick={() => store.setUiState("qpView", "cards")}
-                      >
-                        卡片
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* 未开启高级渲染引擎时点击 Web/Scene 卡片的内联引导横幅 */}
-                  {snap.gatedAttempt && !settings.advancedEngineEnabled ? (
-                    <div
-                      className="pmx-wp-gate-banner"
-                      role="alert"
-                      data-pmx-engine-gate-banner="1"
+                  {/* 多选内容分级 */}
+                  <details className="pmx-wp-menu pmx-wp-qp__rating-menu">
+                    <summary
+                      className="pmx-wp-menu-btn pmx-wp-qp__rating-btn"
+                      aria-label="内容分级"
                     >
-                      <div className="pmx-wp-gate-banner__head">
-                        <span className="pmx-wp-gate-banner__title">
-                          高级壁纸渲染引擎未开启
-                        </span>
-                        <button
-                          type="button"
-                          className="pmx-wp-gate-banner__close"
-                          aria-label="关闭提示"
-                          onClick={() => store.clearGatedAttempt()}
-                        >
-                          ×
-                        </button>
-                      </div>
-                      <p className="pmx-wp-gate-banner__desc">
-                        「{snap.gatedAttempt.wallpaper.title}」属于
-                        {snap.gatedAttempt.wallpaper.type === "scene" ? " Steam 场景" : "网页"}
-                        壁纸，实时渲染会占用更高 GPU 与显存。如需启用，可一键开启高级渲染引擎。
-                      </p>
-                      <div className="pmx-wp-gate-banner__actions">
-                        <button
-                          type="button"
-                          className="pmx-wp-btn pmx-wp-btn--danger-solid"
-                          data-pmx-enable-advanced-engine="1"
-                          disabled={enablingEngine}
-                          onClick={() =>
-                            void handleQuickEnableEngine(snap.gatedAttempt!.wallpaper.id)
+                      <span className="pmx-wp-menu-text">内容分级</span>
+                      <span className="pmx-wp-menu-caret" aria-hidden="true">
+                        ▾
+                      </span>
+                    </summary>
+                    <div className="pmx-wp-menu-list">
+                      {RATING_TIER_VALUES.map((r) => (
+                        <label
+                          key={r}
+                          className={
+                            "pmx-wp-menu-item" + (ratingSet.has(r) ? " pmx-wp-menu-item--on" : "")
                           }
                         >
-                          {enablingEngine ? "正在开启…" : "开启高级渲染引擎"}
-                        </button>
-                        <button
-                          type="button"
-                          className="pmx-wp-btn pmx-wp-btn--mini"
-                          data-pmx-open-engine-settings="1"
-                          onClick={() => {
-                            if (adapter?.openSettingsSection) {
-                              adapter.openSettingsSection("playback");
-                            } else {
-                              store.setUiState("qpTab", "playback");
-                            }
-                          }}
-                        >
-                          前往引擎设置
-                        </button>
-                      </div>
+                          <input
+                            type="checkbox"
+                            checked={ratingSet.has(r)}
+                            onChange={() => store.toggleRatingFilter(r)}
+                          />
+                          <span>{RATING_LABELS[r]}</span>
+                        </label>
+                      ))}
                     </div>
-                  ) : null}
+                  </details>
 
-                  {/* 虚拟滚动壁纸列表 / 卡片网格 */}
-                  <div
-                    ref={listRef}
-                    className={
-                      "pmx-wp-qp__list" + (cardsView ? " pmx-wp-qp__list--cards" : "")
-                    }
-                    role="listbox"
-                    aria-label="壁纸列表"
-                  >
-                    {visibleRows.length > 0 ? (
-                      <>
-                        {vTopH > 0 ? (
-                          <div
-                            className="pmx-wp-qp__vspacer"
-                            style={{ height: `${vTopH}px` }}
-                            aria-hidden="true"
-                          />
-                        ) : null}
-                        {visibleRows.map(cardsView ? renderCard : renderListRow)}
-                        {vBtmH > 0 ? (
-                          <div
-                            className="pmx-wp-qp__vspacer"
-                            style={{ height: `${vBtmH}px` }}
-                            aria-hidden="true"
-                          />
-                        ) : null}
-                      </>
-                    ) : (
-                      <span className="pmx-wp-hint">
-                        {snap.qpSearch.trim()
-                          ? `没有匹配「${snap.qpSearch}」的壁纸`
-                          : playable.length === 0
-                            ? "当前内容分级下没有可播放的壁纸"
-                            : "当前筛选条件下没有壁纸"}
+                  {/* 多选类型 */}
+                  <details className="pmx-wp-menu pmx-wp-qp__type-menu">
+                    <summary className="pmx-wp-menu-btn pmx-wp-qp__type-btn" aria-label="类型">
+                      <span className="pmx-wp-menu-text">类型</span>
+                      <span className="pmx-wp-menu-caret" aria-hidden="true">
+                        ▾
                       </span>
-                    )}
+                    </summary>
+                    <div className="pmx-wp-menu-list">
+                      {TYPE_TIER_VALUES.map((t) => (
+                        <label
+                          key={t}
+                          className={
+                            "pmx-wp-menu-item" + (typeSet.has(t) ? " pmx-wp-menu-item--on" : "")
+                          }
+                        >
+                          <input
+                            type="checkbox"
+                            checked={typeSet.has(t)}
+                            onChange={() => store.toggleTypeFilter(t)}
+                          />
+                          <span>{CARD_TYPE_LABELS[t]}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </details>
+
+                  {/* 单选方向 */}
+                  <details className="pmx-wp-menu pmx-wp-qp__type-menu">
+                    <summary className="pmx-wp-menu-btn pmx-wp-qp__type-btn" aria-label="壁纸方向">
+                      <span className="pmx-wp-menu-text">方向</span>
+                      <span className="pmx-wp-menu-caret" aria-hidden="true">
+                        ▾
+                      </span>
+                    </summary>
+                    <div className="pmx-wp-menu-list">
+                      {(
+                        [
+                          { id: "all", label: "全部方向" },
+                          { id: "landscape", label: "横屏" },
+                          { id: "portrait", label: "竖屏" },
+                        ] as Array<{ id: OrientationFilter; label: string }>
+                      ).map((opt) => (
+                        <label
+                          key={opt.id}
+                          className={
+                            "pmx-wp-menu-item" +
+                            (settings.orientationFilter === opt.id ? " pmx-wp-menu-item--on" : "")
+                          }
+                        >
+                          <input
+                            type="radio"
+                            name="pmx-wp-qp-orientation"
+                            checked={settings.orientationFilter === opt.id}
+                            onChange={() => store.setSetting("orientationFilter", opt.id)}
+                          />
+                          <span>{opt.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </details>
+
+                  {/* 列表 / 卡片滑动胶囊切换 */}
+                  <div className="pmx-wp-tabs pmx-wp-qp__viewtabs" role="group" aria-label="视图">
+                    <span
+                      className="pmx-wp-tabs__pill"
+                      aria-hidden="true"
+                      style={{
+                        width: "calc((100% - 6px) / 2)",
+                        transform: `translateX(${cardsView ? 100 : 0}%)`,
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className={
+                        "pmx-wp-tabs__tab pmx-wp-qp__viewtab" +
+                        (!cardsView ? " pmx-wp-tabs__tab--active" : "")
+                      }
+                      aria-pressed={!cardsView}
+                      onClick={() => store.setUiState("qpView", "list")}
+                    >
+                      列表
+                    </button>
+                    <button
+                      type="button"
+                      className={
+                        "pmx-wp-tabs__tab pmx-wp-qp__viewtab" +
+                        (cardsView ? " pmx-wp-tabs__tab--active" : "")
+                      }
+                      aria-pressed={cardsView}
+                      onClick={() => store.setUiState("qpView", "cards")}
+                    >
+                      卡片
+                    </button>
                   </div>
-                </>
-              )}
-            </div>
+                </div>
+
+                {/* 未开启高级渲染引擎时点击 Web/Scene 卡片的内联引导横幅 */}
+                {snap.gatedAttempt && !settings.advancedEngineEnabled ? (
+                  <div className="pmx-wp-gate-banner" role="alert" data-pmx-engine-gate-banner="1">
+                    <div className="pmx-wp-gate-banner__head">
+                      <span className="pmx-wp-gate-banner__title">高级壁纸渲染引擎未开启</span>
+                      <button
+                        type="button"
+                        className="pmx-wp-gate-banner__close"
+                        aria-label="关闭提示"
+                        onClick={() => store.clearGatedAttempt()}
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <p className="pmx-wp-gate-banner__desc">
+                      「{snap.gatedAttempt.wallpaper.title}」属于
+                      {snap.gatedAttempt.wallpaper.type === "scene" ? " Steam 场景" : "网页"}
+                      壁纸，实时渲染会占用更高 GPU 与显存。如需启用，可一键开启高级渲染引擎。
+                    </p>
+                    <div className="pmx-wp-gate-banner__actions">
+                      <button
+                        type="button"
+                        className="pmx-wp-btn pmx-wp-btn--danger-solid"
+                        data-pmx-enable-advanced-engine="1"
+                        disabled={enablingEngine}
+                        onClick={() =>
+                          void handleQuickEnableEngine(snap.gatedAttempt!.wallpaper.id)
+                        }
+                      >
+                        {enablingEngine ? "正在开启…" : "开启高级渲染引擎"}
+                      </button>
+                      <button
+                        type="button"
+                        className="pmx-wp-btn pmx-wp-btn--mini"
+                        data-pmx-open-engine-settings="1"
+                        onClick={() => {
+                          if (adapter?.openSettingsSection) {
+                            adapter.openSettingsSection("playback");
+                          } else {
+                            store.setUiState("qpTab", "playback");
+                          }
+                        }}
+                      >
+                        前往引擎设置
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
+                {/* 虚拟滚动壁纸列表 / 卡片网格 */}
+                <div
+                  ref={listRef}
+                  className={"pmx-wp-qp__list" + (cardsView ? " pmx-wp-qp__list--cards" : "")}
+                  role="listbox"
+                  aria-label="壁纸列表"
+                >
+                  {visibleRows.length > 0 ? (
+                    <>
+                      {vTopH > 0 ? (
+                        <div
+                          className="pmx-wp-qp__vspacer"
+                          style={{ height: `${vTopH}px` }}
+                          aria-hidden="true"
+                        />
+                      ) : null}
+                      {visibleRows.map(cardsView ? renderCard : renderListRow)}
+                      {vBtmH > 0 ? (
+                        <div
+                          className="pmx-wp-qp__vspacer"
+                          style={{ height: `${vBtmH}px` }}
+                          aria-hidden="true"
+                        />
+                      ) : null}
+                    </>
+                  ) : (
+                    <span className="pmx-wp-hint">
+                      {snap.qpSearch.trim()
+                        ? `没有匹配「${snap.qpSearch}」的壁纸`
+                        : playable.length === 0
+                          ? "当前内容分级下没有可播放的壁纸"
+                          : "当前筛选条件下没有壁纸"}
+                    </span>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
         )}
       </div>
 

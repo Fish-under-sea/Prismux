@@ -57,11 +57,7 @@ function getBrowserStorage(injected?: StorageLike | null): StorageLike | null {
   return null;
 }
 
-function readUiFlag(
-  storage: StorageLike | null,
-  key: string,
-  defaultOpen: boolean,
-): boolean {
+function readUiFlag(storage: StorageLike | null, key: string, defaultOpen: boolean): boolean {
   if (!storage) return defaultOpen;
   try {
     const val = storage.getItem(key);
@@ -107,11 +103,19 @@ function loadInitialUiViewState(
   return {
     qpTab: overrides?.qpTab ?? qpTab,
     qpView: overrides?.qpView ?? qpView,
-    detailOpen: overrides?.detailOpen ?? readUiFlag(storage, UI_STORAGE_KEYS.detailOpen, defaults.detailOpen),
-    glassUiOpen: overrides?.glassUiOpen ?? readUiFlag(storage, UI_STORAGE_KEYS.glassUiOpen, defaults.glassUiOpen),
-    cornersOpen: overrides?.cornersOpen ?? readUiFlag(storage, UI_STORAGE_KEYS.cornersOpen, defaults.cornersOpen),
-    uiColorOpen: overrides?.uiColorOpen ?? readUiFlag(storage, UI_STORAGE_KEYS.uiColorOpen, defaults.uiColorOpen),
-    fontOpen: overrides?.fontOpen ?? readUiFlag(storage, UI_STORAGE_KEYS.fontOpen, defaults.fontOpen),
+    detailOpen:
+      overrides?.detailOpen ?? readUiFlag(storage, UI_STORAGE_KEYS.detailOpen, defaults.detailOpen),
+    glassUiOpen:
+      overrides?.glassUiOpen ??
+      readUiFlag(storage, UI_STORAGE_KEYS.glassUiOpen, defaults.glassUiOpen),
+    cornersOpen:
+      overrides?.cornersOpen ??
+      readUiFlag(storage, UI_STORAGE_KEYS.cornersOpen, defaults.cornersOpen),
+    uiColorOpen:
+      overrides?.uiColorOpen ??
+      readUiFlag(storage, UI_STORAGE_KEYS.uiColorOpen, defaults.uiColorOpen),
+    fontOpen:
+      overrides?.fontOpen ?? readUiFlag(storage, UI_STORAGE_KEYS.fontOpen, defaults.fontOpen),
     glassDetailOpen:
       overrides?.glassDetailOpen ??
       readUiFlag(storage, UI_STORAGE_KEYS.glassDetailOpen, defaults.glassDetailOpen),
@@ -121,9 +125,7 @@ function loadInitialUiViewState(
 // ── Pure filtering, virtual window & rotation helpers ───────────────────────
 
 /** True for Web / Steam Scene wallpapers gated behind the opt-in `advancedEngineEnabled` switch. */
-export function isAdvancedWallpaperType(
-  type: WallpaperType | string | null | undefined,
-): boolean {
+export function isAdvancedWallpaperType(type: WallpaperType | string | null | undefined): boolean {
   return type === "web" || type === "scene";
 }
 
@@ -336,7 +338,9 @@ export function resolveRotationCandidates(
 
 // ── Module reset maps (exact per-section isolation) ─────────────────────────
 
-function buildModuleResetPatch(moduleKey: WallpaperModuleResetKey): Partial<WallpaperSettingsState> {
+function buildModuleResetPatch(
+  moduleKey: WallpaperModuleResetKey,
+): Partial<WallpaperSettingsState> {
   const d = createDefaultSettings();
   switch (moduleKey) {
     case "theme":
@@ -479,7 +483,13 @@ export interface WallpaperStore {
     value: WallpaperUiViewState[K],
   ) => void;
   toggleUiSection: (
-    key: "detailOpen" | "glassUiOpen" | "cornersOpen" | "uiColorOpen" | "fontOpen" | "glassDetailOpen",
+    key:
+      | "detailOpen"
+      | "glassUiOpen"
+      | "cornersOpen"
+      | "uiColorOpen"
+      | "fontOpen"
+      | "glassDetailOpen",
   ) => void;
   selectWallpaper: (id: string | null) => void;
   clearGatedAttempt: () => void;
@@ -519,9 +529,15 @@ export interface WallpaperStore {
     meta?: { steamRoots?: string[]; customDir?: string; error?: string | null },
   ) => void;
   refreshLibrary: (adapter?: WallpaperHostAdapter, forceRefresh?: boolean) => Promise<void>;
-  importLocalFiles: (adapter: WallpaperHostAdapter | undefined, files: FileList | File[]) => Promise<void>;
+  importLocalFiles: (
+    adapter: WallpaperHostAdapter | undefined,
+    files: FileList | File[],
+  ) => Promise<void>;
   refreshSystemFonts: (adapter?: WallpaperHostAdapter, forceRefresh?: boolean) => Promise<void>;
-  ensureUserProperties: (adapter: WallpaperHostAdapter | undefined, wallpaper: WallpaperItem) => Promise<void>;
+  ensureUserProperties: (
+    adapter: WallpaperHostAdapter | undefined,
+    wallpaper: WallpaperItem,
+  ) => Promise<void>;
   setQpSearch: (query: string) => void;
   setSettingsSearch: (query: string) => void;
   setPropsPanelOpen: (open: boolean) => void;
@@ -569,18 +585,35 @@ export function normalizeWallpaperSettingsPatch(
   patch: Partial<WallpaperSettingsState>,
 ): Partial<WallpaperSettingsState> {
   let next: Partial<WallpaperSettingsState> = patch;
-  if ("selectedId" in patch && isLegacyBuiltinWallpaperId(patch.selectedId)) {
+  let hasUndefinedKey = false;
+  for (const key of Object.keys(patch) as Array<keyof WallpaperSettingsState>) {
+    if (patch[key] === undefined) {
+      hasUndefinedKey = true;
+      break;
+    }
+  }
+  if (hasUndefinedKey) {
+    const cleaned: Partial<WallpaperSettingsState> = {};
+    for (const key of Object.keys(patch) as Array<keyof WallpaperSettingsState>) {
+      const value = patch[key];
+      if (value !== undefined) {
+        (cleaned as Record<string, unknown>)[key] = value;
+      }
+    }
+    next = cleaned;
+  }
+  if ("selectedId" in next && isLegacyBuiltinWallpaperId(next.selectedId)) {
     next = { ...next, selectedId: null };
   }
-  if ("wallpaperOpacity" in patch && patch.wallpaperOpacity !== undefined) {
-    const normalized = normalizeWallpaperFadeOpacity(patch.wallpaperOpacity, 0);
-    if (normalized !== patch.wallpaperOpacity) {
+  if ("wallpaperOpacity" in next && next.wallpaperOpacity !== undefined) {
+    const normalized = normalizeWallpaperFadeOpacity(next.wallpaperOpacity, 0);
+    if (normalized !== next.wallpaperOpacity) {
       next = { ...next, wallpaperOpacity: normalized };
     }
   }
-  if ("scrim" in patch && patch.scrim !== undefined) {
-    const normalized = normalizeWallpaperScrim(patch.scrim, 0.15);
-    if (normalized !== patch.scrim) {
+  if ("scrim" in next && next.scrim !== undefined) {
+    const normalized = normalizeWallpaperScrim(next.scrim, 0.15);
+    if (normalized !== next.scrim) {
       next = { ...next, scrim: normalized };
     }
   }
@@ -601,9 +634,7 @@ function mergeWallpapers(
   return [...map.values()];
 }
 
-export function createWallpaperStore(
-  options: CreateWallpaperStoreOptions = {},
-): WallpaperStore {
+export function createWallpaperStore(options: CreateWallpaperStoreOptions = {}): WallpaperStore {
   const storage = getBrowserStorage(options.storage);
   const includeBuiltins = options.includeBuiltins === true;
   const defaults = createDefaultSettings();
@@ -647,8 +678,8 @@ export function createWallpaperStore(
   // auto-enable it ONLY when the active `selectedId` is a Web or Steam Scene wallpaper.
   const hasExplicitAdvancedEngine = Boolean(
     options.settings &&
-      "advancedEngineEnabled" in options.settings &&
-      typeof options.settings.advancedEngineEnabled === "boolean",
+    "advancedEngineEnabled" in options.settings &&
+    typeof options.settings.advancedEngineEnabled === "boolean",
   );
   let legacyAdvancedEnginePending = false;
   if (!hasExplicitAdvancedEngine && initialSettings.selectedId) {
@@ -673,16 +704,23 @@ export function createWallpaperStore(
     }
   }
 
+  const initialRetainedWallpaper =
+    initialSettings.selectedId && !initialSettings.hiddenIds.includes(initialSettings.selectedId)
+      ? findWallpaperById(initialWallpapers, initialSettings.selectedId)
+      : null;
+
   let snapshot: WallpaperRuntimeSnapshot = {
     settings: initialSettings,
     ui: loadInitialUiViewState(storage, options.ui),
     wallpapers: initialWallpapers,
     steamRoots: [],
     customDir: initialSettings.customWallpaperDir,
-    loaded: true,
+    loaded: Array.isArray(options.wallpapers),
     loading: false,
     inventoryError: null,
     videoError: null,
+    mediaRecoveryNonce: 0,
+    retainedWallpaper: initialRetainedWallpaper,
     gatedAttempt: null,
     qpSearch: "",
     settingsSearch: "",
@@ -700,6 +738,7 @@ export function createWallpaperStore(
 
   const listeners = new Set<() => void>();
   let rotationTimer: ReturnType<typeof setInterval> | null = null;
+  let refreshSeq = 0;
 
   const emit = (): void => {
     for (const listener of listeners) {
@@ -707,8 +746,33 @@ export function createWallpaperStore(
     }
   };
 
+  const resolveRetainedWallpaper = (
+    prevRetained: WallpaperItem | null | undefined,
+    next: WallpaperRuntimeSnapshot,
+  ): WallpaperItem | null => {
+    const selectedId = next.settings.selectedId;
+    if (!selectedId || next.settings.hiddenIds.includes(selectedId)) {
+      return null;
+    }
+    const direct = findWallpaperById(next.wallpapers, selectedId);
+    if (direct) {
+      return direct;
+    }
+    if (
+      prevRetained &&
+      prevRetained.id === selectedId &&
+      !prevRetained.mediaUrl?.startsWith("blob:") &&
+      (next.loading || !next.loaded || next.inventoryError !== null)
+    ) {
+      return prevRetained;
+    }
+    return null;
+  };
+
   const commit = (next: WallpaperRuntimeSnapshot, settingsChanged = false): void => {
-    snapshot = next;
+    const nextRetained = resolveRetainedWallpaper(snapshot.retainedWallpaper, next);
+    snapshot =
+      next.retainedWallpaper === nextRetained ? next : { ...next, retainedWallpaper: nextRetained };
     if (settingsChanged) {
       options.onSettingsChange?.(snapshot.settings);
     }
@@ -760,7 +824,13 @@ export function createWallpaperStore(
       };
       let nextPropsPanelOpen = snapshot.propsPanelOpen;
       let nextVideoError = snapshot.videoError;
+      let nextMediaRecoveryNonce = snapshot.mediaRecoveryNonce;
       let nextGatedAttempt = snapshot.gatedAttempt;
+
+      if (normalizedPatch.playing === true && snapshot.videoError !== null) {
+        nextVideoError = null;
+        nextMediaRecoveryNonce += 1;
+      }
 
       if (
         "advancedEngineEnabled" in normalizedPatch &&
@@ -794,6 +864,7 @@ export function createWallpaperStore(
           settings: nextSettings,
           propsPanelOpen: nextPropsPanelOpen,
           videoError: nextVideoError,
+          mediaRecoveryNonce: nextMediaRecoveryNonce,
           gatedAttempt: nextGatedAttempt,
         },
         true,
@@ -844,15 +915,26 @@ export function createWallpaperStore(
         safeId && snapshot.settings.hiddenIds.includes(safeId)
           ? snapshot.settings.hiddenIds.filter((x) => x !== safeId)
           : snapshot.settings.hiddenIds;
+      const isReselectingSame = safeId !== null && safeId === snapshot.settings.selectedId;
       const nextSettings: WallpaperSettingsState = {
         ...snapshot.settings,
         selectedId: safeId,
-        selectedWallpaperType: target?.type ?? null,
+        selectedWallpaperType:
+          target?.type ??
+          (isReselectingSame ? (snapshot.settings.selectedWallpaperType ?? null) : null),
         playing: safeId !== null,
         hiddenIds: nextHidden,
       };
       commit(
-        { ...snapshot, settings: nextSettings, videoError: null, gatedAttempt: null },
+        {
+          ...snapshot,
+          settings: nextSettings,
+          videoError: null,
+          mediaRecoveryNonce: isReselectingSame
+            ? snapshot.mediaRecoveryNonce + 1
+            : snapshot.mediaRecoveryNonce,
+          gatedAttempt: null,
+        },
         true,
       );
     },
@@ -885,10 +967,7 @@ export function createWallpaperStore(
             ...snapshot.settings,
             advancedEngineEnabled: true,
           };
-      commit(
-        { ...snapshot, settings: nextSettings, videoError: null, gatedAttempt: null },
-        true,
-      );
+      commit({ ...snapshot, settings: nextSettings, videoError: null, gatedAttempt: null }, true);
     },
 
     clearWallpaper() {
@@ -922,9 +1001,7 @@ export function createWallpaperStore(
     toggleAudio() {
       const nextEnabled = !snapshot.settings.videoAudioEnabled;
       const nextVolume =
-        nextEnabled && snapshot.settings.videoVolume <= 0
-          ? 0.5
-          : snapshot.settings.videoVolume;
+        nextEnabled && snapshot.settings.videoVolume <= 0 ? 0.5 : snapshot.settings.videoVolume;
       store.updateSettings({
         videoAudioEnabled: nextEnabled,
         videoVolume: nextVolume,
@@ -1101,7 +1178,8 @@ export function createWallpaperStore(
       store.updateSettings({
         rotationGroups: nextGroups,
         rotationGroupId: wasActive ? (nextGroups[0]?.id ?? "") : snapshot.settings.rotationGroupId,
-        rotationEnabled: wasActive && nextGroups.length === 0 ? false : snapshot.settings.rotationEnabled,
+        rotationEnabled:
+          wasActive && nextGroups.length === 0 ? false : snapshot.settings.rotationEnabled,
       });
     },
 
@@ -1252,6 +1330,7 @@ export function createWallpaperStore(
 
     async refreshLibrary(adapter, forceRefresh = true) {
       if (!adapter?.listWallpapers && !adapter?.refreshSteamLibrary) return;
+      const seq = ++refreshSeq;
       commit({ ...snapshot, loading: true, inventoryError: null }, false);
       try {
         const res = adapter.listWallpapers
@@ -1261,17 +1340,56 @@ export function createWallpaperStore(
               customDir: snapshot.settings.customWallpaperDir || undefined,
             })
           : await adapter.refreshSteamLibrary!(snapshot.settings.steamRootOverride || undefined);
+        if (seq !== refreshSeq) {
+          return;
+        }
+        const hasError = typeof res.error === "string" && res.error.trim().length > 0;
+        const returnedEmpty = res.wallpapers.length === 0;
+        const looksOfflineEmpty =
+          returnedEmpty &&
+          !hasError &&
+          !forceRefresh &&
+          (res.steamRoots?.length ?? 0) === 0 &&
+          !res.customDir;
+        // Never wipe an already-hydrated wallpaper inventory on transient daemon errors or offline empty replies.
+        if ((hasError && returnedEmpty) || (looksOfflineEmpty && snapshot.wallpapers.length > 0)) {
+          commit(
+            {
+              ...snapshot,
+              loading: false,
+              loaded: snapshot.wallpapers.length > 0,
+              inventoryError: hasError ? (res.error ?? null) : snapshot.inventoryError,
+            },
+            false,
+          );
+          return;
+        }
+        if (looksOfflineEmpty && snapshot.wallpapers.length === 0) {
+          commit(
+            {
+              ...snapshot,
+              loading: false,
+              loaded: false,
+              inventoryError: null,
+            },
+            false,
+          );
+          return;
+        }
         store.setWallpapers(res.wallpapers, {
           steamRoots: res.steamRoots,
           customDir: res.customDir,
           error: res.error ?? null,
         });
       } catch (err) {
+        if (seq !== refreshSeq) {
+          return;
+        }
         commit(
           {
             ...snapshot,
             loading: false,
-            loaded: true,
+            loaded: snapshot.wallpapers.length > 0,
             inventoryError: err instanceof Error ? err.message : String(err),
           },
           false,
@@ -1478,9 +1596,5 @@ export function createBlobUrlRegistry(
 }
 
 export function useWallpaperStore(store: WallpaperStore): WallpaperRuntimeSnapshot {
-  return useSyncExternalStore(
-    store.subscribe,
-    store.getSnapshot,
-    store.getServerSnapshot,
-  );
+  return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getServerSnapshot);
 }

@@ -14,10 +14,7 @@ import {
   SwitchRow,
   VinylRecord,
 } from "./renderers/controls.js";
-import {
-  PlaybackAudioSection,
-  PlaybackEffectsSection,
-} from "./renderers/PlaybackSections.js";
+import { PlaybackAudioSection, PlaybackEffectsSection } from "./renderers/PlaybackSections.js";
 import { UserPropsDrillPanel } from "./renderers/UserPropsDrillPanel.js";
 import type { BlobUrlRegistry, WallpaperStore } from "./store.js";
 import {
@@ -132,7 +129,10 @@ function useSettingsGridVirtualWindow(
       const width = el.clientWidth;
       lastObservedWidth = width;
       const minW = layout === "classic" ? SETTINGS_CARD_MIN_CLASSIC : SETTINGS_CARD_MIN_FIXED;
-      const cols = Math.max(1, Math.floor((width + SETTINGS_GRID_GAP) / (minW + SETTINGS_GRID_GAP)));
+      const cols = Math.max(
+        1,
+        Math.floor((width + SETTINGS_GRID_GAP) / (minW + SETTINGS_GRID_GAP)),
+      );
       const colW =
         width > 0 ? Math.max(minW, (width - SETTINGS_GRID_GAP * (cols - 1)) / cols) : minW;
       const rawCardH = Math.max(1, Math.round((colW * 9) / 16));
@@ -201,9 +201,7 @@ function useSettingsGridVirtualWindow(
 
     const handleResize = () => {
       const nextWidth = el.clientWidth;
-      const nextViewportH = boundScroller
-        ? boundScroller.clientHeight
-        : window.innerHeight || 800;
+      const nextViewportH = boundScroller ? boundScroller.clientHeight : window.innerHeight || 800;
       if (
         lastObservedWidth >= 0 &&
         Math.abs(nextWidth - lastObservedWidth) < 2 &&
@@ -243,13 +241,7 @@ interface RotationDraft {
   wallpaperIds: string[];
 }
 
-/**
- * Focused 4-tab Settings Page Wallpaper View (strictly deduplicated from /settings/appearance per Issue #3):
- *   1. 壁纸库 (library): Vinyl hero, local image/video import, filter bar with counts, batch hide, inline props
- *   2. 画面与播放 (playback): Reuses PlaybackEffectsSection & PlaybackAudioSection (`surface="settings"`)
- *   3. 轮播与隐藏 (rotation): Rotation group CRUD + Hidden wallpapers restore manager
- *   4. 系统与目录 (system): Steam Workshop 431960 directory & local wallpaper directory config, refresh, wallpaper reset
- */
+/** Focused 4-tab Settings Page Wallpaper View (壁纸库 / 画面与播放 / 轮播与隐藏 / 系统与目录). */
 export function WallpaperSettingsView({
   store,
   adapter,
@@ -309,24 +301,14 @@ export function WallpaperSettingsView({
   const playbackLive = Boolean(current && settings.playing && !snap.occluded);
   const visibleList = useMemo(
     () => filterVisibleWallpapers(wallpapers, settings, snap.settingsSearch),
-    [
-      wallpapers,
-      settings.hiddenIds,
-      settings.contentRatingFilter,
-      settings.typeFilter,
-      settings.orientationFilter,
-      snap.settingsSearch,
-    ],
+    [wallpapers, settings, snap.settingsSearch],
   );
   const hiddenList = useMemo(() => {
     const hiddenSet = new Set(settings.hiddenIds);
     return wallpapers.filter((w) => hiddenSet.has(w.id));
   }, [wallpapers, settings.hiddenIds]);
 
-  const counts = useMemo(
-    () => computeFilterCounts(wallpapers, settings),
-    [wallpapers, settings.hiddenIds, settings.contentRatingFilter, settings.typeFilter],
-  );
+  const counts = useMemo(() => computeFilterCounts(wallpapers, settings), [wallpapers, settings]);
 
   const shouldVirtualizeGrid = visibleList.length > SETTINGS_VIRTUALIZE_THRESHOLD;
   const gridVWin = useSettingsGridVirtualWindow(
@@ -411,9 +393,7 @@ export function WallpaperSettingsView({
   };
 
   const toggleBatchItem = (id: string) => {
-    setBatchSelected((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
-    );
+    setBatchSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
 
   const openNewRotationGroup = () => {
@@ -460,7 +440,10 @@ export function WallpaperSettingsView({
     setRotDraft(null);
   };
 
-  const tabIdx = Math.max(0, SETTINGS_TABS.findIndex((t) => t.id === tab));
+  const tabIdx = Math.max(
+    0,
+    SETTINGS_TABS.findIndex((t) => t.id === tab),
+  );
   const ratingSet = new Set(settings.contentRatingFilter);
   const typeSet = new Set(settings.typeFilter);
 
@@ -515,6 +498,7 @@ export function WallpaperSettingsView({
           <button
             type="button"
             className="pmx-wp-btn pmx-wp-btn--mini pmx-wp-card-head__action"
+            // oxlint-disable-next-line prismux/no-native-title-tooltip -- standalone @prismux/wallpaper package has no host Tooltip component
             title="调整主题模式、液态玻璃与字体设置"
             onClick={() => {
               if (onOpenAppearanceSettings) {
@@ -549,9 +533,7 @@ export function WallpaperSettingsView({
               type="button"
               role="tab"
               aria-selected={tab === t.id}
-              className={
-                "pmx-wp-tabs__tab" + (tab === t.id ? " pmx-wp-tabs__tab--active" : "")
-              }
+              className={"pmx-wp-tabs__tab" + (tab === t.id ? " pmx-wp-tabs__tab--active" : "")}
               onClick={() => setTab(t.id)}
             >
               {t.label}
@@ -573,11 +555,7 @@ export function WallpaperSettingsView({
       </div>
 
       {/* ── Tab 1: 壁纸库（保持挂载避免切页重挂载 50+ 缩略图引发黑屏闪烁）── */}
-      <div
-        className="pmx-wp-tabpanel"
-        data-pmx-settings-tab="library"
-        hidden={tab !== "library"}
-      >
+      <div className="pmx-wp-tabpanel" data-pmx-settings-tab="library" hidden={tab !== "library"}>
         {/* 当前壁纸黑胶大卡 */}
         <section className="pmx-wp-glass-card pmx-wp-current-card">
           <VinylRecord
@@ -614,7 +592,10 @@ export function WallpaperSettingsView({
             >
               {playbackLive ? "暂停" : "播放"}
             </button>
-            {current && (current.type === "scene" || current.type === "web" || (current.userProperties?.length ?? 0) > 0) ? (
+            {current &&
+            (current.type === "scene" ||
+              current.type === "web" ||
+              (current.userProperties?.length ?? 0) > 0) ? (
               <button
                 type="button"
                 className={"pmx-wp-btn" + (showInlineProps ? " is-on" : "")}
@@ -652,7 +633,8 @@ export function WallpaperSettingsView({
                 if (adapter?.pickLocalFiles) {
                   void adapter.pickLocalFiles().then((added) => {
                     if (added.length > 0) {
-                      store.setWallpapers([...wallpapers, ...added]);
+                      const latestWallpapers = store.getSnapshot().wallpapers;
+                      store.setWallpapers([...latestWallpapers, ...added]);
                       store.selectWallpaper(added[0]!.id);
                       setImportStatus(`已导入 ${added.length} 个本地壁纸`);
                     }
@@ -681,12 +663,12 @@ export function WallpaperSettingsView({
           {/* 工具栏 + 批量管理 */}
           <div className="pmx-wp-row">
             <span className="pmx-wp-section-label">全部壁纸</span>
-            <span className="pmx-wp-hint">
-              {visibleList.length} 个可播放 · 点击卡片即刻切换
-            </span>
+            <span className="pmx-wp-hint">{visibleList.length} 个可播放 · 点击卡片即刻切换</span>
             <button
               type="button"
-              className={"pmx-wp-btn pmx-wp-btn--mini pmx-wp-library-batch-btn" + (batchMode ? " is-on" : "")}
+              className={
+                "pmx-wp-btn pmx-wp-btn--mini pmx-wp-library-batch-btn" + (batchMode ? " is-on" : "")
+              }
               disabled={visibleList.length === 0}
               onClick={() => {
                 setBatchMode((prev) => !prev);
@@ -755,7 +737,9 @@ export function WallpaperSettingsView({
                 {RATING_TIER_VALUES.map((r) => (
                   <label
                     key={r}
-                    className={"pmx-wp-menu-item" + (ratingSet.has(r) ? " pmx-wp-menu-item--on" : "")}
+                    className={
+                      "pmx-wp-menu-item" + (ratingSet.has(r) ? " pmx-wp-menu-item--on" : "")
+                    }
                   >
                     <input
                       type="checkbox"
@@ -825,11 +809,7 @@ export function WallpaperSettingsView({
 
           {/* 未开启高级渲染引擎时点击 Web/Scene 卡片的内联引导横幅 */}
           {snap.gatedAttempt && !settings.advancedEngineEnabled ? (
-            <div
-              className="pmx-wp-gate-banner"
-              role="alert"
-              data-pmx-engine-gate-banner="1"
-            >
+            <div className="pmx-wp-gate-banner" role="alert" data-pmx-engine-gate-banner="1">
               <div className="pmx-wp-gate-banner__head">
                 <span className="pmx-wp-gate-banner__title">高级壁纸渲染引擎未开启</span>
                 <button
@@ -909,7 +889,7 @@ export function WallpaperSettingsView({
                       aria-label={isGated ? `${w.title}（渲染引擎未开启）` : w.title}
                       aria-disabled={isGated && !batchMode ? "true" : undefined}
                       onPointerDown={() => {
-                        if (w.type === "video" && w.mediaUrl) {
+                        if (w.type === "video" && w.mediaUrl && !isSelected && !isGated) {
                           schedulePrewarmVideo(w.mediaUrl, true);
                         }
                       }}
@@ -920,12 +900,7 @@ export function WallpaperSettingsView({
                       onKeyDown={cardKeyDown}
                     >
                       {w.previewUrl ? (
-                        <img
-                          src={w.previewUrl}
-                          alt={w.title}
-                          loading="lazy"
-                          decoding="async"
-                        />
+                        <img src={w.previewUrl} alt={w.title} loading="lazy" decoding="async" />
                       ) : (
                         <span className="pmx-wp-card__placeholder">无预览</span>
                       )}
@@ -944,6 +919,7 @@ export function WallpaperSettingsView({
                         <button
                           type="button"
                           className="pmx-wp-card__hide"
+                          // oxlint-disable-next-line prismux/no-native-title-tooltip -- standalone @prismux/wallpaper package has no host Tooltip component
                           title="隐藏此壁纸（不删源文件，可在「轮播与隐藏」恢复）"
                           onClick={(e) => {
                             e.stopPropagation();
@@ -1014,7 +990,9 @@ export function WallpaperSettingsView({
             </div>
 
             {settings.rotationGroups.length === 0 ? (
-              <div className="pmx-wp-hint">尚未创建轮播分组，点击上方「新建轮播分组」开始配置。</div>
+              <div className="pmx-wp-hint">
+                尚未创建轮播分组，点击上方「新建轮播分组」开始配置。
+              </div>
             ) : (
               <div className="pmx-wp-group-list">
                 {settings.rotationGroups.map((g) => (
@@ -1078,6 +1056,7 @@ export function WallpaperSettingsView({
                     min={1}
                     max={1440}
                     value={rotDraft.intervalMinutes}
+                    // oxlint-disable-next-line prismux/no-native-title-tooltip -- standalone @prismux/wallpaper package has no host Tooltip component
                     title="轮播间隔（分钟）"
                     onChange={(e) =>
                       setRotDraft({
@@ -1151,11 +1130,7 @@ export function WallpaperSettingsView({
                   >
                     保存分组
                   </button>
-                  <button
-                    type="button"
-                    className="pmx-wp-btn"
-                    onClick={() => setRotDraft(null)}
-                  >
+                  <button type="button" className="pmx-wp-btn" onClick={() => setRotDraft(null)}>
                     取消
                   </button>
                 </div>
@@ -1171,9 +1146,7 @@ export function WallpaperSettingsView({
             ) : (
               <>
                 <div className="pmx-wp-row">
-                  <span className="pmx-wp-hint">
-                    仅从壁纸库隐藏，不会删除你的磁盘源文件。
-                  </span>
+                  <span className="pmx-wp-hint">仅从壁纸库隐藏，不会删除你的磁盘源文件。</span>
                   <button
                     type="button"
                     className="pmx-wp-btn"
@@ -1196,12 +1169,7 @@ export function WallpaperSettingsView({
                   {hiddenList.map((w) => (
                     <div key={w.id} className="pmx-wp-card pmx-wp-card--hidden">
                       {w.previewUrl ? (
-                        <img
-                          src={w.previewUrl}
-                          alt={w.title}
-                          loading="lazy"
-                          decoding="async"
-                        />
+                        <img src={w.previewUrl} alt={w.title} loading="lazy" decoding="async" />
                       ) : (
                         <span className="pmx-wp-card__placeholder">无预览</span>
                       )}
@@ -1268,9 +1236,7 @@ export function WallpaperSettingsView({
                 </button>
               </div>
               {snap.steamRoots.length > 0 ? (
-                <div className="pmx-wp-hint">
-                  已发现 Steam 库：{snap.steamRoots.join(" ； ")}
-                </div>
+                <div className="pmx-wp-hint">已发现 Steam 库：{snap.steamRoots.join(" ； ")}</div>
               ) : null}
 
               <div className="pmx-wp-row">
@@ -1317,7 +1283,11 @@ export function WallpaperSettingsView({
             <SwitchRow
               label="紧凑 CD 架网格"
               checked={settings.pickerLayout === "classic"}
-              hint={settings.pickerLayout === "classic" ? "层叠唱片架视觉风格" : "标准 16:9 宽屏卡片网格"}
+              hint={
+                settings.pickerLayout === "classic"
+                  ? "层叠唱片架视觉风格"
+                  : "标准 16:9 宽屏卡片网格"
+              }
               onChange={(on) => store.setSetting("pickerLayout", on ? "classic" : "fixed")}
             />
             <SwitchRow

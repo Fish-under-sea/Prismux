@@ -6,11 +6,23 @@ export type WallpaperOrientation = "landscape" | "portrait" | "square" | "unknow
 export type ContentRating = "everyone" | "pg13" | "mature" | "unrated";
 export type OrientationFilter = "all" | "landscape" | "portrait";
 export type ObjectFitMode = "cover" | "contain" | "center" | "fill";
-export type SwitchTransition = "cut" | "fade" | "push" | "wipe" | "iris" | "zoom" | "bars" | "random";
+export type SwitchTransition =
+  | "cut"
+  | "fade"
+  | "push"
+  | "wipe"
+  | "iris"
+  | "zoom"
+  | "bars"
+  | "random";
 export type SidebarCornerRadius = "native" | 6 | 12 | 20;
 export type ThinkingGlassMode = "off" | "glass" | "native";
 export type ThemeMode = "light" | "dark" | "glass";
-export type BuiltinScenePresetId = "aurora-prism" | "midnight-abyss" | "liquid-silk" | "cyber-twilight";
+export type BuiltinScenePresetId =
+  | "aurora-prism"
+  | "midnight-abyss"
+  | "liquid-silk"
+  | "cyber-twilight";
 export type QuickPanelTabId = "wallpaper" | "appearance" | "playback";
 export type QuickPanelViewMode = "cards" | "list";
 export type WallpaperSettingsTabId = "library" | "appearance" | "playback" | "rotation" | "system";
@@ -381,6 +393,10 @@ export interface WallpaperRuntimeSnapshot {
   loading: boolean;
   inventoryError: string | null;
   videoError: string | null;
+  /** Monotonic counter bumped when user re-selects the active wallpaper or resumes after error to force stage media recovery. */
+  mediaRecoveryNonce: number;
+  /** Last resolved non-blob active wallpaper retained across transient inventory loading/error states. */
+  retainedWallpaper?: WallpaperItem | null;
   gatedAttempt: GatedSelectionAttempt | null;
   qpSearch: string;
   settingsSearch: string;

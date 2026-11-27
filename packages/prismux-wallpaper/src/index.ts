@@ -6,13 +6,20 @@ export * from "./videoPrewarm.js";
 export {
   WallpaperStage,
   ImageCrossfadeStage,
+  VideoStage,
+  WebWallpaperStage,
   disposeWebWallGLCanvas,
   WATCHDOG_BACKOFF_MS,
   resolveEffectiveLiveFps,
+  resolveVideoRecoveryAction,
 } from "./WallpaperStage.js";
 export type {
   WallpaperStageProps,
   ImageCrossfadeStageProps,
+  VideoStageProps,
+  WebWallpaperStageProps,
+  VideoPlaybackHealthLike,
+  VideoRecoveryAction,
   WebWallGLDisposableContextLike,
 } from "./WallpaperStage.js";
 export {
@@ -31,10 +38,7 @@ export {
 export type { WallpaperSettingsViewProps } from "./WallpaperSettingsView.js";
 export { AppearanceSections } from "./renderers/AppearanceSections.js";
 export type { AppearanceSectionsProps } from "./renderers/AppearanceSections.js";
-export {
-  PlaybackEffectsSection,
-  PlaybackAudioSection,
-} from "./renderers/PlaybackSections.js";
+export { PlaybackEffectsSection, PlaybackAudioSection } from "./renderers/PlaybackSections.js";
 export type {
   PlaybackEffectsSectionProps,
   PlaybackAudioSectionProps,

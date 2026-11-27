@@ -30,13 +30,12 @@ import {
   disposeVideoElement,
   disposeWebWallGLCanvas,
   resolveEffectiveLiveFps,
+  resolveVideoRecoveryAction,
   silenceAndBlankIframe,
   WATCHDOG_BACKOFF_MS,
 } from "../WallpaperStage.js";
-import {
-  SETTINGS_VIRTUALIZE_THRESHOLD,
-  SETTINGS_VP_FIRST,
-} from "../WallpaperSettingsView.js";
+import { disposePrewarmedVideo, getPrewarmedVideoUrl, prewarmVideo } from "../videoPrewarm.js";
+import { SETTINGS_VIRTUALIZE_THRESHOLD, SETTINGS_VP_FIRST } from "../WallpaperSettingsView.js";
 import {
   importLocalWallpaperFile,
   isPathInsideDir,
@@ -184,7 +183,14 @@ describe("@prismux/wallpaper — Node Steam Workshop 431960 & Security Scanner",
             },
             properties: {
               schemecolor: { type: "color", value: "0.2 0.6 1.0", order: 1.5 },
-              speed: { type: "slider", text: "ui_speed", value: 1.2, min: 0.5, max: 2, order: 1.25 },
+              speed: {
+                type: "slider",
+                text: "ui_speed",
+                value: 1.2,
+                min: 0.5,
+                max: 2,
+                order: 1.25,
+              },
             },
           },
         }),
@@ -260,11 +266,7 @@ describe("@prismux/wallpaper — Node Steam Workshop 431960 & Security Scanner",
         JSON.stringify({ title: "Hidden By WE", type: "image", file: "bg.png" }),
         "utf8",
       );
-      await writeFile(
-        join(wsRoot, "visibility.json"),
-        JSON.stringify({ "9999": false }),
-        "utf8",
-      );
+      await writeFile(join(wsRoot, "visibility.json"), JSON.stringify({ "9999": false }), "utf8");
 
       const res = await scanSteamWorkshop431960({
         steamRootOverride: steamA,
@@ -470,7 +472,10 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
     });
 
     // All 4 visible initially
-    assert.equal(filterVisibleWallpapers(store.getSnapshot().wallpapers, store.getSnapshot().settings).length, 4);
+    assert.equal(
+      filterVisibleWallpapers(store.getSnapshot().wallpapers, store.getSnapshot().settings).length,
+      4,
+    );
 
     // Filter out mature & unrated
     store.toggleRatingFilter("mature");
@@ -506,7 +511,10 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
     );
 
     // Counts & hide/restore
-    const counts = computeFilterCounts(store.getSnapshot().wallpapers, store.getSnapshot().settings);
+    const counts = computeFilterCounts(
+      store.getSnapshot().wallpapers,
+      store.getSnapshot().settings,
+    );
     assert.equal(counts.ratings.everyone, 1);
     assert.equal(counts.ratings.mature, 1);
     store.hideWallpapers(["w1"]);
@@ -686,10 +694,7 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
       }),
       true,
     );
-    assert.equal(
-      weEvalCondition("enableBloom == true", { enableBloom: false }),
-      false,
-    );
+    assert.equal(weEvalCondition("enableBloom == true", { enableBloom: false }), false);
 
     const weColor = weHexToColor("#4f8cff");
     assert.equal(weColorToHex(weColor), "#4f8cff");
@@ -814,7 +819,11 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
     // Clicking "外观与玻璃" switches in-panel tab to "appearance" and NEVER triggers route navigation
     openInlineAppearanceInStore(store);
     assert.equal(resolveQuickPanelTab(store.getSnapshot().ui.qpTab), "appearance");
-    assert.deepEqual(routedSections, [], "opening inline appearance must not navigate to /settings/appearance");
+    assert.deepEqual(
+      routedSections,
+      [],
+      "opening inline appearance must not navigate to /settings/appearance",
+    );
 
     // Returning via "← 返回壁纸" restores wallpaper tab while keeping search & filters intact
     closeInlineAppearanceInStore(store, "wallpaper");
@@ -857,7 +866,10 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
 
     // Verify stylesheet keeps QuickPanel transparent over rightSidebar glass & provides light/dark contrast tokens
     const panelCss = await readFile(join(pkgRoot, "src", "styles", "wallpaper-panel.css"), "utf8");
-    assert.match(panelCss, /html\[data-pmx-glass='1'\] \.pmx-wp-qp\s*\{[\s\S]*?background:\s*transparent/);
+    assert.match(
+      panelCss,
+      /html\[data-pmx-glass='1'\] \.pmx-wp-qp\s*\{[\s\S]*?background:\s*transparent/,
+    );
     assert.match(panelCss, /html:not\(\.dark\) \.pmx-wp-qp/);
     assert.match(panelCss, /html\.dark \.pmx-wp-qp/);
     assert.match(panelCss, /html\.dark\[data-pmx-glass='1'\] \.pmx-wp-qp/);
@@ -898,12 +910,12 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
       stageSrc,
       /const isLightSurface =\s*settings\.themeMode === "light" \|\| \(settings\.themeMode === "glass" && docIsLight\);/,
     );
-    assert.match(
-      stageSrc,
-      /const nativeFadeColor = isLightSurface \? "#ffffff" : "#000000";/,
-    );
+    assert.match(stageSrc, /const nativeFadeColor = isLightSurface \? "#ffffff" : "#000000";/);
     // Stage media & scrim enforce normal blend mode, filter: none default, pure black scrim, and natural 1.1 menu saturation
-    assert.match(panelCss, /\.pmx-wp-stage__media\s*\{[^}]*filter:\s*none;[^}]*mix-blend-mode:\s*normal;/s);
+    assert.match(
+      panelCss,
+      /\.pmx-wp-stage__media\s*\{[^}]*filter:\s*none;[^}]*mix-blend-mode:\s*normal;/s,
+    );
     assert.match(panelCss, /\.pmx-wp-stage__scrim\s*\{[^}]*background:\s*#000000;/s);
     assert.doesNotMatch(panelCss, /backdrop-filter:[^;]*saturate\(1\.[4-9]/);
   });
@@ -914,7 +926,11 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
     const panelCss = await readFile(join(pkgRoot, "src", "styles", "wallpaper-panel.css"), "utf8");
     const noComments = panelCss.replace(/\/\*[\s\S]*?\*\//g, "");
 
-    assert.equal(noComments.includes("prefers-color-scheme"), false, "wallpaper-panel.css must never use prefers-color-scheme");
+    assert.equal(
+      noComments.includes("prefers-color-scheme"),
+      false,
+      "wallpaper-panel.css must never use prefers-color-scheme",
+    );
     assert.equal(
       (noComments.match(/\{/g) ?? []).length,
       (noComments.match(/\}/g) ?? []).length,
@@ -923,16 +939,40 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
 
     // Recessed track + accented sliding pill across Dark, Light, Dark Glass, Light Glass
     assert.match(panelCss, /\.pmx-wp-tabs__pill\s*\{[\s\S]*?border:\s*1px solid color-mix\(/);
-    assert.match(panelCss, /html:not\(\.dark\):not\(\[data-pmx-theme='dark'\]\) \.pmx-wp-tabs__pill[\s\S]*?color-mix\(/);
-    assert.match(panelCss, /html\.dark\[data-pmx-glass='1'\] \.pmx-wp-tabs__pill[\s\S]*?color-mix\(/);
-    assert.match(panelCss, /html:not\(\.dark\)\[data-pmx-glass='1'\] \.pmx-wp-tabs__pill[\s\S]*?color-mix\(/);
-    assert.match(panelCss, /\.pmx-wp-tabs__tab--active\s*\{[\s\S]*?color:\s*#ffffff;[\s\S]*?font-weight:\s*600;/);
-    assert.match(panelCss, /html:not\(\.dark\):not\(\[data-pmx-theme='dark'\]\) \.pmx-wp-tabs__tab--active[\s\S]*?color:\s*#0f172a;/);
+    assert.match(
+      panelCss,
+      /html:not\(\.dark\):not\(\[data-pmx-theme='dark'\]\) \.pmx-wp-tabs__pill[\s\S]*?color-mix\(/,
+    );
+    assert.match(
+      panelCss,
+      /html\.dark\[data-pmx-glass='1'\] \.pmx-wp-tabs__pill[\s\S]*?color-mix\(/,
+    );
+    assert.match(
+      panelCss,
+      /html:not\(\.dark\)\[data-pmx-glass='1'\] \.pmx-wp-tabs__pill[\s\S]*?color-mix\(/,
+    );
+    assert.match(
+      panelCss,
+      /\.pmx-wp-tabs__tab--active\s*\{[\s\S]*?color:\s*#ffffff;[\s\S]*?font-weight:\s*600;/,
+    );
+    assert.match(
+      panelCss,
+      /html:not\(\.dark\):not\(\[data-pmx-theme='dark'\]\) \.pmx-wp-tabs__tab--active[\s\S]*?color:\s*#0f172a;/,
+    );
 
     // Active toggle buttons (.pmx-wp-btn.is-on) keep high-contrast fill & are excluded from generic glass button override
-    assert.match(panelCss, /\.pmx-wp-btn\.is-on\s*\{[\s\S]*?color:\s*#ffffff;[\s\S]*?font-weight:\s*600;/);
-    assert.match(panelCss, /html:not\(\.dark\):not\(\[data-pmx-theme='dark'\]\) \.pmx-wp-btn\.is-on[\s\S]*?color:\s*#0f172a;/);
-    assert.match(panelCss, /\.pmx-wp-btn:not\(\.pmx-wp-btn--primary\):not\(\.pmx-wp-rate--active\):not\(\.is-on\)/);
+    assert.match(
+      panelCss,
+      /\.pmx-wp-btn\.is-on\s*\{[\s\S]*?color:\s*#ffffff;[\s\S]*?font-weight:\s*600;/,
+    );
+    assert.match(
+      panelCss,
+      /html:not\(\.dark\):not\(\[data-pmx-theme='dark'\]\) \.pmx-wp-btn\.is-on[\s\S]*?color:\s*#0f172a;/,
+    );
+    assert.match(
+      panelCss,
+      /\.pmx-wp-btn:not\(\.pmx-wp-btn--primary\):not\(\.pmx-wp-rate--active\):not\(\.is-on\)/,
+    );
   });
 
   it("consolidates WallpaperSettingsView refresh action into Tab bar trailingAction slot and denoises jargon (RC.2)", async () => {
@@ -944,9 +984,21 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
     assert.match(viewSrc, /trailingAction\?:\s*ReactNode/);
     assert.match(viewSrc, /headerStatusBadge\?:\s*ReactNode/);
     assert.match(viewSrc, /data-pmx-wp-tabs-trailing="1"/);
-    assert.doesNotMatch(viewSrc, /刷新库/, "duplicate 刷新库 button in vinyl hero card must be removed");
-    assert.doesNotMatch(viewSrc, /应用并刷新/, "redundant 应用并刷新 label must be simplified to 保存");
-    assert.doesNotMatch(viewSrc, /0 Token/, "raw 0 Token jargon must not appear in user-facing copy");
+    assert.doesNotMatch(
+      viewSrc,
+      /刷新库/,
+      "duplicate 刷新库 button in vinyl hero card must be removed",
+    );
+    assert.doesNotMatch(
+      viewSrc,
+      /应用并刷新/,
+      "redundant 应用并刷新 label must be simplified to 保存",
+    );
+    assert.doesNotMatch(
+      viewSrc,
+      /0 Token/,
+      "raw 0 Token jargon must not appear in user-facing copy",
+    );
     assert.match(panelCss, /\.pmx-wp-tabs-row\s*\{/);
     assert.match(panelCss, /\.pmx-wp-tabs-trailing\s*\{/);
   });
@@ -1120,7 +1172,10 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
       backgroundContrast: 100,
       backgroundSaturate: 100,
     });
-    assert.equal(zoomedPanned.mediaStyle.transform, "translate3d(16.67%, 0.00%, 0) scale(-1.5, 1.5)");
+    assert.equal(
+      zoomedPanned.mediaStyle.transform,
+      "translate3d(16.67%, 0.00%, 0) scale(-1.5, 1.5)",
+    );
     assert.equal(zoomedPanned.showAmbientBackdrop, true);
 
     // Scaled down (< 100%) activates ambient backdrop even at center
@@ -1148,9 +1203,15 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
       readFile(join(pkgRoot, "src", "styles", "wallpaper-panel.css"), "utf8"),
     ]);
 
-    assert.match(panelCss, /\.pmx-wp-stage__viewport\s*\{[^}]*z-index:\s*0;[^}]*isolation:\s*isolate;/s);
+    assert.match(
+      panelCss,
+      /\.pmx-wp-stage__viewport\s*\{[^}]*z-index:\s*0;[^}]*isolation:\s*isolate;/s,
+    );
     assert.match(panelCss, /\.pmx-wp-stage__fade\s*\{[^}]*z-index:\s*10;/s);
-    assert.match(panelCss, /\.pmx-wp-stage__scrim\s*\{[^}]*z-index:\s*11;[^}]*background:\s*#000000;/s);
+    assert.match(
+      panelCss,
+      /\.pmx-wp-stage__scrim\s*\{[^}]*z-index:\s*11;[^}]*background:\s*#000000;/s,
+    );
     assert.match(stageSrc, /className="pmx-wp-stage__viewport"\s+style=\{viewportStyle\}/);
 
     // Card grid row height & zero hover jitter
@@ -1184,7 +1245,10 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
     const idxTabs = panelSrc.indexOf("pmx-wp-tabs pmx-wp-qp__tabs");
     const idxPlayback = panelSrc.indexOf('effectiveTab === "playback" ?');
     const idxRotation = panelSrc.indexOf("pmx-wp-glass-card pmx-wp-qp__rotation");
-    assert.ok(idxCurrent > -1 && idxTabs > idxCurrent, "current wallpaper card must stay above tab bar");
+    assert.ok(
+      idxCurrent > -1 && idxTabs > idxCurrent,
+      "current wallpaper card must stay above tab bar",
+    );
     assert.ok(
       idxPlayback > idxTabs && idxRotation > idxPlayback,
       "auto-rotation card must live inside the playback tab instead of above tabs",
@@ -1368,9 +1432,7 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
       },
     };
     silenceAndBlankIframe(mockIframe);
-    assert.deepEqual(cleanupPosted, [
-      { type: "prismuxWallpaperAudio", muted: true, volume: 0 },
-    ]);
+    assert.deepEqual(cleanupPosted, [{ type: "prismuxWallpaperAudio", muted: true, volume: 0 }]);
     assert.equal(mockIframe.src, "about:blank");
 
     // 4. Verify all 5 VideoStage timings, WebWallpaperStage bridge readiness, and WallpaperStage prop wiring
@@ -1456,12 +1518,21 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
 
     // filterVisibleWallpapers KEEPS web & scene visible when disabled
     const visible = filterVisibleWallpapers(sampleWallpapers, store.getSnapshot().settings);
-    assert.equal(visible.some((w) => w.type === "web"), true);
-    assert.equal(visible.some((w) => w.type === "scene"), true);
+    assert.equal(
+      visible.some((w) => w.type === "web"),
+      true,
+    );
+    assert.equal(
+      visible.some((w) => w.type === "scene"),
+      true,
+    );
 
     // resolveRotationCandidates EXCLUDES web & scene when disabled
     const rotDisabled = resolveRotationCandidates(sampleWallpapers, store.getSnapshot().settings);
-    assert.equal(rotDisabled.some((w) => w.type === "web" || w.type === "scene"), false);
+    assert.equal(
+      rotDisabled.some((w) => w.type === "web" || w.type === "scene"),
+      false,
+    );
     assert.deepEqual(
       rotDisabled.map((w) => w.id),
       ["w1", "w2"],
@@ -1471,7 +1542,11 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
     store.selectWallpaper("w1");
     assert.equal(store.getSnapshot().settings.selectedId, "w1");
     store.selectWallpaper("w3");
-    assert.equal(store.getSnapshot().settings.selectedId, "w1", "gated selection must not overwrite selectedId");
+    assert.equal(
+      store.getSnapshot().settings.selectedId,
+      "w1",
+      "gated selection must not overwrite selectedId",
+    );
     assert.equal(store.getSnapshot().gatedAttempt?.wallpaper.id, "w3");
     assert.deepEqual(blockedItems, ["w3"]);
 
@@ -1518,8 +1593,16 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
       stageSrc.indexOf("const paintOnce ="),
       stageSrc.indexOf("const tick ="),
     );
-    assert.doesNotMatch(paintOnceBlock, /syncSize\(/, "paintOnce must not call syncSize() per frame");
-    assert.doesNotMatch(stageSrc, /setParallax/, "SteamSceneFallback must update DOM ref directly without React setParallax");
+    assert.doesNotMatch(
+      paintOnceBlock,
+      /syncSize\(/,
+      "paintOnce must not call syncSize() per frame",
+    );
+    assert.doesNotMatch(
+      stageSrc,
+      /setParallax/,
+      "SteamSceneFallback must update DOM ref directly without React setParallax",
+    );
     assert.match(stageSrc, /parallaxPosRef = useRef\(\{ x: 0, y: 0 \}\)/);
     assert.match(stageSrc, /\}, \[parallaxEnabled\]\);/);
     assert.match(stageSrc, /\.\.\.\(parallaxEnabled \? \{\} : \{ transform: staticTransform \}\)/);
@@ -1621,5 +1704,191 @@ describe("@prismux/wallpaper — Store, Filtering, Module Reset, Virtual Window 
       "blob:http://localhost/one-v2",
     ]);
     assert.equal(registry.size, 0);
+  });
+
+  it("recovers video playback states, preserves active inventory across transient refresh failures, strips undefined patches, and guards video prewarm", async () => {
+    // 1. Pure video recovery state machine covers decoder reclamation, ended-loop, error, and manual pause
+    assert.equal(
+      resolveVideoRecoveryAction(
+        { readyState: 0, networkState: 0, paused: true, ended: false, error: null },
+        { paused: true, loop: true },
+      ),
+      "none",
+      "paused stage must never trigger reload/play",
+    );
+    assert.equal(
+      resolveVideoRecoveryAction(
+        { readyState: 0, networkState: 1, paused: true, ended: false, error: null },
+        { paused: false, loop: true },
+      ),
+      "reload-and-play",
+      "reclaimed decoder (readyState=0) must reload and play",
+    );
+    assert.equal(
+      resolveVideoRecoveryAction(
+        { readyState: 2, networkState: 3, paused: false, ended: false, error: null },
+        { paused: false, loop: true },
+      ),
+      "reload-and-play",
+      "NETWORK_NO_SOURCE must reload and play",
+    );
+    assert.equal(
+      resolveVideoRecoveryAction(
+        { readyState: 4, networkState: 1, paused: false, ended: false, error: null },
+        { paused: false, loop: true, failed: true },
+      ),
+      "reload-and-play",
+      "previous failed flag must trigger reload on recovery",
+    );
+    assert.equal(
+      resolveVideoRecoveryAction(
+        { readyState: 4, networkState: 1, paused: true, ended: true, error: null },
+        { paused: false, loop: true },
+      ),
+      "restart-loop",
+      "ended looping video must restart from t=0",
+    );
+    assert.equal(
+      resolveVideoRecoveryAction(
+        { readyState: 3, networkState: 1, paused: true, ended: false, error: null },
+        { paused: false, loop: true },
+      ),
+      "play",
+      "paused video with buffered data must resume play()",
+    );
+    assert.equal(
+      resolveVideoRecoveryAction(
+        { readyState: 4, networkState: 1, paused: false, ended: false, error: null },
+        { paused: false, loop: true },
+      ),
+      "none",
+      "healthy playing video needs no reload",
+    );
+
+    // 2. Store: undefined patch keys must never clobber selectedId/playing; loaded starts false when unhydrated
+    const unhydrated = createWallpaperStore({
+      includeBuiltins: false,
+      storage: createMemoryStorage(),
+      settings: { selectedId: "w2", playing: true },
+    });
+    assert.equal(unhydrated.getSnapshot().loaded, false);
+    unhydrated.updateSettings({
+      selectedId: undefined,
+      playing: undefined,
+      objectFit: undefined,
+    } as Partial<ReturnType<typeof createDefaultSettings>>);
+    assert.equal(unhydrated.getSnapshot().settings.selectedId, "w2");
+    assert.equal(unhydrated.getSnapshot().settings.playing, true);
+    assert.equal(unhydrated.getSnapshot().settings.objectFit, "cover");
+    // Explicit null still clears selectedId cleanly
+    unhydrated.updateSettings({ selectedId: null });
+    assert.equal(unhydrated.getSnapshot().settings.selectedId, null);
+    unhydrated.dispose();
+
+    // 3. Store: refreshLibrary preserves existing wallpapers & selectedId across daemon errors, offline-empty replies, and out-of-order responses
+    const store = createWallpaperStore({
+      wallpapers: sampleWallpapers,
+      includeBuiltins: false,
+      storage: createMemoryStorage(),
+      settings: { selectedId: "w2", playing: true },
+    });
+    assert.equal(store.getSnapshot().loaded, true);
+
+    // 3a. Adapter returns error with empty list -> preserve existing library!
+    await store.refreshLibrary(
+      {
+        listWallpapers: async () => ({
+          wallpapers: [],
+          steamRoots: [],
+          customDir: "",
+          error: "Daemon temporarily restarting",
+        }),
+      },
+      true,
+    );
+    assert.equal(store.getSnapshot().wallpapers.length, sampleWallpapers.length);
+    assert.equal(store.getSnapshot().settings.selectedId, "w2");
+    assert.equal(store.getSnapshot().inventoryError, "Daemon temporarily restarting");
+    assert.equal(store.getSnapshot().retainedWallpaper?.id, "w2");
+
+    // Even if wallpapers are momentarily cleared during an active error state, retainedWallpaper stays intact;
+    // a clean non-error empty list clears retainedWallpaper so removed items do not linger.
+    store.setWallpapers([], { error: "Daemon temporarily restarting" });
+    assert.equal(store.getSnapshot().retainedWallpaper?.id, "w2");
+    store.setWallpapers([]);
+    assert.equal(store.getSnapshot().retainedWallpaper, null);
+    store.setWallpapers(sampleWallpapers);
+
+    // 3b. Adapter returns offline-empty payload on non-forced refresh -> preserve existing library!
+    await store.refreshLibrary(
+      {
+        listWallpapers: async () => ({
+          wallpapers: [],
+          steamRoots: [],
+          customDir: "",
+          error: null,
+        }),
+      },
+      false,
+    );
+    assert.equal(store.getSnapshot().wallpapers.length, sampleWallpapers.length);
+    assert.equal(store.getSnapshot().settings.selectedId, "w2");
+
+    // 3c. Out-of-order concurrent refreshLibrary: slower stale response must not overwrite newer result
+    let resolveSlow!: (v: { wallpapers: WallpaperItem[]; customDir: string }) => void;
+    const slowPromise = new Promise<{ wallpapers: WallpaperItem[]; customDir: string }>((r) => {
+      resolveSlow = r;
+    });
+    const firstRefresh = store.refreshLibrary({ listWallpapers: () => slowPromise }, true);
+    const secondRefresh = store.refreshLibrary(
+      {
+        listWallpapers: async () => ({
+          wallpapers: [sampleWallpapers[0]!, sampleWallpapers[1]!],
+          customDir: "/fresh",
+        }),
+      },
+      true,
+    );
+    await secondRefresh;
+    resolveSlow({ wallpapers: [sampleWallpapers[0]!], customDir: "/stale" });
+    await firstRefresh;
+    assert.deepEqual(
+      store.getSnapshot().wallpapers.map((w) => w.id),
+      ["w1", "w2"],
+    );
+    assert.equal(store.getSnapshot().customDir, "/fresh");
+
+    // 3d. Re-selecting active wallpaper or unpausing after videoError bumps mediaRecoveryNonce & clears videoError
+    const nonceBefore = store.getSnapshot().mediaRecoveryNonce;
+    store.setVideoError("decode glitch");
+    store.selectWallpaper("w2");
+    assert.equal(store.getSnapshot().videoError, null);
+    assert.equal(store.getSnapshot().mediaRecoveryNonce, nonceBefore + 1);
+
+    store.setPlaying(false);
+    store.setVideoError("network hiccup");
+    store.setPlaying(true);
+    assert.equal(store.getSnapshot().videoError, null);
+    assert.equal(store.getSnapshot().mediaRecoveryNonce, nonceBefore + 2);
+    store.dispose();
+
+    // 4. videoPrewarm skips blob: URLs cleanly
+    disposePrewarmedVideo();
+    prewarmVideo("blob:http://localhost/live-video-123");
+    assert.equal(getPrewarmedVideoUrl(), null);
+
+    // 5. Static source verification of render-recovery hooks in WallpaperStage.tsx
+    const testDir = dirname(fileURLToPath(import.meta.url));
+    const pkgRoot = join(testDir, "..", "..");
+    const stageSrc = await readFile(join(pkgRoot, "src", "WallpaperStage.tsx"), "utf8");
+    assert.match(stageSrc, /addEventListener\("webglcontextlost",\s*handleContextLost\)/);
+    assert.match(stageSrc, /addEventListener\("webglcontextrestored",\s*handleContextRestored\)/);
+    assert.match(stageSrc, /addEventListener\("emptied",\s*handleEmptiedOrAbort\)/);
+    assert.match(stageSrc, /addEventListener\("abort",\s*handleEmptiedOrAbort\)/);
+    assert.match(stageSrc, /addEventListener\("canplaythrough",\s*handleReadyToPlay\)/);
+    assert.match(stageSrc, /addEventListener\("timeupdate",\s*handleTimeUpdate\)/);
+    assert.match(stageSrc, /addEventListener\("pause",\s*handleUnexpectedPause\)/);
+    assert.match(stageSrc, /snap\.retainedWallpaper/);
+    assert.match(stageSrc, /healedExternalOcclusion/);
   });
 });

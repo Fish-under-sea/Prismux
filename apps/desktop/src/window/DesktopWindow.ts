@@ -4,11 +4,13 @@ import * as NodeFS from "node:fs";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 
 import * as Electron from "electron";
@@ -22,6 +24,7 @@ import * as DesktopPrimaryPaste from "../app/DesktopPrimaryPaste.ts";
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
+import * as ElectronPowerMonitor from "../electron/ElectronPowerMonitor.ts";
 import { getDesktopUrl } from "../electron/ElectronProtocol.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
@@ -155,10 +158,22 @@ export function matchMainWindowContentsShortcut(
   const key = input.key.toLowerCase();
   const code = typeof input.code === "string" ? input.code : "";
   if (platform === "darwin") {
-    if (input.meta && input.shift && !input.alt && !input.control && (key === "r" || code === "KeyR")) {
+    if (
+      input.meta &&
+      input.shift &&
+      !input.alt &&
+      !input.control &&
+      (key === "r" || code === "KeyR")
+    ) {
       return "forceReload";
     }
-    if (input.meta && input.alt && !input.shift && !input.control && (key === "i" || code === "KeyI")) {
+    if (
+      input.meta &&
+      input.alt &&
+      !input.shift &&
+      !input.control &&
+      (key === "i" || code === "KeyI")
+    ) {
       return "toggleDevTools";
     }
     return null;
@@ -460,6 +475,7 @@ export const make = Effect.gen(function* () {
   const clientSettings = yield* DesktopClientSettings.DesktopClientSettings;
   const electronApp = yield* ElectronApp.ElectronApp;
   const rendererHistory = yield* DesktopRendererHistory.DesktopRendererHistory;
+  const powerMonitorOption = yield* Effect.serviceOption(ElectronPowerMonitor.ElectronPowerMonitor);
   const backendReadyRef = yield* Ref.make(false);
   let backendHasStarted = false;
   let mainClosedDuringStartup = false;
@@ -933,18 +949,42 @@ export const make = Effect.gen(function* () {
       event.preventDefault();
       window.setTitle(environment.displayName);
     });
-    window.on("resize", scheduleBoundsPersist);
-    window.on("move", scheduleBoundsPersist);
-    window.on("maximize", scheduleBoundsPersist);
-    window.on("unmaximize", scheduleBoundsPersist);
+    let systemOccluded = false;
+    let lastEmittedOccluded: boolean | null = null;
+    const computeWindowOccluded = (): boolean =>
+      systemOccluded || window.isMinimized() || !window.isVisible();
+    const emitWindowOcclusion = (occluded: boolean, reason: string) => {
+      if (window.isDestroyed()) return;
+      lastEmittedOccluded = occluded;
+      window.webContents.send(PRISMUX_WINDOW_OCCLUSION_CHANNEL, { occluded, reason });
+    };
+    const syncVisibleRecovery = (reason: string) => {
+      if (window.isDestroyed()) return;
+      if (lastEmittedOccluded === true && !computeWindowOccluded()) {
+        emitWindowOcclusion(false, reason);
+      }
+    };
+
+    window.on("resize", () => {
+      scheduleBoundsPersist();
+      syncVisibleRecovery("visible-bounds-change");
+    });
+    window.on("move", () => {
+      scheduleBoundsPersist();
+      syncVisibleRecovery("visible-bounds-change");
+    });
+    window.on("maximize", () => {
+      scheduleBoundsPersist();
+      emitWindowOcclusion(computeWindowOccluded(), "maximized");
+    });
+    window.on("unmaximize", () => {
+      scheduleBoundsPersist();
+      emitWindowOcclusion(computeWindowOccluded(), "unmaximized");
+    });
     window.on("close", () => {
       runFork(flushBoundsPersist);
     });
 
-    const emitWindowOcclusion = (occluded: boolean, reason: string) => {
-      if (window.isDestroyed()) return;
-      window.webContents.send(PRISMUX_WINDOW_OCCLUSION_CHANNEL, { occluded, reason });
-    };
     window.on("minimize", () => {
       emitWindowOcclusion(true, "minimized");
     });
@@ -952,10 +992,10 @@ export const make = Effect.gen(function* () {
       emitWindowOcclusion(true, "hidden");
     });
     window.on("restore", () => {
-      emitWindowOcclusion(false, "restored");
+      emitWindowOcclusion(computeWindowOccluded(), "restored");
     });
     window.on("show", () => {
-      emitWindowOcclusion(false, "shown");
+      emitWindowOcclusion(computeWindowOccluded(), "shown");
     });
     window.on("blur", () => {
       if (window.isDestroyed()) return;
@@ -964,8 +1004,35 @@ export const make = Effect.gen(function* () {
       }
     });
     window.on("focus", () => {
-      emitWindowOcclusion(false, "focused");
+      emitWindowOcclusion(computeWindowOccluded(), "focused");
     });
+
+    let powerMonitorScope: Scope.Closeable | undefined;
+    if (Option.isSome(powerMonitorOption)) {
+      const powerMonitor = powerMonitorOption.value;
+      powerMonitorScope = yield* Scope.make();
+      yield* Effect.all(
+        [
+          powerMonitor.onSimpleEvent("lock-screen", () => {
+            systemOccluded = true;
+            emitWindowOcclusion(true, "lock-screen");
+          }),
+          powerMonitor.onSimpleEvent("unlock-screen", () => {
+            systemOccluded = false;
+            emitWindowOcclusion(computeWindowOccluded(), "unlock-screen");
+          }),
+          powerMonitor.onSimpleEvent("suspend", () => {
+            systemOccluded = true;
+            emitWindowOcclusion(true, "suspend");
+          }),
+          powerMonitor.onSimpleEvent("resume", () => {
+            systemOccluded = false;
+            emitWindowOcclusion(computeWindowOccluded(), "resume");
+          }),
+        ],
+        { concurrency: "unbounded" },
+      ).pipe(Scope.provide(powerMonitorScope));
+    }
 
     if (environment.platform === "darwin") {
       // Mouse drivers can deliver Back/Forward as macOS swipe gestures instead of buttons.
@@ -976,10 +1043,19 @@ export const make = Effect.gen(function* () {
       });
       window.on("enter-full-screen", () => {
         window.webContents.send(WINDOW_FULLSCREEN_STATE_CHANNEL, true);
+        emitWindowOcclusion(computeWindowOccluded(), "enter-full-screen");
       });
       window.on("leave-full-screen", () => {
         syncMacosWindowButtons(window);
         window.webContents.send(WINDOW_FULLSCREEN_STATE_CHANNEL, false);
+        emitWindowOcclusion(computeWindowOccluded(), "leave-full-screen");
+      });
+    } else {
+      window.on("enter-full-screen", () => {
+        emitWindowOcclusion(computeWindowOccluded(), "enter-full-screen");
+      });
+      window.on("leave-full-screen", () => {
+        emitWindowOcclusion(computeWindowOccluded(), "leave-full-screen");
       });
     }
 
@@ -1039,6 +1115,7 @@ export const make = Effect.gen(function* () {
       clearDevelopmentLoadRetry();
       developmentLoadRetryIndex = 0;
       if (environment.platform === "darwin") syncMacosWindowButtons(window);
+      emitWindowOcclusion(computeWindowOccluded(), "did-finish-load");
     });
     window.webContents.on(
       "did-fail-load",
@@ -1132,6 +1209,7 @@ export const make = Effect.gen(function* () {
       window.webContents.setBackgroundThrottling(true);
       if (persistedSettings.mainWindowMaximized) window.maximize();
       yield* electronWindow.reveal(window);
+      emitWindowOcclusion(computeWindowOccluded(), "revealed");
       yield* dismissConnectingSplash;
     });
     pendingMainReveals.set(window, revealWhenReady);
@@ -1151,6 +1229,11 @@ export const make = Effect.gen(function* () {
       if (!backendHasStarted) mainClosedDuringStartup = true;
       clearDevelopmentLoadRetry();
       clearBoundsPersist();
+      if (powerMonitorScope !== undefined) {
+        const scopeToClose = powerMonitorScope;
+        powerMonitorScope = undefined;
+        void runPromise(Scope.close(scopeToClose, Exit.void).pipe(Effect.ignore));
+      }
       void runPromise(electronWindow.clearMain(Option.some(window)));
     });
 

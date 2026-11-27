@@ -11,7 +11,7 @@ import {
   type WallpaperSettingsState,
   type WallpaperStore,
 } from "@prismux/wallpaper";
-import { memo, useId, useMemo } from "react";
+import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { PopoverCreateHandle, PopoverTrigger } from "../components/ui/popover";
 import { Toggle } from "../components/ui/toggle";
@@ -76,28 +76,274 @@ export function createEngineAwareWallpaperHost(
   };
 }
 
+const MISSING_WALLPAPER_RETRY_MS: readonly number[] = [500, 1500, 4000, 8000];
+const MEDIA_REFRESH_THROTTLE_MS = 3000;
+
+/**
+ * Rebuilds a fresh authenticated Daemon media URL after daemon restart or auth-token rotation.
+ * Preserves blob:/data: URLs verbatim.
+ */
+export function buildFreshWallpaperMediaUrl(
+  daemon: Pick<PrismuxDaemonClient, "resolveMediaUrl" | "buildMediaUrl">,
+  wallpaper: Pick<WallpaperItem, "id" | "type" | "source" | "mediaUrl" | "sceneLiveSupported">,
+): string | null {
+  if (!wallpaper.mediaUrl) return null;
+  if (wallpaper.mediaUrl.startsWith("blob:") || wallpaper.mediaUrl.startsWith("data:")) {
+    return wallpaper.mediaUrl;
+  }
+  if (/\/v1\/wallpapers\/media\//i.test(wallpaper.mediaUrl)) {
+    return daemon.buildMediaUrl("media", wallpaper.id);
+  }
+  if (wallpaper.type === "web") {
+    return daemon.buildMediaUrl("web", wallpaper.id, "index.html");
+  }
+  if (wallpaper.type === "scene" && wallpaper.source === "steam" && wallpaper.sceneLiveSupported) {
+    return daemon.buildMediaUrl("scene", wallpaper.id, "index.html");
+  }
+  return daemon.resolveMediaUrl(wallpaper.mediaUrl);
+}
+
 /**
  * Z-0 Fullscreen Wallpaper Stage (0 Token visual layer).
  * Mounts behind the Prismux shell, obeys window occlusion / visibility for 0 FPS suspension,
- * and resolves authenticated Daemon URLs for Steam/local web & live scene runtimes.
+ * self-heals stale occlusion or unhydrated inventory states, and resolves fresh authenticated
+ * Daemon URLs for video/image/web/scene runtimes.
  */
 export const PrismuxWallpaperBackdrop = memo(function PrismuxWallpaperBackdrop() {
-  const { daemon, wallpaperStore, occluded } = usePrismuxRuntime();
+  const { daemon, daemonInfo, wallpaperStore, wallpaperHost, occluded } = usePrismuxRuntime();
   const snapshot = useWallpaperStore(wallpaperStore);
+  const [verifiedUnoccluded, setVerifiedUnoccluded] = useState(false);
+  const lastMediaRefreshAtRef = useRef(0);
 
-  const currentWallpaper = findWallpaperById(snapshot.wallpapers, snapshot.settings.selectedId);
+  const selectedId = snapshot.settings.selectedId;
+  const currentWallpaper = findWallpaperById(snapshot.wallpapers, selectedId);
+  const rawOccluded = occluded || snapshot.occluded;
+
+  // Reset local occlusion verification whenever upstream occlusion clears or a fresh desktop occlusion event arrives.
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- subscribes to Electron occlusion IPC and wake events to self-heal stale occluded=true state
+  useEffect(() => {
+    if (!rawOccluded) {
+      queueMicrotask(() => {
+        setVerifiedUnoccluded((prev) => (prev ? false : prev));
+      });
+      return;
+    }
+    if (typeof window === "undefined" || typeof document === "undefined") {
+      return;
+    }
+
+    let disposed = false;
+    const prismuxBridge = window.desktopBridge?.prismux;
+
+    const verifyWithHost = async (): Promise<boolean> => {
+      if (disposed || document.hidden || document.visibilityState !== "visible") {
+        return true;
+      }
+      if (prismuxBridge && typeof prismuxBridge.getWindowOcclusion === "function") {
+        try {
+          const res = await prismuxBridge.getWindowOcclusion();
+          if (disposed) return true;
+          if (res && res.occluded === false && document.visibilityState === "visible") {
+            setVerifiedUnoccluded(true);
+            if (wallpaperStore.getSnapshot().occluded) {
+              wallpaperStore.setOccluded(false);
+            }
+            return false;
+          }
+          setVerifiedUnoccluded(false);
+          return true;
+        } catch {
+          return true;
+        }
+      }
+      setVerifiedUnoccluded(true);
+      if (wallpaperStore.getSnapshot().occluded) {
+        wallpaperStore.setOccluded(false);
+      }
+      return false;
+    };
+
+    const unsubscribeDesktopOcclusion =
+      prismuxBridge && typeof prismuxBridge.onWindowOcclusionChange === "function"
+        ? prismuxBridge.onWindowOcclusionChange((payload) => {
+            if (disposed) return;
+            if (payload.occluded) {
+              setVerifiedUnoccluded(false);
+            } else if (document.visibilityState === "visible") {
+              setVerifiedUnoccluded(true);
+            }
+          })
+        : undefined;
+
+    // Immediately verify once if a desktop window is already visible (heals cold-boot show:false IPC races).
+    let settleTimer: ReturnType<typeof setTimeout> | null = null;
+    if (
+      document.visibilityState === "visible" &&
+      prismuxBridge &&
+      typeof prismuxBridge.getWindowOcclusion === "function"
+    ) {
+      void verifyWithHost();
+      settleTimer = setTimeout(() => {
+        settleTimer = null;
+        if (!disposed && document.visibilityState === "visible") {
+          void verifyWithHost();
+        }
+      }, 300);
+    }
+
+    const onLiveWake = () => {
+      if (disposed || document.hidden || document.visibilityState !== "visible") return;
+      void verifyWithHost();
+    };
+
+    document.addEventListener("visibilitychange", onLiveWake);
+    window.addEventListener("focus", onLiveWake);
+    window.addEventListener("pageshow", onLiveWake);
+    window.addEventListener("pointerdown", onLiveWake, { passive: true });
+    window.addEventListener("keydown", onLiveWake, { passive: true });
+
+    return () => {
+      disposed = true;
+      if (settleTimer !== null) clearTimeout(settleTimer);
+      unsubscribeDesktopOcclusion?.();
+      document.removeEventListener("visibilitychange", onLiveWake);
+      window.removeEventListener("focus", onLiveWake);
+      window.removeEventListener("pageshow", onLiveWake);
+      window.removeEventListener("pointerdown", onLiveWake);
+      window.removeEventListener("keydown", onLiveWake);
+    };
+  }, [rawOccluded, wallpaperStore]);
+
+  // Self-heal when a persisted `selectedId` exists but the wallpaper inventory has not hydrated yet
+  // (e.g. slow Windows daemon startup or transient initial inventory failure).
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- retries wallpaperStore.refreshLibrary with bounded backoff when selectedId is unresolved
+  useEffect(() => {
+    if (!selectedId || currentWallpaper !== null || !wallpaperHost.listWallpapers) {
+      return;
+    }
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    let disposed = false;
+    let attempt = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const triggerRefresh = () => {
+      if (disposed) return;
+      const latest = wallpaperStore.getSnapshot();
+      if (
+        !latest.settings.selectedId ||
+        findWallpaperById(latest.wallpapers, latest.settings.selectedId) !== null ||
+        latest.loading
+      ) {
+        return;
+      }
+      void wallpaperStore.refreshLibrary(wallpaperHost, false).finally(() => {
+        if (!disposed) {
+          scheduleNext();
+        }
+      });
+    };
+
+    const scheduleNext = () => {
+      if (disposed || retryTimer !== null || attempt >= MISSING_WALLPAPER_RETRY_MS.length) {
+        return;
+      }
+      const latest = wallpaperStore.getSnapshot();
+      if (
+        !latest.settings.selectedId ||
+        findWallpaperById(latest.wallpapers, latest.settings.selectedId) !== null
+      ) {
+        return;
+      }
+      const delayMs = MISSING_WALLPAPER_RETRY_MS[attempt]!;
+      attempt += 1;
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        triggerRefresh();
+      }, delayMs);
+    };
+
+    if (daemonInfo.ready) {
+      scheduleNext();
+    }
+
+    const onWake = () => {
+      if (disposed || (typeof document !== "undefined" && document.hidden)) return;
+      attempt = 0;
+      triggerRefresh();
+    };
+
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onWake);
+    }
+    window.addEventListener("focus", onWake);
+    window.addEventListener("online", onWake);
+
+    return () => {
+      disposed = true;
+      if (retryTimer !== null) clearTimeout(retryTimer);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onWake);
+      }
+      window.removeEventListener("focus", onWake);
+      window.removeEventListener("online", onWake);
+    };
+  }, [selectedId, currentWallpaper, daemonInfo.ready, wallpaperHost, wallpaperStore]);
+
+  const handleRequestOcclusionSync = async (): Promise<boolean> => {
+    if (
+      typeof document !== "undefined" &&
+      (document.hidden || document.visibilityState !== "visible")
+    ) {
+      return true;
+    }
+    const prismuxBridge = typeof window !== "undefined" ? window.desktopBridge?.prismux : undefined;
+    if (prismuxBridge && typeof prismuxBridge.getWindowOcclusion === "function") {
+      try {
+        const res = await prismuxBridge.getWindowOcclusion();
+        const stillOccluded = Boolean(res?.occluded);
+        setVerifiedUnoccluded(!stillOccluded);
+        if (!stillOccluded && wallpaperStore.getSnapshot().occluded) {
+          wallpaperStore.setOccluded(false);
+        }
+        return stillOccluded;
+      } catch {
+        return rawOccluded;
+      }
+    }
+    setVerifiedUnoccluded(true);
+    if (wallpaperStore.getSnapshot().occluded) {
+      wallpaperStore.setOccluded(false);
+    }
+    return false;
+  };
+
+  const handleRequestMediaRefresh = async (wallpaper: WallpaperItem): Promise<string | null> => {
+    const info = await daemon.getConnectionInfo(true).catch(() => null);
+    const now = Date.now();
+    if (
+      info?.ready &&
+      wallpaperHost.listWallpapers &&
+      now - lastMediaRefreshAtRef.current >= MEDIA_REFRESH_THROTTLE_MS
+    ) {
+      lastMediaRefreshAtRef.current = now;
+      void wallpaperStore.refreshLibrary(wallpaperHost, false);
+    }
+    return buildFreshWallpaperMediaUrl(daemon, wallpaper);
+  };
 
   const resolveLiveRuntimeUrl = (
     wallpaper: WallpaperItem,
     settings: WallpaperSettingsState,
   ): string | null => resolveWallpaperLiveRuntimeUrl(daemon, wallpaper, settings);
 
-  if (
-    !snapshot.settings.selectedId ||
-    isWallpaperGatedByEngine(currentWallpaper, snapshot.settings)
-  ) {
+  if (!selectedId || isWallpaperGatedByEngine(currentWallpaper, snapshot.settings)) {
     return null;
   }
+
+  const effectiveOccluded = rawOccluded && !verifiedUnoccluded;
 
   return (
     <div
@@ -113,8 +359,10 @@ export const PrismuxWallpaperBackdrop = memo(function PrismuxWallpaperBackdrop()
     >
       <WallpaperStage
         store={wallpaperStore}
-        occluded={occluded}
+        occluded={effectiveOccluded}
         resolveLiveRuntimeUrl={resolveLiveRuntimeUrl}
+        onRequestMediaRefresh={handleRequestMediaRefresh}
+        onRequestOcclusionSync={handleRequestOcclusionSync}
       />
     </div>
   );
