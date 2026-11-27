@@ -1,7 +1,14 @@
 import { ImageIcon } from "lucide-react";
 import { memo, useMemo, useState, type ReactNode } from "react";
 
-import { getAuxStrings, type AgentAuxLocale } from "./agentAux.i18n";
+import {
+  formatAuxBoardMemberHandle,
+  formatAuxBoardStatusTag,
+  getAuxStrings,
+  localizeAuxBoardPlainText,
+  type AgentAuxLocale,
+  type AuxBoardStatusTagKind,
+} from "./agentAux.i18n";
 import {
   extractScreenshotsFromText,
   stripLeadingMentionTokens,
@@ -136,10 +143,12 @@ function renderFormattedSpan(
   text: string,
   knownNames: ReadonlySet<string>,
   maxSeq: number,
+  locale: AgentAuxLocale,
   onJumpSeq?: (seq: number) => void,
   onClickMention?: (name: string) => void,
   keyPrefix = "",
 ): ReactNode[] {
+  const s = getAuxStrings(locale);
   const tokens = tokenizeBoardText(text, knownNames, maxSeq);
   const out: ReactNode[] = [];
 
@@ -171,32 +180,37 @@ function renderFormattedSpan(
     }
     if (tok.kind === "mention") {
       const className = tok.isAll ? "pmx-aux-mention pmx-aux-mention--all" : "pmx-aux-mention";
+      const displayLabel = tok.isAll
+        ? s.boardBroadcastAllMention
+        : formatAuxBoardMemberHandle(tok.name, locale);
+      const rawMemberId = tok.isAll ? "all" : tok.name;
       if (!tok.isAll && onClickMention) {
         out.push(
           <button
             key={key}
             type="button"
             className={`${className} pmx-aux-mention--btn`}
+            data-aux-member-id={rawMemberId}
             onClick={(e) => {
               e.stopPropagation();
               onClickMention(tok.name);
             }}
           >
-            {tok.value}
+            {displayLabel}
           </button>,
         );
       } else {
         out.push(
-          <span key={key} className={className}>
-            {tok.value}
+          <span key={key} className={className} data-aux-member-id={rawMemberId}>
+            {displayLabel}
           </span>,
         );
       }
       return;
     }
 
-    // Plain text: apply safe inline bold / italic / strikethrough / [done]|[blocked]|[stall]
-    const raw = tok.value;
+    // Plain text: localize known provider/system notices and apply safe inline formatting
+    const raw = localizeAuxBoardPlainText(tok.value, locale);
     let cursor = 0;
     let partIdx = 0;
     for (const match of raw.matchAll(INLINE_FORMAT_RE)) {
@@ -212,13 +226,14 @@ function renderFormattedSpan(
       } else if (match[3]) {
         out.push(<em key={`${key}-i${partIdx++}`}>{m0.slice(1, -1)}</em>);
       } else if (match[4]) {
-        const tagKind = m0.toLowerCase().slice(1, -1);
+        const tagKind = m0.toLowerCase().slice(1, -1) as AuxBoardStatusTagKind;
         out.push(
           <span
             key={`${key}-tag${partIdx++}`}
             className={`pmx-aux-md-tag pmx-aux-md-tag--${tagKind}`}
+            data-aux-status-tag={tagKind}
           >
-            {m0}
+            {formatAuxBoardStatusTag(tagKind, locale)}
           </span>,
         );
       }
@@ -291,6 +306,7 @@ export const AgentAuxMarkdown = memo(function AgentAuxMarkdown({
                   block.text,
                   knownNames,
                   maxSeq,
+                  locale,
                   onJumpSeq,
                   onClickMention,
                   `h-${blockKey}`,
@@ -309,6 +325,7 @@ export const AgentAuxMarkdown = memo(function AgentAuxMarkdown({
                       item,
                       knownNames,
                       maxSeq,
+                      locale,
                       onJumpSeq,
                       onClickMention,
                       `ul-${blockKey}-${li}`,
@@ -329,6 +346,7 @@ export const AgentAuxMarkdown = memo(function AgentAuxMarkdown({
                       item,
                       knownNames,
                       maxSeq,
+                      locale,
                       onJumpSeq,
                       onClickMention,
                       `ol-${blockKey}-${li}`,
@@ -344,6 +362,7 @@ export const AgentAuxMarkdown = memo(function AgentAuxMarkdown({
                 block.text,
                 knownNames,
                 maxSeq,
+                locale,
                 onJumpSeq,
                 onClickMention,
                 `p-${blockKey}`,

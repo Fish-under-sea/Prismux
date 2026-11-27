@@ -180,15 +180,131 @@ export function makeSubagentConversationArtifacts(input: {
   return { message, turnItem };
 }
 
+interface ParsedSubagentModel {
+  readonly raw: string;
+  readonly provider: string | undefined;
+  readonly model: string;
+  readonly fromTuple: boolean;
+}
+
+function parseSubagentModelId(value: string): ParsedSubagentModel {
+  const raw = value.trim();
+  if (raw.length === 0) {
+    return { raw: "", provider: undefined, model: "", fromTuple: false };
+  }
+  if (raw.startsWith("[") && raw.endsWith("]")) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        if (
+          parsed.length >= 2 &&
+          typeof parsed[0] === "string" &&
+          typeof parsed[1] === "string" &&
+          parsed[1].trim().length > 0
+        ) {
+          const provider = parsed[0].trim();
+          return {
+            raw,
+            provider: provider.length > 0 ? provider : undefined,
+            model: parsed[1].trim(),
+            fromTuple: true,
+          };
+        }
+        if (parsed.length === 1 && typeof parsed[0] === "string" && parsed[0].trim().length > 0) {
+          return {
+            raw,
+            provider: undefined,
+            model: parsed[0].trim(),
+            fromTuple: true,
+          };
+        }
+      }
+    } catch {
+      // Fall back to treating the raw string as a plain model identifier.
+    }
+  }
+  return { raw, provider: undefined, model: raw, fromTuple: false };
+}
+
+function modelMatchesWithOptionalProviderPrefix(left: string, right: string): boolean {
+  if (left === right) return true;
+  if (left.endsWith(`/${right}`) || right.endsWith(`/${left}`)) return true;
+  const leftColonIdx = left.indexOf(":");
+  if (leftColonIdx > 0 && left.slice(leftColonIdx + 1) === right) return true;
+  const rightColonIdx = right.indexOf(":");
+  if (rightColonIdx > 0 && right.slice(rightColonIdx + 1) === left) return true;
+  return false;
+}
+
+function modelMatchCandidates(parsed: ParsedSubagentModel): ReadonlyArray<string> {
+  const lowerModel = parsed.model.toLowerCase();
+  if (!lowerModel) return [];
+  if (!parsed.provider) return [lowerModel];
+  const lowerProvider = parsed.provider.toLowerCase();
+  return [lowerModel, `${lowerProvider}/${lowerModel}`, `${lowerProvider}:${lowerModel}`];
+}
+
+/**
+ * Formats a model identifier into a readable string, unwrapping DSH/ACP JSON tuple strings
+ * such as `["magpie","group/deepseek"]` into `group/deepseek`.
+ */
+export function formatReadableSubagentModel(
+  model: string,
+  options?: { readonly includeTupleProvider?: boolean },
+): string {
+  const parsed = parseSubagentModelId(model);
+  if (!parsed.model) return parsed.raw;
+  if (parsed.fromTuple && options?.includeTupleProvider && parsed.provider) {
+    return `${parsed.provider}/${parsed.model}`;
+  }
+  return parsed.model;
+}
+
+/**
+ * Checks whether `requestedModel` and `executedModel` identify the same underlying model,
+ * normalizing DSH/ACP JSON tuple wrappers and optional provider prefixes.
+ */
+export function areSubagentModelsEquivalent(
+  requestedModel: string,
+  executedModel: string,
+): boolean {
+  const req = parseSubagentModelId(requestedModel);
+  const exec = parseSubagentModelId(executedModel);
+  if (!req.model || !exec.model) return req.raw === exec.raw;
+  if (
+    req.provider !== undefined &&
+    exec.provider !== undefined &&
+    req.provider.toLowerCase() !== exec.provider.toLowerCase()
+  ) {
+    return false;
+  }
+  const reqCandidates = modelMatchCandidates(req);
+  const execCandidates = modelMatchCandidates(exec);
+  return reqCandidates.some((left) =>
+    execCandidates.some((right) => modelMatchesWithOptionalProviderPrefix(left, right)),
+  );
+}
+
 /** A delegated result, led by a note when the provider reported running another model than requested. */
 export function withExecutedModelNote(
   result: string,
   requestedModel: string,
   executedModel: string | null | undefined,
 ): string {
-  return executedModel == null || executedModel === requestedModel
-    ? result
-    : `Requested model ${requestedModel}; the provider reported running ${executedModel}.\n\n${result}`;
+  if (executedModel == null || executedModel.trim().length === 0) {
+    return result;
+  }
+  if (areSubagentModelsEquivalent(requestedModel, executedModel)) {
+    return result;
+  }
+  const reqParsed = parseSubagentModelId(requestedModel);
+  const execParsed = parseSubagentModelId(executedModel);
+  const includeTupleProvider =
+    reqParsed.model.toLowerCase() === execParsed.model.toLowerCase() &&
+    reqParsed.provider !== execParsed.provider;
+  const readableRequested = formatReadableSubagentModel(requestedModel, { includeTupleProvider });
+  const readableExecuted = formatReadableSubagentModel(executedModel, { includeTupleProvider });
+  return `Requested model ${readableRequested}; the provider reported running ${readableExecuted}.\n\n${result}`;
 }
 
 /** Run signal of the notice that carries a provider's stop reason on a completed run. */

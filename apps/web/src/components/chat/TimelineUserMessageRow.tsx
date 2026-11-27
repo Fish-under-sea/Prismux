@@ -101,6 +101,12 @@ const MEDIA_EDGE_CLASS_NAME =
 const BUBBLE_CHIP_CLASS_NAME =
   "[&_[data-slot=context-chip]]:[--context-chip-message-ink:var(--context-chip-message)]";
 
+// Neutralize unlayered `.chat-markdown.user-message-markdown p { margin: 0.65rem 0; }`
+// so single-line bubbles stay flat and compact with zero vertical excess, while multi-paragraph
+// user messages keep a tight 4px block rhythm.
+const USER_BUBBLE_COMPACT_MARKDOWN_CLASS =
+  "[&_.user-message-markdown_p]:!my-1 [&_.user-message-markdown_ul]:!my-1 [&_.user-message-markdown_ol]:!my-1 [&_.user-message-markdown_blockquote]:!my-1 [&_.user-message-markdown_pre]:!my-1.5 [&_.user-message-markdown_.chat-markdown-table-container:not(:first-child)]:!mt-1.5 [&_.user-message-markdown_.chat-markdown-table-container:not(:last-child)]:!mb-1.5 [&_.user-message-markdown>:first-child]:!mt-0 [&_.user-message-markdown>:last-child]:!mb-0";
+
 function UserFileCard({
   file,
   copyMarkdown,
@@ -141,7 +147,7 @@ function UserFileCard({
   return (
     <div
       data-markdown-copy={copyMarkdown}
-      className="flex w-64 max-w-full items-center gap-1 rounded-2xl bg-message py-2 ps-2 pe-1 text-message-foreground"
+      className="flex w-64 max-w-full items-center gap-1 rounded-xl bg-message py-2 ps-2 pe-1 text-message-foreground"
     >
       {file.downloadable === false ? (
         <>
@@ -219,7 +225,7 @@ function UserVideoAttachment({
         className={cn(
           "flex aspect-[4/3] w-full items-center justify-center bg-black px-2 py-3 text-center text-2xs text-white/70",
           standalone
-            ? cn(MEDIA_EDGE_CLASS_NAME, "rounded-2xl", cornerClassName)
+            ? cn(MEDIA_EDGE_CLASS_NAME, "rounded-xl", cornerClassName)
             : "rounded-lg border border-border/80",
         )}
       >
@@ -254,7 +260,7 @@ function UserVideoAttachment({
     />
   );
   return standalone ? (
-    <div className={cn(MEDIA_EDGE_CLASS_NAME, "overflow-hidden rounded-2xl", cornerClassName)}>
+    <div className={cn(MEDIA_EDGE_CLASS_NAME, "overflow-hidden rounded-xl", cornerClassName)}>
       {player}
     </div>
   ) : (
@@ -321,8 +327,9 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
       ) : null}
       <div
         className={cn(
-          "relative min-w-0 max-w-[80%] rounded-[22px] border border-border/55 bg-message text-message-foreground",
+          "relative min-w-0 max-w-[80%] rounded-xl border border-border/55 bg-message text-message-foreground",
           BUBBLE_CHIP_CLASS_NAME,
+          USER_BUBBLE_COMPACT_MARKDOWN_CLASS,
           expanded && "w-full",
         )}
         data-pmx-glass-zone="userBubble"
@@ -343,7 +350,7 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           <div
             ref={revealRef}
             hidden={!expanded}
-            className={cn("px-3 pb-3", !ctx.findActive && "max-h-96 overflow-auto")}
+            className={cn("px-3 pb-2.5", !ctx.findActive && "max-h-96 overflow-auto")}
             data-thread-find-text="true"
           >
             <UserMessageBody text={text} skills={ctx.skills} markdownCwd={ctx.markdownCwd} />
@@ -407,7 +414,7 @@ export function FoldedMessageHeader(props: {
       aria-expanded={props.expanded}
       data-scroll-anchor-ignore
       onClick={props.onToggle}
-      className="flex w-full min-w-0 items-center gap-1.5 rounded-2xl px-3 py-2 text-left text-sm focus-visible:outline-2 focus-visible:outline-ring"
+      className="flex w-full min-w-0 items-center gap-1.5 rounded-xl px-3 py-1.5 text-left text-sm focus-visible:outline-2 focus-visible:outline-ring"
     >
       <Icon className="size-4 shrink-0 stroke-2 text-muted-foreground" />
       <span
@@ -546,8 +553,8 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
     regularImages.every((image) => image.source?.kind !== "snap-shot");
   // Corners that touch the bubble or a neighbouring message tighten, like the bubble's.
   const mediaCornerClassName = cn(
-    row.groupedWithPrevious && "rounded-tr-md",
-    (mediaAboveText || row.groupedWithNext) && "rounded-br-md",
+    row.groupedWithPrevious && "rounded-tr-sm",
+    (mediaAboveText || row.groupedWithNext) && "rounded-br-sm",
   );
   // Files sent without words show as cards, not as a bubble around a name chip.
   const fileCardsOnly =
@@ -724,7 +731,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
               : collage
                 ? cn(
                     MEDIA_EDGE_CLASS_NAME,
-                    "w-80 max-w-full gap-px overflow-hidden rounded-2xl bg-black/9 dark:bg-white/12",
+                    "w-80 max-w-full gap-px overflow-hidden rounded-xl bg-black/9 dark:bg-white/12",
                     mediaCornerClassName,
                     regularImages.length === 2
                       ? "auto-rows-[12rem] grid-cols-2"
@@ -748,13 +755,13 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                     standaloneMedia
                       ? cn(
                           MEDIA_EDGE_CLASS_NAME,
-                          "min-h-16 justify-self-end overflow-hidden rounded-2xl",
+                          "min-h-16 justify-self-end overflow-hidden rounded-xl",
                           loneImage && mediaCornerClassName,
                         )
                       : SNAP_SHOT_ATTACHMENT_FRAME_CLASS,
                   )
                 : loneImage
-                  ? cn(MEDIA_EDGE_CLASS_NAME, "overflow-hidden rounded-2xl", mediaCornerClassName)
+                  ? cn(MEDIA_EDGE_CLASS_NAME, "overflow-hidden rounded-xl", mediaCornerClassName)
                   : collage
                     ? cn(
                         "overflow-hidden bg-background",
@@ -765,7 +772,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                           "col-span-2",
                       )
                     : standaloneMedia
-                      ? cn(MEDIA_EDGE_CLASS_NAME, "aspect-[4/3] overflow-hidden rounded-2xl")
+                      ? cn(MEDIA_EDGE_CLASS_NAME, "aspect-[4/3] overflow-hidden rounded-xl")
                       : "aspect-[4/3] overflow-hidden rounded-lg border border-border/80",
             )}
           >
@@ -922,14 +929,15 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       ) : null}
       <div
         className={cn(
-          "relative min-w-0 max-w-[80%] rounded-[22px] text-message-foreground",
-          (mediaAboveText || row.groupedWithPrevious) && "rounded-tr-md",
-          row.groupedWithNext && "rounded-br-md",
+          "relative min-w-0 max-w-[80%] rounded-xl text-message-foreground",
+          (mediaAboveText || row.groupedWithPrevious) && "rounded-tr-sm",
+          row.groupedWithNext && "rounded-br-sm",
           BUBBLE_CHIP_CLASS_NAME,
+          USER_BUBBLE_COMPACT_MARKDOWN_CLASS,
           userMessage.attribution === "guest"
             ? guestBubbleClassName(false)
             : hasBubbleSurface && "border border-border/55 bg-message",
-          !folded && !mediaOnly && !fileCardsOnly && !audioOnly && "px-4 py-2",
+          !folded && !mediaOnly && !fileCardsOnly && !audioOnly && "px-3 py-1.5",
           folded && expanded && "w-full",
         )}
         data-pmx-glass-zone={hasBubbleSurface ? "userBubble" : undefined}
@@ -963,7 +971,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             hidden={folded && !expanded}
             dir={markdownProseDirection(resolvedContext.text)}
             className={cn(
-              folded && "px-3 pb-3",
+              folded && "px-3 pb-2.5",
               folded && !ctx.findActive && "max-h-96 overflow-auto",
             )}
           >
@@ -1285,7 +1293,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       cwd={props.markdownCwd}
       threadRef={ctx.threadRef ?? undefined}
       skills={props.skills}
-      className="text-message-foreground user-message-markdown"
+      className="text-inherit text-sm leading-snug user-message-markdown"
       lineBreaks
       parseRawHtml={false}
       extensions={USER_MESSAGE_MARKDOWN}

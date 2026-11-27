@@ -112,6 +112,10 @@ export interface AgentAuxMessages {
   readonly boardSenderAll: string;
   readonly boardRecipientAll: string;
   readonly boardBroadcastAllOption: string;
+  readonly boardBroadcastAllMention: string;
+  readonly boardTagDone: string;
+  readonly boardTagBlocked: string;
+  readonly boardTagStall: string;
   readonly boardFollowLabel: string;
   readonly boardNewDivider: string;
   readonly boardExpandPost: string;
@@ -246,7 +250,11 @@ export const AGENT_AUX_STRINGS: Readonly<Record<AgentAuxLocale, AgentAuxMessages
     boardFiltersAria: "展开或收起筛选器",
     boardSenderAll: "发送者：全部",
     boardRecipientAll: "接收者：全部",
-    boardBroadcastAllOption: "@all 全体广播",
+    boardBroadcastAllOption: "@全体 广播",
+    boardBroadcastAllMention: "@全体",
+    boardTagDone: "[已完成]",
+    boardTagBlocked: "[受阻]",
+    boardTagStall: "[停滞]",
     boardFollowLabel: "自动跟随",
     boardNewDivider: "新消息",
     boardExpandPost: "展开全文",
@@ -381,6 +389,10 @@ export const AGENT_AUX_STRINGS: Readonly<Record<AgentAuxLocale, AgentAuxMessages
     boardSenderAll: "From: All",
     boardRecipientAll: "To: All",
     boardBroadcastAllOption: "@all broadcast",
+    boardBroadcastAllMention: "@all",
+    boardTagDone: "[done]",
+    boardTagBlocked: "[blocked]",
+    boardTagStall: "[stall]",
     boardFollowLabel: "Follow",
     boardNewDivider: "New",
     boardExpandPost: "Show more",
@@ -614,4 +626,179 @@ export function formatAuxCoordinatorSummary(childCount: number, locale: AgentAux
   return locale === "zh"
     ? `协调 ${childCount} 个子代理任务`
     : `Coordinating ${childCount} delegated agent${childCount === 1 ? "" : "s"}`;
+}
+
+export type AuxBoardStatusTagKind = "done" | "blocked" | "stall";
+
+export function formatAuxBoardStatusTag(
+  kind: AuxBoardStatusTagKind,
+  locale: AgentAuxLocale,
+): string {
+  const s = getAuxStrings(locale);
+  switch (kind) {
+    case "done":
+      return s.boardTagDone;
+    case "blocked":
+      return s.boardTagBlocked;
+    case "stall":
+      return s.boardTagStall;
+  }
+}
+
+const ACP_REGISTRY_HANDLE_PREFIX_RE = /^acp[_-]?registry[-_]+/i;
+
+/**
+ * Formats a board member handle for display (always prefixed with `@`) without altering the
+ * underlying member routing ID (`coordinator` -> `@协调者` in zh; strips noisy internal
+ * `acpregistry-` driver prefixes while keeping disambiguation suffixes readable).
+ */
+export function formatAuxBoardMemberHandle(
+  name: string,
+  locale: AgentAuxLocale,
+  options?: { readonly displayName?: string; readonly isCoordinator?: boolean },
+): string {
+  const raw = name.trim().replace(/^@+/, "");
+  if (!raw) return "@";
+  const s = getAuxStrings(locale);
+  const lower = raw.toLowerCase();
+  if (lower === "all") {
+    return s.boardBroadcastAllMention;
+  }
+  if (lower === "coordinator" || (locale === "zh" && lower === "team-lead")) {
+    return locale === "zh" ? `@${s.roleCoordinator}` : `@${raw}`;
+  }
+  if (lower === "acpregistry") {
+    const cleanDisplay = options?.displayName?.trim();
+    if (cleanDisplay) return `@${cleanDisplay}`;
+    return locale === "zh" ? `@${s.roleAcpDelegated}` : "@acp";
+  }
+  if (ACP_REGISTRY_HANDLE_PREFIX_RE.test(raw)) {
+    const stripped = raw.replace(ACP_REGISTRY_HANDLE_PREFIX_RE, "").trim();
+    if (!stripped) {
+      return locale === "zh" ? `@${s.roleSubagent}` : "@acp";
+    }
+    if (/^\d+$/.test(stripped)) {
+      return locale === "zh" ? `@${s.roleSubagent}-${stripped}` : `@acp-${stripped}`;
+    }
+    return `@${stripped}`;
+  }
+  return `@${raw}`;
+}
+
+interface ParsedBoardModelSpec {
+  readonly raw: string;
+  readonly provider: string | undefined;
+  readonly model: string;
+  readonly fromTuple: boolean;
+}
+
+function parseBoardModelSpec(rawValue: string): ParsedBoardModelSpec {
+  const raw = rawValue.trim();
+  if (raw.startsWith("[") && raw.endsWith("]")) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        if (
+          parsed.length >= 2 &&
+          typeof parsed[0] === "string" &&
+          typeof parsed[1] === "string" &&
+          parsed[1].trim().length > 0
+        ) {
+          const provider = parsed[0].trim();
+          return {
+            raw,
+            provider: provider.length > 0 ? provider : undefined,
+            model: parsed[1].trim(),
+            fromTuple: true,
+          };
+        }
+        if (parsed.length === 1 && typeof parsed[0] === "string" && parsed[0].trim().length > 0) {
+          return {
+            raw,
+            provider: undefined,
+            model: parsed[0].trim(),
+            fromTuple: true,
+          };
+        }
+      }
+    } catch {
+      // Fall back to raw text.
+    }
+  }
+  return { raw, provider: undefined, model: raw, fromTuple: false };
+}
+
+/** Formats raw model strings (including JSON tuples like `["magpie","group/deepseek"]`) for display. */
+export function formatAuxReadableModelId(
+  rawValue: string,
+  options?: { readonly includeTupleProvider?: boolean },
+): string {
+  const parsed = parseBoardModelSpec(rawValue);
+  if (!parsed.model) return parsed.raw;
+  if (parsed.fromTuple && options?.includeTupleProvider && parsed.provider) {
+    return `${parsed.provider}/${parsed.model}`;
+  }
+  return parsed.model;
+}
+
+export function formatAuxModelMismatchNote(
+  requestedModel: string,
+  executedModel: string,
+  locale: AgentAuxLocale,
+): string {
+  const reqParsed = parseBoardModelSpec(requestedModel);
+  const execParsed = parseBoardModelSpec(executedModel);
+  const includeTupleProvider =
+    reqParsed.model.toLowerCase() === execParsed.model.toLowerCase() &&
+    reqParsed.provider !== execParsed.provider;
+  const cleanRequested = formatAuxReadableModelId(requestedModel, { includeTupleProvider });
+  const cleanExecuted = formatAuxReadableModelId(executedModel, { includeTupleProvider });
+  return locale === "zh"
+    ? `请求模型 ${cleanRequested}，提供方实际运行 ${cleanExecuted}。`
+    : `Requested model ${cleanRequested}; the provider reported running ${cleanExecuted}.`;
+}
+
+const REQUESTED_MODEL_NOTE_RE =
+  /Requested model ([^\n;]+?);\s*the provider reported running ([^\n]+?)\.(?=\s|$)/g;
+const CHILD_NO_ASSISTANT_RESULT_RE = /Child task completed without an assistant result\./g;
+const CHILD_ENDED_WITH_STATUS_RE = /Child task ended with status ([a-z_]+)\./gi;
+const LAST_ASSISTANT_BEFORE_FAIL_RE = /Last assistant message before the run failed:/g;
+
+function localizeSubagentRunStatusZh(status: string): string {
+  switch (status.toLowerCase()) {
+    case "completed":
+      return "已完成";
+    case "failed":
+      return "失败";
+    case "cancelled":
+    case "canceled":
+      return "已取消";
+    case "interrupted":
+      return "已中断";
+    case "rolled_back":
+      return "已回滚";
+    default:
+      return status;
+  }
+}
+
+/**
+ * Localizes known provider-projected system notices inside plain board text (never invoked on
+ * code blocks or inline code) and unwraps ugly JSON model tuple strings across both zh & en.
+ */
+export function localizeAuxBoardPlainText(text: string, locale: AgentAuxLocale): string {
+  if (!text) return text;
+  let out = text.replace(REQUESTED_MODEL_NOTE_RE, (_full, requested: string, executed: string) =>
+    formatAuxModelMismatchNote(requested, executed, locale),
+  );
+  if (locale === "zh") {
+    out = out
+      .replace(CHILD_NO_ASSISTANT_RESULT_RE, "子任务已完成，但未返回助手结果。")
+      .replace(
+        CHILD_ENDED_WITH_STATUS_RE,
+        (_full, status: string) => `子任务已结束（状态：${localizeSubagentRunStatusZh(status)}）。`,
+      )
+      .replace(LAST_ASSISTANT_BEFORE_FAIL_RE, "运行失败前最后一条助手消息：");
+  }
+  return out;
 }

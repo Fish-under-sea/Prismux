@@ -1,7 +1,14 @@
 import { ArrowDownIcon, SearchIcon, SlidersHorizontalIcon, XIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { formatAuxNewPostsFloat, formatAuxShowEarlier, getAuxStrings } from "./agentAux.i18n";
+import {
+  formatAuxBoardMemberHandle,
+  formatAuxBoardStatusTag,
+  formatAuxNewPostsFloat,
+  formatAuxShowEarlier,
+  getAuxStrings,
+  localizeAuxBoardPlainText,
+} from "./agentAux.i18n";
 import {
   formatAuxClockTime,
   type AgentAuxBoardMessage,
@@ -53,6 +60,9 @@ export const AgentAuxBoardTab = memo(function AgentAuxBoardTab({
   );
   const knownNames = useMemo(() => new Set(model.members.map((m) => m.name)), [model.members]);
 
+  const displayMemberHandle = (name: string) =>
+    formatAuxBoardMemberHandle(name, model.locale, memberByName.get(name));
+
   const visibleMessages = useMemo(
     () => model.messages.filter((m) => !m.isControl),
     [model.messages],
@@ -76,13 +86,41 @@ export const AgentAuxBoardTab = memo(function AgentAuxBoardTab({
       }
       if (q) {
         const seqHit = `#${msg.seq}`.includes(q);
+        const localizedAgent = formatAuxBoardMemberHandle(
+          msg.agent,
+          model.locale,
+          memberByName.get(msg.agent),
+        );
+        const localizedRecipient = msg.recipient
+          ? formatAuxBoardMemberHandle(msg.recipient, model.locale, memberByName.get(msg.recipient))
+          : "";
+        const localizedMentions = msg.mentions
+          .map((m) => formatAuxBoardMemberHandle(m, model.locale, memberByName.get(m)))
+          .join(" ");
+        const localizedText = localizeAuxBoardPlainText(msg.text, model.locale).replace(
+          /\[(done|blocked|stall)\]/gi,
+          (_full, kind: string) =>
+            formatAuxBoardStatusTag(
+              kind.toLowerCase() as "done" | "blocked" | "stall",
+              model.locale,
+            ),
+        );
         const hay =
-          `${msg.agent} ${msg.recipient ?? ""} ${msg.mentions.join(" ")} ${msg.text} ${msg.summary ?? ""}`.toLowerCase();
+          `${msg.agent} ${localizedAgent} ${msg.recipient ?? ""} ${localizedRecipient} ${msg.mentions.join(" ")} ${localizedMentions} ${msg.text} ${localizedText} ${msg.summary ?? ""}`.toLowerCase();
         if (!seqHit && !hay.includes(q)) return false;
       }
       return true;
     });
-  }, [visibleMessages, hiddenMembers, senderFilter, recipientFilter, channelFilter, search]);
+  }, [
+    visibleMessages,
+    hiddenMembers,
+    senderFilter,
+    recipientFilter,
+    channelFilter,
+    search,
+    memberByName,
+    model.locale,
+  ]);
 
   const hasActiveFilters =
     search.trim().length > 0 ||
@@ -206,22 +244,28 @@ export const AgentAuxBoardTab = memo(function AgentAuxBoardTab({
     return (
       <span className="pmx-aux-msg-to">
         <span aria-hidden="true">→</span>{" "}
-        {shown.map((t, idx) => (
-          <span key={t}>
-            {idx > 0 ? " " : ""}
-            {t === "all" ? (
-              <span className="pmx-aux-mention pmx-aux-mention--all">@all</span>
-            ) : (
-              <button
-                type="button"
-                className="pmx-aux-msg-target-btn"
-                onClick={() => onChangeSenderFilter(senderFilter === t ? "" : t)}
-              >
-                @{t}
-              </button>
-            )}
-          </span>
-        ))}
+        {shown.map((t, idx) => {
+          const targetLabel = t === "all" ? s.boardBroadcastAllMention : displayMemberHandle(t);
+          return (
+            <span key={t}>
+              {idx > 0 ? " " : ""}
+              {t === "all" ? (
+                <span className="pmx-aux-mention pmx-aux-mention--all" data-aux-member-id="all">
+                  {targetLabel}
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="pmx-aux-msg-target-btn"
+                  data-aux-member-id={t}
+                  onClick={() => onChangeSenderFilter(senderFilter === t ? "" : t)}
+                >
+                  {targetLabel}
+                </button>
+              )}
+            </span>
+          );
+        })}
         {extra > 0 ? <span className="text-muted-foreground"> +{extra}</span> : null}
       </span>
     );
@@ -300,7 +344,7 @@ export const AgentAuxBoardTab = memo(function AgentAuxBoardTab({
           <div className="pmx-aux-active-filters">
             {senderFilter ? (
               <span className="pmx-aux-active-tag">
-                @{senderFilter}
+                {displayMemberHandle(senderFilter)}
                 <button
                   type="button"
                   aria-label={s.boardClearFilters}
@@ -312,7 +356,10 @@ export const AgentAuxBoardTab = memo(function AgentAuxBoardTab({
             ) : null}
             {recipientFilter ? (
               <span className="pmx-aux-active-tag">
-                → {recipientFilter === "__all__" ? "@all" : `@${recipientFilter}`}
+                →{" "}
+                {recipientFilter === "__all__"
+                  ? s.boardBroadcastAllMention
+                  : displayMemberHandle(recipientFilter)}
                 <button
                   type="button"
                   aria-label={s.boardClearFilters}
@@ -341,7 +388,7 @@ export const AgentAuxBoardTab = memo(function AgentAuxBoardTab({
                 <option value="">{s.boardSenderAll}</option>
                 {teamMembers.map((m) => (
                   <option key={m.id} value={m.name}>
-                    @{m.name}
+                    {displayMemberHandle(m.name)}
                   </option>
                 ))}
               </select>
@@ -355,7 +402,7 @@ export const AgentAuxBoardTab = memo(function AgentAuxBoardTab({
                 <option value="__all__">{s.boardBroadcastAllOption}</option>
                 {teamMembers.map((m) => (
                   <option key={m.id} value={m.name}>
-                    @{m.name}
+                    {displayMemberHandle(m.name)}
                   </option>
                 ))}
               </select>
@@ -373,15 +420,17 @@ export const AgentAuxBoardTab = memo(function AgentAuxBoardTab({
               <div className="pmx-aux-chips">
                 {teamMembers.slice(0, 20).map((m) => {
                   const hidden = hiddenMembers.has(m.name);
+                  const label = displayMemberHandle(m.name);
                   return (
                     <button
                       key={m.id}
                       type="button"
                       className={hidden ? "pmx-aux-chip pmx-aux-chip--dim" : "pmx-aux-chip"}
                       aria-pressed={!hidden}
+                      data-aux-member-id={m.name}
                       onClick={() => toggleHiddenMember(m.name)}
                     >
-                      @{m.name}
+                      {label}
                     </button>
                   );
                 })}
@@ -472,11 +521,12 @@ export const AgentAuxBoardTab = memo(function AgentAuxBoardTab({
                         <button
                           type="button"
                           className="pmx-aux-msg-author"
+                          data-aux-member-id={msg.agent}
                           onClick={() =>
                             onChangeSenderFilter(senderFilter === msg.agent ? "" : msg.agent)
                           }
                         >
-                          @{msg.agent}
+                          {displayMemberHandle(msg.agent)}
                         </button>
                         {isAbsorbedAcp ? (
                           <span className="pmx-aux-acp-badge">{s.acpDelegatedBadge}</span>
