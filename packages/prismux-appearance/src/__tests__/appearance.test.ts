@@ -3294,13 +3294,20 @@ describe('6th glass zone `workPanels` (Tasks / Workspace Board / Scheduled Tasks
       /html:not\(\.dark\)\[data-pmx-glass=['"]1['"]\]\s+\[data-app-sidebar\]\s+\[data-sidebar-card=['"]1['"]\]\[data-sidebar-card-active=['"]1['"]\]/,
     );
 
-    // 3. Active agent RGB border marquee + breathing logo + reduced-motion fallback
-    assert.match(bridgeCss, /@property --pmx-rgb-border-angle\s*\{[\s\S]*?syntax:\s*['"]<angle>['"];/);
-    assert.match(bridgeCss, /@keyframes pmx-rgb-border-spin\b/);
+    // 3. Active agent GPU-composited RGB border flow + breathing logo + reduced-motion fallback (zero @property main-thread repaint)
+    assert.equal(
+      bridgeCss.includes('@property --pmx-rgb-border-angle'),
+      false,
+      'CPU main-thread @property --pmx-rgb-border-angle repaint must be eliminated',
+    );
+    assert.match(
+      bridgeCss,
+      /@keyframes pmx-rgb-border-hue-flow\s*\{[\s\S]*?filter:\s*hue-rotate\(0deg\);[\s\S]*?filter:\s*hue-rotate\(360deg\);/,
+    );
     assert.match(bridgeCss, /@keyframes pmx-agent-logo-breathe\b/);
     assert.match(
       bridgeCss,
-      /\[data-sidebar-card=['"]1['"]\]\[data-sidebar-agent-active=['"]1['"]\]::before[\s\S]*?conic-gradient\([\s\S]*?from var\(--pmx-rgb-border-angle\)[\s\S]*?mask-composite:\s*exclude;[\s\S]*?animation:\s*pmx-rgb-border-spin 3\.2s linear infinite;/,
+      /\[data-sidebar-card=['"]1['"]\]\[data-sidebar-agent-active=['"]1['"]\]::before[\s\S]*?linear-gradient\(\s*125deg,[\s\S]*?mask-composite:\s*exclude;[\s\S]*?will-change:\s*filter;[\s\S]*?animation:\s*pmx-rgb-border-hue-flow 3\.2s linear infinite;/,
     );
     assert.match(
       bridgeCss,
@@ -3962,24 +3969,48 @@ describe('RC.3 Liquid Glass Theme Substrates (`GlassThemeBase` 6-substrate syste
   });
 });
 
-describe('Composer outer-ring open-gap flowing RGB light-arc & sidebar tree RGB branch conduction', () => {
-  it('defines open-gap (~40% transparent gap) RGB conic-gradient on [data-pmx-composer-layout="agy"][data-pmx-composer-active="1"] with Light/Dark/6-Glass, reduced-motion, and forced-colors support', () => {
+describe('Composer outer-ring GPU constant-speed RGB shimmer & sidebar tree RGB branch conduction', () => {
+  it('defines GPU-composited [data-pmx-composer-shimmer="1"] perimeter ring + fallback on [data-pmx-composer-layout="agy"][data-pmx-composer-active="1"] with Light/Dark/6-Glass, reduced-motion, and forced-colors support', () => {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const bridgeCss = fs.readFileSync(
       path.resolve(here, '../styles/prismux-glass-bridge.css'),
       'utf8',
     );
 
-    // 1. Glass pseudo-layer suppression must exempt active composer ::before so RGB light-arc renders in Liquid Glass.
+    // 1. Glass pseudo-layer suppression must exempt active composer ::before fallback.
     assert.match(
       bridgeCss,
       /html\[data-pmx-glass=['"]1['"]\]\s+\[data-pmx-composer-layout=['"]agy['"]\]:not\(\[data-pmx-composer-active=['"]1['"]\]\)::before/,
     );
 
-    // 2. Open-gap RGB comet arc stops (~40% transparent 0deg..135deg gap + ~60% glowing comet arc ending at white head -> transparent 360deg).
+    // 2. Primary GPU-composited perimeter ring + 16 transform-only ribbon segments with Light & Dark palettes
+    //    (zero @property --pmx-rgb-border-angle or offset-distance main-thread repaint).
+    assert.equal(bridgeCss.includes('pmx-rgb-border-spin'), false);
+    assert.equal(bridgeCss.includes('offset-distance'), false);
     assert.match(
       bridgeCss,
-      /\[data-pmx-composer-layout=['"]agy['"]\]\[data-pmx-composer-active=['"]1['"]\]::before[\s\S]*?content:\s*['"]['"]\s*!important;[\s\S]*?display:\s*block\s*!important;[\s\S]*?border-radius:\s*inherit;[\s\S]*?padding:\s*1\.5px;[\s\S]*?pointer-events:\s*none;[\s\S]*?conic-gradient\(\s*from var\(--pmx-rgb-border-angle\),\s*transparent 0deg,\s*transparent 135deg,\s*rgba\(255,\s*59,\s*127,\s*0\.18\) 155deg,\s*#ff3b7f 185deg,\s*#ff9f1c 220deg,\s*#34d399 258deg,\s*#38bdf8 295deg,\s*#818cf8 328deg,\s*#c084fc 348deg,\s*#ffffff 356deg,\s*transparent 360deg\s*\)[\s\S]*?mask-composite:\s*exclude;[\s\S]*?animation:\s*pmx-rgb-border-spin 3\.2s linear infinite;/,
+      /\[data-pmx-composer-shimmer=['"]1['"]\]\s*\{[\s\S]*?inset:\s*-1px;[\s\S]*?border-radius:\s*inherit;[\s\S]*?pointer-events:\s*none;[\s\S]*?overflow:\s*hidden;[\s\S]*?contain:\s*strict;[\s\S]*?mask-composite:\s*exclude;[\s\S]*?--pmx-shimmer-c0:/,
+    );
+    assert.match(
+      bridgeCss,
+      /html\.dark\s+\[data-pmx-composer-shimmer=['"]1['"]\][\s\S]*?--pmx-shimmer-c0:\s*rgba\(255,\s*255,\s*255,\s*0\.98\);/,
+    );
+    assert.match(
+      bridgeCss,
+      /\[data-pmx-composer-shimmer=['"]1['"]\]\s*>\s*\[data-pmx-composer-shimmer-segment\]\s*\{[\s\S]*?contain:\s*strict;[\s\S]*?will-change:\s*transform;[\s\S]*?radial-gradient\(/,
+    );
+    assert.match(
+      bridgeCss,
+      /\[data-pmx-composer-shimmer=['"]1['"]\]\[data-pmx-composer-shimmer-static=['"]1['"]\]\s*\{[\s\S]*?linear-gradient\([\s\S]*?opacity:\s*0\.78;/,
+    );
+    // Standalone CSS-only fallback is suppressed whenever ComposerSurface.Main mounts `[data-pmx-composer-shimmer="1"]`.
+    assert.match(
+      bridgeCss,
+      /\[data-pmx-composer-layout=['"]agy['"]\]\[data-pmx-composer-active=['"]1['"]\]:has\(\s*>\s*\[data-pmx-composer-shimmer=['"]1['"]\]\s*\)::before[\s\S]*?display:\s*none\s*!important;[\s\S]*?content:\s*none\s*!important;/,
+    );
+    assert.match(
+      bridgeCss,
+      /\[data-pmx-composer-layout=['"]agy['"]\]\[data-pmx-composer-active=['"]1['"]\]:not\(\s*:has\(>\s*\[data-pmx-composer-shimmer=['"]1['"]\]\)\s*\)::before[\s\S]*?will-change:\s*filter;[\s\S]*?animation:\s*pmx-rgb-border-hue-flow 3\.2s linear infinite;/,
     );
 
     // 3. Ambient outer glow rules for Light, Dark, Liquid Glass, and all 5 patterned substrates.
@@ -4003,15 +4034,16 @@ describe('Composer outer-ring open-gap flowing RGB light-arc & sidebar tree RGB 
       /\[data-pmx-tree-rgb-beam=['"]1['"]\]\s*\{[^}]*stroke-dasharray:[^}]*animation:\s*pmx-tree-rgb-flow/s,
     );
 
-    // 5. Reduced-motion calm fallback stops both composer spin and tree beam flow.
+    // 5. Reduced-motion calm fallback stops composer shimmer, fallback ::before, and tree beam flow.
     assert.match(
       bridgeCss,
-      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\[data-pmx-composer-layout=['"]agy['"]\]\[data-pmx-composer-active=['"]1['"]\]::before[\s\S]*?animation:\s*none\s*!important;[\s\S]*?\[data-pmx-tree-rgb-beam=['"]1['"]\][\s\S]*?animation:\s*none\s*!important;/,
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\[data-pmx-composer-shimmer=['"]1['"]\][\s\S]*?\[data-pmx-composer-shimmer=['"]1['"]\]\s*>\s*\[data-pmx-composer-shimmer-segment\][\s\S]*?animation:\s*none\s*!important;[\s\S]*?\[data-pmx-composer-layout=['"]agy['"]\]\[data-pmx-composer-active=['"]1['"]\]::before[\s\S]*?animation:\s*none\s*!important;[\s\S]*?\[data-pmx-tree-rgb-beam=['"]1['"]\][\s\S]*?animation:\s*none\s*!important;/,
     );
 
-    // 6. Forced-colors fallback uses Highlight and hides ::before gradient.
+    // 6. Forced-colors fallback uses Highlight and hides shimmer ring + ::before gradient.
     const forcedColorsSection = bridgeCss.slice(bridgeCss.indexOf('@media (forced-colors: active)'));
     assert.match(forcedColorsSection, /\[data-pmx-composer-layout=['"]agy['"]\]\[data-pmx-composer-active=['"]1['"]\]/);
+    assert.match(forcedColorsSection, /\[data-pmx-composer-shimmer=['"]1['"]\]/);
     assert.match(forcedColorsSection, /\[data-pmx-composer-layout=['"]agy['"]\]\[data-pmx-composer-active=['"]1['"]\]::before/);
     assert.match(forcedColorsSection, /\[data-pmx-tree-rgb-beam=['"]1['"]\]/);
 
