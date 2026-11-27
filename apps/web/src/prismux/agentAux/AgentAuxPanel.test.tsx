@@ -1,8 +1,12 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Static source guard in unit test runs outside an Effect runtime.
+import * as NodeFS from "node:fs";
+import * as NodeURL from "node:url";
+
 import type { ThreadId } from "@prismux/core-contracts";
 import { EnvironmentId } from "@prismux/core-contracts";
 import { GTProvider, initializeGT } from "gt-react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { RightPanelTabs } from "../../components/RightPanelTabs";
 import { buildAgentAuxViewModel } from "./agentAux.logic";
@@ -621,5 +625,162 @@ describe("AgentAuxPanel & AgentAuxOverviewEntryButton", () => {
     );
     expect(tabHtml).toContain('data-agent-brand="dsh"');
     expect(tabHtml).not.toContain('data-agent-brand-monogram="AC"');
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('never uses repeatCount="indefinite" anywhere in AgentAuxGraphTab.tsx and renders one-shot fill="freeze" dots only while fresh & active', () => {
+    const graphTabSource = NodeFS.readFileSync(
+      NodeURL.fileURLToPath(new URL("./AgentAuxGraphTab.tsx", import.meta.url)),
+      "utf8",
+    );
+    expect(graphTabSource).not.toContain('repeatCount="indefinite"');
+    expect(graphTabSource).not.toContain("repeatCount='indefinite'");
+    expect(graphTabSource).not.toMatch(/repeatCount\s*=\s*\{\s*["']indefinite["']\s*\}/);
+
+    // Active swarm within 90s freshness renders one-shot fill="freeze" motion dot
+    const activeSnap = createRichSwarmSnapshot();
+    const latestTs = activeSnap.swarm.messages.at(-1)!.ts;
+    vi.useFakeTimers();
+    vi.setSystemTime(latestTs + 5_000);
+
+    const activeModel = buildAgentAuxViewModel({
+      provider: "antigravity",
+      threadId: "thread-live-fresh" as ThreadId,
+      daemonSnapshot: activeSnap,
+      locale: "zh",
+    });
+    const activeGraphHtml = renderToStaticMarkup(
+      <AgentAuxPanel model={activeModel} initialTab="graph" locale="zh" />,
+    );
+    expect(activeGraphHtml).toContain('data-graph-motion="active"');
+    expect(activeGraphHtml).toContain('data-live-state="live"');
+    expect(activeGraphHtml).toContain("<animateMotion");
+    expect(activeGraphHtml).toContain('repeatCount="1"');
+    expect(activeGraphHtml).toContain('fill="freeze"');
+    expect(activeGraphHtml).not.toContain('repeatCount="indefinite"');
+
+    // Past 90s freshness in active swarm: beam expires cleanly
+    vi.setSystemTime(latestTs + 90_000);
+    const expiredGraphHtml = renderToStaticMarkup(
+      <AgentAuxPanel model={activeModel} initialTab="graph" locale="zh" />,
+    );
+    expect(expiredGraphHtml).not.toContain("<animateMotion");
+    expect(expiredGraphHtml).not.toContain("pmx-aux-hv-beam-g");
+  });
+
+  it("renders zero active animations, beams, wait arrows, flapping bees, or breathing logos when Swarm or ACP sessions finish", () => {
+    const baseSnap = createRichSwarmSnapshot();
+    const lastTs = baseSnap.swarm.messages.at(-1)!.ts;
+    vi.useFakeTimers();
+    vi.setSystemTime(lastTs + 5_000);
+
+    // 1. Finished AGY Swarm
+    const finishedSwarmModel = buildAgentAuxViewModel({
+      provider: "antigravity",
+      threadId: "thread-swarm-done-ui" as ThreadId,
+      daemonSnapshot: {
+        ...baseSnap,
+        hasLiveWork: false,
+        swarm: {
+          ...baseSnap.swarm,
+          head: 4,
+          members: [
+            {
+              ...baseSnap.swarm.members[0]!,
+              status: "waiting" as const,
+              activity: "",
+              activityKind: "" as const,
+              replied: true,
+              replyAsk: "",
+            },
+            {
+              ...baseSnap.swarm.members[1]!,
+              status: "waiting" as const,
+              activity: "",
+              activityKind: "" as const,
+            },
+            baseSnap.swarm.members[2]!,
+          ],
+          messages: [
+            ...baseSnap.swarm.messages,
+            {
+              seq: 4,
+              agent: "coordinator",
+              text: "@all [done] 蜂群交付完成",
+              time: "11:06",
+              ts: lastTs + 2_000,
+              mentions: [],
+              all: true,
+            },
+          ],
+        },
+      },
+      locale: "zh",
+    });
+
+    const finishedSwarmGraphHtml = renderToStaticMarkup(
+      <AgentAuxPanel model={finishedSwarmModel} initialTab="graph" locale="zh" />,
+    );
+    expect(finishedSwarmGraphHtml).toContain('data-graph-motion="paused"');
+    expect(finishedSwarmGraphHtml).toContain('data-session-settled="1"');
+    expect(finishedSwarmGraphHtml).toContain("pmx-aux-graph--paused");
+    expect(finishedSwarmGraphHtml).toContain('data-live-state="settled"');
+    expect(finishedSwarmGraphHtml).not.toContain("pmx-aux-live-pill--on");
+    expect(finishedSwarmGraphHtml).not.toContain("<animateMotion");
+    expect(finishedSwarmGraphHtml).not.toContain("pmx-aux-hv-beam-g");
+    expect(finishedSwarmGraphHtml).not.toContain("pmx-aux-hv-wait-g");
+    expect(finishedSwarmGraphHtml).not.toContain("pmx-aux-hv-bee--working");
+    expect(finishedSwarmGraphHtml).not.toContain('data-state="working"');
+    expect(finishedSwarmGraphHtml).not.toContain('data-state="waiting_on"');
+    expect(finishedSwarmGraphHtml).not.toContain('data-breathing="true"');
+
+    // 2. Finished ACP multi-agent session
+    const finishedAcpModel = buildAgentAuxViewModel({
+      provider: "codex",
+      threadId: "thread-acp-done-ui" as ThreadId,
+      threadShell: {
+        id: "thread-acp-done-ui" as ThreadId,
+        title: "Codex -> DSH 已完成",
+        status: "idle",
+        activityRunStatus: "completed",
+        activeRunId: null,
+        lineage: {},
+      },
+      projection: {
+        runs: [{ id: "r1", status: "completed" }],
+        subagents: [
+          {
+            id: "sub-dsh-1",
+            title: "DSH 审计",
+            status: "completed",
+            driver: "dsh",
+            model: "deepseek-reasoner",
+            childThreadId: "child-dsh-1" as ThreadId,
+            prompt: "审查路由",
+            result: "审查通过",
+            startedAt: lastTs,
+            completedAt: lastTs + 3_000,
+          },
+        ],
+      },
+      daemonSnapshot: null,
+      locale: "zh",
+    });
+
+    const finishedAcpGraphHtml = renderToStaticMarkup(
+      <AgentAuxPanel model={finishedAcpModel} initialTab="graph" locale="zh" />,
+    );
+    expect(finishedAcpGraphHtml).toContain('data-graph-motion="paused"');
+    expect(finishedAcpGraphHtml).toContain('data-session-settled="1"');
+    expect(finishedAcpGraphHtml).toContain('data-live-state="settled"');
+    expect(finishedAcpGraphHtml).not.toContain("pmx-aux-live-pill--on");
+    expect(finishedAcpGraphHtml).not.toContain("<animateMotion");
+    expect(finishedAcpGraphHtml).not.toContain("pmx-aux-hv-beam-g");
+    expect(finishedAcpGraphHtml).not.toContain("pmx-aux-hv-wait-g");
+    expect(finishedAcpGraphHtml).not.toContain("pmx-aux-hv-bee--working");
+    expect(finishedAcpGraphHtml).not.toContain('data-breathing="true"');
   });
 });

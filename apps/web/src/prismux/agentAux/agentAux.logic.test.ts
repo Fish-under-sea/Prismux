@@ -441,6 +441,7 @@ describe("agentAux.logic", () => {
       containerWidth: 380,
       replaySeq: null,
       hideInactive: false,
+      nowMs: 1_760_000_100_000,
     });
     expect(hive.cells.length).toBeGreaterThanOrEqual(2);
     expect(hive.beams.length).toBeGreaterThanOrEqual(1);
@@ -978,5 +979,433 @@ describe("agentAux.logic", () => {
     expect(model.members.find((m) => m.id === "sub-qwen")?.providerBrand).toBe("qwen");
     expect(model.members.find((m) => m.id === "sub-kimi")?.providerBrand).toBe("kimi");
     expect(model.messages[0]?.providerBrand).toBe("dsh");
+  });
+
+  it("halts live beams, working/wait states, and Mentions current highlights once Swarm finishes (via [done] or all workers settled)", () => {
+    const baseTs = 1_760_000_000_000;
+    const closedSnap = createAgySwarmSnapshot({
+      hasLiveWork: false,
+      swarm: {
+        ...createAgySwarmSnapshot().swarm!,
+        head: 5,
+        members: [
+          {
+            ...createAgySwarmSnapshot().swarm!.members[0]!,
+            status: "waiting",
+            activity: "",
+            activityKind: "",
+            replied: true,
+            replyAsk: "",
+          },
+          {
+            ...createAgySwarmSnapshot().swarm!.members[1]!,
+            status: "waiting",
+            activity: "",
+            activityKind: "",
+          },
+          createAgySwarmSnapshot().swarm!.members[2]!,
+        ],
+        messages: [
+          ...createAgySwarmSnapshot().swarm!.messages,
+          {
+            seq: 5,
+            agent: "coordinator",
+            text: "@all [done] 全部交付并验收完毕",
+            time: "10:05",
+            ts: baseTs + 300_000,
+            mentions: [],
+            all: true,
+          },
+        ],
+      },
+    });
+
+    const closedModel = buildAgentAuxViewModel({
+      provider: "antigravity",
+      threadId: "thread-closed-swarm" as ThreadId,
+      daemonSnapshot: closedSnap,
+      locale: "zh",
+    });
+
+    expect(closedModel.finished).toBe(true);
+    expect(closedModel.hasLiveActivity).toBe(false);
+
+    // Even right after the final message (< 90s), a finished swarm emits ZERO live beams or working/wait states
+    const closedHiveState = computeHiveStateAtSeq(closedModel, null);
+    expect(closedHiveState.beam).toBeNull();
+    expect(closedHiveState.trailBeams).toEqual([]);
+    expect(closedHiveState.states.coordinator?.st).toBe("idle");
+    expect(closedHiveState.states["agent-aux-pane"]?.st).toBe("done");
+    expect(closedHiveState.states["old-helper"]?.st).toBe("retired");
+    for (const entry of Object.values(closedHiveState.states)) {
+      expect(entry.st).not.toBe("working");
+      expect(entry.st).not.toBe("wait");
+      expect(entry.st).not.toBe("needs");
+    }
+
+    const closedHive = computeHiveLayout({
+      model: closedModel,
+      containerWidth: 400,
+      replaySeq: null,
+      hideInactive: false,
+    });
+    expect(closedHive.beams).toEqual([]);
+    expect(closedHive.activeMessage).toBeNull();
+    expect(
+      closedHive.bees.some((b) => b.replayState === "working" || b.replayState === "wait"),
+    ).toBe(false);
+
+    const closedMentions = computeMentionGraphLayout({
+      model: closedModel,
+      width: 360,
+      replaySeq: null,
+      hideInactive: false,
+      expandAll: false,
+    });
+    expect(closedMentions.currentMessage).toBeNull();
+    expect(closedMentions.edges.every((e) => !e.isCurrent)).toBe(true);
+    expect(closedMentions.nodes.every((n) => !n.isHot)).toBe(true);
+
+    // Swarm where all non-coordinator workers are killed/done and coordinator stopped working (no explicit coordinator [done])
+    const settledWorkersSnap = createAgySwarmSnapshot({
+      hasLiveWork: false,
+      swarm: {
+        ...createAgySwarmSnapshot().swarm!,
+        members: [
+          {
+            ...createAgySwarmSnapshot().swarm!.members[0]!,
+            status: "waiting",
+            activity: "",
+            activityKind: "",
+            replied: true,
+            replyAsk: "",
+          },
+          {
+            ...createAgySwarmSnapshot().swarm!.members[1]!,
+            status: "killed",
+            killed: true,
+            activity: "",
+            activityKind: "",
+          },
+          createAgySwarmSnapshot().swarm!.members[2]!,
+        ],
+        view: {
+          ...createAgySwarmSnapshot().swarm!.view!,
+          attention: [],
+        },
+      },
+    });
+    const settledModel = buildAgentAuxViewModel({
+      provider: "antigravity",
+      threadId: "thread-settled-swarm" as ThreadId,
+      daemonSnapshot: settledWorkersSnap,
+      locale: "zh",
+    });
+    expect(settledModel.finished).toBe(true);
+    expect(settledModel.hasLiveActivity).toBe(false);
+    expect(computeHiveStateAtSeq(settledModel, null).beam).toBeNull();
+    expect(
+      computeHiveLayout({
+        model: settledModel,
+        containerWidth: 400,
+        replaySeq: null,
+        hideInactive: false,
+      }).beams,
+    ).toEqual([]);
+  });
+
+  it("halts live beams, breathing/working states, and Mentions highlights once ACP, Claude Team, Codex Collab, or AGY Subagents finish", () => {
+    const baseTs = 1_760_000_000_000;
+    const finishedAcpModel = buildAgentAuxViewModel({
+      provider: "codex",
+      threadId: "thread-acp-finished" as ThreadId,
+      threadShell: {
+        id: "thread-acp-finished" as ThreadId,
+        title: "Codex 委派 DSH 完成任务",
+        status: "idle",
+        activityRunStatus: "completed",
+        activeRunId: null,
+        lineage: {},
+      },
+      projection: {
+        runs: [
+          { id: "run-stale", status: "running" },
+          { id: "run-final", status: "completed" },
+        ],
+        subagents: [
+          {
+            id: "sub-dsh-done",
+            runId: "run-final",
+            title: "DSH 审计",
+            status: "completed",
+            driver: "dsh",
+            model: "deepseek-reasoner",
+            childThreadId: "child-dsh-done" as ThreadId,
+            prompt: "审计代码",
+            result: "审计通过",
+            startedAt: baseTs + 10_000,
+            completedAt: baseTs + 30_000,
+          },
+          {
+            id: "sub-cc-done",
+            runId: "run-final",
+            title: "Claude 校验",
+            status: "completed",
+            driver: "claudeAgent",
+            model: "claude-sonnet-4-5",
+            childThreadId: "child-cc-done" as ThreadId,
+            prompt: "运行单测",
+            result: "100% 通过",
+            startedAt: baseTs + 15_000,
+            completedAt: baseTs + 40_000,
+          },
+        ],
+      },
+      daemonSnapshot: null,
+      locale: "zh",
+    });
+
+    expect(finishedAcpModel.finished).toBe(true);
+    expect(finishedAcpModel.hasLiveActivity).toBe(false);
+    expect(finishedAcpModel.members[0]?.status).toBe("done");
+
+    const acpHive = computeHiveLayout({
+      model: finishedAcpModel,
+      containerWidth: 380,
+      replaySeq: null,
+      hideInactive: false,
+    });
+    expect(acpHive.beams).toEqual([]);
+    expect(acpHive.activeMessage).toBeNull();
+    expect(acpHive.bees.some((b) => b.replayState === "working" || b.replayState === "wait")).toBe(
+      false,
+    );
+
+    const acpMentions = computeMentionGraphLayout({
+      model: finishedAcpModel,
+      width: 360,
+      replaySeq: null,
+      hideInactive: false,
+      expandAll: false,
+    });
+    expect(acpMentions.currentMessage).toBeNull();
+    expect(acpMentions.edges.every((e) => !e.isCurrent)).toBe(true);
+    expect(acpMentions.nodes.every((n) => !n.isHot)).toBe(true);
+
+    // Finished Claude Team (all tasks completed)
+    const finishedClaudeTeam = buildAgentAuxViewModel({
+      provider: "claudeAgent",
+      threadId: "thread-cc-done" as ThreadId,
+      daemonSnapshot: {
+        ok: true,
+        active: true,
+        hasLiveWork: false,
+        kind: "claude-team",
+        title: "auth-done",
+        activationKey: "claude-team:auth-done",
+        updatedAt: baseTs + 50_000,
+        claudeTeam: {
+          teamName: "auth-done",
+          description: "鉴权完成",
+          leadSessionId: "cc-1",
+          members: [
+            {
+              agentId: "lead",
+              name: "team-lead",
+              agentType: "team-lead",
+              model: "claude-opus-4-6",
+              color: "#d97757",
+              cwd: "/repo",
+              backendType: "in-process",
+              isLead: true,
+              status: "done",
+            },
+            {
+              agentId: "w1",
+              name: "reviewer",
+              agentType: "worker",
+              model: "claude-sonnet-4-5",
+              color: "#3b82f6",
+              cwd: "/repo",
+              backendType: "in-process",
+              isLead: false,
+              status: "done",
+            },
+          ],
+          messages: [
+            {
+              seq: 1,
+              agent: "reviewer",
+              recipient: "team-lead",
+              text: "@team-lead 全部通过",
+              summary: "通过",
+              time: "10:01",
+              ts: baseTs + 45_000,
+              read: true,
+              mentions: ["team-lead"],
+              all: false,
+            },
+          ],
+          edges: [{ from: "reviewer", to: "team-lead", count: 1, direct: 1, viaAll: 0 }],
+        },
+        tasks: [
+          {
+            id: "1",
+            subject: "鉴权重构",
+            description: "",
+            status: "completed",
+            owner: "reviewer",
+            blockedBy: [],
+            blocks: [],
+            source: "claude-tasks",
+          },
+        ],
+      },
+      locale: "zh",
+    });
+    expect(finishedClaudeTeam.finished).toBe(true);
+    expect(finishedClaudeTeam.hasLiveActivity).toBe(false);
+    expect(computeHiveStateAtSeq(finishedClaudeTeam, null).beam).toBeNull();
+
+    // Finished Codex Collab
+    const finishedCodex = buildAgentAuxViewModel({
+      provider: "codex",
+      threadId: "thread-cx-done" as ThreadId,
+      daemonSnapshot: {
+        ok: true,
+        active: true,
+        hasLiveWork: false,
+        kind: "codex-collab",
+        title: "Codex 协同",
+        activationKey: "codex-collab:s2",
+        updatedAt: baseTs + 60_000,
+        codex: {
+          goals: [
+            {
+              goalId: "g-done",
+              threadId: "s2",
+              objective: "修复锁顺序",
+              status: "complete",
+              tokenBudget: 50_000,
+              tokensUsed: 12_000,
+              timeUsedSeconds: 20,
+              createdAtMs: baseTs,
+              updatedAtMs: baseTs + 50_000,
+            },
+          ],
+          spawnedThreads: [
+            {
+              threadId: "cx-child-1",
+              parentThreadId: "s2",
+              nickname: "auditor",
+              role: "reviewer",
+              title: "锁审计",
+              model: "gpt-5.3-codex",
+              reasoningEffort: "high",
+              status: "completed",
+              cwd: "/repo",
+              updatedAtMs: baseTs + 50_000,
+            },
+          ],
+        },
+        tasks: [
+          {
+            id: "g-done",
+            subject: "修复锁顺序",
+            description: "",
+            status: "completed",
+            owner: "Codex",
+            blockedBy: [],
+            blocks: [],
+            source: "codex-goals",
+          },
+        ],
+      },
+      locale: "zh",
+    });
+    expect(finishedCodex.finished).toBe(true);
+    expect(finishedCodex.hasLiveActivity).toBe(false);
+    expect(computeHiveStateAtSeq(finishedCodex, null).beam).toBeNull();
+
+    // Finished AGY Subagents
+    const finishedAgySub = buildAgentAuxViewModel({
+      provider: "antigravity",
+      threadId: "thread-agy-sub-done" as ThreadId,
+      daemonSnapshot: null,
+      nativeChildWork: [
+        {
+          conversationId: "conv-sub-done",
+          role: "explorer",
+          prompt: "检查路由",
+          steps: [
+            {
+              index: 1,
+              type: "tool",
+              status: "DONE",
+              text: "检查完毕",
+              toolCalls: [{ name: "read_file", input: "App.tsx" }],
+            },
+          ],
+        } as unknown as OrchestrationV2NativeChildWork,
+      ],
+      locale: "zh",
+    });
+    expect(finishedAgySub.finished).toBe(true);
+    expect(finishedAgySub.hasLiveActivity).toBe(false);
+    expect(computeHiveStateAtSeq(finishedAgySub, null).beam).toBeNull();
+  });
+
+  it("enforces AGY 90s freshness window for live Hive beams and restricts Mentions isCurrent/isHot to replay mode", () => {
+    const model = buildAgentAuxViewModel({
+      provider: "antigravity",
+      threadId: "thread-live-freshness" as ThreadId,
+      daemonSnapshot: createAgySwarmSnapshot(),
+      locale: "zh",
+    });
+    const latestTs = model.messages.at(-1)!.ts!;
+
+    // 10s after latest post (seq 4 at +240s, seq 3 at +180s -> 70s old, seq 2 at +120s -> 130s old)
+    const freshWithTrail = computeHiveStateAtSeq(model, null, latestTs + 10_000);
+    expect(freshWithTrail.beam?.seq).toBe(4);
+    expect(freshWithTrail.trailBeams.map((b) => b.seq)).toEqual([3]);
+
+    // 89.999s after latest post -> seq 4 still fresh, earlier trails expired
+    const freshBoundary = computeHiveStateAtSeq(model, null, latestTs + 89_999);
+    expect(freshBoundary.beam?.seq).toBe(4);
+    expect(freshBoundary.trailBeams).toEqual([]);
+
+    // At/past 90s -> live beam and trail beams automatically expire
+    const expiredState = computeHiveStateAtSeq(model, null, latestTs + 90_000);
+    expect(expiredState.beam).toBeNull();
+    expect(expiredState.trailBeams).toEqual([]);
+
+    // Mentions live mode (replaySeq === null): never permanently marks last edge/node as current/hot
+    const liveMentions = computeMentionGraphLayout({
+      model,
+      width: 360,
+      replaySeq: null,
+      hideInactive: false,
+      expandAll: false,
+    });
+    expect(liveMentions.currentMessage).toBeNull();
+    expect(liveMentions.edges.every((e) => !e.isCurrent)).toBe(true);
+    expect(liveMentions.nodes.every((n) => !n.isHot)).toBe(true);
+
+    // Mentions replay mode (replaySeq === 2): marks current step edge & endpoints
+    const replayMentions = computeMentionGraphLayout({
+      model,
+      width: 360,
+      replaySeq: 2,
+      hideInactive: false,
+      expandAll: false,
+    });
+    expect(replayMentions.currentMessage?.seq).toBe(2);
+    expect(
+      replayMentions.edges.some(
+        (e) => e.from === "agent-aux-pane" && e.to === "coordinator" && e.isCurrent,
+      ),
+    ).toBe(true);
+    expect(replayMentions.nodes.find((n) => n.name === "agent-aux-pane")?.isHot).toBe(true);
+    expect(replayMentions.nodes.find((n) => n.name === "coordinator")?.isHot).toBe(true);
   });
 });

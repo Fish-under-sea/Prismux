@@ -625,6 +625,8 @@ const DONE_POST_RE = /^(@[A-Za-z0-9_-]+[\s,:–—-]*)*(?:\*\*|\*|`|_)?\[done\]/
 const WAITING_ASK_RE = /[?？]|等待|请确认|could you|can you|please|ping me|waiting on|blocker/i;
 const HV_BUSY_MS = 45 * 60 * 1000;
 const HV_ASK_MS = 6 * 3600 * 1000;
+/** Exact 1:1 AGY `hive.js:1134` freshness window (90s) for live message beams. */
+export const HIVE_LIVE_BEAM_FRESH_MS = 90 * 1000;
 
 export type HiveReplayMemberState =
   | "working"
@@ -683,6 +685,7 @@ export function computeReplayDelayMs(
 export function computeHiveStateAtSeq(
   model: AgentAuxViewModel,
   replaySeq: number | null,
+  nowMs: number = Date.now(),
 ): HiveStateAtSeqResult {
   const nonSystem = model.members.filter((m) => !m.isSystem);
   const memberMap = new Map(nonSystem.map((m) => [m.name, m]));
@@ -690,6 +693,20 @@ export function computeHiveStateAtSeq(
   const states: Record<string, HiveMemberSnapshotAtSeq> = {};
 
   if (replaySeq === null) {
+    const nonCoordMembers = nonSystem.filter((m) => !m.isCoordinator);
+    const anyNonSystemBusy = nonSystem.some(
+      (m) =>
+        !m.killed &&
+        (m.status === "working" || m.status === "waiting_on" || m.status === "needs_you"),
+    );
+    const allNonCoordSettled =
+      nonCoordMembers.length > 0 &&
+      nonCoordMembers.every(
+        (m) => m.killed || m.status === "done" || m.status === "parked" || m.status === "error",
+      );
+    const isSettledLive =
+      model.finished || !model.hasLiveActivity || (allNonCoordSettled && !anyNonSystemBusy);
+
     for (const m of nonSystem) {
       const owned = model.workstreams.filter((w) => w.owners.includes(m.name));
       let st: HiveReplayMemberState = "idle";
@@ -698,6 +715,17 @@ export function computeHiveStateAtSeq(
         st = "retired";
       } else if (model.finished) {
         st = m.isCoordinator ? "idle" : "done";
+      } else if (isSettledLive) {
+        if (m.status === "error" || m.failureText) {
+          st = "issue";
+        } else if (
+          !m.isCoordinator &&
+          (m.status === "done" || (owned.length > 0 && owned.every((w) => w.state === "done")))
+        ) {
+          st = "done";
+        } else {
+          st = "idle";
+        }
       } else if (m.status === "error" || m.failureText) {
         st = "issue";
       } else if (m.status === "working") {
@@ -716,19 +744,38 @@ export function computeHiveStateAtSeq(
       states[m.name] = { st, who };
     }
     if (
-      !model.finished &&
+      !isSettledLive &&
       states.coordinator &&
       states.coordinator.st !== "retired" &&
       model.attention.some((a) => a.wait === "you")
     ) {
       states.coordinator = { st: "needs", who: null };
     }
+    if (isSettledLive) {
+      return {
+        states,
+        isDoneAtSeq: null,
+        beam: null,
+        trailBeams: [],
+      };
+    }
+    const isFreshLiveBeam = (msg: AgentAuxBoardMessage | null | undefined): boolean =>
+      Boolean(
+        msg &&
+        msg.ts !== null &&
+        Number.isFinite(msg.ts) &&
+        nowMs - msg.ts < HIVE_LIVE_BEAM_FRESH_MS,
+      );
     const latest = P.at(-1) ?? null;
-    const trailBeams = P.length > 1 ? P.slice(Math.max(0, P.length - 3), P.length - 1) : [];
+    const beam = isFreshLiveBeam(latest) ? latest : null;
+    const trailBeams =
+      beam && P.length > 1
+        ? P.slice(Math.max(0, P.length - 3), P.length - 1).filter(isFreshLiveBeam)
+        : [];
     return {
       states,
       isDoneAtSeq: null,
-      beam: latest,
+      beam,
       trailBeams,
     };
   }
@@ -998,12 +1045,13 @@ export function computeHiveLayout(input: {
   readonly hideInactive: boolean;
   readonly zoom?: number;
   readonly selectedCellId?: string | null;
+  readonly nowMs?: number;
 }): HiveLayoutResult {
-  const { model, replaySeq, hideInactive, selectedCellId = null } = input;
+  const { model, replaySeq, hideInactive, selectedCellId = null, nowMs } = input;
   const s = getAuxStrings(model.locale);
   const W = Math.max(280, Math.floor(input.containerWidth || 360));
   const nonSystem = model.members.filter((m) => !m.isSystem);
-  const hs = computeHiveStateAtSeq(model, replaySeq);
+  const hs = computeHiveStateAtSeq(model, replaySeq, nowMs);
 
   const visibleMessages =
     replaySeq === null
@@ -1619,6 +1667,7 @@ export interface MentionGraphEdge {
   readonly viaAll: number;
   readonly viaAllOnly: boolean;
   readonly isCurrent: boolean;
+  readonly isPast: boolean;
   readonly strokeWidth: number;
   readonly pathD: string;
   readonly labelX: number;
@@ -1656,7 +1705,8 @@ export function computeMentionGraphLayout(input: {
           return idx >= 0 ? allMsgs.slice(0, idx + 1) : allMsgs.filter((m) => m.seq <= replaySeq);
         })();
 
-  const currentMessage = msgs.at(-1) ?? null;
+  // Exact 1:1 AGY `app.js:1516`: only replay steps designate a `current` message; live mode stays calm.
+  const currentMessage = replaying ? (msgs.at(-1) ?? null) : null;
 
   const participantSet = new Set<string>(["coordinator"]);
   const broadcastCounts = new Map<string, number>();
@@ -1851,6 +1901,7 @@ export function computeMentionGraphLayout(input: {
       viaAll: e.viaAll,
       viaAllOnly: e.direct === 0 && e.viaAll > 0,
       isCurrent,
+      isPast: replaying && !isCurrent,
       strokeWidth,
       pathD: `M${s1.x.toFixed(1)} ${s1.y.toFixed(1)} Q${mx.toFixed(1)} ${my.toFixed(1)} ${e1.x.toFixed(1)} ${e1.y.toFixed(1)}`,
       labelX: (s1.x + 2 * mx + e1.x) / 4,
@@ -3249,22 +3300,50 @@ function extractParentModelFromProjection(
   return "";
 }
 
+const TERMINAL_RUN_STATUS_SET = new Set([
+  "completed",
+  "done",
+  "idle",
+  "failed",
+  "error",
+  "cancelled",
+  "canceled",
+  "stopped",
+  "interrupted",
+  "aborted",
+]);
+
 function isParentProjectionRunning(
   projection: AgentAuxProjectionLike | null | undefined,
   threadShell: AgentAuxThreadShellLike | null | undefined,
 ): boolean {
   if (threadShell) {
-    if (
-      Boolean(threadShell.activeRunId) ||
-      ACTIVE_SUBAGENT_STATUS_SET.has((threadShell.status ?? "").toLowerCase()) ||
-      ACTIVE_SUBAGENT_STATUS_SET.has((threadShell.activityRunStatus ?? "").toLowerCase())
-    ) {
+    if (Boolean(threadShell.activeRunId)) {
       return true;
+    }
+    const actStatus = (threadShell.activityRunStatus ?? "").trim().toLowerCase();
+    if (ACTIVE_SUBAGENT_STATUS_SET.has(actStatus)) {
+      return true;
+    }
+    if (TERMINAL_RUN_STATUS_SET.has(actStatus)) {
+      return false;
+    }
+    const shellStatus = (threadShell.status ?? "").trim().toLowerCase();
+    if (ACTIVE_SUBAGENT_STATUS_SET.has(shellStatus)) {
+      return true;
+    }
+    const latestRunStatus = (threadShell.latestRun?.status ?? "").trim().toLowerCase();
+    if (ACTIVE_SUBAGENT_STATUS_SET.has(latestRunStatus)) {
+      return true;
+    }
+    if (TERMINAL_RUN_STATUS_SET.has(latestRunStatus)) {
+      return false;
     }
   }
   const runs = Array.isArray(projection?.runs) ? projection.runs : [];
-  for (let i = runs.length - 1; i >= 0; i -= 1) {
-    const st = typeof runs[i]?.status === "string" ? String(runs[i]?.status).toLowerCase() : "";
+  const latestRun = runs.at(-1);
+  if (latestRun) {
+    const st = typeof latestRun.status === "string" ? latestRun.status.trim().toLowerCase() : "";
     if (ACTIVE_SUBAGENT_STATUS_SET.has(st)) return true;
   }
   return false;
@@ -3482,12 +3561,38 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
 
     const rawTeam = sw.members.filter((m) => !m.roleWorker && !m.narrator);
     const hasSysAttention = sw.systemAttention.length > 0;
+    const anyRawWorking = rawTeam.some((m) => !m.killed && m.status === "working");
     const closed =
-      !rawTeam.some((m) => !m.killed && m.status === "working") &&
+      !anyRawWorking &&
       !hasSysAttention &&
       Boolean(
         lastTeamPost && lastTeamPost.agent === coordName && DONE_POST_RE.test(lastTeamPost.text),
       );
+    const coordHasOpenAsk = Boolean(
+      coordRaw && !coordRaw.killed && coordRaw.replied && coordRaw.replyAsk,
+    );
+    const nonCoordRawTeam = rawTeam.filter(
+      (m) => !(m.role === "coordinator" || m.name === "coordinator"),
+    );
+    const rawViewWorkstreams = (sw.view?.workstreams ?? []).filter((w) => Boolean(w.title));
+    const allNativeWorkersSettled =
+      !anyRawWorking &&
+      !hasSysAttention &&
+      !coordHasOpenAsk &&
+      ((nonCoordRawTeam.length > 0 &&
+        nonCoordRawTeam.every((m) => {
+          if (m.killed) return true;
+          const lp = lastPostByMember.get(m.name);
+          if (lp && DONE_POST_RE.test(lp.text)) return true;
+          const ownedWs = rawViewWorkstreams.filter((w) => (w.owners ?? []).includes(m.name));
+          return (
+            ownedWs.length > 0 &&
+            ownedWs.every((w) => normalizeWorkstreamRawState(w.state) === "done")
+          );
+        })) ||
+        (rawViewWorkstreams.length > 0 &&
+          rawViewWorkstreams.every((w) => normalizeWorkstreamRawState(w.state) === "done")));
+    const nativeClosed = closed || allNativeWorkersSettled;
 
     const nativeMembers: AgentAuxMember[] = sw.members.map((m) => {
       const isCoordinator = m.role === "coordinator" || m.name === "coordinator";
@@ -3500,7 +3605,7 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
           ? "error"
           : m.status === "working"
             ? "working"
-            : isCoordinator && !closed && m.replied && m.replyAsk
+            : isCoordinator && !nativeClosed && m.replied && m.replyAsk
               ? "needs_you"
               : "parked";
       let waitingOn: string | null = null;
@@ -3508,7 +3613,7 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
       // Exact port of AGY hive.js:978 waiting_on inference
       if (
         visualStatus === "parked" &&
-        !closed &&
+        !nativeClosed &&
         !m.killed &&
         !isSystem &&
         lp &&
@@ -3650,7 +3755,8 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
         const owners = w.owners && w.owners.length > 0 ? w.owners : [coordName];
         const primaryOwner = memberByName.get(owners[0] ?? "");
         const raw0 = normalizeWorkstreamRawState(w.state);
-        const rawState: AgentAuxWorkstreamRawState = closed && raw0 !== "failed" ? "done" : raw0;
+        const rawState: AgentAuxWorkstreamRawState =
+          nativeClosed && raw0 !== "failed" ? "done" : raw0;
         const waitingOn =
           rawState !== "done" ? (w.blocked_on ?? primaryOwner?.waitingOn ?? null) : null;
         return {
@@ -3683,7 +3789,7 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
           } else if (m.status === "working" || m.status === "needs_you") {
             rawState = "active";
           } else if (lp) {
-            rawState = closed || DONE_POST_RE.test(lp.text) ? "done" : "review";
+            rawState = nativeClosed || DONE_POST_RE.test(lp.text) ? "done" : "review";
           } else {
             rawState = "queued";
           }
@@ -3792,7 +3898,7 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
     );
     const hasLiveWorkers = team.some((m) => !m.isCoordinator && !m.killed);
     const stall: AgentAuxStallAlert | null =
-      !closed &&
+      !nativeClosed &&
       activeCount === 0 &&
       !attention.some((a) => a.wait === "you") &&
       !coordHandledStall &&
@@ -3826,7 +3932,7 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
       : null;
 
     const starting =
-      !closed &&
+      !nativeClosed &&
       !sw.view &&
       attention.length === 0 &&
       !stall &&
@@ -3842,12 +3948,21 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
       ]),
     ];
 
+    const hasLiveAbsorbedAcp = merged.members.some(
+      (m) =>
+        m.sourceKind === "acp-delegated" &&
+        !m.killed &&
+        (m.status === "working" || m.status === "waiting_on" || m.status === "needs_you"),
+    );
+    const finished = nativeClosed && activeCount === 0 && !hasLiveAbsorbedAcp && !hasSysAttention;
+    const openAttentionCount = finished ? 0 : attention.filter((a) => a.wait !== null).length;
+
     // ALWAYS render all 4 core tabs matching AGY Figs 3–6
     const tabs: AgentAuxTabDescriptor[] = [
       {
         id: "overview",
         label: s.tabOverview,
-        ...(attention.length > 0 ? { badge: attention.length } : {}),
+        ...(openAttentionCount > 0 ? { badge: openAttentionCount } : {}),
       },
       { id: "board", label: s.tabBoard, count: visibleMsgCount },
       { id: "members", label: s.tabMembers, count: liveTeamCount },
@@ -3861,7 +3976,8 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
     statusParts.push(locale === "zh" ? `${visibleMsgCount} 条消息` : `${visibleMsgCount} posts`);
 
     const hasLiveActivity =
-      snap.hasLiveWork || activeCount > 0 || attention.length > 0 || Boolean(stall);
+      !finished &&
+      (snap.hasLiveWork || activeCount > 0 || openAttentionCount > 0 || Boolean(stall));
 
     return {
       active: true,
@@ -3899,7 +4015,7 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
       messages: merged.messages,
       edges: merged.edges.length > 0 ? merged.edges : sw.edges,
       tasks: [],
-      finished: closed && activeCount === 0 && !merged.hasAbsorbedAcpAgents,
+      finished,
       updatedAt,
     };
   }
@@ -4026,6 +4142,16 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
 
     const activeCount = members.filter((m) => m.status === "working").length;
     const waitingCount = members.filter((m) => m.status === "parked").length;
+    const nonLeadMembers = members.filter((m) => !m.isCoordinator);
+    const hasInProgressTasks = tasks.some((t) => t.status === "in_progress");
+    const finished =
+      activeCount === 0 &&
+      !hasInProgressTasks &&
+      (tasks.length > 0
+        ? tasks.every((t) => t.status === "completed")
+        : nonLeadMembers.length > 0 && nonLeadMembers.every((m) => m.status === "done"));
+    const hasLiveActivity =
+      !finished && (snap.hasLiveWork || activeCount > 0 || hasInProgressTasks);
     const tabs: AgentAuxTabDescriptor[] = [
       { id: "overview", label: s.tabOverview },
       { id: "board", label: s.tabBoard, count: messages.length },
@@ -4038,8 +4164,7 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
 
     return {
       active: true,
-      hasLiveActivity:
-        snap.hasLiveWork || activeCount > 0 || tasks.some((t) => t.status === "in_progress"),
+      hasLiveActivity,
       kind: "claude-team",
       locale,
       useBees: false,
@@ -4076,8 +4201,7 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
       messages,
       edges: team.edges,
       tasks,
-      finished:
-        activeCount === 0 && tasks.length > 0 && tasks.every((t) => t.status === "completed"),
+      finished,
       updatedAt,
     };
   }
@@ -4389,10 +4513,18 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
   const retiredCount = enrichedChildren.filter((m) => m.killed).length;
   const liveMemberCount = allMembers.filter((m) => !m.killed).length;
 
+  const hasActiveTask = allTasks.some((t) => t.status === "in_progress");
   const hasLiveActivity =
     activeCount > 0 ||
-    Boolean(snap?.hasLiveWork) ||
-    enrichedChildren.some((m) => ACTIVE_SUBAGENT_STATUS_SET.has(m.status));
+    anyChildActive ||
+    parentRunning ||
+    hasActiveTask ||
+    Boolean(snap?.hasLiveWork);
+  const finished =
+    !hasLiveActivity &&
+    (enrichedChildren.length > 0
+      ? allChildrenSettled
+      : allTasks.length > 0 && allTasks.every((t) => t.status === "completed"));
 
   // ALWAYS render ALL 4 unified tabs (`概览`, `看板 N`, `成员 N`, `关系图`) + optional `任务 N`!
   const tabs: AgentAuxTabDescriptor[] = [
@@ -4463,7 +4595,7 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
     messages: syntheticMessages,
     edges,
     tasks: allTasks,
-    finished: !hasLiveActivity && enrichedChildren.length > 0,
+    finished,
     updatedAt,
   };
 }

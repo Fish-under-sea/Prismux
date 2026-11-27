@@ -326,6 +326,7 @@ export interface SwarmBeeSpriteProps {
   /** Integer pixel scale: 1 = 22x18, 2 = 44x36, 3 = 66x54 */
   readonly scale?: 1 | 2 | 3;
   readonly showShadow?: boolean;
+  readonly paused?: boolean;
   readonly className?: string;
 }
 
@@ -334,6 +335,7 @@ export const SwarmBeeSprite = memo(function SwarmBeeSprite({
   state,
   scale = 2,
   showShadow = false,
+  paused = false,
   className,
 }: SwarmBeeSpriteProps) {
   const frame0Ref = useRef<HTMLCanvasElement | null>(null);
@@ -356,6 +358,7 @@ export const SwarmBeeSprite = memo(function SwarmBeeSprite({
       className={className ? `pmx-beebox ${className}` : "pmx-beebox"}
       data-bee={name}
       data-state={state}
+      data-motion-paused={paused ? "1" : undefined}
       style={style}
       aria-hidden="true"
     >

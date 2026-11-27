@@ -454,6 +454,10 @@ html.dark:root[data-pmx-glass="1"] .pmx-aux-pane {
   animation: pmx-bee-flap 0.9s steps(1, end) infinite;
 }
 
+.pmx-beebox[data-motion-paused="1"] .pmx-beewrap canvas:nth-child(2) {
+  animation: none;
+}
+
 .pmx-bee-tile {
   position: relative;
   display: grid;
@@ -2480,6 +2484,16 @@ html.dark .pmx-agent-avatar--bare .pmx-agent-brand-logo:not([data-breathing="tru
   color: var(--pmx-aux-success);
 }
 
+.pmx-aux-live-pill--settled {
+  border-color: var(--pmx-aux-border);
+  background: var(--pmx-aux-fill);
+  color: var(--pmx-aux-muted);
+}
+
+.pmx-aux-live-pill--settled .pmx-aux-live-pill-dot {
+  background: var(--pmx-aux-faint);
+}
+
 .pmx-aux-live-pill-dot {
   width: 6px;
   height: 6px;
@@ -2678,6 +2692,16 @@ html.dark .pmx-agent-avatar--bare .pmx-agent-brand-logo:not([data-breathing="tru
   stroke-opacity: 0.28;
 }
 
+@keyframes pmx-aux-hv-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.pmx-aux-hv-beam--fresh {
+  animation: pmx-aux-hv-fade 0.35s ease-out 1;
+}
+
 .pmx-aux-hv-beam-dot {
   fill: var(--pmx-aux-accent);
   pointer-events: none;
@@ -2697,6 +2721,11 @@ html.dark .pmx-agent-avatar--bare .pmx-agent-brand-logo:not([data-breathing="tru
   stroke-linecap: round;
   animation: pmx-march 1.2s linear infinite;
   pointer-events: none;
+}
+
+.pmx-aux-hv-wait--paused,
+.pmx-aux-graph--paused .pmx-aux-hv-wait {
+  animation: none;
 }
 
 .pmx-aux-hv-wait-head {
@@ -2728,6 +2757,11 @@ html.dark .pmx-agent-avatar--bare .pmx-agent-brand-logo:not([data-breathing="tru
 
 .pmx-aux-hv-bee--working .pmx-beebox {
   animation: pmx-aux-bob 1.2s ease-in-out infinite;
+}
+
+.pmx-aux-graph--paused .pmx-aux-hv-bee--working .pmx-beebox,
+.pmx-aux-graph--paused .pmx-beebox .pmx-beewrap canvas:nth-child(2) {
+  animation: none;
 }
 
 .pmx-aux-hv-bee--retired {
@@ -2815,9 +2849,23 @@ html.dark .pmx-aux-hv-brand-bare,
   stroke-opacity: 0.24;
 }
 
+.pmx-aux-graph-edge--past {
+  stroke-opacity: 0.14;
+}
+
 .pmx-aux-graph-edge--cur {
   stroke: var(--pmx-aux-accent);
   stroke-opacity: 0.92;
+}
+
+@keyframes pmx-aux-edge-pulse {
+  from {
+    stroke-opacity: 0.95;
+  }
+}
+
+.pmx-aux-graph-edge--pulse {
+  animation: pmx-aux-edge-pulse 1.6s ease-out 1;
 }
 
 .pmx-aux-graph-count-bg {

@@ -2,7 +2,7 @@ import type { ThreadId } from "@prismux/core-contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 
-import { act, render } from "../../../test/render";
+import { act, fakeTimers, render } from "../../../test/render";
 import "~/index.css";
 import { buildAgentAuxViewModel } from "./agentAux.logic";
 import { AgentAuxPanel } from "./AgentAuxPanel";
@@ -749,5 +749,313 @@ describe("AgentAuxPanel real-Chrome browser verification", () => {
     await assertThemeGeometry("light");
     await assertThemeGeometry("dark");
     await assertThemeGeometry("glass");
+  });
+
+  it("retires 90s live Hive beams, settles one-shot fill='freeze' dots, halts motion on finished Swarm & ACP graphs, and auto-stops Replay cleanly", async () => {
+    using _theme = useThemeGuard();
+    using _timers = fakeTimers();
+    const baseTs = 1_760_000_000_000;
+    const latestMsgTs = baseTs + 3_960_000;
+    vi.setSystemTime(latestMsgTs + 5_000);
+
+    // 1. Active Swarm: fresh beam flies ONCE (repeatCount="1" fill="freeze"), settles statically, then retires at 90s
+    const activeModel = buildHybridDemoModel();
+    const activeContainer = document.createElement("div");
+    activeContainer.style.width = "390px";
+    activeContainer.style.height = "780px";
+
+    await using activeScreen = await render(
+      <AgentAuxPanel model={activeModel} initialTab="graph" locale="zh" />,
+      { container: activeContainer, router: false },
+    );
+
+    const activeRoot = activeScreen.container.querySelector<HTMLElement>(".pmx-aux-graph-root");
+    expect(activeRoot?.dataset.graphMotion).toBe("active");
+    expect(activeScreen.container.querySelector('[data-live-state="live"]')).toBeTruthy();
+
+    const flyingMotions = activeScreen.container.querySelectorAll("animateMotion");
+    expect(flyingMotions.length).toBeGreaterThan(0);
+    for (const anim of flyingMotions) {
+      expect(anim.getAttribute("repeatCount")).toBe("1");
+      expect(anim.getAttribute("fill")).toBe("freeze");
+    }
+
+    // After single 700ms flight settles: zero <animateMotion>, static settled dot remains until 90s expiry
+    await act(() => {
+      vi.advanceTimersByTime(800);
+    });
+    expect(activeScreen.container.querySelectorAll("animateMotion")).toHaveLength(0);
+    expect(
+      activeScreen.container.querySelectorAll('[data-motion-dot="settled"]').length,
+    ).toBeGreaterThan(0);
+
+    // At 90s boundary: single-shot deadline expires the live message beam completely
+    await act(() => {
+      vi.advanceTimersByTime(90_000);
+    });
+    expect(activeScreen.container.querySelectorAll(".pmx-aux-hv-beam-g")).toHaveLength(0);
+    expect(activeScreen.container.querySelectorAll("[data-motion-dot]")).toHaveLength(0);
+
+    // Switch to Mentions while active: live mode has ZERO permanent current/hot highlights or animateMotion
+    const activeMentionsBtn = Array.from(
+      activeScreen.container.querySelectorAll<HTMLButtonElement>(".pmx-aux-segmented button"),
+    ).find((b) => b.textContent?.includes("提及关系"));
+    expect(activeMentionsBtn).toBeTruthy();
+    await act(() => {
+      activeMentionsBtn!.click();
+    });
+    expect(activeScreen.container.querySelectorAll(".pmx-aux-graph-edge--cur")).toHaveLength(0);
+    expect(activeScreen.container.querySelectorAll(".pmx-aux-graph-node--hot")).toHaveLength(0);
+    expect(activeScreen.container.querySelectorAll("animateMotion")).toHaveLength(0);
+
+    // 2. Finished Swarm: zero motion in Hive & Mentions, and Replay plays one-shot dots then auto-stops to settled static state
+    vi.setSystemTime(baseTs + 305_000);
+    const finishedSwarmModel = buildAgentAuxViewModel({
+      provider: "antigravity",
+      threadId: "thread-finished-swarm-browser" as ThreadId,
+      locale: "zh",
+      daemonSnapshot: {
+        ok: true,
+        active: true,
+        hasLiveWork: false,
+        kind: "agy-swarm",
+        title: "已完成的蜂群",
+        activationKey: "agy-swarm:done-root",
+        updatedAt: baseTs + 300_000,
+        swarm: {
+          id: "done-root",
+          title: "已完成的蜂群",
+          selfMember: "coordinator",
+          head: 3,
+          members: [
+            {
+              name: "coordinator",
+              role: "coordinator",
+              model: "claude-opus-4-6",
+              conversationId: "done-root",
+              status: "waiting",
+              waitSince: 0,
+              killed: false,
+              roleWorker: false,
+              narrator: false,
+              steps: 10,
+              posts: 2,
+              unread: 0,
+              lastReadSeq: 3,
+              lastPostSeq: 3,
+              lastPostTime: "10:05",
+              lastPostTs: baseTs + 300_000,
+              transcriptMtime: baseTs + 300_000,
+              activity: "",
+              activityKind: "",
+              wakeMode: "mentions",
+              replied: true,
+              replyAsk: "",
+              failure: null,
+            },
+            {
+              name: "worker-alpha",
+              role: "worker",
+              model: "claude-sonnet-4-5",
+              conversationId: "done-w1",
+              status: "waiting",
+              waitSince: 0,
+              killed: false,
+              roleWorker: false,
+              narrator: false,
+              steps: 8,
+              posts: 1,
+              unread: 0,
+              lastReadSeq: 3,
+              lastPostSeq: 2,
+              lastPostTime: "10:02",
+              lastPostTs: baseTs + 120_000,
+              transcriptMtime: baseTs + 120_000,
+              activity: "",
+              activityKind: "",
+              wakeMode: "mentions",
+              replied: false,
+              replyAsk: "",
+              failure: null,
+            },
+          ],
+          messages: [
+            {
+              seq: 1,
+              agent: "coordinator",
+              text: "@worker-alpha 请完成校验",
+              time: "10:00",
+              ts: baseTs,
+              mentions: ["worker-alpha"],
+              all: false,
+            },
+            {
+              seq: 2,
+              agent: "worker-alpha",
+              text: "@coordinator 请确认结果？",
+              time: "10:02",
+              ts: baseTs + 120_000,
+              mentions: ["coordinator"],
+              all: false,
+            },
+            {
+              seq: 3,
+              agent: "coordinator",
+              text: "@worker-alpha [done] 全部完成",
+              time: "10:05",
+              ts: baseTs + 300_000,
+              mentions: ["worker-alpha"],
+              all: false,
+            },
+          ],
+          edges: [
+            { from: "coordinator", to: "worker-alpha", count: 2, direct: 2, viaAll: 0 },
+            { from: "worker-alpha", to: "coordinator", count: 1, direct: 1, viaAll: 0 },
+          ],
+          plan: null,
+          view: null,
+          systemAttention: [],
+        },
+      },
+    });
+
+    const finishedContainer = document.createElement("div");
+    finishedContainer.style.width = "390px";
+    finishedContainer.style.height = "780px";
+
+    await using finishedScreen = await render(
+      <AgentAuxPanel model={finishedSwarmModel} initialTab="graph" locale="zh" />,
+      { container: finishedContainer, router: false },
+    );
+
+    const finishedRoot = finishedScreen.container.querySelector<HTMLElement>(".pmx-aux-graph-root");
+    expect(finishedRoot?.dataset.graphMotion).toBe("paused");
+    expect(finishedRoot?.dataset.sessionSettled).toBe("1");
+    expect(finishedScreen.container.querySelector('[data-live-state="settled"]')).toBeTruthy();
+    expect(finishedScreen.container.querySelectorAll(".pmx-aux-hv-beam-g")).toHaveLength(0);
+    expect(finishedScreen.container.querySelectorAll(".pmx-aux-hv-wait-g")).toHaveLength(0);
+    expect(finishedScreen.container.querySelectorAll(".pmx-aux-hv-bee--working")).toHaveLength(0);
+    expect(finishedScreen.container.querySelectorAll("animateMotion")).toHaveLength(0);
+
+    // Step to historical seq #2 (paused): wait arrow exists visually, CSS march animation is paused
+    const playBtn = finishedScreen.container.querySelector<HTMLButtonElement>(".pmx-aux-play-btn");
+    expect(playBtn).toBeTruthy();
+    await act(() => {
+      playBtn!.click();
+    });
+    expect(playBtn!.getAttribute("aria-label")).toBe("暂停回放");
+    expect(finishedRoot?.dataset.graphMotion).toBe("active");
+    expect(finishedScreen.container.querySelectorAll("animateMotion").length).toBeGreaterThan(0);
+
+    // Advance 1 step to seq #2, then pause and verify wait-arrow CSS animation is paused
+    await act(() => {
+      vi.advanceTimersByTime(1_400);
+    });
+    await act(() => {
+      playBtn!.click();
+    });
+    expect(playBtn!.getAttribute("aria-label")).toBe("播放回放");
+    expect(finishedRoot?.dataset.graphMotion).toBe("paused");
+    const pausedWaitPath =
+      finishedScreen.container.querySelector<SVGPathElement>(".pmx-aux-hv-wait");
+    expect(pausedWaitPath).toBeTruthy();
+    expect(getComputedStyle(pausedWaitPath!).animationName).toBe("none");
+
+    // Resume playback until final message completes -> auto-stops and returns to settled static state
+    await act(() => {
+      playBtn!.click();
+    });
+    await act(() => {
+      vi.advanceTimersByTime(1_400);
+    });
+    await act(() => {
+      vi.advanceTimersByTime(1_400);
+    });
+    expect(playBtn!.getAttribute("aria-label")).toBe("播放回放");
+    expect(finishedRoot?.dataset.graphMotion).toBe("paused");
+    expect(finishedScreen.container.querySelector('[data-live-state="settled"]')).toBeTruthy();
+    expect(finishedScreen.container.querySelectorAll(".pmx-aux-hv-beam-g")).toHaveLength(0);
+    expect(finishedScreen.container.querySelectorAll(".pmx-aux-hv-wait-g")).toHaveLength(0);
+    expect(finishedScreen.container.querySelectorAll("animateMotion")).toHaveLength(0);
+
+    // Switch to Mentions & replay to end: one-shot dot during replay, then auto-stop to clean static graph
+    const mentionsBtn = Array.from(
+      finishedScreen.container.querySelectorAll<HTMLButtonElement>(".pmx-aux-segmented button"),
+    ).find((b) => b.textContent?.includes("提及关系"));
+    await act(() => {
+      mentionsBtn!.click();
+    });
+    expect(finishedScreen.container.querySelectorAll(".pmx-aux-graph-edge--cur")).toHaveLength(0);
+    expect(finishedScreen.container.querySelectorAll("animateMotion")).toHaveLength(0);
+
+    await act(() => {
+      playBtn!.click();
+    });
+    const mentionAnims = finishedScreen.container.querySelectorAll("animateMotion");
+    expect(mentionAnims.length).toBeGreaterThan(0);
+    for (const anim of mentionAnims) {
+      expect(anim.getAttribute("repeatCount")).toBe("1");
+      expect(anim.getAttribute("fill")).toBe("freeze");
+    }
+    await act(() => {
+      vi.advanceTimersByTime(1_400);
+    });
+    await act(() => {
+      vi.advanceTimersByTime(1_400);
+    });
+    await act(() => {
+      vi.advanceTimersByTime(1_400);
+    });
+    expect(playBtn!.getAttribute("aria-label")).toBe("播放回放");
+    expect(finishedScreen.container.querySelectorAll(".pmx-aux-graph-edge--cur")).toHaveLength(0);
+    expect(finishedScreen.container.querySelectorAll("animateMotion")).toHaveLength(0);
+
+    // 3. Finished ACP multi-agent session: zero breathing logos, zero beams, zero motion in both views
+    const finishedAcpModel = buildAgentAuxViewModel({
+      provider: "codex",
+      threadId: "thread-acp-settled-browser" as ThreadId,
+      threadShell: {
+        id: "thread-acp-settled-browser" as ThreadId,
+        title: "Codex -> DSH 已完成",
+        status: "idle",
+        activityRunStatus: "completed",
+        activeRunId: null,
+        lineage: {},
+      },
+      projection: {
+        runs: [{ id: "r1", status: "completed" }],
+        subagents: [
+          {
+            id: "sub-dsh",
+            title: "DSH 审计",
+            status: "completed",
+            driver: "dsh",
+            model: "deepseek-reasoner",
+            childThreadId: "child-dsh-browser" as ThreadId,
+            prompt: "审计",
+            result: "完成",
+            startedAt: baseTs + 290_000,
+            completedAt: baseTs + 300_000,
+          },
+        ],
+      },
+      daemonSnapshot: null,
+      locale: "zh",
+    });
+
+    const acpContainer = document.createElement("div");
+    acpContainer.style.width = "390px";
+    acpContainer.style.height = "780px";
+
+    await using acpScreen = await render(
+      <AgentAuxPanel model={finishedAcpModel} initialTab="graph" locale="zh" />,
+      { container: acpContainer, router: false },
+    );
+    expect(
+      acpScreen.container.querySelector<HTMLElement>(".pmx-aux-graph-root")?.dataset.graphMotion,
+    ).toBe("paused");
+    expect(acpScreen.container.querySelectorAll('[data-breathing="true"]')).toHaveLength(0);
+    expect(acpScreen.container.querySelectorAll(".pmx-aux-hv-beam-g")).toHaveLength(0);
+    expect(acpScreen.container.querySelectorAll("animateMotion")).toHaveLength(0);
   });
 });

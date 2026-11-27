@@ -1,3 +1,4 @@
+import { deadlineStore } from "@prismux/client-runtime/clock";
 import {
   MinusIcon,
   PauseIcon,
@@ -16,6 +17,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type KeyboardEvent,
   type PointerEvent,
@@ -36,6 +38,7 @@ import {
   computeReplayDelayMs,
   formatAuxClockTime,
   formatAuxStatusLabel,
+  HIVE_LIVE_BEAM_FRESH_MS,
   type AgentAuxViewModel,
   type ReplayPacingMode,
 } from "./agentAux.logic";
@@ -49,6 +52,85 @@ export interface AgentAuxGraphTabProps {
 }
 
 const SPEED_OPTIONS = [0.5, 1, 2, 4, 8] as const;
+const LIVE_MENTION_PULSE_MS = 1_600;
+
+function useDeadlinePassed(deadlineMs: number | null): boolean {
+  const store = deadlineStore(deadlineMs);
+  return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+}
+
+interface OneShotMotionDotProps {
+  readonly pathD: string;
+  readonly endX: number;
+  readonly endY: number;
+  readonly r: number;
+  readonly dur: string;
+  readonly durMs: number;
+  readonly className: string;
+  readonly reducedMotion: boolean;
+}
+
+/**
+ * 1:1 AGY one-shot travelling dot (`hive.js:1282-1284` & `app.js:1634-1639`):
+ * flies exactly once via `repeatCount="1"` + `fill="freeze"` triggered by `beginElement()`,
+ * then settles statically at `(endX, endY)` so pausing, zooming, or re-rendering never restarts it.
+ */
+function OneShotMotionDot({
+  pathD,
+  endX,
+  endY,
+  r,
+  dur,
+  durMs,
+  className,
+  reducedMotion,
+}: OneShotMotionDotProps) {
+  const circleRef = useRef<SVGCircleElement | null>(null);
+  const motionRef = useRef<SVGElement | null>(null);
+  const [settled, setSettled] = useState(reducedMotion);
+
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- triggers SMIL beginElement() once on mount and swaps to a static end dot after the single flight completes
+  useEffect(() => {
+    if (reducedMotion || settled) return;
+    const motionEl = motionRef.current as (SVGElement & { beginElement?: () => void }) | null;
+    const circleEl = circleRef.current;
+    let rafId = 0;
+    if (motionEl && typeof motionEl.beginElement === "function") {
+      if (circleEl) circleEl.style.opacity = "0";
+      motionEl.beginElement();
+      rafId = window.requestAnimationFrame(() => {
+        if (circleEl) circleEl.style.opacity = "";
+      });
+    }
+    const timer = window.setTimeout(() => {
+      setSettled(true);
+    }, durMs + 60);
+    return () => {
+      if (rafId !== 0) window.cancelAnimationFrame(rafId);
+      window.clearTimeout(timer);
+    };
+  }, [reducedMotion, settled, durMs]);
+
+  if (reducedMotion || settled) {
+    return <circle cx={endX} cy={endY} r={r} className={className} data-motion-dot="settled" />;
+  }
+
+  return (
+    <circle ref={circleRef} r={r} className={className} data-motion-dot="flying">
+      <animateMotion
+        ref={motionRef}
+        dur={dur}
+        repeatCount="1"
+        begin="indefinite"
+        fill="freeze"
+        calcMode="spline"
+        keyTimes="0;1"
+        keySplines="0.3 0 0.2 1"
+        path={pathD}
+      />
+    </circle>
+  );
+}
 
 function usePrefersReducedMotion(): boolean {
   const [reduced, setReduced] = useState(() => {
@@ -157,13 +239,15 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
     if (!isReplaying || totalPosts === 0) return;
     const curIdx = replaySeq === null ? -1 : currentReplayIdx;
     const nextIdx = curIdx + 1;
-    const delayMs =
-      nextIdx >= totalPosts
-        ? 0
-        : computeReplayDelayMs(replayableMessages, nextIdx, replayPacing, replaySpeed);
+    const delayMs = computeReplayDelayMs(replayableMessages, nextIdx, replayPacing, replaySpeed);
     const timer = window.setTimeout(() => {
+      if (nextIdx >= totalPosts) {
+        setReplaySeq(null);
+        setIsReplaying(false);
+        return;
+      }
       const nextMsg = replayableMessages[nextIdx];
-      if (!nextMsg || nextIdx >= totalPosts - 1) {
+      if (!nextMsg) {
         setReplaySeq(null);
         setIsReplaying(false);
       } else {
@@ -248,6 +332,65 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
     }
   };
 
+  const isSessionSettled = model.finished || !model.hasLiveActivity;
+  const isReplayPaused = replaySeq !== null && !isReplaying;
+  const isGraphMotionPaused =
+    reducedMotion || isReplayPaused || (replaySeq === null && isSessionSettled);
+
+  // Single-shot deadline timers (zero polling) for AGY 90s Hive beam expiry & 1.6s live Mentions pulse.
+  const latestLiveMsg =
+    replaySeq === null && !isSessionSettled ? (replayableMessages.at(-1) ?? null) : null;
+  const trail1LiveMsg =
+    replaySeq === null && !isSessionSettled && replayableMessages.length >= 2
+      ? (replayableMessages.at(-2) ?? null)
+      : null;
+  const trail2LiveMsg =
+    replaySeq === null && !isSessionSettled && replayableMessages.length >= 3
+      ? (replayableMessages.at(-3) ?? null)
+      : null;
+
+  const latestBeamDeadlineMs =
+    latestLiveMsg && latestLiveMsg.ts !== null && Number.isFinite(latestLiveMsg.ts)
+      ? latestLiveMsg.ts + HIVE_LIVE_BEAM_FRESH_MS
+      : null;
+  const trail1BeamDeadlineMs =
+    trail1LiveMsg && trail1LiveMsg.ts !== null && Number.isFinite(trail1LiveMsg.ts)
+      ? trail1LiveMsg.ts + HIVE_LIVE_BEAM_FRESH_MS
+      : null;
+  const trail2BeamDeadlineMs =
+    trail2LiveMsg && trail2LiveMsg.ts !== null && Number.isFinite(trail2LiveMsg.ts)
+      ? trail2LiveMsg.ts + HIVE_LIVE_BEAM_FRESH_MS
+      : null;
+  const livePulseDeadlineMs =
+    latestLiveMsg && latestLiveMsg.ts !== null && Number.isFinite(latestLiveMsg.ts)
+      ? latestLiveMsg.ts + LIVE_MENTION_PULSE_MS
+      : null;
+
+  const isLatestBeamExpired = useDeadlinePassed(latestBeamDeadlineMs);
+  const isTrail1BeamExpired = useDeadlinePassed(trail1BeamDeadlineMs);
+  const isTrail2BeamExpired = useDeadlinePassed(trail2BeamDeadlineMs);
+  const isLivePulseExpired = useDeadlinePassed(livePulseDeadlineMs);
+
+  let effectiveLiveNowMs: number | undefined;
+  if (latestBeamDeadlineMs !== null) {
+    let now = latestLiveMsg?.ts ?? latestBeamDeadlineMs;
+    if (isTrail2BeamExpired && trail2BeamDeadlineMs !== null) {
+      now = Math.max(now, trail2BeamDeadlineMs);
+    }
+    if (isTrail1BeamExpired && trail1BeamDeadlineMs !== null) {
+      now = Math.max(now, trail1BeamDeadlineMs);
+    }
+    if (isLatestBeamExpired) {
+      now = Math.max(now, latestBeamDeadlineMs);
+    }
+    effectiveLiveNowMs = now;
+  }
+
+  const livePulseMsg =
+    replaySeq === null && !isSessionSettled && !reducedMotion && !isLivePulseExpired
+      ? latestLiveMsg
+      : null;
+
   const hiveLayout = useMemo(
     () =>
       computeHiveLayout({
@@ -257,8 +400,9 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
         hideInactive,
         zoom,
         selectedCellId,
+        ...(effectiveLiveNowMs !== undefined ? { nowMs: effectiveLiveNowMs } : {}),
       }),
-    [model, stageWidth, replaySeq, hideInactive, zoom, selectedCellId],
+    [model, stageWidth, replaySeq, hideInactive, zoom, selectedCellId, effectiveLiveNowMs],
   );
 
   const mentionLayout = useMemo(
@@ -338,7 +482,14 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
   const sliderMax = Math.max(0, totalPosts - 1);
   const sliderVal = currentReplayIdx >= 0 ? currentReplayIdx : sliderMax;
   const sliderPct = sliderMax > 0 ? Math.round((sliderVal / sliderMax) * 100) : 100;
-  const isLive = replaySeq === null && !isReplaying;
+  const isAtLiveHead = replaySeq === null && !isReplaying;
+  const isLiveActive = isAtLiveHead && !isSessionSettled;
+  const isLiveSettled = isAtLiveHead && isSessionSettled;
+  const livePillLabel = isLiveSettled
+    ? model.finished
+      ? s.headerCompleted
+      : s.headerIdle
+    : s.graphReplayLive;
 
   const progressSummaryText =
     replaySeq === null || !currentReplayMsg
@@ -354,8 +505,10 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
 
   return (
     <div
-      className="pmx-aux-graph-root"
+      className={`pmx-aux-graph-root${isGraphMotionPaused ? " pmx-aux-graph--paused" : ""}`}
       data-aux-section="graph"
+      data-graph-motion={isGraphMotionPaused ? "paused" : "active"}
+      data-session-settled={isSessionSettled ? "1" : "0"}
       tabIndex={-1}
       onKeyDown={handlePlayerKeyDown}
     >
@@ -418,15 +571,22 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
 
           <button
             type="button"
-            className={`pmx-aux-live-pill${isLive ? " pmx-aux-live-pill--on" : ""}`}
-            aria-pressed={isLive}
+            className={[
+              "pmx-aux-live-pill",
+              isLiveActive ? "pmx-aux-live-pill--on" : "",
+              isLiveSettled ? "pmx-aux-live-pill--settled" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            data-live-state={isLiveActive ? "live" : isLiveSettled ? "settled" : "replay"}
+            aria-pressed={isAtLiveHead}
             onClick={() => {
               setIsReplaying(false);
               setReplaySeq(null);
             }}
           >
             <i className="pmx-aux-live-pill-dot" aria-hidden="true" />
-            <span>{s.graphReplayLive}</span>
+            <span>{livePillLabel}</span>
           </button>
         </div>
 
@@ -664,18 +824,26 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
                   );
                 })}
 
-                {/* Layer 2: Waiting-on Dashed Marching Arrows & Message Beams */}
+                {/* Layer 2: Waiting-on Dashed Marching Arrows & One-Shot Message Beams */}
                 {hiveLayout.beams.map((beam) => {
                   if (beam.kind === "wait") {
                     return (
                       <g key={beam.id} className="pmx-aux-hv-wait-g">
-                        <path d={beam.pathD} className="pmx-aux-hv-wait" />
+                        <path
+                          d={beam.pathD}
+                          className={
+                            isGraphMotionPaused
+                              ? "pmx-aux-hv-wait pmx-aux-hv-wait--paused"
+                              : "pmx-aux-hv-wait"
+                          }
+                        />
                         {beam.arrowPathD ? (
                           <path d={beam.arrowPathD} className="pmx-aux-hv-wait-head" />
                         ) : null}
                       </g>
                     );
                   }
+                  const dotKey = `${replaySeq === null ? "live" : "replay"}:${beam.id}`;
                   return (
                     <g key={beam.id} className="pmx-aux-hv-beam-g">
                       <path
@@ -683,15 +851,23 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
                         className={
                           beam.isTrail
                             ? "pmx-aux-hv-beam pmx-aux-hv-beam--trail"
-                            : "pmx-aux-hv-beam"
+                            : reducedMotion
+                              ? "pmx-aux-hv-beam"
+                              : "pmx-aux-hv-beam pmx-aux-hv-beam--fresh"
                         }
                       />
-                      {!beam.isTrail && !reducedMotion ? (
-                        <circle r="3.4" className="pmx-aux-hv-beam-dot">
-                          <animateMotion dur="1.15s" repeatCount="indefinite" path={beam.pathD} />
-                        </circle>
-                      ) : !beam.isTrail ? (
-                        <circle cx={beam.x2} cy={beam.y2} r="3.2" className="pmx-aux-hv-beam-dot" />
+                      {!beam.isTrail ? (
+                        <OneShotMotionDot
+                          key={dotKey}
+                          pathD={beam.pathD}
+                          endX={beam.x2}
+                          endY={beam.y2}
+                          r={3}
+                          dur="0.7s"
+                          durMs={700}
+                          className="pmx-aux-hv-beam-dot"
+                          reducedMotion={reducedMotion}
+                        />
                       ) : null}
                     </g>
                   );
@@ -705,6 +881,8 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
                   const scale: 1 | 2 | 3 = bee.size === "lg" ? 2 : bee.size === "sm" ? 1 : 1;
                   const useBeeSprite = model.useBees && bee.sourceKind !== "acp-delegated";
                   const tooltip = `@${bee.name} · ${formatAuxStatusLabel(bee.state, bee.waitingOn, model.locale)}`;
+                  const isBeeWorkingAnimated =
+                    !isGraphMotionPaused && bee.replayState === "working";
 
                   return (
                     <button
@@ -718,7 +896,7 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
                       className={[
                         "pmx-aux-hv-bee",
                         replaySeq !== null && !reducedMotion ? "pmx-aux-hv-bee--replay" : "",
-                        bee.replayState === "working" ? "pmx-aux-hv-bee--working" : "",
+                        isBeeWorkingAnimated ? "pmx-aux-hv-bee--working" : "",
                         bee.replayState === "retired" ? "pmx-aux-hv-bee--retired" : "",
                       ]
                         .filter(Boolean)
@@ -737,6 +915,7 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
                           name={bee.name}
                           state={toPixelBeeState(bee.state)}
                           scale={scale}
+                          paused={isGraphMotionPaused}
                         />
                       ) : (
                         <span
@@ -748,7 +927,7 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
                             provider={bee.providerBrand}
                             size={bee.size === "lg" ? 26 : bee.size === "sm" ? 18 : 15}
                             online={bee.replayState !== "retired"}
-                            breathing={bee.replayState === "working"}
+                            breathing={isBeeWorkingAnimated}
                           />
                         </span>
                       )}
@@ -792,24 +971,49 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
                 selectedMentionNode !== null &&
                 edge.from !== selectedMentionNode &&
                 edge.to !== selectedMentionNode;
+              const isLivePulsingEdge = Boolean(
+                livePulseMsg &&
+                livePulseMsg.agent === edge.from &&
+                (livePulseMsg.recipient === edge.to ||
+                  livePulseMsg.mentions.includes(edge.to) ||
+                  (expandAll && livePulseMsg.all)),
+              );
+              const shouldPulseEdge = !reducedMotion && (edge.isCurrent || isLivePulsingEdge);
+              const pulseSeq = edge.isCurrent
+                ? (mentionLayout.currentMessage?.seq ?? 0)
+                : isLivePulsingEdge
+                  ? (livePulseMsg?.seq ?? 0)
+                  : 0;
+
               return (
                 <g key={edge.id} className={egoDim ? "pmx-aux-graph-dim" : undefined}>
                   <path
+                    key={shouldPulseEdge ? `${edge.id}:p:${pulseSeq}` : edge.id}
                     d={edge.pathD}
                     strokeWidth={edge.strokeWidth}
                     markerEnd="url(#pmx-aux-arr)"
                     className={[
                       "pmx-aux-graph-edge",
                       edge.viaAllOnly ? "pmx-aux-graph-edge--all" : "",
+                      edge.isPast ? "pmx-aux-graph-edge--past" : "",
                       edge.isCurrent ? "pmx-aux-graph-edge--cur" : "",
+                      shouldPulseEdge ? "pmx-aux-graph-edge--pulse" : "",
                     ]
                       .filter(Boolean)
                       .join(" ")}
                   />
-                  {edge.isCurrent && !reducedMotion ? (
-                    <circle r="3" className="pmx-aux-hv-beam-dot">
-                      <animateMotion dur="1.1s" repeatCount="indefinite" path={edge.pathD} />
-                    </circle>
+                  {edge.isCurrent ? (
+                    <OneShotMotionDot
+                      key={`mention:${mentionLayout.currentMessage?.seq ?? 0}:${edge.id}`}
+                      pathD={edge.pathD}
+                      endX={edge.endX}
+                      endY={edge.endY}
+                      r={3.5}
+                      dur="0.9s"
+                      durMs={900}
+                      className="pmx-aux-hv-beam-dot"
+                      reducedMotion={reducedMotion}
+                    />
                   ) : null}
                   {edge.count > 1 ? (
                     <g
