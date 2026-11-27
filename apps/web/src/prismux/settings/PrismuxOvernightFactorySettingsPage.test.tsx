@@ -1022,16 +1022,27 @@ describe("PrismuxOvernightFactorySettingsPage & overnightFactory.logic", () => {
     expect(embeddedHtml).toContain("max-w-none");
     expect(embeddedHtml).not.toContain("max-w-5xl");
 
-    // Live Agent Mail immediately reflects 已配置 / 已就绪 + version + quota + checklist + redetect button
+    // Live Agent Mail auto-collapses original onboarding wizard into compact verified summary + test-only pathway
     expect(embeddedHtml).toContain("Agent 邮箱已配置 · fishundersea@agent.qq.com");
     expect(embeddedHtml).toContain("已配置 · 已就绪");
+    expect(embeddedHtml).toContain('data-mail-view-mode="agent_mail_verified_compact"');
+    expect(embeddedHtml).toContain('data-testid="overnight-agent-mail-verified-summary"');
     expect(embeddedHtml).toContain("agently-cli 已安装 v1.0.18");
     expect(embeddedHtml).toContain("日发信额度 50");
-    expect(embeddedHtml).toContain('data-testid="overnight-connection-checklist"');
+    expect(embeddedHtml).toContain("展开配置 / 切换邮箱");
     expect(embeddedHtml).toContain('data-testid="overnight-redetect-env-btn"');
+    expect(embeddedHtml).toContain('data-testid="overnight-mail-test-row"');
+    expect(embeddedHtml).toContain('data-testid="overnight-test-mail-btn"');
+    expect(embeddedHtml).toContain('data-testid="overnight-send-report-btn"');
     expect(embeddedHtml).toContain('data-testid="overnight-test-recipient-input"');
 
-    // Outbound failure hint rendered cleanly
+    // Original onboarding/preset wizard & save button are hidden while auto-collapsed
+    expect(embeddedHtml).not.toContain('data-testid="overnight-connection-checklist"');
+    expect(embeddedHtml).not.toContain('data-testid="overnight-mailbox-presets-grid"');
+    expect(embeddedHtml).not.toContain('data-testid="overnight-agent-mail-card"');
+    expect(embeddedHtml).not.toContain('data-testid="overnight-save-mail-btn"');
+
+    // Outbound failure hint still rendered cleanly beneath the compact test bar
     expect(embeddedHtml).toContain('data-testid="overnight-outbound-hint"');
     expect(embeddedHtml).toContain("请检查授权码或重新完成 OAuth 授权。");
 
@@ -1048,5 +1059,185 @@ describe("PrismuxOvernightFactorySettingsPage & overnightFactory.logic", () => {
     expect(embeddedHtml).toContain('data-testid="overnight-run-logs"');
     expect(embeddedHtml).toContain("已创建隔离 Git Worktree 分支 factory/1126-fix-tests");
     expect(embeddedHtml).toContain('data-testid="overnight-run-cancel-btn"');
+  });
+
+  it("places Overnight Factory workbench & strategy ahead of mail channel in both standalone and settings views, keeps test buttons & recipient input on one row, and expands Agent Mail setup on demand", () => {
+    const verifiedAgentSnap: DaemonOvernightConfigSnapshot = {
+      ...makeSnapshot(),
+      agentMail: {
+        cliInstalled: true,
+        installed: true,
+        version: "1.0.18",
+        cliPath: "C:\\Users\\Fish\\AppData\\Roaming\\npm\\agently-cli.cmd",
+        binaryPath: "C:\\Users\\Fish\\AppData\\Roaming\\npm\\agently-cli.cmd",
+        loggedIn: true,
+        authorizedEmail: "fishundersea@agent.qq.com",
+        address: "fishundersea@agent.qq.com",
+        configured: true,
+        scopes: ["mail:read", "mail:send"],
+        dailySendQuota: 50,
+        authInProgress: false,
+        pendingAuthUrl: null,
+        lastError: null,
+      },
+    };
+
+    const unverifiedAgentSnap: DaemonOvernightConfigSnapshot = {
+      ...makeSnapshot({
+        emailProvider: "agent_mail",
+        imapSmtp: {
+          ...makeSnapshot().config.imapSmtp,
+          preset: "agent_mail",
+        },
+      }),
+      agentMail: {
+        cliInstalled: true,
+        installed: true,
+        version: "1.0.18",
+        loggedIn: false,
+        authorizedEmail: null,
+        address: null,
+        configured: false,
+        authInProgress: false,
+        pendingAuthUrl: null,
+        lastError: null,
+      },
+    };
+
+    const renderPage = (
+      props: Partial<Parameters<typeof PrismuxOvernightFactorySettingsPage>[0]>,
+    ) =>
+      renderToStaticMarkup(
+        <PrismuxOvernightFactorySettingsPage
+          daemonReadyOverride
+          serverProvidersOverride={SAMPLE_LIVE_PROVIDERS}
+          settingsOverride={null}
+          waiverOverride={UNSIGNED_WAIVER}
+          initialRunsOverride={[]}
+          workspaceOptionsOverride={[]}
+          {...props}
+        />,
+      );
+
+    // 1. Standalone verified Agent Mail: Overnight Factory FIRST, Mail auto-collapsed with test-only row
+    const standaloneVerifiedHtml = renderPage({
+      standalone: true,
+      initialSnapshotOverride: verifiedAgentSnap,
+    });
+    expect(standaloneVerifiedHtml).toContain('data-mail-view-mode="agent_mail_verified_compact"');
+    expect(standaloneVerifiedHtml).toContain('data-testid="overnight-agent-mail-verified-summary"');
+    expect(standaloneVerifiedHtml).toContain("复制邮箱");
+    expect(standaloneVerifiedHtml).toContain("展开配置 / 切换邮箱");
+    expect(standaloneVerifiedHtml).not.toContain('data-testid="overnight-mailbox-presets-grid"');
+    expect(standaloneVerifiedHtml).not.toContain('data-testid="overnight-agent-mail-card"');
+    expect(standaloneVerifiedHtml).not.toContain('data-testid="overnight-save-mail-btn"');
+
+    // Overnight Factory workbench, runs & strategy MUST all precede mail section (never squeezed below email wall)
+    const standaloneTaskPos = standaloneVerifiedHtml.indexOf(
+      'data-testid="overnight-task-workbench"',
+    );
+    const standaloneRunsPos = standaloneVerifiedHtml.indexOf(
+      'data-testid="overnight-runs-section"',
+    );
+    const standaloneStrategyPos = standaloneVerifiedHtml.indexOf(
+      'data-testid="overnight-strategy-section"',
+    );
+    const standaloneMailPos = standaloneVerifiedHtml.indexOf('data-testid="overnight-mail-band"');
+    expect(standaloneTaskPos).toBeGreaterThan(-1);
+    expect(standaloneRunsPos).toBeGreaterThan(standaloneTaskPos);
+    expect(standaloneStrategyPos).toBeGreaterThan(standaloneRunsPos);
+    expect(standaloneMailPos).toBeGreaterThan(standaloneStrategyPos);
+
+    // Helper to extract the exact balanced <div>...</div> for a given data-testid
+    const extractDivByTestId = (html: string, testId: string): string => {
+      const marker = `data-testid="${testId}"`;
+      const markerPos = html.indexOf(marker);
+      expect(markerPos).toBeGreaterThan(-1);
+      const openStart = html.lastIndexOf("<div", markerPos);
+      expect(openStart).toBeGreaterThan(-1);
+      let depth = 0;
+      let cursor = openStart;
+      while (cursor < html.length) {
+        const nextOpen = html.indexOf("<div", cursor);
+        const nextClose = html.indexOf("</div>", cursor);
+        expect(nextClose).toBeGreaterThan(-1);
+        if (nextOpen !== -1 && nextOpen < nextClose) {
+          depth += 1;
+          cursor = nextOpen + 4;
+        } else {
+          depth -= 1;
+          cursor = nextClose + 6;
+          if (depth === 0) {
+            return html.slice(openStart, cursor);
+          }
+        }
+      }
+      throw new Error(`Unclosed div for ${testId}`);
+    };
+
+    // 2. Test buttons and recipient input MUST live inside the SAME horizontal flex row (input on right)
+    const testRowSlice = extractDivByTestId(standaloneVerifiedHtml, "overnight-mail-test-row");
+    expect(testRowSlice).toContain("flex flex-wrap items-center");
+    const testMailBtnPos = testRowSlice.indexOf('data-testid="overnight-test-mail-btn"');
+    const sendReportBtnPos = testRowSlice.indexOf('data-testid="overnight-send-report-btn"');
+    const recipientGroupPos = testRowSlice.indexOf('data-testid="overnight-test-recipient-group"');
+    const recipientInputPos = testRowSlice.indexOf('data-testid="overnight-test-recipient-input"');
+    expect(testMailBtnPos).toBeGreaterThan(-1);
+    expect(sendReportBtnPos).toBeGreaterThan(testMailBtnPos);
+    expect(recipientGroupPos).toBeGreaterThan(sendReportBtnPos);
+    expect(recipientInputPos).toBeGreaterThan(recipientGroupPos);
+
+    // 3. Expanding verified Agent Mail (`initialMailSetupExpandedOverride`) reveals full setup/presets
+    // while keeping Overnight Factory FIRST and keeping save + test buttons + recipient on ONE row
+    const standaloneExpandedHtml = renderPage({
+      standalone: true,
+      initialSnapshotOverride: verifiedAgentSnap,
+      initialMailSetupExpandedOverride: true,
+    });
+    expect(standaloneExpandedHtml).toContain('data-mail-view-mode="expanded_setup"');
+    expect(standaloneExpandedHtml).toContain('data-testid="overnight-connection-checklist"');
+    expect(standaloneExpandedHtml).toContain('data-testid="overnight-mailbox-presets-grid"');
+    expect(standaloneExpandedHtml).toContain('data-testid="overnight-agent-mail-card"');
+    expect(standaloneExpandedHtml).toContain('data-testid="overnight-save-mail-btn"');
+    expect(standaloneExpandedHtml).toContain("收起配置");
+    expect(standaloneExpandedHtml.indexOf('data-testid="overnight-task-workbench"')).toBeLessThan(
+      standaloneExpandedHtml.indexOf('data-testid="overnight-mail-band"'),
+    );
+    const expandedRowSlice = extractDivByTestId(standaloneExpandedHtml, "overnight-mail-test-row");
+    expect(expandedRowSlice).toContain("flex flex-wrap items-center");
+    const saveBtnPos = expandedRowSlice.indexOf('data-testid="overnight-save-mail-btn"');
+    const expTestBtnPos = expandedRowSlice.indexOf('data-testid="overnight-test-mail-btn"');
+    const expSendBtnPos = expandedRowSlice.indexOf('data-testid="overnight-send-report-btn"');
+    const expRecipientPos = expandedRowSlice.indexOf(
+      'data-testid="overnight-test-recipient-input"',
+    );
+    expect(saveBtnPos).toBeGreaterThan(-1);
+    expect(expTestBtnPos).toBeGreaterThan(saveBtnPos);
+    expect(expSendBtnPos).toBeGreaterThan(expTestBtnPos);
+    expect(expRecipientPos).toBeGreaterThan(expSendBtnPos);
+
+    // 4. Unverified Agent Mail starts expanded cleanly in both standalone & embedded settings
+    const unverifiedStandaloneHtml = renderPage({
+      standalone: true,
+      initialSnapshotOverride: unverifiedAgentSnap,
+    });
+    expect(unverifiedStandaloneHtml).toContain('data-mail-view-mode="expanded_setup"');
+    expect(unverifiedStandaloneHtml).toContain('data-testid="overnight-agent-mail-card"');
+    expect(unverifiedStandaloneHtml).not.toContain(
+      'data-testid="overnight-agent-mail-verified-summary"',
+    );
+
+    // 5. Embedded settings view uses full-width 12-col workbench FIRST and Mail band below
+    const embeddedVerifiedHtml = renderPage({
+      standalone: false,
+      initialSnapshotOverride: verifiedAgentSnap,
+    });
+    expect(embeddedVerifiedHtml).toContain("max-w-none");
+    expect(embeddedVerifiedHtml).toContain('data-testid="overnight-workbench-grid"');
+    expect(embeddedVerifiedHtml).toContain("xl:grid-cols-12");
+    expect(embeddedVerifiedHtml.indexOf('data-testid="overnight-task-workbench"')).toBeLessThan(
+      embeddedVerifiedHtml.indexOf('data-testid="overnight-mail-band"'),
+    );
+    expect(embeddedVerifiedHtml).toContain('data-mail-view-mode="agent_mail_verified_compact"');
   });
 });

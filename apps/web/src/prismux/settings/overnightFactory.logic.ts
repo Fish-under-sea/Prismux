@@ -1370,6 +1370,116 @@ export function isMailChannelConfigured(draft: OvernightFactoryDraft): boolean {
   return Boolean(draft.email.trim() && draft.imapHost.trim() && draft.hasImapPassword);
 }
 
+export type OvernightMailSectionViewMode =
+  | "agent_mail_verified_compact"
+  | "expanded_setup"
+  | "collapsed_summary";
+
+export type OvernightAgentMailVerificationDraft = Pick<
+  OvernightFactoryDraft,
+  | "mode"
+  | "emailProvider"
+  | "preset"
+  | "agentMailCliInstalled"
+  | "agentMailLoggedIn"
+  | "agentMailConfigured"
+  | "agentMailAuthorizedEmail"
+  | "agentMailAddress"
+  | "agentMailAuthInProgress"
+  | "agentMailPendingAuthUrl"
+>;
+
+/**
+ * Returns true when Tencent Agent Mail (`agently-cli`) is the active mail channel AND has
+ * completed CLI installation, login, and identity verification (with no OAuth browser login
+ * currently in progress).
+ */
+export function isAgentMailVerified(draft: OvernightAgentMailVerificationDraft): boolean {
+  const isAgentMail =
+    draft.mode === "imap" &&
+    (draft.preset === "agent_mail" || draft.emailProvider === "agent_mail");
+  if (!isAgentMail) {
+    return false;
+  }
+  if (draft.agentMailAuthInProgress || Boolean(draft.agentMailPendingAuthUrl?.trim())) {
+    return false;
+  }
+  const activeEmail = (draft.agentMailAuthorizedEmail || draft.agentMailAddress).trim();
+  if (!activeEmail) {
+    return false;
+  }
+  return Boolean(
+    draft.agentMailCliInstalled &&
+    (draft.agentMailLoggedIn ||
+      draft.agentMailConfigured ||
+      Boolean(draft.agentMailAuthorizedEmail?.trim())),
+  );
+}
+
+/**
+ * Auto-collapses verified Agent Mail onboarding into the compact test-only pathway unless
+ * the user explicitly expanded setup (`userExpandedSetup: true`) to edit or switch mailboxes.
+ */
+export function shouldAutoCollapseAgentMailSetup(input: {
+  readonly draft: OvernightAgentMailVerificationDraft;
+  readonly userExpandedSetup: boolean;
+}): boolean {
+  if (input.userExpandedSetup) {
+    return false;
+  }
+  return isAgentMailVerified(input.draft);
+}
+
+/**
+ * Resolves the active render mode of the Mail Channel section:
+ * - `"agent_mail_verified_compact"`: Verified Agent Mail auto-collapsed (compact summary + test pathway only).
+ * - `"expanded_setup"`: Full onboarding / preset / IMAP / Gmail OAuth2 setup + inline test pathway.
+ * - `"collapsed_summary"`: Compact unconfigured/collapsed summary bar.
+ */
+export function resolveMailSectionViewMode(input: {
+  readonly draft: OvernightAgentMailVerificationDraft;
+  readonly mailExpanded: boolean;
+  readonly userExpandedSetup: boolean;
+}): OvernightMailSectionViewMode {
+  if (
+    shouldAutoCollapseAgentMailSetup({
+      draft: input.draft,
+      userExpandedSetup: input.userExpandedSetup,
+    })
+  ) {
+    return "agent_mail_verified_compact";
+  }
+  return input.mailExpanded ? "expanded_setup" : "collapsed_summary";
+}
+
+/**
+ * Pure state transition when clicking the Mail Channel expand/collapse toggle button.
+ * Expanding a verified Agent Mail card locks `userExpandedSetup: true` so background refreshes
+ * never re-collapse while the user is editing; collapsing returns cleanly to the compact verified bar.
+ */
+export function toggleMailSectionState(input: {
+  readonly draft: OvernightAgentMailVerificationDraft;
+  readonly mailExpanded: boolean;
+  readonly userExpandedSetup: boolean;
+}): { readonly mailExpanded: boolean; readonly userExpandedSetup: boolean } {
+  const verified = isAgentMailVerified(input.draft);
+  const autoCollapsed = shouldAutoCollapseAgentMailSetup({
+    draft: input.draft,
+    userExpandedSetup: input.userExpandedSetup,
+  });
+
+  if (autoCollapsed) {
+    return { mailExpanded: true, userExpandedSetup: true };
+  }
+  if (verified && input.mailExpanded) {
+    return { mailExpanded: true, userExpandedSetup: false };
+  }
+  return {
+    mailExpanded: !input.mailExpanded,
+    userExpandedSetup: false,
+  };
+}
+
 export function resolveDefaultTestRecipient(draft: OvernightFactoryDraft): string {
   if (draft.mode === "gmail-oauth2" || draft.emailProvider === "gmail_oauth2") {
     if (draft.gmailBoundEmail.trim()) return draft.gmailBoundEmail.trim();

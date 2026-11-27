@@ -121,14 +121,25 @@ import {
   parseAllowedSendersInput,
   resolveDefaultTestRecipient,
   resolveGmailOAuthRedirectUri,
+  resolveMailSectionViewMode,
+  shouldAutoCollapseAgentMailSetup,
   shouldDefaultExpandMailChannel,
   shouldDefaultExpandStrategy,
   toDaemonOvernightPatch,
+  toggleMailSectionState,
   toggleTutorialStepCompletion,
   type GmailOAuthTutorialStepNumber,
   type OvernightFactoryDraft,
   type OvernightNeteaseDomain,
 } from "./overnightFactory.logic";
+
+const PMX_ACCENT_ICON_STYLE = {
+  color: "var(--pmx-accent-text, var(--primary))",
+} as const;
+const PMX_ACCENT_BADGE_STYLE = {
+  backgroundColor: "var(--pmx-accent-soft, color-mix(in srgb, var(--primary) 14%, transparent))",
+  color: "var(--pmx-accent-text, var(--primary))",
+} as const;
 
 type OvernightDaemonSubset = Pick<
   PrismuxDaemonClient,
@@ -170,6 +181,7 @@ export interface PrismuxOvernightFactorySettingsPageProps {
   readonly initialSnapshotOverride?: DaemonOvernightConfigSnapshot;
   readonly initialRunsOverride?: readonly DaemonOvernightRunRecordDto[];
   readonly initialTasksOverride?: readonly DaemonOvernightTaskDto[];
+  readonly initialMailSetupExpandedOverride?: boolean;
   readonly workspaceOptionsOverride?: ReadonlyArray<{
     readonly title: string;
     readonly cwd: string;
@@ -283,6 +295,7 @@ function PrismuxOvernightFactoryShell({
   initialSnapshotOverride,
   initialRunsOverride,
   initialTasksOverride,
+  initialMailSetupExpandedOverride,
   workspaceOptions,
   onOpenExternalUrl,
 }: {
@@ -297,6 +310,7 @@ function PrismuxOvernightFactoryShell({
   readonly initialSnapshotOverride?: DaemonOvernightConfigSnapshot;
   readonly initialRunsOverride?: readonly DaemonOvernightRunRecordDto[];
   readonly initialTasksOverride?: readonly DaemonOvernightTaskDto[];
+  readonly initialMailSetupExpandedOverride?: boolean;
   readonly workspaceOptions: ReadonlyArray<{ readonly title: string; readonly cwd: string }>;
   readonly onOpenExternalUrl: (url: string) => void;
 }) {
@@ -333,14 +347,18 @@ function PrismuxOvernightFactoryShell({
   );
   const [oauthPendingUrl, setOauthPendingUrl] = useState<string | null>(null);
 
-  // In standalone `/overnight-factory` workbench, Block A defaults EXPANDED so the user sees the
-  // ready-to-use mail setup immediately without an extra click.
+  // Mail channel expand state: standalone defaults expanded for unconfigured mailboxes, while
+  // verified Agent Mail automatically collapses to the compact verified + test-only view unless
+  // the user explicitly clicks "展开配置 / 切换邮箱" (`userExpandedSetup`).
   const [mailExpanded, setMailExpanded] = useState<boolean>(() =>
     standalone
       ? true
       : initialSnapshotOverride
         ? shouldDefaultExpandMailChannel(initialSnapshotOverride, false)
         : false,
+  );
+  const [userExpandedSetup, setUserExpandedSetup] = useState<boolean>(
+    () => initialMailSetupExpandedOverride ?? false,
   );
   const [strategyExpanded, setStrategyExpanded] = useState<boolean>(() =>
     initialSnapshotOverride ? shouldDefaultExpandStrategy(initialSnapshotOverride) : false,
@@ -457,6 +475,7 @@ function PrismuxOvernightFactoryShell({
     }
     if (syncCollapse) {
       setMailExpanded(shouldDefaultExpandMailChannel(snapshot, standalone));
+      setUserExpandedSetup(false);
       setStrategyExpanded(shouldDefaultExpandStrategy(snapshot));
       setOauthTutorialOpen(!snapshot.config.gmail.connected);
     }
@@ -1194,6 +1213,24 @@ function PrismuxOvernightFactoryShell({
   }, [navigateToMainApp, standalone]);
 
   const mailConfigured = isMailChannelConfigured(draft);
+  const agentMailAutoCollapsed = shouldAutoCollapseAgentMailSetup({
+    draft,
+    userExpandedSetup,
+  });
+  const mailViewMode = resolveMailSectionViewMode({
+    draft,
+    mailExpanded,
+    userExpandedSetup,
+  });
+  const handleToggleMailSection = () => {
+    const next = toggleMailSectionState({
+      draft,
+      mailExpanded,
+      userExpandedSetup,
+    });
+    setMailExpanded(next.mailExpanded);
+    setUserExpandedSetup(next.userExpandedSetup);
+  };
   const connectionChecklist = buildOvernightConnectionChecklist(draft, testResult);
   const defaultTestRecipient = resolveDefaultTestRecipient(draft);
   const isAgentMailSelected =
@@ -1255,9 +1292,9 @@ function PrismuxOvernightFactoryShell({
           role="status"
           aria-live="polite"
           data-pmx-work-panel-card="1"
-          className="flex items-center gap-2 rounded-xl border border-success/35 bg-success/12 px-3.5 py-2.5 text-xs text-foreground"
+          className="flex items-center gap-2 rounded-xl border border-success/35 bg-success/10 px-3.5 py-2.5 text-xs text-foreground"
         >
-          <CheckCircle2Icon className="size-4 shrink-0 text-success" />
+          <CheckCircle2Icon className="size-4 shrink-0 text-success-foreground" />
           <span className="min-w-0 flex-1">{statusMsg}</span>
         </div>
       ) : null}
@@ -1269,14 +1306,123 @@ function PrismuxOvernightFactoryShell({
       data-testid="overnight-kpi-strip"
       className="grid w-full grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4"
     >
-      {/* KPI 1: 邮箱收发通道 */}
+      {/* KPI 1: 工场状态与时间窗口 */}
       <div
         data-pmx-work-panel-card="1"
-        className="flex min-w-0 flex-col justify-between gap-2 rounded-xl border border-border/75 bg-card/75 px-3.5 py-3 shadow-xs/5"
+        className="flex min-w-0 flex-col justify-between gap-1.5 rounded-xl border border-border/75 bg-card/75 px-3.5 py-2.5 shadow-xs/5"
       >
         <div className="flex items-center justify-between gap-2">
           <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <MailIcon className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
+            <MoonStarIcon
+              className="size-3.5 shrink-0"
+              style={PMX_ACCENT_ICON_STYLE}
+              aria-hidden="true"
+            />
+            工场状态与时间窗口
+          </span>
+          <Switch
+            aria-label="快捷切换启用夜间全自动工场"
+            data-testid="overnight-kpi-enabled-switch"
+            checked={draft.enabled}
+            onCheckedChange={(checked) => void handleToggleMasterEnabled(checked)}
+          />
+        </div>
+        <div className="min-w-0 space-y-0.5">
+          <div className="truncate text-sm font-semibold text-foreground">
+            {draft.enabled ? "已启用 · 后台值守中" : "默认关闭 · 待命"}
+          </div>
+          <div className="truncate text-xs text-muted-foreground tabular-nums">
+            {draft.windowMode === "always"
+              ? "全天候执行"
+              : `${draft.windowStart}–${draft.windowEnd}`}
+            {` · 每 ${draft.pollIntervalMinutes || "5"} 分钟轮询`}
+          </div>
+        </div>
+      </div>
+
+      {/* KPI 2: 触发规则与白名单 */}
+      <div
+        data-pmx-work-panel-card="1"
+        className="flex min-w-0 flex-col justify-between gap-1.5 rounded-xl border border-border/75 bg-card/75 px-3.5 py-2.5 shadow-xs/5"
+      >
+        <div className="flex items-center justify-between gap-2">
+          <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <ShieldCheckIcon
+              className="size-3.5 shrink-0 text-success-foreground"
+              aria-hidden="true"
+            />
+            触发规则与白名单
+          </span>
+          <Badge variant={parsedWhitelistCount > 0 ? "success" : "warning"}>
+            {parsedWhitelistCount > 0 ? `${parsedWhitelistCount} 位白名单` : "未设白名单"}
+          </Badge>
+        </div>
+        <div className="min-w-0 space-y-0.5">
+          <div className="flex items-center gap-1.5 truncate text-sm font-semibold text-foreground">
+            <code className="rounded bg-muted/80 px-1.5 py-0.5 font-mono text-xs text-foreground">
+              {draft.triggerTag || "#factory"}
+            </code>
+            <span className="truncate text-xs font-normal text-muted-foreground tabular-nums">
+              {parsedWhitelistCount > 0
+                ? `允许 ${parsedWhitelistCount} 个发件人立项`
+                : "空名单拦截全部邮件"}
+            </span>
+          </div>
+          <div className="truncate text-xs text-muted-foreground">
+            {draft.localWorktreeOnlyNoPush
+              ? "安全护栏：仅本地 Worktree，绝不 push"
+              : "注意：已放开仅本地 Worktree 护栏"}
+          </div>
+        </div>
+      </div>
+
+      {/* KPI 3: 运行记录与最近拉取 */}
+      <div
+        data-pmx-work-panel-card="1"
+        className="flex min-w-0 flex-col justify-between gap-1.5 rounded-xl border border-border/75 bg-card/75 px-3.5 py-2.5 shadow-xs/5"
+      >
+        <div className="flex items-center justify-between gap-2">
+          <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <Clock3Icon
+              className="size-3.5 shrink-0"
+              style={PMX_ACCENT_ICON_STYLE}
+              aria-hidden="true"
+            />
+            运行记录与最近拉取
+          </span>
+          <Badge variant={lastPollError ? "error" : runs.length > 0 ? "success" : "secondary"}>
+            {lastPollError ? "拉取异常" : `${runs.length} 条记录`}
+          </Badge>
+        </div>
+        <div className="min-w-0 space-y-0.5">
+          <div className="truncate text-sm font-semibold text-foreground tabular-nums">
+            {runs.length > 0 ? `累计 ${runs.length} 次夜间任务` : "暂无执行记录"}
+          </div>
+          <div
+            className={cn(
+              "truncate text-xs tabular-nums",
+              lastPollError ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {lastPollError
+              ? `错误：${lastPollError}`
+              : `上次拉取：${formatOvernightTimestamp(lastPollAt)}`}
+          </div>
+        </div>
+      </div>
+
+      {/* KPI 4: 邮箱收发通道 */}
+      <div
+        data-pmx-work-panel-card="1"
+        className="flex min-w-0 flex-col justify-between gap-1.5 rounded-xl border border-border/75 bg-card/75 px-3.5 py-2.5 shadow-xs/5"
+      >
+        <div className="flex items-center justify-between gap-2">
+          <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <MailIcon
+              className="size-3.5 shrink-0"
+              style={PMX_ACCENT_ICON_STYLE}
+              aria-hidden="true"
+            />
             邮箱收发通道
           </span>
           <Badge
@@ -1311,109 +1457,186 @@ function PrismuxOvernightFactoryShell({
           </div>
         </div>
       </div>
+    </div>
+  );
 
-      {/* KPI 2: 工场状态与时间窗口 */}
-      <div
-        data-pmx-work-panel-card="1"
-        className="flex min-w-0 flex-col justify-between gap-2 rounded-xl border border-border/75 bg-card/75 px-3.5 py-3 shadow-xs/5"
+  const renderMailTestRow = (options: { readonly includeSaveButton: boolean }) => (
+    <div
+      data-testid="overnight-mail-test-row"
+      className={cn(
+        "flex flex-wrap items-center gap-2.5",
+        options.includeSaveButton && "border-t border-border/60 pt-3",
+      )}
+    >
+      {options.includeSaveButton ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="default"
+          data-testid="overnight-save-mail-btn"
+          disabled={savingMail}
+          aria-busy={savingMail}
+          onClick={() => void handleSaveMail()}
+        >
+          <SaveIcon className="size-3.5" />
+          {savingMail ? "保存中..." : "保存邮箱配置"}
+        </Button>
+      ) : null}
+      <Button
+        type="button"
+        size="sm"
+        variant={options.includeSaveButton ? "outline" : "default"}
+        data-testid="overnight-test-mail-btn"
+        data-pmx-work-panel-control={options.includeSaveButton ? "1" : undefined}
+        disabled={testingMail}
+        aria-busy={testingMail}
+        onClick={() => void handleTestMail()}
       >
-        <div className="flex items-center justify-between gap-2">
-          <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <MoonStarIcon className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
-            工场状态与时间窗口
-          </span>
-          <Switch
-            aria-label="快捷切换启用夜间全自动工场"
-            data-testid="overnight-kpi-enabled-switch"
-            checked={draft.enabled}
-            onCheckedChange={(checked) => void handleToggleMasterEnabled(checked)}
-          />
-        </div>
-        <div className="min-w-0 space-y-0.5">
-          <div className="truncate text-sm font-semibold text-foreground">
-            {draft.enabled ? "已启用 · 后台值守中" : "默认关闭 · 待命"}
-          </div>
-          <div className="truncate text-xs text-muted-foreground tabular-nums">
-            {draft.windowMode === "always"
-              ? "全天候执行"
-              : `${draft.windowStart}–${draft.windowEnd}`}
-            {` · 每 ${draft.pollIntervalMinutes || "5"} 分钟轮询`}
-          </div>
-        </div>
-      </div>
+        <WifiIcon className="size-3.5" />
+        {testingMail ? "测试连接中..." : "测试收发连通性"}
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        data-testid="overnight-send-report-btn"
+        data-pmx-work-panel-control="1"
+        disabled={sendingReport}
+        aria-busy={sendingReport}
+        onClick={() => void handleSendTestReport()}
+      >
+        <SendIcon className="size-3.5" />
+        {sendingReport ? "发送中..." : "发送测试早报"}
+      </Button>
 
-      {/* KPI 3: 触发规则与白名单 */}
-      <div
-        data-pmx-work-panel-card="1"
-        className="flex min-w-0 flex-col justify-between gap-2 rounded-xl border border-border/75 bg-card/75 px-3.5 py-3 shadow-xs/5"
-      >
-        <div className="flex items-center justify-between gap-2">
-          <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <ShieldCheckIcon className="size-3.5 shrink-0 text-success" aria-hidden="true" />
-            触发规则与白名单
-          </span>
-          <Badge variant={parsedWhitelistCount > 0 ? "success" : "warning"}>
-            {parsedWhitelistCount > 0 ? `${parsedWhitelistCount} 位白名单` : "未设白名单"}
-          </Badge>
-        </div>
-        <div className="min-w-0 space-y-0.5">
-          <div className="flex items-center gap-1.5 truncate text-sm font-semibold text-foreground">
-            <code className="rounded bg-muted/80 px-1.5 py-0.5 font-mono text-xs text-foreground">
-              {draft.triggerTag || "#factory"}
-            </code>
-            <span className="truncate text-xs font-normal text-muted-foreground tabular-nums">
-              {parsedWhitelistCount > 0
-                ? `允许 ${parsedWhitelistCount} 个发件人立项`
-                : "空名单拦截全部邮件"}
-            </span>
-          </div>
-          <div className="truncate text-xs text-muted-foreground">
-            {draft.localWorktreeOnlyNoPush
-              ? "安全护栏：仅本地 Worktree，绝不 push"
-              : "注意：已放开仅本地 Worktree 护栏"}
-          </div>
-        </div>
-      </div>
+      <span
+        aria-hidden="true"
+        className={cn(
+          "hidden h-4 w-px shrink-0 bg-border/75",
+          options.includeSaveButton ? "lg:inline-block" : "md:inline-block",
+        )}
+      />
 
-      {/* KPI 4: 运行记录与最近拉取 */}
       <div
-        data-pmx-work-panel-card="1"
-        className="flex min-w-0 flex-col justify-between gap-2 rounded-xl border border-border/75 bg-card/75 px-3.5 py-3 shadow-xs/5"
+        data-testid="overnight-test-recipient-group"
+        className="flex min-w-60 flex-1 items-center gap-2 sm:max-w-sm"
       >
-        <div className="flex items-center justify-between gap-2">
-          <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <Clock3Icon className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
-            运行记录与最近拉取
-          </span>
-          <Badge variant={lastPollError ? "error" : runs.length > 0 ? "success" : "secondary"}>
-            {lastPollError ? "拉取异常" : `${runs.length} 条记录`}
-          </Badge>
-        </div>
-        <div className="min-w-0 space-y-0.5">
-          <div className="truncate text-sm font-semibold text-foreground tabular-nums">
-            {runs.length > 0 ? `累计 ${runs.length} 次夜间任务` : "暂无执行记录"}
-          </div>
-          <div
-            className={cn(
-              "truncate text-xs tabular-nums",
-              lastPollError ? "text-destructive" : "text-muted-foreground",
-            )}
-          >
-            {lastPollError
-              ? `错误：${lastPollError}`
-              : `上次拉取：${formatOvernightTimestamp(lastPollAt)}`}
-          </div>
-        </div>
+        <label
+          htmlFor="overnight-test-recipient-input"
+          className="shrink-0 whitespace-nowrap text-xs font-medium text-muted-foreground"
+        >
+          测试收件人：
+        </label>
+        <Input
+          id="overnight-test-recipient-input"
+          size="sm"
+          type="email"
+          data-testid="overnight-test-recipient-input"
+          data-pmx-work-panel-control="1"
+          value={testRecipientInput}
+          onChange={(e) => setTestRecipientInput(e.target.value)}
+          placeholder={defaultTestRecipient || "留空默认发往当前配置邮箱"}
+          className="min-w-0 flex-1"
+        />
       </div>
     </div>
   );
+
+  const mailTestResultBlock = testResult ? (
+    <div
+      data-testid="overnight-mail-test-result"
+      data-pmx-work-panel-card="1"
+      className={cn(
+        "space-y-2 rounded-xl border px-3.5 py-2.5 text-xs",
+        testResult.ok
+          ? "border-success/35 bg-success/10 text-foreground"
+          : "border-destructive/40 bg-destructive/10 text-foreground",
+      )}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 font-medium">
+          {testResult.ok ? (
+            <CheckCircle2Icon className="size-4 text-success-foreground" />
+          ) : (
+            <XCircleIcon className="size-4 text-destructive" />
+          )}
+          <span>{testResult.message}</span>
+        </div>
+        <span className="font-mono text-xs text-muted-foreground tabular-nums">
+          总耗时 {testResult.durationMs} ms
+        </span>
+      </div>
+      <div className="grid gap-2 text-xs sm:grid-cols-2">
+        <div
+          data-pmx-work-panel-card="1"
+          className={cn(
+            "rounded-lg border bg-card/75 px-2.5 py-1.5",
+            testResult.inbound.ok ? "border-success/30" : "border-destructive/40",
+          )}
+        >
+          <div className="flex items-center justify-between font-medium">
+            <span className="flex items-center gap-1">
+              {testResult.inbound.ok ? (
+                <CheckCircle2Icon className="size-3.5 text-success-foreground" />
+              ) : (
+                <XCircleIcon className="size-3.5 text-destructive" />
+              )}
+              收信通道（Inbound）
+            </span>
+            <span className="font-mono text-muted-foreground tabular-nums">
+              {testResult.inbound.latencyMs} ms
+            </span>
+          </div>
+          <div className="mt-0.5 text-muted-foreground">{testResult.inbound.message}</div>
+          {testResult.inbound.hint ? (
+            <div
+              data-testid="overnight-inbound-hint"
+              className="mt-1.5 rounded-md border border-warning/35 bg-warning/10 px-2 py-1 text-2xs leading-relaxed text-foreground"
+            >
+              修复建议：{testResult.inbound.hint}
+            </div>
+          ) : null}
+        </div>
+        <div
+          data-pmx-work-panel-card="1"
+          className={cn(
+            "rounded-lg border bg-card/75 px-2.5 py-1.5",
+            testResult.outbound.ok ? "border-success/30" : "border-destructive/40",
+          )}
+        >
+          <div className="flex items-center justify-between font-medium">
+            <span className="flex items-center gap-1">
+              {testResult.outbound.ok ? (
+                <CheckCircle2Icon className="size-3.5 text-success-foreground" />
+              ) : (
+                <XCircleIcon className="size-3.5 text-destructive" />
+              )}
+              发信通道（Outbound）
+            </span>
+            <span className="font-mono text-muted-foreground tabular-nums">
+              {testResult.outbound.latencyMs} ms
+            </span>
+          </div>
+          <div className="mt-0.5 text-muted-foreground">{testResult.outbound.message}</div>
+          {testResult.outbound.hint ? (
+            <div
+              data-testid="overnight-outbound-hint"
+              className="mt-1.5 rounded-md border border-warning/35 bg-warning/10 px-2 py-1 text-2xs leading-relaxed text-foreground"
+            >
+              修复建议：{testResult.outbound.hint}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  ) : null;
 
   const mailBindingSection = (
     <OvernightSectionCard
       standalone={standalone}
       id="overnight-mail-binding"
-      title="区块 A · 邮箱登录与收发绑定"
-      icon={<MailIcon className="size-4 text-primary" />}
+      title="邮箱通道与收发测试"
+      icon={<MailIcon className="size-4" style={PMX_ACCENT_ICON_STYLE} />}
       headerAction={
         <div className="flex flex-wrap items-center gap-2">
           <Badge
@@ -1426,7 +1649,7 @@ function PrismuxOvernightFactoryShell({
                 : isAgentMailSelected
                   ? `Agent 邮箱已配置${activeAgentMailEmail ? ` · ${activeAgentMailEmail}` : ""}`
                   : `IMAP/SMTP 已配置${draft.email ? ` · ${draft.email}` : ""}`
-              : mailExpanded
+              : mailViewMode === "expanded_setup"
                 ? "待配置邮箱通道"
                 : "通道未配置（已折叠）"}
           </Badge>
@@ -1451,13 +1674,18 @@ function PrismuxOvernightFactoryShell({
             variant="outline"
             data-testid="overnight-mail-toggle-btn"
             data-pmx-work-panel-control="1"
-            aria-expanded={mailExpanded}
-            onClick={() => setMailExpanded((prev) => !prev)}
+            aria-expanded={mailViewMode === "expanded_setup"}
+            onClick={handleToggleMailSection}
           >
-            {mailExpanded ? (
+            {mailViewMode === "expanded_setup" ? (
               <>
                 <ChevronDownIcon className="size-3.5" />
                 收起配置
+              </>
+            ) : agentMailAutoCollapsed ? (
+              <>
+                <ChevronRightIcon className="size-3.5" />
+                展开配置 / 切换邮箱
               </>
             ) : (
               <>
@@ -1469,65 +1697,80 @@ function PrismuxOvernightFactoryShell({
         </div>
       }
     >
-      <div data-testid="overnight-mail-section" className="space-y-4 p-4">
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          支持通用 IMAP / SMTP（内置谷歌邮箱 Gmail / QQ / Agent 邮箱 / Outlook / 网易 163 & 126 /
-          自定义预设）与 Google OAuth2 授权。所有授权码与密钥仅写加密落盘，界面永不回显明文。
-        </p>
-
-        {/* 4-Step Visual Connection Status Checklist */}
-        <div
-          data-testid="overnight-connection-checklist"
-          className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4"
-        >
-          {connectionChecklist.map((step, index) => (
+      <div
+        data-testid="overnight-mail-section"
+        data-mail-view-mode={mailViewMode}
+        className="space-y-3.5 p-4"
+      >
+        {mailViewMode === "agent_mail_verified_compact" ? (
+          <>
+            {/* Sleek Verified Agent Mail Summary Bar (original onboarding/presets auto-collapsed) */}
             <div
-              key={step.id}
-              data-testid={`overnight-checklist-${step.id}`}
-              data-status={step.status}
+              data-testid="overnight-agent-mail-verified-summary"
               data-pmx-work-panel-card="1"
-              className={cn(
-                "flex min-w-0 items-start gap-2 rounded-lg border px-2.5 py-2 text-xs",
-                step.status === "passed"
-                  ? "border-success/35 bg-success/10 text-foreground"
-                  : step.status === "error"
-                    ? "border-destructive/45 bg-destructive/10 text-foreground"
-                    : step.status === "warning"
-                      ? "border-warning/40 bg-warning/10 text-foreground"
-                      : "border-border/65 bg-muted/20 text-muted-foreground",
-              )}
+              className="flex flex-wrap items-center justify-between gap-2.5 rounded-lg border border-border/75 bg-muted/20 px-3.5 py-2.5 text-xs"
             >
-              <span className="mt-0.5 shrink-0">
-                {step.status === "passed" ? (
-                  <CheckCircle2Icon className="size-3.5 text-success" aria-hidden="true" />
-                ) : step.status === "error" ? (
-                  <XCircleIcon className="size-3.5 text-destructive" aria-hidden="true" />
-                ) : step.status === "warning" ? (
-                  <AlertTriangleIcon className="size-3.5 text-warning" aria-hidden="true" />
-                ) : (
-                  <CircleIcon className="size-3.5 text-muted-foreground/70" aria-hidden="true" />
-                )}
-              </span>
-              <div className="min-w-0 flex-1 space-y-0.5">
-                <div className="truncate font-semibold text-foreground">
-                  {index + 1}. {step.label}
-                </div>
-                <div className="line-clamp-2 text-2xs leading-snug text-muted-foreground">
-                  {step.detail}
-                </div>
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <CheckCircle2Icon
+                  className="size-4 shrink-0 text-success-foreground"
+                  aria-hidden="true"
+                />
+                <span className="font-medium text-foreground">Agent 邮箱已验证</span>
+                <code
+                  data-testid="overnight-agent-mail-verified-address"
+                  className="rounded-md border border-border/70 bg-card/85 px-2 py-0.5 font-mono text-xs font-semibold text-foreground"
+                >
+                  {activeAgentMailEmail}
+                </code>
+                <Badge data-testid="overnight-agent-mail-cli-badge" variant="secondary">
+                  {`agently-cli 已安装${draft.agentMailVersion ? ` v${draft.agentMailVersion}` : ""}`}
+                </Badge>
+                {draft.agentMailDailySendQuota !== null ? (
+                  <Badge variant="outline">日发信额度 {draft.agentMailDailySendQuota}</Badge>
+                ) : null}
+              </div>
+
+              <div className="flex shrink-0 items-center gap-1.5">
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  data-testid="overnight-agent-mail-copy-address-btn"
+                  data-pmx-work-panel-control="1"
+                  onClick={() =>
+                    void handleCopyText(
+                      "agent-mail-address",
+                      activeAgentMailEmail,
+                      "Agent 邮箱地址",
+                    )
+                  }
+                >
+                  {copiedKey === "agent-mail-address" ? (
+                    <>
+                      <CheckIcon className="size-3.5 text-success-foreground" />
+                      已复制
+                    </>
+                  ) : (
+                    <>
+                      <CopyIcon className="size-3.5" />
+                      复制邮箱
+                    </>
+                  )}
+                </Button>
               </div>
             </div>
-          ))}
-        </div>
 
-        {/* Compact Summary Bar when collapsed */}
-        {!mailExpanded ? (
+            {/* Test Pathway ONLY: buttons left + inline recipient input right on SAME ROW */}
+            {renderMailTestRow({ includeSaveButton: false })}
+            {mailTestResultBlock}
+          </>
+        ) : mailViewMode === "collapsed_summary" ? (
           <div
             data-pmx-work-panel-card="1"
             className="flex flex-wrap items-center justify-between gap-2.5 rounded-lg border border-border/65 bg-muted/20 px-3.5 py-2.5 text-xs text-muted-foreground"
           >
             <div className="flex flex-wrap items-center gap-2">
-              <MailIcon className="size-4 shrink-0 text-primary/80" />
+              <MailIcon className="size-4 shrink-0" style={PMX_ACCENT_ICON_STYLE} />
               <span>
                 当前接入方式：
                 <strong className="font-medium text-foreground">
@@ -1549,6 +1792,62 @@ function PrismuxOvernightFactoryShell({
           </div>
         ) : (
           <div className="space-y-4">
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              支持通用 IMAP / SMTP（内置谷歌邮箱 Gmail / QQ / Agent 邮箱 / Outlook / 网易 163 & 126
+              / 自定义预设）与 Google OAuth2 授权。所有授权码与密钥仅写加密落盘，界面永不回显明文。
+            </p>
+
+            {/* 4-Step Visual Connection Status Checklist (expanded setup view) */}
+            <div
+              data-testid="overnight-connection-checklist"
+              className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4"
+            >
+              {connectionChecklist.map((step, index) => (
+                <div
+                  key={step.id}
+                  data-testid={`overnight-checklist-${step.id}`}
+                  data-status={step.status}
+                  data-pmx-work-panel-card="1"
+                  className={cn(
+                    "flex min-w-0 items-start gap-2 rounded-lg border px-2.5 py-2 text-xs",
+                    step.status === "passed"
+                      ? "border-success/35 bg-success/10 text-foreground"
+                      : step.status === "error"
+                        ? "border-destructive/45 bg-destructive/10 text-foreground"
+                        : step.status === "warning"
+                          ? "border-warning/40 bg-warning/10 text-foreground"
+                          : "border-border/65 bg-muted/20 text-muted-foreground",
+                  )}
+                >
+                  <span className="mt-0.5 shrink-0">
+                    {step.status === "passed" ? (
+                      <CheckCircle2Icon
+                        className="size-3.5 text-success-foreground"
+                        aria-hidden="true"
+                      />
+                    ) : step.status === "error" ? (
+                      <XCircleIcon className="size-3.5 text-destructive" aria-hidden="true" />
+                    ) : step.status === "warning" ? (
+                      <AlertTriangleIcon className="size-3.5 text-warning" aria-hidden="true" />
+                    ) : (
+                      <CircleIcon
+                        className="size-3.5 text-muted-foreground/70"
+                        aria-hidden="true"
+                      />
+                    )}
+                  </span>
+                  <div className="min-w-0 flex-1 space-y-0.5">
+                    <div className="truncate font-semibold text-foreground">
+                      {index + 1}. {step.label}
+                    </div>
+                    <div className="line-clamp-2 text-2xs leading-snug text-muted-foreground">
+                      {step.detail}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
             {/* Mode Switcher: IMAP / SMTP 通用邮箱 FIRST (left), Gmail OAuth2 SECOND (right) */}
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-0 space-y-0.5">
@@ -1693,11 +1992,11 @@ function PrismuxOvernightFactoryShell({
                     {activeAgentMailEmail ? (
                       <div
                         data-testid="overnight-agent-mail-address"
-                        className="space-y-1.5 rounded-lg border border-success/35 bg-success/10 px-3 py-2 text-xs text-foreground"
+                        className="space-y-1.5 rounded-lg border border-border/75 bg-muted/25 px-3 py-2 text-xs text-foreground"
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <div className="flex flex-wrap items-center gap-2">
-                            <CheckCircle2Icon className="size-4 shrink-0 text-success" />
+                            <CheckCircle2Icon className="size-4 shrink-0 text-success-foreground" />
                             <span>已配置 Agent 邮箱：</span>
                             <code className="rounded bg-card/80 px-1.5 py-0.5 font-mono font-semibold text-foreground">
                               {activeAgentMailEmail}
@@ -1723,7 +2022,7 @@ function PrismuxOvernightFactoryShell({
                           >
                             {copiedKey === "agent-mail-address" ? (
                               <>
-                                <CheckIcon className="size-3.5 text-success" />
+                                <CheckIcon className="size-3.5 text-success-foreground" />
                                 已复制
                               </>
                             ) : (
@@ -1795,7 +2094,7 @@ function PrismuxOvernightFactoryShell({
                             }
                           >
                             {copiedKey === "agent-mail-install-cmd" ? (
-                              <CheckIcon className="size-3.5 text-success" />
+                              <CheckIcon className="size-3.5 text-success-foreground" />
                             ) : (
                               <CopyIcon className="size-3.5" />
                             )}
@@ -1919,7 +2218,7 @@ function PrismuxOvernightFactoryShell({
                           >
                             {copiedKey === "agent-mail-oauth-url" ? (
                               <>
-                                <CheckIcon className="size-3.5 text-success" />
+                                <CheckIcon className="size-3.5 text-success-foreground" />
                                 已复制授权链接
                               </>
                             ) : (
@@ -1984,7 +2283,7 @@ function PrismuxOvernightFactoryShell({
                             >
                               {copiedKey === "agent-mail-official-prompt" ? (
                                 <>
-                                  <CheckIcon className="size-3.5 text-success" />
+                                  <CheckIcon className="size-3.5 text-success-foreground" />
                                   已复制提示词
                                 </>
                               ) : (
@@ -2483,8 +2782,9 @@ function PrismuxOvernightFactoryShell({
                                 <CheckIcon
                                   className={cn(
                                     "size-3 shrink-0",
-                                    isActive ? "text-primary" : "text-success",
+                                    !isActive && "text-success-foreground",
                                   )}
+                                  style={isActive ? PMX_ACCENT_ICON_STYLE : undefined}
                                 />
                               ) : null}
                               <span className="truncate">{item.shortLabel}</span>
@@ -2540,7 +2840,7 @@ function PrismuxOvernightFactoryShell({
                               >
                                 {copiedKey === "oauth-scopes" ? (
                                   <>
-                                    <CheckIcon className="size-3.5 text-success" />
+                                    <CheckIcon className="size-3.5 text-success-foreground" />
                                     已复制 Scope
                                   </>
                                 ) : (
@@ -2580,7 +2880,7 @@ function PrismuxOvernightFactoryShell({
                               >
                                 {copiedKey === "tutorial-redirect" ? (
                                   <>
-                                    <CheckIcon className="size-3.5 text-success" />
+                                    <CheckIcon className="size-3.5 text-success-foreground" />
                                     已复制回调地址
                                   </>
                                 ) : (
@@ -2612,7 +2912,7 @@ function PrismuxOvernightFactoryShell({
                             <div className="grid gap-2 sm:grid-cols-2">
                               <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-2.5 py-1.5">
                                 {oauthReadiness.clientIdReady ? (
-                                  <CheckCircle2Icon className="size-4 shrink-0 text-success" />
+                                  <CheckCircle2Icon className="size-4 shrink-0 text-success-foreground" />
                                 ) : (
                                   <CircleIcon className="size-4 shrink-0 text-muted-foreground" />
                                 )}
@@ -2622,7 +2922,7 @@ function PrismuxOvernightFactoryShell({
                               </div>
                               <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-2.5 py-1.5">
                                 {oauthReadiness.clientSecretReady ? (
-                                  <CheckCircle2Icon className="size-4 shrink-0 text-success" />
+                                  <CheckCircle2Icon className="size-4 shrink-0 text-success-foreground" />
                                 ) : (
                                   <CircleIcon className="size-4 shrink-0 text-muted-foreground" />
                                 )}
@@ -2810,7 +3110,7 @@ function PrismuxOvernightFactoryShell({
                       >
                         {copiedKey === "field-redirect" ? (
                           <>
-                            <CheckIcon className="size-3.5 text-success" />
+                            <CheckIcon className="size-3.5 text-success-foreground" />
                             已复制
                           </>
                         ) : (
@@ -2853,160 +3153,11 @@ function PrismuxOvernightFactoryShell({
               </div>
             )}
 
-            {/* Bottom Mail Action Buttons + Editable Test Recipient */}
-            <div className="space-y-2.5">
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="default"
-                  data-testid="overnight-save-mail-btn"
-                  disabled={savingMail}
-                  aria-busy={savingMail}
-                  onClick={() => void handleSaveMail()}
-                >
-                  <SaveIcon className="size-3.5" />
-                  {savingMail ? "保存中..." : "保存邮箱配置"}
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  data-testid="overnight-test-mail-btn"
-                  data-pmx-work-panel-control="1"
-                  disabled={testingMail}
-                  aria-busy={testingMail}
-                  onClick={() => void handleTestMail()}
-                >
-                  <WifiIcon className="size-3.5" />
-                  {testingMail ? "测试连接中..." : "测试收发连通性"}
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  data-testid="overnight-send-report-btn"
-                  data-pmx-work-panel-control="1"
-                  disabled={sendingReport}
-                  aria-busy={sendingReport}
-                  onClick={() => void handleSendTestReport()}
-                >
-                  <SendIcon className="size-3.5" />
-                  {sendingReport ? "发送中..." : "发送测试早报"}
-                </Button>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <label
-                  htmlFor="overnight-test-recipient-input"
-                  className="text-xs text-muted-foreground"
-                >
-                  测试收件人：
-                </label>
-                <Input
-                  id="overnight-test-recipient-input"
-                  size="sm"
-                  type="email"
-                  data-testid="overnight-test-recipient-input"
-                  data-pmx-work-panel-control="1"
-                  value={testRecipientInput}
-                  onChange={(e) => setTestRecipientInput(e.target.value)}
-                  placeholder={defaultTestRecipient || "留空默认发往当前配置邮箱"}
-                  className="max-w-xs"
-                />
-              </div>
-            </div>
+            {/* Bottom Mail Action Buttons + Inline Right-Side Test Recipient (SAME ROW) */}
+            {renderMailTestRow({ includeSaveButton: true })}
 
             {/* Connectivity Probe Inline Report */}
-            {testResult ? (
-              <div
-                data-testid="overnight-mail-test-result"
-                data-pmx-work-panel-card="1"
-                className={cn(
-                  "space-y-2 rounded-xl border px-3.5 py-2.5 text-xs",
-                  testResult.ok
-                    ? "border-success/35 bg-success/10 text-foreground"
-                    : "border-destructive/40 bg-destructive/10 text-foreground",
-                )}
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5 font-medium">
-                    {testResult.ok ? (
-                      <CheckCircle2Icon className="size-4 text-success" />
-                    ) : (
-                      <XCircleIcon className="size-4 text-destructive" />
-                    )}
-                    <span>{testResult.message}</span>
-                  </div>
-                  <span className="font-mono text-xs text-muted-foreground tabular-nums">
-                    总耗时 {testResult.durationMs} ms
-                  </span>
-                </div>
-                <div className="grid gap-2 text-xs sm:grid-cols-2">
-                  <div
-                    data-pmx-work-panel-card="1"
-                    className={cn(
-                      "rounded-lg border bg-card/75 px-2.5 py-1.5",
-                      testResult.inbound.ok ? "border-success/30" : "border-destructive/40",
-                    )}
-                  >
-                    <div className="flex items-center justify-between font-medium">
-                      <span className="flex items-center gap-1">
-                        {testResult.inbound.ok ? (
-                          <CheckCircle2Icon className="size-3.5 text-success" />
-                        ) : (
-                          <XCircleIcon className="size-3.5 text-destructive" />
-                        )}
-                        收信通道（Inbound）
-                      </span>
-                      <span className="font-mono text-muted-foreground tabular-nums">
-                        {testResult.inbound.latencyMs} ms
-                      </span>
-                    </div>
-                    <div className="mt-0.5 text-muted-foreground">{testResult.inbound.message}</div>
-                    {testResult.inbound.hint ? (
-                      <div
-                        data-testid="overnight-inbound-hint"
-                        className="mt-1.5 rounded-md border border-warning/35 bg-warning/10 px-2 py-1 text-2xs leading-relaxed text-foreground"
-                      >
-                        修复建议：{testResult.inbound.hint}
-                      </div>
-                    ) : null}
-                  </div>
-                  <div
-                    data-pmx-work-panel-card="1"
-                    className={cn(
-                      "rounded-lg border bg-card/75 px-2.5 py-1.5",
-                      testResult.outbound.ok ? "border-success/30" : "border-destructive/40",
-                    )}
-                  >
-                    <div className="flex items-center justify-between font-medium">
-                      <span className="flex items-center gap-1">
-                        {testResult.outbound.ok ? (
-                          <CheckCircle2Icon className="size-3.5 text-success" />
-                        ) : (
-                          <XCircleIcon className="size-3.5 text-destructive" />
-                        )}
-                        发信通道（Outbound）
-                      </span>
-                      <span className="font-mono text-muted-foreground tabular-nums">
-                        {testResult.outbound.latencyMs} ms
-                      </span>
-                    </div>
-                    <div className="mt-0.5 text-muted-foreground">
-                      {testResult.outbound.message}
-                    </div>
-                    {testResult.outbound.hint ? (
-                      <div
-                        data-testid="overnight-outbound-hint"
-                        className="mt-1.5 rounded-md border border-warning/35 bg-warning/10 px-2 py-1 text-2xs leading-relaxed text-foreground"
-                      >
-                        修复建议：{testResult.outbound.hint}
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              </div>
-            ) : null}
+            {mailTestResultBlock}
           </div>
         )}
       </div>
@@ -3017,8 +3168,8 @@ function PrismuxOvernightFactoryShell({
     <OvernightSectionCard
       standalone={standalone}
       id="overnight-tasks"
-      title="区块 B · 夜间任务队列与立即执行"
-      icon={<ListTodoIcon className="size-4 text-primary" />}
+      title="夜间任务队列与立即执行"
+      icon={<ListTodoIcon className="size-4" style={PMX_ACCENT_ICON_STYLE} />}
       headerAction={
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant={tasks.length > 0 ? "success" : "secondary"}>队列 {tasks.length} 项</Badge>
@@ -3296,8 +3447,8 @@ function PrismuxOvernightFactoryShell({
     <OvernightSectionCard
       standalone={standalone}
       id="overnight-strategy"
-      title="区块 C · 夜间工场执行策略"
-      icon={<ShieldCheckIcon className="size-4 text-primary" />}
+      title="夜间工场执行策略"
+      icon={<ShieldCheckIcon className="size-4" style={PMX_ACCENT_ICON_STYLE} />}
       headerAction={
         <div className="flex flex-wrap items-center gap-2.5">
           <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-foreground">
@@ -3523,7 +3674,7 @@ function PrismuxOvernightFactoryShell({
             </div>
 
             {/* Live Configured Agent Provider & Live Model Selector */}
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-3 2xl:grid-cols-2">
               <div className="space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-xs font-medium text-foreground">
@@ -3765,7 +3916,7 @@ function PrismuxOvernightFactoryShell({
             ) : null}
 
             {/* Oracle Review & Local Worktree Safety Switches */}
-            <div className="grid gap-2.5 md:grid-cols-2">
+            <div className="grid gap-2.5 2xl:grid-cols-2">
               <label
                 data-pmx-work-panel-card="1"
                 className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-border/75 bg-card/75 px-3.5 py-2.5 transition-colors motion-reduce:transition-none hover:border-border"
@@ -3793,7 +3944,7 @@ function PrismuxOvernightFactoryShell({
               >
                 <div className="space-y-0.5">
                   <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-                    <ShieldCheckIcon className="size-3.5 text-success" />
+                    <ShieldCheckIcon className="size-3.5 text-success-foreground" />
                     安全保护：仅提交本地隔离 Worktree 分支
                   </div>
                   <div className="text-xs leading-relaxed text-muted-foreground">
@@ -3838,8 +3989,8 @@ function PrismuxOvernightFactoryShell({
     <OvernightSectionCard
       standalone={standalone}
       id="overnight-runs"
-      title="区块 D · 运行历史与实时日志"
-      icon={<Clock3Icon className="size-4 text-primary" />}
+      title="运行历史与实时日志"
+      icon={<Clock3Icon className="size-4" style={PMX_ACCENT_ICON_STYLE} />}
       headerAction={
         <div className="flex flex-wrap items-center gap-2">
           <span className="hidden text-xs text-muted-foreground tabular-nums sm:inline">
@@ -3898,7 +4049,9 @@ function PrismuxOvernightFactoryShell({
           <div
             className={cn(
               "space-y-2.5",
-              standalone && "xl:max-h-[calc(100dvh-18rem)] xl:overflow-y-auto xl:pr-1",
+              standalone
+                ? "xl:max-h-[calc(100dvh-18rem)] xl:overflow-y-auto xl:pr-1"
+                : "xl:max-h-[40rem] xl:overflow-y-auto xl:pr-1",
             )}
           >
             {runs.map((run) => {
@@ -4026,7 +4179,9 @@ function PrismuxOvernightFactoryShell({
 
                   {run.oracleSummary ? (
                     <div className="rounded-lg border border-border/60 bg-muted/35 px-2.5 py-1.5 text-xs leading-relaxed text-foreground/90">
-                      <span className="mr-1.5 font-medium text-primary">Oracle 摘要：</span>
+                      <span className="mr-1.5 font-medium" style={PMX_ACCENT_ICON_STYLE}>
+                        Oracle 摘要：
+                      </span>
                       {run.oracleSummary}
                     </div>
                   ) : null}
@@ -4116,7 +4271,10 @@ function PrismuxOvernightFactoryShell({
             {/* Unified Compact Full-Bleed Header Bar: aligned 1:1 with Tasks / Board / Scheduled Tasks */}
             <header className="flex flex-none flex-wrap items-center justify-between gap-2.5 border-b border-border/65 px-4 py-2.5">
               <div className="flex min-w-0 flex-wrap items-center gap-2.5">
-                <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary/14 text-primary">
+                <span
+                  className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg"
+                  style={PMX_ACCENT_BADGE_STYLE}
+                >
                   <MoonStarIcon className="size-4" aria-hidden="true" />
                 </span>
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -4198,7 +4356,7 @@ function PrismuxOvernightFactoryShell({
               </div>
             </header>
 
-            {/* Full-Bleed Edge-to-Edge Body (no narrow centered max-w-5xl container) */}
+            {/* Full-Bleed Edge-to-Edge Body (Overnight Factory FIRST, Mail Channel full-width below) */}
             <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-4 scrollbar-gutter-both">
               <div className="flex w-full min-w-0 flex-col gap-4">
                 {alertBanners}
@@ -4209,13 +4367,16 @@ function PrismuxOvernightFactoryShell({
                   className="grid w-full min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-12"
                 >
                   <div className="flex min-w-0 flex-col gap-4 xl:col-span-7">
-                    {mailBindingSection}
                     {taskWorkbenchSection}
+                  </div>
+                  <div className="flex min-w-0 flex-col gap-4 xl:col-span-5">
+                    {runsHistorySection}
                     {strategySection}
                   </div>
-                  <div className="flex min-w-0 flex-col gap-4 xl:sticky xl:top-0 xl:col-span-5">
-                    {runsHistorySection}
-                  </div>
+                </div>
+
+                <div data-testid="overnight-mail-band" className="w-full min-w-0">
+                  {mailBindingSection}
                 </div>
               </div>
             </div>
@@ -4226,7 +4387,7 @@ function PrismuxOvernightFactoryShell({
   }
 
   return (
-    <SettingsPageContainer width="full">
+    <SettingsPageContainer width="full" className="gap-5">
       {/* Top Status Banner */}
       <div
         id="prismux-overnight-factory"
@@ -4235,7 +4396,10 @@ function PrismuxOvernightFactoryShell({
         className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-border/80 bg-card/75 px-4 py-3"
       >
         <div className="flex flex-wrap items-center gap-2">
-          <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary/14 text-primary">
+          <span
+            className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg"
+            style={PMX_ACCENT_BADGE_STYLE}
+          >
             <MoonStarIcon className="size-4" aria-hidden="true" />
           </span>
           <span className="text-sm font-semibold tracking-tight text-foreground">
@@ -4278,10 +4442,21 @@ function PrismuxOvernightFactoryShell({
 
       {alertBanners}
       {kpiStrip}
-      {mailBindingSection}
-      {taskWorkbenchSection}
-      {strategySection}
-      {runsHistorySection}
+
+      <div
+        data-testid="overnight-workbench-grid"
+        className="grid w-full min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-12"
+      >
+        <div className="flex min-w-0 flex-col gap-4 xl:col-span-7">{taskWorkbenchSection}</div>
+        <div className="flex min-w-0 flex-col gap-4 xl:col-span-5">
+          {runsHistorySection}
+          {strategySection}
+        </div>
+      </div>
+
+      <div data-testid="overnight-mail-band" className="w-full min-w-0">
+        {mailBindingSection}
+      </div>
     </SettingsPageContainer>
   );
 }
@@ -4298,6 +4473,7 @@ export function PrismuxOvernightFactorySettingsPage({
   initialSnapshotOverride,
   initialRunsOverride,
   initialTasksOverride,
+  initialMailSetupExpandedOverride,
   workspaceOptionsOverride,
   onOpenExternalUrl,
 }: PrismuxOvernightFactorySettingsPageProps = {}) {
@@ -4339,6 +4515,9 @@ export function PrismuxOvernightFactorySettingsPage({
       {...(initialSnapshotOverride !== undefined ? { initialSnapshotOverride } : {})}
       {...(initialRunsOverride !== undefined ? { initialRunsOverride } : {})}
       {...(initialTasksOverride !== undefined ? { initialTasksOverride } : {})}
+      {...(initialMailSetupExpandedOverride !== undefined
+        ? { initialMailSetupExpandedOverride }
+        : {})}
       workspaceOptions={workspaceOptions}
       onOpenExternalUrl={onOpenExternalUrl ?? defaultOpenExternalUrl}
     />

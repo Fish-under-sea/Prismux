@@ -42,10 +42,14 @@ import {
   formatOvernightExecutionStageLabel,
   formatOvernightRunStatusBadge,
   hydrateOvernightDraftFromSnapshot,
+  isAgentMailVerified,
   isMailChannelConfigured,
   parseAgentMailTestResponse,
   resolveDefaultTestRecipient,
+  resolveMailSectionViewMode,
+  shouldAutoCollapseAgentMailSetup,
   shouldDefaultExpandMailChannel,
+  toggleMailSectionState,
 } from "./overnightFactory.logic";
 import {
   PrismuxOvernightFactorySettingsPage,
@@ -545,5 +549,138 @@ describe("overnightFactory.logic — 6-card presets, NetEase 163/126 & Tencent A
       label: "已取消",
       variant: "secondary",
     });
+  });
+
+  it("auto-collapses verified Agent Mail setup into test-only view and preserves every state transition cleanly", () => {
+    const base = createDefaultOvernightDraft();
+
+    // 1. Uninstalled / unverified Agent Mail MUST NOT auto-collapse
+    const uninstalledAgentMail = applyOvernightMailPreset(base, "agent_mail");
+    expect(isAgentMailVerified(uninstalledAgentMail)).toBe(false);
+    expect(
+      shouldAutoCollapseAgentMailSetup({
+        draft: uninstalledAgentMail,
+        userExpandedSetup: false,
+      }),
+    ).toBe(false);
+    expect(
+      resolveMailSectionViewMode({
+        draft: uninstalledAgentMail,
+        mailExpanded: true,
+        userExpandedSetup: false,
+      }),
+    ).toBe("expanded_setup");
+
+    // 2. Installed CLI but NOT logged in yet MUST NOT auto-collapse
+    const installedUnlogged = {
+      ...uninstalledAgentMail,
+      agentMailCliInstalled: true,
+      agentMailVersion: "1.0.18",
+      agentMailLoggedIn: false,
+      agentMailConfigured: false,
+      agentMailAuthorizedEmail: null,
+      agentMailAddress: "",
+    };
+    expect(isAgentMailVerified(installedUnlogged)).toBe(false);
+    expect(
+      shouldAutoCollapseAgentMailSetup({
+        draft: installedUnlogged,
+        userExpandedSetup: false,
+      }),
+    ).toBe(false);
+
+    // 3. OAuth login in progress with pending URL MUST stay expanded so user can finish browser login
+    const oauthInProgress = {
+      ...installedUnlogged,
+      agentMailLoggedIn: true,
+      agentMailConfigured: true,
+      agentMailAuthorizedEmail: "fishundersea@agent.qq.com",
+      agentMailAddress: "fishundersea@agent.qq.com",
+      agentMailAuthInProgress: true,
+      agentMailPendingAuthUrl: "https://agent.qq.com/oauth/authorize?code=123",
+    };
+    expect(isAgentMailVerified(oauthInProgress)).toBe(false);
+    expect(
+      shouldAutoCollapseAgentMailSetup({
+        draft: oauthInProgress,
+        userExpandedSetup: false,
+      }),
+    ).toBe(false);
+
+    // 4. Verified & logged-in Agent Mail AUTOMATICALLY collapses onboarding when userExpandedSetup is false
+    const verifiedAgentMail = {
+      ...oauthInProgress,
+      agentMailAuthInProgress: false,
+      agentMailPendingAuthUrl: null,
+    };
+    expect(isAgentMailVerified(verifiedAgentMail)).toBe(true);
+    expect(
+      shouldAutoCollapseAgentMailSetup({
+        draft: verifiedAgentMail,
+        userExpandedSetup: false,
+      }),
+    ).toBe(true);
+    expect(
+      resolveMailSectionViewMode({
+        draft: verifiedAgentMail,
+        mailExpanded: true,
+        userExpandedSetup: false,
+      }),
+    ).toBe("agent_mail_verified_compact");
+    // Even if mailExpanded is false in embedded settings, verified Agent Mail shows the compact test bar
+    expect(
+      resolveMailSectionViewMode({
+        draft: verifiedAgentMail,
+        mailExpanded: false,
+        userExpandedSetup: false,
+      }),
+    ).toBe("agent_mail_verified_compact");
+
+    // 5. Clicking "展开配置 / 切换邮箱" expands full setup and keeps it expanded while editing
+    const afterExpand = toggleMailSectionState({
+      draft: verifiedAgentMail,
+      mailExpanded: true,
+      userExpandedSetup: false,
+    });
+    expect(afterExpand).toEqual({ mailExpanded: true, userExpandedSetup: true });
+    expect(
+      shouldAutoCollapseAgentMailSetup({
+        draft: verifiedAgentMail,
+        userExpandedSetup: afterExpand.userExpandedSetup,
+      }),
+    ).toBe(false);
+    expect(
+      resolveMailSectionViewMode({
+        draft: verifiedAgentMail,
+        mailExpanded: afterExpand.mailExpanded,
+        userExpandedSetup: afterExpand.userExpandedSetup,
+      }),
+    ).toBe("expanded_setup");
+
+    // 6. Switching to another provider while expanded stays expanded and never auto-collapses
+    const switchedToQq = applyOvernightMailPreset(verifiedAgentMail, "qq");
+    expect(isAgentMailVerified(switchedToQq)).toBe(false);
+    expect(
+      resolveMailSectionViewMode({
+        draft: switchedToQq,
+        mailExpanded: afterExpand.mailExpanded,
+        userExpandedSetup: afterExpand.userExpandedSetup,
+      }),
+    ).toBe("expanded_setup");
+
+    // 7. Clicking "收起配置" on verified Agent Mail returns cleanly to compact verified test bar
+    const afterCollapse = toggleMailSectionState({
+      draft: verifiedAgentMail,
+      mailExpanded: afterExpand.mailExpanded,
+      userExpandedSetup: afterExpand.userExpandedSetup,
+    });
+    expect(afterCollapse).toEqual({ mailExpanded: true, userExpandedSetup: false });
+    expect(
+      resolveMailSectionViewMode({
+        draft: verifiedAgentMail,
+        mailExpanded: afterCollapse.mailExpanded,
+        userExpandedSetup: afterCollapse.userExpandedSetup,
+      }),
+    ).toBe("agent_mail_verified_compact");
   });
 });
