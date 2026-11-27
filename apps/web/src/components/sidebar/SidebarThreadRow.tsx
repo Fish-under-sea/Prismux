@@ -46,14 +46,12 @@ import {
   ArchiveIcon,
   ArrowRightLeftIcon,
   CheckIcon,
-  ChevronDownIcon,
   ChevronRightIcon,
   CircleAlertIcon,
   CircleCheckIcon,
   CircleDashedIcon,
   CircleDotDashedIcon,
   ClockIcon,
-  CornerDownRightIcon,
   FolderGit2Icon,
   GitBranchIcon,
   MessageCircleQuestionIcon,
@@ -72,6 +70,7 @@ import {
   memo,
   useRef,
   useState,
+  type CSSProperties,
   type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
@@ -164,6 +163,23 @@ import {
   type SidebarThreadSplitDragPayload,
 } from "./sidebarWorkspaceGrouping";
 import { DelegatedSubthreadTree } from "./DelegatedSubthreadTree";
+import { isDelegatedChildThreadActive } from "./delegatedThreadTree.logic";
+
+const DELEGATED_PILL_EXPANDED_STYLE: CSSProperties = {
+  color: "var(--pmx-accent-text, var(--primary))",
+  backgroundColor: "var(--pmx-accent-soft, color-mix(in srgb, var(--primary) 13%, transparent))",
+  borderColor: "var(--pmx-accent-border, color-mix(in srgb, var(--primary) 34%, transparent))",
+};
+
+const DELEGATED_PILL_RUNNING_STYLE: CSSProperties = {
+  color: "var(--pmx-accent-text, var(--primary))",
+  backgroundColor: "var(--pmx-accent-soft, color-mix(in srgb, var(--primary) 16%, transparent))",
+  borderColor: "var(--pmx-accent-border, color-mix(in srgb, var(--primary) 42%, transparent))",
+};
+
+const DELEGATED_RUNNING_DOT_STYLE: CSSProperties = {
+  backgroundColor: "var(--pmx-accent, var(--primary))",
+};
 
 // The fields thread rows show. Provider status pushes refresh `checkedAt`,
 // status and auth on every provider; leaving those out keeps each
@@ -1609,47 +1625,103 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   const delegatedCount = delegatedChildren?.length ?? 0;
   const delegatedExpanded = Boolean(props.delegatedTreeExpanded);
   const delegatedHasRunning = Boolean(props.delegatedTreeHasRunning);
+  const delegatedRunningCount =
+    delegatedHasRunning && delegatedChildren !== undefined
+      ? delegatedChildren.reduce((count, child) => {
+          const childKey = scopedThreadKey(scopeThreadRef(child.environmentId, child.id));
+          return (
+            count +
+            (isDelegatedChildThreadActive(child, props.localLastVisitedAtById?.[childKey]) ? 1 : 0)
+          );
+        }, 0)
+      : 0;
+  const delegatedToggleLabel =
+    delegatedHasRunning && delegatedRunningCount > 0
+      ? delegatedExpanded
+        ? gt(
+            "{count, plural, one {Collapse {count} delegated agent ({running} running)} other {Collapse {count} delegated agents ({running} running)}}",
+            { count: delegatedCount, running: delegatedRunningCount },
+          )
+        : gt(
+            "{count, plural, one {Expand {count} delegated agent ({running} running)} other {Expand {count} delegated agents ({running} running)}}",
+            { count: delegatedCount, running: delegatedRunningCount },
+          )
+      : delegatedHasRunning
+        ? delegatedExpanded
+          ? gt(
+              "{count, plural, one {Collapse {count} delegated agent (running)} other {Collapse {count} delegated agents (running)}}",
+              { count: delegatedCount },
+            )
+          : gt(
+              "{count, plural, one {Expand {count} delegated agent (running)} other {Expand {count} delegated agents (running)}}",
+              { count: delegatedCount },
+            )
+        : delegatedExpanded
+          ? gt(
+              "{count, plural, one {Collapse {count} delegated agent} other {Collapse {count} delegated agents}}",
+              { count: delegatedCount },
+            )
+          : gt(
+              "{count, plural, one {Expand {count} delegated agent} other {Expand {count} delegated agents}}",
+              { count: delegatedCount },
+            );
+  const delegatedPillStyle = delegatedHasRunning
+    ? DELEGATED_PILL_RUNNING_STYLE
+    : delegatedExpanded
+      ? DELEGATED_PILL_EXPANDED_STYLE
+      : undefined;
   const delegatedTreeBadge =
     delegatedCount > 0 ? (
-      <button
-        type="button"
-        data-testid="sidebar-delegated-tree-toggle"
-        data-delegated-expanded={delegatedExpanded ? "true" : "false"}
-        data-delegated-running={delegatedHasRunning ? "1" : "0"}
-        aria-expanded={delegatedExpanded}
-        aria-label={
-          delegatedExpanded
-            ? gt(
-                "{count, plural, one {Collapse {count} delegated agent} other {Collapse {count} delegated agents}}",
-                { count: delegatedCount },
-              )
-            : gt(
-                "{count, plural, one {Expand {count} delegated agent} other {Expand {count} delegated agents}}",
-                { count: delegatedCount },
-              )
-        }
-        onPointerDown={(event) => event.stopPropagation()}
-        onKeyDown={stopActivationKeyPropagation}
-        onClick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          props.onToggleDelegatedTree?.(threadKey, delegatedHasRunning);
-        }}
-        className={cn(
-          "inline-flex h-4 shrink-0 cursor-pointer items-center gap-0.5 rounded px-1 font-mono text-3xs leading-none font-medium tabular-nums outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
-          delegatedHasRunning
-            ? "bg-info/15 text-info-foreground ring-1 ring-inset ring-info/35 hover:bg-info/24"
-            : "bg-sidebar-foreground/[0.07] text-sidebar-muted-foreground hover:bg-sidebar-foreground/[0.14] hover:text-sidebar-foreground",
-        )}
-      >
-        <CornerDownRightIcon aria-hidden className="size-2.5 shrink-0 opacity-80" />
-        <span>{delegatedCount}</span>
-        {delegatedExpanded ? (
-          <ChevronDownIcon aria-hidden className="size-2.5 shrink-0 opacity-75" />
-        ) : (
-          <ChevronRightIcon aria-hidden className="size-2.5 shrink-0 opacity-75" />
-        )}
-      </button>
+      <Tooltip disabled={sortable?.isDragging}>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              data-testid="sidebar-delegated-tree-toggle"
+              data-delegated-expanded={delegatedExpanded ? "true" : "false"}
+              data-delegated-running={delegatedHasRunning ? "1" : "0"}
+              aria-expanded={delegatedExpanded}
+              aria-label={delegatedToggleLabel}
+              onPointerDown={(event) => event.stopPropagation()}
+              onKeyDown={stopActivationKeyPropagation}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                props.onToggleDelegatedTree?.(threadKey, delegatedHasRunning);
+              }}
+              style={delegatedPillStyle}
+              className={cn(
+                "inline-flex h-[18px] shrink-0 cursor-pointer select-none items-center gap-1 rounded-full border px-1.5 font-mono text-3xs leading-none font-medium tabular-nums outline-none transition-[background-color,border-color,color,filter,box-shadow] duration-150 motion-reduce:transition-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
+                delegatedHasRunning
+                  ? "font-semibold hover:brightness-105 [[data-pmx-glass='1']_&]:shadow-xs"
+                  : delegatedExpanded
+                    ? "hover:brightness-105 [[data-pmx-glass='1']_&]:shadow-2xs"
+                    : "border-sidebar-border/55 bg-sidebar-foreground/[0.06] text-sidebar-muted-foreground hover:border-sidebar-border/80 hover:bg-sidebar-foreground/[0.12] hover:text-sidebar-foreground [[data-pmx-glass='1']_&]:border-sidebar-foreground/[0.16] [[data-pmx-glass='1']_&]:bg-sidebar-foreground/[0.08] [[data-pmx-glass='1']_&]:hover:border-sidebar-foreground/[0.26] [[data-pmx-glass='1']_&]:hover:bg-sidebar-foreground/[0.15]",
+              )}
+            />
+          }
+        >
+          {delegatedHasRunning ? (
+            <span
+              aria-hidden
+              data-delegated-running-dot="true"
+              className="size-1.5 shrink-0 animate-pulse rounded-full motion-reduce:animate-none"
+              style={DELEGATED_RUNNING_DOT_STYLE}
+            />
+          ) : null}
+          <GitBranchIcon aria-hidden className="size-2.5 shrink-0 opacity-85" />
+          <span data-delegated-count="true">{delegatedCount}</span>
+          <ChevronRightIcon
+            aria-hidden
+            data-delegated-chevron="true"
+            className={cn(
+              "size-2.5 shrink-0 opacity-75 transition-transform duration-150 motion-reduce:transition-none",
+              delegatedExpanded && "rotate-90",
+            )}
+          />
+        </TooltipTrigger>
+        <TooltipPopup side="top">{delegatedToggleLabel}</TooltipPopup>
+      </Tooltip>
     ) : null;
 
   const delegatedTreeNode =

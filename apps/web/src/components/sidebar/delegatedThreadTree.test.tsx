@@ -744,6 +744,215 @@ describe("DelegatedSubthreadTree & SidebarThreadRow SSR rendering", () => {
     expect(expandedHtml).toContain("Fix unit test");
   });
 
+  it("renders refined dynamic-accent full-pill toggle with rotating chevron and breathing dot across idle-collapsed, idle-expanded, and running states", () => {
+    const parentId = ThreadId.make("parent-pill");
+    const parentThread = makeShell({
+      id: parentId,
+      title: "Polish delegated pill",
+      latestRunId: RunId.make("run-pill-p"),
+      status: "running",
+    });
+    const childRunning = makeShell({
+      id: ThreadId.make("child-pill-running"),
+      title: "Active subagent",
+      creationSource: "mcp",
+      latestRunId: RunId.make("run-pill-c1"),
+      status: "running",
+      lineage: {
+        rootThreadId: parentId,
+        parentThreadId: parentId,
+        relationshipToParent: "subagent",
+      },
+    });
+    const childDone = makeShell({
+      id: ThreadId.make("child-pill-done"),
+      title: "Completed subagent",
+      creationSource: "mcp",
+      latestRunId: RunId.make("run-pill-c2"),
+      status: "completed",
+      lineage: {
+        rootThreadId: parentId,
+        parentThreadId: parentId,
+        relationshipToParent: "subagent",
+      },
+    });
+    const childDoneSecond = makeShell({
+      id: ThreadId.make("child-pill-done-2"),
+      title: "Second completed subagent",
+      creationSource: "mcp",
+      latestRunId: RunId.make("run-pill-c3"),
+      status: "completed",
+      lineage: {
+        rootThreadId: parentId,
+        parentThreadId: parentId,
+        relationshipToParent: "subagent",
+      },
+    });
+
+    const extractToggleMarkup = (html: string): string => {
+      const match = html.match(
+        /<button\b[^>]*data-testid="sidebar-delegated-tree-toggle"[^>]*>[\s\S]*?<\/button>/,
+      );
+      expect(match).not.toBeNull();
+      return match![0];
+    };
+
+    const extractChevronClass = (toggleHtml: string): string => {
+      const match = toggleHtml.match(
+        /<svg\b[^>]*data-delegated-chevron="true"[^>]*class="([^"]*)"|<svg\b[^>]*class="([^"]*)"[^>]*data-delegated-chevron="true"/,
+      );
+      expect(match).not.toBeNull();
+      return match![1] ?? match![2] ?? "";
+    };
+
+    const baseRowProps = {
+      thread: parentThread,
+      variant: "orca-compact" as const,
+      inWorkspaceCard: true,
+      variantAction: "settle" as const,
+      settlementSupported: true,
+      snoozeSupported: true,
+      pinningSupported: true,
+      isPinned: false,
+      dropVerb: null,
+      dragOverPinned: false,
+      sweepAction: null,
+      snoozeWakeLabelText: null,
+      wokeAt: null,
+      isActive: true,
+      isRouteThread: true,
+      readOpensPullRequestsInRightPanel: () => true,
+      jumpLabel: null,
+      environmentLabel: "Local",
+      environmentMachine: "desktop" as const,
+      project: null,
+      projectDisplayName: "Prismux",
+      providerEntryByInstanceId: providerMap,
+      timestampFormat: "24-hour" as const,
+      onThreadClick: vi.fn(),
+      onThreadActivate: vi.fn(),
+      onStartRename: vi.fn(),
+      onRenameTitleChange: vi.fn(),
+      onCommitRename: vi.fn(),
+      onCancelRename: vi.fn(),
+      isRenaming: false,
+      renamingTitle: "",
+      onContextMenu: vi.fn(),
+      onSettle: vi.fn(),
+      onArchive: vi.fn(),
+      onDelete: vi.fn(),
+      onActionSweepStart: vi.fn(),
+      onUnsettle: vi.fn(),
+      onSnooze: vi.fn(),
+      onUnsnooze: vi.fn(),
+      onUnpin: vi.fn(),
+      onAcknowledgeWoke: vi.fn(),
+      delegatedChildren: [childDone, childRunning],
+      onToggleDelegatedTree: vi.fn(),
+    };
+
+    // 1. Idle collapsed: sleek full-pill translucent surface, single non-rotated chevron, zero hardcoded info color or nested backdrop-filter
+    const idleCollapsedToggle = extractToggleMarkup(
+      wrap(
+        <ul>
+          <SidebarThreadRow
+            {...baseRowProps}
+            delegatedChildren={[childDone, childDoneSecond]}
+            delegatedTreeExpanded={false}
+            delegatedTreeHasRunning={false}
+          />
+        </ul>,
+        "en",
+      ),
+    );
+    expect(idleCollapsedToggle).toContain("rounded-full");
+    expect(idleCollapsedToggle).toContain("h-[18px]");
+    expect(idleCollapsedToggle).toContain("px-1.5");
+    expect(idleCollapsedToggle).toContain("gap-1");
+    expect(idleCollapsedToggle).toContain("tabular-nums");
+    expect(idleCollapsedToggle).toContain("bg-sidebar-foreground/[0.06]");
+    expect(idleCollapsedToggle).toContain("border-sidebar-border/55");
+    expect(idleCollapsedToggle).toContain("text-sidebar-muted-foreground");
+    expect(idleCollapsedToggle).toContain("[[data-pmx-glass=&#x27;1&#x27;]_&amp;]:");
+    expect(idleCollapsedToggle).not.toContain("backdrop-blur");
+    expect(idleCollapsedToggle).not.toContain("backdrop-filter");
+    expect(idleCollapsedToggle).not.toContain("bg-info");
+    expect(idleCollapsedToggle).not.toContain("data-delegated-running-dot");
+    expect(idleCollapsedToggle).toContain('data-delegated-expanded="false"');
+    expect(idleCollapsedToggle).toContain('data-delegated-running="0"');
+    expect(idleCollapsedToggle).toContain('aria-label="Expand 2 delegated agents"');
+    expect(idleCollapsedToggle).toContain('data-delegated-count="true">2<');
+    const idleCollapsedChevronClass = extractChevronClass(idleCollapsedToggle);
+    expect(idleCollapsedChevronClass).toContain("transition-transform");
+    expect(idleCollapsedChevronClass).toContain("duration-150");
+    expect(idleCollapsedChevronClass).toContain("motion-reduce:transition-none");
+    expect(idleCollapsedChevronClass).not.toContain("rotate-90");
+
+    // 2. Idle expanded: dynamic Prismux accent CSS variables + smoothly rotated 90deg chevron
+    const idleExpandedToggle = extractToggleMarkup(
+      wrap(
+        <ul>
+          <SidebarThreadRow
+            {...baseRowProps}
+            delegatedChildren={[childDone, childDoneSecond]}
+            delegatedTreeExpanded
+            delegatedTreeHasRunning={false}
+          />
+        </ul>,
+        "en",
+      ),
+    );
+    expect(idleExpandedToggle).toContain("var(--pmx-accent-text, var(--primary))");
+    expect(idleExpandedToggle).toContain("var(--pmx-accent-soft");
+    expect(idleExpandedToggle).toContain("var(--pmx-accent-border");
+    expect(idleExpandedToggle).not.toContain("bg-info");
+    expect(idleExpandedToggle).not.toContain("backdrop-blur");
+    expect(idleExpandedToggle).not.toContain("data-delegated-running-dot");
+    expect(idleExpandedToggle).toContain('data-delegated-expanded="true"');
+    expect(idleExpandedToggle).toContain('aria-label="Collapse 2 delegated agents"');
+    const idleExpandedChevronClass = extractChevronClass(idleExpandedToggle);
+    expect(idleExpandedChevronClass).toContain("rotate-90");
+    expect(idleExpandedChevronClass).toContain("motion-reduce:transition-none");
+
+    // 3. Running expanded: dynamic accent pill + animated breathing dot with motion-reduce fallback + running count status
+    const runningExpandedToggle = extractToggleMarkup(
+      wrap(
+        <ul>
+          <SidebarThreadRow {...baseRowProps} delegatedTreeExpanded delegatedTreeHasRunning />
+        </ul>,
+        "en",
+      ),
+    );
+    expect(runningExpandedToggle).toContain("var(--pmx-accent-text, var(--primary))");
+    expect(runningExpandedToggle).toContain("var(--pmx-accent-soft");
+    expect(runningExpandedToggle).toContain("var(--pmx-accent-border");
+    expect(runningExpandedToggle).toContain('data-delegated-running-dot="true"');
+    expect(runningExpandedToggle).toContain("animate-pulse");
+    expect(runningExpandedToggle).toContain("motion-reduce:animate-none");
+    expect(runningExpandedToggle).toContain("var(--pmx-accent, var(--primary))");
+    expect(runningExpandedToggle).toContain('data-delegated-running="1"');
+    expect(runningExpandedToggle).toContain('aria-label="Collapse 2 delegated agents (1 running)"');
+    expect(runningExpandedToggle).not.toContain("bg-info");
+    expect(extractChevronClass(runningExpandedToggle)).toContain("rotate-90");
+
+    // 4. Running manually collapsed: retains breathing dot & running count, un-rotates chevron
+    const runningCollapsedToggle = extractToggleMarkup(
+      wrap(
+        <ul>
+          <SidebarThreadRow
+            {...baseRowProps}
+            delegatedTreeExpanded={false}
+            delegatedTreeHasRunning
+          />
+        </ul>,
+        "en",
+      ),
+    );
+    expect(runningCollapsedToggle).toContain('data-delegated-running-dot="true"');
+    expect(runningCollapsedToggle).toContain('aria-label="Expand 2 delegated agents (1 running)"');
+    expect(extractChevronClass(runningCollapsedToggle)).not.toContain("rotate-90");
+  });
+
   it("renders DeepSeek whale SVG (never [AR]) for local acpRegistry DSH subagents with custom display names, command paths, or opaque UUID instance IDs", () => {
     const parentId = ThreadId.make("parent-dsh");
     const parentKey = scopedThreadKey(scopeThreadRef(ENV_LOCAL, parentId));

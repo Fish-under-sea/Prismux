@@ -306,7 +306,7 @@ export const TurnUsagePill = memo(function TurnUsagePill({
         <span className="pmx-turn-usage-label">{copy.pillPrefix}</span>
         <span className="font-mono">{`${compactTokens} tok`}</span>
       </PopoverTrigger>
-      <PopoverPopup side="top" align="end" sideOffset={8} padding="none">
+      <PopoverPopup side="top" align="start" sideOffset={8} collisionPadding={12} padding="none">
         <div data-turn-usage-popover="true" className="px-4 py-3.5 text-xs leading-4 tabular-nums">
           <div className="flex items-center justify-between gap-3 pb-2.5">
             <span className="font-medium text-foreground">{copy.popoverHeader}</span>
