@@ -52,7 +52,7 @@ function readBundledManifestVersion(fallback: string): string {
 
 export const manifest: PluginManifest = {
   id: "qq",
-  version: readBundledManifestVersion("0.2.4-rc.3"),
+  version: readBundledManifestVersion("0.2.4-rc.4"),
   realms: ["daemon", "ui"],
   permissions: [
     "network:outbound",
