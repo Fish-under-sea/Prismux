@@ -5018,6 +5018,11 @@ it.layer(
           hasExistingCache: false,
         }),
       );
+      assert.isTrue(
+        ProviderRegistry.shouldPersistProviderSnapshot(disabledUninstalled, {
+          hasExistingCache: true,
+        }),
+      );
       assert.isFalse(
         ProviderRegistry.shouldPersistProviderSnapshot(enabledMissingCli, {
           hasExistingCache: false,
@@ -5129,11 +5134,26 @@ it.layer(
             message: "Antigravity ACP runtime is not installed.",
           };
 
+          const previouslyCachedDisabledUninstalled: ServerProvider = {
+            instanceId: ProviderInstanceId.make("cursor"),
+            driver: ProviderDriverKind.make("cursor"),
+            enabled: false,
+            installed: false,
+            version: null,
+            status: "disabled",
+            auth: { status: "unknown" },
+            checkedAt: "2026-11-27T00:01:00.000Z",
+            models: [],
+            slashCommands: [],
+            skills: [],
+          };
+
           const instances = [
             makeStaticInstance(disabledPi),
             makeStaticInstance(uninstalledCodex),
             makeStaticInstance(installedOpenCode),
             makeStaticInstance(previouslyCachedUninstalled),
+            makeStaticInstance(previouslyCachedDisabledUninstalled),
           ];
           const layerInstanceRegistry = Layer.succeed(
             ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -5164,10 +5184,24 @@ it.layer(
             cacheDir: config.providerStatusCacheDir,
             instanceId: previouslyCachedUninstalled.instanceId,
           });
+          const cursorCachePath = yield* resolveProviderStatusCachePath({
+            cacheDir: config.providerStatusCacheDir,
+            instanceId: previouslyCachedDisabledUninstalled.instanceId,
+          });
           yield* writeProviderStatusCache({
             filePath: antigravityCachePath,
             provider: {
               ...previouslyCachedUninstalled,
+              installed: true,
+              status: "ready",
+              checkedAt: "2026-11-27T00:00:00.000Z",
+            },
+          });
+          yield* writeProviderStatusCache({
+            filePath: cursorCachePath,
+            provider: {
+              ...previouslyCachedDisabledUninstalled,
+              enabled: true,
               installed: true,
               status: "ready",
               checkedAt: "2026-11-27T00:00:00.000Z",
@@ -5188,6 +5222,9 @@ it.layer(
               (yield* readProviderStatusCache(antigravityCachePath))?.installed,
               false,
             );
+            const refreshedCursor = yield* readProviderStatusCache(cursorCachePath);
+            assert.strictEqual(refreshedCursor?.enabled, false);
+            assert.strictEqual(refreshedCursor?.installed, false);
           }).pipe(
             Effect.provide(
               ProviderRegistry.layer.pipe(

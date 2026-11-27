@@ -444,10 +444,13 @@ export const shouldPersistProviderSnapshot = (
   provider: ServerProvider,
   options: { readonly hasExistingCache: boolean },
 ): boolean => {
+  if (options.hasExistingCache) {
+    return true;
+  }
   if (!provider.enabled && !provider.installed) {
     return false;
   }
-  if (provider.installed || options.hasExistingCache || provider.modelsRetained === true) {
+  if (provider.installed || provider.modelsRetained === true) {
     return true;
   }
   return provider.auth.status === "authenticated" || provider.status === "ready";

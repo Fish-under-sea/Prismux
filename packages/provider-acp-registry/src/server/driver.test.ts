@@ -2192,4 +2192,152 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
         expect(resolvedCwds.includes(host.paths.cwd)).toBe(false);
       }),
   );
+
+  it.effect(
+    "unlocks local ACP probe via auth.refreshMethods and forwards auth.start stopSessions and methodId",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const host = yield* ProviderHost.ProviderHost;
+        const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "acp-auth-unlock-" });
+        const fakeAgentScript = path.join(root, "fake-auth-agent.mjs");
+        const authLogPath = path.join(root, "auth-log.json");
+        const resolvedCwds: Array<string> = [];
+        const instanceId = ProviderInstanceId.make("local-auth-unlock");
+        const expectedProbeCwd = resolveAcpRegistryProbeCwd(
+          path,
+          host.paths.providerStatusCacheDir,
+          instanceId,
+        );
+        yield* fileSystem
+          .remove(expectedProbeCwd, { recursive: true, force: true })
+          .pipe(Effect.ignore);
+        yield* fileSystem.writeFileString(authLogPath, JSON.stringify([]));
+        yield* fileSystem.writeFileString(
+          fakeAgentScript,
+          `import * as fs from "node:fs";
+import * as readline from "node:readline";
+const logPath = ${JSON.stringify(authLogPath)};
+const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  if (!line.trim()) return;
+  const { id, method, params } = JSON.parse(line);
+  if (id === undefined) return;
+  if (method === "initialize") {
+    send({
+      id,
+      result: {
+        protocolVersion: 1,
+        agentCapabilities: { sessionCapabilities: { close: {} } },
+        authMethods: [
+          { id: "primary-login", name: "Primary Login", type: "agent" },
+          { id: "secondary-login", name: "Secondary Login", type: "agent" },
+        ],
+        agentInfo: { name: "local-auth-agent", version: "1.0.0" },
+      },
+    });
+  } else if (method === "authenticate") {
+    const seen = JSON.parse(fs.readFileSync(logPath, "utf8"));
+    seen.push(params?.methodId ?? null);
+    fs.writeFileSync(logPath, JSON.stringify(seen));
+    send({ id, result: {} });
+  } else if (method === "session/new") {
+    send({
+      id,
+      result: {
+        sessionId: "auth-session-1",
+        models: {
+          currentModelId: "local-model-1",
+          availableModels: [{ modelId: "local-model-1", name: "Local Model 1" }],
+        },
+      },
+    });
+  } else {
+    send({ id, result: {} });
+  }
+});
+`,
+        );
+
+        const instance = yield* AcpRegistryDriver.create({
+          instanceId,
+          displayName: "Local Auth Agent",
+          enabled: true,
+          environment: [],
+          config: decodeSettings({
+            source: "local",
+            commandPath: process.execPath,
+            commandArgs: [fakeAgentScript],
+          }),
+        }).pipe(
+          Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
+            ...catalogWithInspection({
+              status: "ready",
+              agentId: "local-auth-agent",
+              version: null,
+              distribution: "local",
+            }),
+            resolve: (_settings, cwd) =>
+              Effect.sync(() => {
+                resolvedCwds.push(cwd);
+                return {
+                  distribution: "local" as const,
+                  spawn: { command: process.execPath, args: [fakeAgentScript] },
+                };
+              }),
+          }),
+        );
+
+        const initialReady = yield* instance.snapshot.streamChanges.pipe(
+          Stream.filter((snapshot) => snapshot.installed),
+          Stream.runHead,
+        );
+        expect(Option.isSome(initialReady)).toBe(true);
+        yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
+        expect(resolvedCwds).toEqual([]);
+        expect(yield* fileSystem.exists(expectedProbeCwd)).toBe(false);
+
+        // Calling auth.refreshMethods directly (before snapshot.refresh) unlocks real ACP probing.
+        expect(instance.auth?.refreshMethods).toBeDefined();
+        yield* instance.auth!.refreshMethods!;
+        const discoveredState = Option.getOrThrow(
+          yield* instance.auth!.subscribe("owner-1").pipe(
+            Stream.filter((state) => (state.methods?.length ?? 0) === 2),
+            Stream.runHead,
+          ),
+        );
+        expect(discoveredState.methods?.map((method) => method.id)).toEqual([
+          "primary-login",
+          "secondary-login",
+        ]);
+        expect(resolvedCwds.length).toBeGreaterThanOrEqual(1);
+        expect(resolvedCwds.every((cwd) => cwd === expectedProbeCwd)).toBe(true);
+        expect(resolvedCwds.includes(host.paths.cwd)).toBe(false);
+
+        // Calling auth.start forwards stopSessions and selected methodId instead of dropping trailing args.
+        let stoppedSessions = 0;
+        const succeeded = yield* instance.auth!.subscribe("owner-1").pipe(
+          Stream.filter((state) => state.phase === "succeeded"),
+          Stream.runHead,
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        yield* instance.auth!.start(
+          "owner-1",
+          Effect.sync(() => {
+            stoppedSessions += 1;
+          }),
+          "secondary-login",
+          "https://return.example/callback",
+          "client",
+        );
+        const finalState = Option.getOrThrow(yield* Fiber.join(succeeded));
+        expect(finalState.phase).toBe("succeeded");
+        expect(stoppedSessions).toBe(1);
+        expect(JSON.parse(yield* fileSystem.readFileString(authLogPath))).toEqual([
+          "secondary-login",
+        ]);
+      }),
+  );
 });

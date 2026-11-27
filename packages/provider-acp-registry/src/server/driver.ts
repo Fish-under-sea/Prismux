@@ -1718,13 +1718,23 @@ export const AcpRegistryDriver: ProviderDriver<
     );
     const auth = {
       ...controller,
-      start: (input: Parameters<typeof controller.start>[0]) =>
-        Ref.set(backgroundProbeEnabledRef, true).pipe(Effect.andThen(controller.start(input))),
-      logout: (stopSessions: Parameters<typeof controller.logout>[0]) =>
+      start: (...args: Parameters<typeof controller.start>) =>
         Ref.set(backgroundProbeEnabledRef, true).pipe(
-          Effect.andThen(controller.logout(stopSessions)),
+          Effect.andThen(() => controller.start(...args)),
         ),
-      invalidate: (controller.invalidate ?? Effect.void).pipe(
+      logout: (...args: Parameters<typeof controller.logout>) =>
+        Ref.set(backgroundProbeEnabledRef, true).pipe(
+          Effect.andThen(() => controller.logout(...args)),
+        ),
+      ...(controller.refreshMethods
+        ? {
+            refreshMethods: Ref.set(backgroundProbeEnabledRef, true).pipe(
+              Effect.andThen(controller.refreshMethods),
+            ),
+          }
+        : {}),
+      invalidate: Ref.set(backgroundProbeEnabledRef, true).pipe(
+        Effect.andThen(controller.invalidate ?? Effect.void),
         Effect.andThen(confirmedAuthentication.set(false)),
         Effect.andThen(clearLiveState),
         Effect.andThen(liveSnapshotSemaphore.withPermit(invalidateEnrichmentCache)),
