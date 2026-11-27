@@ -1023,6 +1023,17 @@ export function useComposerSend(input: ComposerSendInput) {
       environmentContexts: composerEnvironmentContextsSnapshot,
       messageText: messageTextForSend,
     } = sendSnapshot;
+    const hasLiveServerRun =
+      isServerThread &&
+      (phase === "running" || phase === "connecting" || activeThread.runtime?.activeRunId != null);
+    const hasVisibleApprovalRedirect =
+      (sendCtx.shownPendingApprovalIds.length ?? 0) > 0 || approvalFeedbackTarget !== undefined;
+    // Never let `"auto"` reach the server while a run is live (unless redirecting an approval):
+    // server CommandPolicy upgrades `deliveryIntent: "auto"` to `steer_active`.
+    const safeDispatchMode: ComposerDispatchMode =
+      dispatchMode === "auto" && hasLiveServerRun && !hasVisibleApprovalRedirect
+        ? "queue"
+        : dispatchMode;
     const {
       missingWorktreeBaseBranch,
       baseBranchForWorktree,
@@ -1043,7 +1054,7 @@ export function useComposerSend(input: ComposerSendInput) {
       resumeCompactionTokens,
       keepFullHistory,
       phase,
-      dispatchMode,
+      dispatchMode: safeDispatchMode,
       freshContext: freshArm !== undefined,
     });
     if (missingWorktreeBaseBranch) {
@@ -1393,7 +1404,8 @@ export function useComposerSend(input: ComposerSendInput) {
       return;
     }
     const optimisticQueueBehindActiveRun =
-      shouldQueueBehindActiveRun || (phase === "connecting" && turnDispatchMode === "queue");
+      shouldQueueBehindActiveRun ||
+      ((phase === "connecting" || hasLiveServerRun) && turnDispatchMode === "queue");
     const optimisticAttachments = optimisticMessageAttachments(composerAttachmentsSnapshot);
     if (!optimisticQueueBehindActiveRun) {
       anchorNewTurn(
@@ -1413,7 +1425,7 @@ export function useComposerSend(input: ComposerSendInput) {
       streaming: false,
       ...(optimisticQueueBehindActiveRun
         ? { inputIntent: "queued_turn" as const }
-        : phase === "running" && dispatchMode === "steer"
+        : hasLiveServerRun && safeDispatchMode === "steer"
           ? { inputIntent: "steer" as const }
           : {}),
     };

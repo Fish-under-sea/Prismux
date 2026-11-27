@@ -1,9 +1,11 @@
+import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@prismux/client-runtime/environment";
+import { parseThreadKey, threadKey } from "@prismux/client-runtime/state/entities";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@prismux/client-runtime/state/runtime";
-import { deriveThreadQueueWorkflowState } from "@prismux/client-runtime/state/thread-workflows";
+import type { ThreadQueueWorkflowState } from "@prismux/client-runtime/state/thread-workflows";
 import { assistantCitationsToPlainText } from "@prismux/core-shared/assistantCitations";
 import { isSlashCommand } from "@prismux/core-shared/composerTrigger";
 import {
@@ -21,20 +23,21 @@ import {
 import { resolveUserMessagePresentation } from "@prismux/client-runtime/user-message";
 import { Link } from "@tanstack/react-router";
 import {
-  ArrowUpIcon,
+  ArrowRightIcon,
   CalendarClockIcon,
   ChevronDownIcon,
   Clock3Icon,
-  ListOrderedIcon,
   MessagesSquareIcon,
   PencilIcon,
   PlayIcon,
   Trash2Icon,
 } from "lucide-react";
 import * as DateTime from "effect/DateTime";
-import { msg, T, useGT, useLocale, useMessages } from "gt-react";
+import { Atom } from "effect/reactivity";
+import { msg, T, useGT, useLocale } from "gt-react";
 import { thrownErrorMessage } from "@prismux/client-runtime/errors";
 import {
+  memo,
   useId,
   useImperativeHandle,
   useRef,
@@ -45,14 +48,13 @@ import {
 } from "react";
 
 import { useAssetUrls } from "../../assets/assetUrls";
-import { threadEnvironment } from "../../state/threads";
-import { useQuietThreadProjection, useQuietThreadShell } from "../../state/entities";
+import { environmentThreadDetails, threadEnvironment } from "../../state/threads";
+import { useQuietThreadShell } from "../../state/entities";
 import { useEnvironment } from "../../state/environments";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { isImageAttachment, type ChatImageAttachment, type ChatMessage } from "../../types";
 import { cn } from "~/lib/utils";
 import { Button, InlineButton } from "../ui/button";
-import { Kbd } from "../ui/kbd";
 import { toastManager } from "../ui/toast";
 import { m } from "../../i18n/messages";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -72,6 +74,33 @@ export interface EditQueuedRunRequest {
 // A longer queue shows its first messages and a button that shows the rest.
 const QUEUE_VISIBLE_ROWS = 3;
 
+const EMPTY_ASSET_RESOURCES: ReadonlyArray<{
+  readonly _tag: "attachment";
+  readonly attachmentId: string;
+}> = Object.freeze([]);
+const EMPTY_MESSAGE_IDS: ReadonlyArray<MessageId> = Object.freeze([]);
+const EMPTY_MESSAGE_IDS_ATOM = Atom.make(EMPTY_MESSAGE_IDS).pipe(
+  Atom.withLabel("queued-runs-message-ids:empty"),
+);
+
+// Only updates when `projection.messages` changes identity — ignores streaming text and turn items.
+const threadMessageIdsAtomFamily = Atom.family((key: string) => {
+  const ref = parseThreadKey(key);
+  let previousMessages: ReadonlyArray<{ readonly id: MessageId }> | null = null;
+  let ids: ReadonlyArray<MessageId> = EMPTY_MESSAGE_IDS;
+  return Atom.make((get) => {
+    const messages = get(environmentThreadDetails.threadAtom(ref))?.projection.messages ?? null;
+    if (messages === null) {
+      previousMessages = null;
+      ids = EMPTY_MESSAGE_IDS;
+    } else if (messages !== previousMessages) {
+      previousMessages = messages;
+      ids = messages.map((message) => message.id);
+    }
+    return ids;
+  }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`queued-runs-message-ids:${key}`));
+});
+
 const ACCENT_ICON_STYLE: CSSProperties = {
   color: "var(--pmx-accent-text, var(--pmx-accent, var(--primary)))",
 };
@@ -86,12 +115,23 @@ const EDITING_ROW_STYLE: CSSProperties = {
 function getQueueDockCopy(locale: string | undefined) {
   const isZh = typeof locale === "string" && locale.toLowerCase().startsWith("zh");
   return {
+    // oxlint-disable-next-line prismux/no-untranslated-copy -- inline bilingual copy (zh.json owned by Track B)
+    dockHeading: isZh ? "排队消息" : "Queued Messages",
+    // oxlint-disable-next-line prismux/no-untranslated-copy -- inline bilingual copy (zh.json owned by Track B)
+    dockHint: isZh ? "智能体结束工作后发送" : "Sends after the agent finishes",
     paused: isZh ? "已暂停" : "Paused",
-    steerFirst: isZh ? "插话队首" : "steer first",
     resume: isZh ? "继续发送" : "Resume",
     clear: isZh ? "清空" : "Clear",
     clearAria: isZh ? "清空待发队列" : "Clear queued messages",
     clearAllAction: () => (isZh ? "移除全部待发排队消息" : "Remove all queued messages"),
+    sendNowAria: isZh ? "立即发送" : "Send now",
+    editAria: isZh ? "编辑排队消息" : "Edit queued message",
+    removeAria: isZh ? "移除排队消息" : "Remove queued message",
+    // oxlint-disable-next-line prismux/no-untranslated-copy -- inline bilingual copy (zh.json owned by Track B)
+    removeHint: isZh ? "从队列移除" : "Remove from queue",
+    editingStatus: isZh ? "正在输入框中编辑" : "Editing in the composer",
+    cancelEdit: isZh ? "取消" : "Cancel",
+    cancelEditAria: isZh ? "取消编辑排队消息" : "Cancel editing queued message",
   };
 }
 
@@ -100,20 +140,10 @@ export interface QueuedRunsControlHandle {
   editLatest: (repeat: boolean) => boolean;
 }
 
-type ThreadQueueProjection = Parameters<typeof deriveThreadQueueWorkflowState>[0];
+type QueuedRunEntry = ThreadQueueWorkflowState["queuedRuns"][number];
+type QueuedRunMessage = NonNullable<QueuedRunEntry["message"]>;
 
-function queuedImageResources(projection: ThreadQueueProjection | undefined) {
-  if (!projection) return [];
-  return deriveThreadQueueWorkflowState(projection).queuedRuns.flatMap(({ attachments }) =>
-    attachments.flatMap((attachment) =>
-      isImageAttachment(attachment)
-        ? [{ _tag: "attachment" as const, attachmentId: attachment.id }]
-        : [],
-    ),
-  );
-}
-
-export function QueuedRunsControl({
+export const QueuedRunsControl = memo(function QueuedRunsControl({
   ref,
   ...props
 }: {
@@ -137,10 +167,15 @@ export function QueuedRunsControl({
   const gt = useGT();
   const locale = useLocale();
   const copy = getQueueDockCopy(locale);
-  const messages = useMessages();
-  const projection = useQuietThreadProjection(
-    scopeThreadRef(props.environmentId, props.threadId),
-  )?.projection;
+  const threadRef = scopeThreadRef(props.environmentId, props.threadId);
+  // Narrow subscription: completely ignores streaming text, tool calls, and turn item churn.
+  const workflow = useAtomValue(environmentThreadDetails.queueWorkflowAtom(threadRef));
+  const hasOptimisticQueued = props.optimisticMessages.some(
+    (message) => message.inputIntent === "queued_turn",
+  );
+  const acknowledgedMessageIdList = useAtomValue(
+    hasOptimisticQueued ? threadMessageIdsAtomFamily(threadKey(threadRef)) : EMPTY_MESSAGE_IDS_ATOM,
+  );
   const promote = useAtomCommand(threadEnvironment.promoteQueuedRun);
   const resume = useAtomCommand(threadEnvironment.resumeThreadQueue);
   const cancel = useAtomCommand(threadEnvironment.cancelQueuedRun);
@@ -150,30 +185,47 @@ export function QueuedRunsControl({
   const queueListId = useId();
   const [busyRunId, setBusyRunId] = useState<RunId | null>(null);
   const steerInFlightRef = useRef(false);
+  const queued = workflow?.queuedRuns ?? [];
+  const activeRun = workflow?.activeRun ?? null;
   // Run-only acknowledgements can resurrect pending rows after cancellation or startup.
-  const acknowledgedMessageIds = new Set((projection?.messages ?? []).map((message) => message.id));
-  const queuedImageAttachmentResources = queuedImageResources(projection);
+  const acknowledgedMessageIds = hasOptimisticQueued ? new Set(acknowledgedMessageIdList) : null;
+  const collectedImageResources: Array<{
+    readonly _tag: "attachment";
+    readonly attachmentId: string;
+  }> = [];
+  for (const entry of queued) {
+    for (const attachment of entry.attachments) {
+      if (isImageAttachment(attachment)) {
+        collectedImageResources.push({ _tag: "attachment", attachmentId: attachment.id });
+      }
+    }
+  }
+  const queuedImageAttachmentResources =
+    collectedImageResources.length === 0 ? EMPTY_ASSET_RESOURCES : collectedImageResources;
   const queuedImageAttachmentUrls = useAssetUrls(
     props.environmentId,
     queuedImageAttachmentResources,
   );
-  const workflow = projection ? deriveThreadQueueWorkflowState(projection, messages) : null;
-  const queued = workflow?.queuedRuns ?? [];
-  const activeRun = workflow?.activeRun ?? null;
   // A fresh message starts its own turn: it may skip compaction, but not steer into a turn.
   const canSendRun = (freshContext: boolean) =>
     workflow?.canSendNow === true ||
     (workflow?.canPromoteToSteer === true &&
       (!freshContext || workflow.promoteSkipsCompaction === true));
-  const queuedImageUrlById = new Map(
-    queuedImageAttachmentUrls.flatMap((url, index) => {
-      const resource = queuedImageAttachmentResources[index];
-      return url && resource ? [[resource.attachmentId, url] as const] : [];
-    }),
-  );
-  const optimisticQueued = props.optimisticMessages.filter(
-    (message) => message.inputIntent === "queued_turn" && !acknowledgedMessageIds.has(message.id),
-  );
+  const queuedImageUrlById =
+    queuedImageAttachmentResources.length === 0
+      ? null
+      : new Map(
+          queuedImageAttachmentUrls.flatMap((url, index) => {
+            const resource = queuedImageAttachmentResources[index];
+            return url && resource ? [[resource.attachmentId, url] as const] : [];
+          }),
+        );
+  const optimisticQueued = hasOptimisticQueued
+    ? props.optimisticMessages.filter(
+        (message) =>
+          message.inputIntent === "queued_turn" && !acknowledgedMessageIds?.has(message.id),
+      )
+    : [];
   const items = [
     ...queued.map(({ run, text, attachments, context, message }, serverIndex) => ({
       key: run.id,
@@ -187,7 +239,7 @@ export function QueuedRunsControl({
       editable: context?.guest === undefined,
       attachments,
       thumbnails: attachments.filter(isImageAttachment).map<ChatImageAttachment>((attachment) => {
-        const previewUrl = queuedImageUrlById.get(attachment.id);
+        const previewUrl = queuedImageUrlById?.get(attachment.id);
         return {
           ...attachment,
           type: "image",
@@ -305,9 +357,8 @@ export function QueuedRunsControl({
   };
 
   const isHeld = workflow?.isHeld === true;
-  const showHeader = items.length > 1 || isHeld;
   const interactionActive = props.editingRunId !== null || busyRunId !== null || clearingAll;
-  const listVisible = !showHeader || !dockCollapsed || interactionActive;
+  const listVisible = !dockCollapsed || interactionActive;
   const collapsible = items.length > QUEUE_VISIBLE_ROWS;
   const visibleItems = collapsible && !showAll ? items.slice(0, QUEUE_VISIBLE_ROWS - 1) : items;
   const anyActionBusy = busyRunId !== null || clearingAll;
@@ -335,71 +386,66 @@ export function QueuedRunsControl({
           "overflow-hidden rounded-2xl border transition-colors",
           "border-border/80 bg-card/95 text-foreground shadow-xs",
           "dark:border-border/70 dark:bg-card/92",
-          "[[data-pmx-glass='1']_&]:border-border/65 [[data-pmx-glass='1']_&]:bg-background/84 [[data-pmx-glass='1']_&]:backdrop-blur-md [[data-pmx-glass='1']_&]:shadow-sm",
-          "dark:[[data-pmx-glass='1']_&]:bg-background/78",
+          "[[data-pmx-glass='1']_&]:border-white/18 [[data-pmx-glass='1']_&]:bg-background/88 [[data-pmx-glass='1']_&]:shadow-sm",
+          "dark:[[data-pmx-glass='1']_&]:border-white/14 dark:[[data-pmx-glass='1']_&]:bg-card/84",
         )}
       >
-        {showHeader ? (
-          <div
-            data-queue-dock-header="true"
-            className={cn(
-              "flex min-h-9 items-center justify-between gap-2 px-3 py-1.5",
-              listVisible && "border-b border-border/55",
-            )}
+        <div
+          data-queue-dock-header="true"
+          className={cn(
+            "flex min-h-9 items-center justify-between gap-2 px-3 py-1.5",
+            listVisible && "border-b border-border/55 [[data-pmx-glass='1']_&]:border-white/12",
+          )}
+        >
+          <button
+            type="button"
+            data-queue-dock-toggle="true"
+            aria-expanded={listVisible}
+            aria-controls={queueListId}
+            disabled={interactionActive}
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={() => setDockCollapsed((value) => !value)}
+            className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default"
           >
-            <button
-              type="button"
-              data-queue-dock-toggle="true"
-              aria-expanded={listVisible}
-              aria-controls={queueListId}
-              disabled={interactionActive}
-              onPointerDown={(event) => event.preventDefault()}
-              onClick={() => setDockCollapsed((value) => !value)}
-              className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default"
+            <span className="shrink-0 text-xs font-medium text-foreground">{copy.dockHeading}</span>
+            <span
+              data-queue-dock-count={items.length}
+              className="inline-flex h-4.5 min-w-4.5 shrink-0 items-center justify-center rounded-full bg-foreground/8 px-1.5 text-2xs font-semibold tabular-nums text-foreground/85"
             >
-              <ListOrderedIcon
-                aria-hidden="true"
-                className="size-3.5 shrink-0"
-                style={ACCENT_ICON_STYLE}
-              />
-              <span className="truncate text-sm font-medium text-foreground">
-                {gt(
-                  "{count, plural, one {{count} queued message} other {{count} queued messages}}",
-                  { count: items.length },
-                )}
+              {items.length}
+            </span>
+            {isHeld ? (
+              <span
+                data-queue-dock-held="true"
+                className="inline-flex shrink-0 items-center rounded-full border border-warning/35 bg-warning/14 px-2 py-0.5 text-2xs font-medium text-warning-foreground dark:text-warning"
+              >
+                {copy.paused}
               </span>
-              {isHeld ? (
-                <span
-                  data-queue-dock-held="true"
-                  className="inline-flex shrink-0 items-center rounded-full border border-warning/35 bg-warning/14 px-2 py-0.5 text-2xs font-medium text-warning-foreground dark:text-warning"
-                >
-                  {copy.paused}
-                </span>
-              ) : null}
-              {!listVisible && optimisticQueued.length > 0 ? (
-                <span className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-                  <Clock3Icon aria-hidden="true" className="size-3" />
-                  <T>Saving</T>
-                </span>
-              ) : null}
-              <ChevronDownIcon
-                aria-hidden="true"
-                className={cn(
-                  "size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 motion-reduce:transition-none",
-                  !listVisible && "-rotate-90",
-                )}
-              />
-            </button>
-            <div className="flex shrink-0 items-center gap-1.5">
-              {!isHeld && props.steerShortcutLabel && workflow?.canPromoteToSteer ? (
-                <span
-                  data-queue-dock-shortcut-hint="true"
-                  className="hidden items-center gap-1 text-2xs text-muted-foreground sm:inline-flex"
-                >
-                  <Kbd variant="outline">{props.steerShortcutLabel}</Kbd>
-                  <span>{copy.steerFirst}</span>
-                </span>
-              ) : null}
+            ) : (
+              <span
+                data-queue-dock-subtitle="true"
+                className="min-w-0 truncate text-xs text-muted-foreground"
+              >
+                {copy.dockHint}
+              </span>
+            )}
+            {!listVisible && optimisticQueued.length > 0 ? (
+              <span className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                <Clock3Icon aria-hidden="true" className="size-3" />
+                <T>Saving</T>
+              </span>
+            ) : null}
+            <ChevronDownIcon
+              aria-hidden="true"
+              className={cn(
+                "ms-auto size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 motion-reduce:transition-none",
+                !listVisible && "-rotate-90",
+              )}
+            />
+          </button>
+          {(isHeld && workflow?.canSendNow && firstQueuedRun !== null) ||
+          (queued.length > 1 && props.editingRunId === null) ? (
+            <div className="flex shrink-0 items-center gap-1">
               {isHeld && workflow?.canSendNow && firstQueuedRun !== null ? (
                 <button
                   type="button"
@@ -438,12 +484,12 @@ export function QueuedRunsControl({
                 </Tooltip>
               ) : null}
             </div>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
         <ol
           id={queueListId}
           hidden={!listVisible}
-          className="max-h-56 overflow-y-auto divide-y divide-border/55"
+          className="max-h-56 overflow-y-auto divide-y divide-border/55 [[data-pmx-glass='1']_&]:divide-white/10"
         >
           {listVisible
             ? visibleItems.map((item, position) => {
@@ -479,8 +525,6 @@ export function QueuedRunsControl({
                       previewText={previewText}
                       thumbnails={item.thumbnails}
                       isEditing={isEditing}
-                      position={position}
-                      singleRow={!showHeader}
                       timestampFormat={props.timestampFormat}
                       onOpenThread={props.onOpenThread}
                       onImageExpand={props.onImageExpand}
@@ -489,8 +533,11 @@ export function QueuedRunsControl({
                         <Tooltip>
                           <TooltipTrigger render={<span className="flex shrink-0" />}>
                             <Button
-                              size="xs"
+                              type="button"
+                              size="icon-xs"
                               variant="ghost-muted"
+                              data-queue-row-action="send-now"
+                              aria-label={copy.sendNowAria}
                               disabled={item.runId === null || anyActionBusy}
                               onPointerDown={(event) => event.preventDefault()}
                               onClick={() => {
@@ -499,8 +546,7 @@ export function QueuedRunsControl({
                                 }
                               }}
                             >
-                              <ArrowUpIcon aria-hidden="true" style={ACCENT_ICON_STYLE} />
-                              <T>Send now</T>
+                              <ArrowRightIcon aria-hidden="true" style={ACCENT_ICON_STYLE} />
                             </Button>
                           </TooltipTrigger>
                           <TooltipPopup>
@@ -542,15 +588,16 @@ export function QueuedRunsControl({
                       {isEditing ? (
                         <>
                           <span className="shrink-0 px-1 text-xs font-medium text-foreground">
-                            <T>Editing in the composer</T>
+                            {copy.editingStatus}
                           </span>
                           <Button
+                            type="button"
                             size="xs"
                             variant="ghost"
-                            aria-label={gt("Cancel editing queued message")}
+                            aria-label={copy.cancelEditAria}
                             onClick={props.onCancelEdit}
                           >
-                            <T>Cancel</T>
+                            {copy.cancelEdit}
                           </Button>
                         </>
                       ) : (
@@ -559,9 +606,11 @@ export function QueuedRunsControl({
                             {/* The span keeps the tooltip, and its reason, on a disabled button. */}
                             <TooltipTrigger render={<span className="flex shrink-0" />}>
                               <Button
+                                type="button"
                                 size="icon-xs"
                                 variant="ghost-muted"
-                                aria-label={gt("Edit queued message")}
+                                data-queue-row-action="edit"
+                                aria-label={copy.editAria}
                                 disabled={
                                   item.runId === null ||
                                   !item.editable ||
@@ -580,7 +629,7 @@ export function QueuedRunsControl({
                                   }
                                 }}
                               >
-                                <PencilIcon />
+                                <PencilIcon aria-hidden="true" />
                               </Button>
                             </TooltipTrigger>
                             <TooltipPopup>
@@ -596,9 +645,11 @@ export function QueuedRunsControl({
                             <TooltipTrigger
                               render={
                                 <Button
+                                  type="button"
                                   size="icon-xs"
                                   variant="ghost-muted"
-                                  aria-label={gt("Remove queued message")}
+                                  data-queue-row-action="remove"
+                                  aria-label={copy.removeAria}
                                   disabled={item.runId === null || anyActionBusy}
                                   onPointerDown={(event) => event.preventDefault()}
                                   onClick={() => {
@@ -607,11 +658,9 @@ export function QueuedRunsControl({
                                 />
                               }
                             >
-                              <Trash2Icon />
+                              <Trash2Icon aria-hidden="true" />
                             </TooltipTrigger>
-                            <TooltipPopup>
-                              <T>Remove from queue</T>
-                            </TooltipPopup>
+                            <TooltipPopup>{copy.removeHint}</TooltipPopup>
                           </Tooltip>
                         </>
                       )}
@@ -622,8 +671,9 @@ export function QueuedRunsControl({
             : null}
         </ol>
         {listVisible && collapsible ? (
-          <div className="flex items-center justify-end border-t border-border/55 px-3 py-1.5 text-xs pointer-coarse:[&_[data-slot=inline-button]]:relative pointer-coarse:[&_[data-slot=inline-button]]:after:absolute pointer-coarse:[&_[data-slot=inline-button]]:after:-inset-x-1.5 pointer-coarse:[&_[data-slot=inline-button]]:after:-inset-y-3.5">
+          <div className="flex items-center justify-end border-t border-border/55 px-3 py-1.5 text-xs [[data-pmx-glass='1']_&]:border-white/12 pointer-coarse:[&_[data-slot=inline-button]]:relative pointer-coarse:[&_[data-slot=inline-button]]:after:absolute pointer-coarse:[&_[data-slot=inline-button]]:after:-inset-x-1.5 pointer-coarse:[&_[data-slot=inline-button]]:after:-inset-y-3.5">
             <InlineButton
+              type="button"
               tone="muted"
               aria-expanded={showAll}
               aria-controls={queueListId}
@@ -650,19 +700,15 @@ export function QueuedRunsControl({
       </div>
     </section>
   );
-}
+});
 
-type QueuedRunMessage = NonNullable<ThreadQueueProjection["messages"][number]>;
-
-/** A queued turn displayed inside the DSH-style docked queue strip while retaining full attribution. */
-function QueuedMessage(props: {
+/** A queued turn displayed inside the docked queue strip while retaining full attribution. */
+const QueuedMessage = memo(function QueuedMessage(props: {
   readonly environmentId: EnvironmentId;
   readonly message: QueuedRunMessage | undefined;
   readonly previewText: string;
   readonly thumbnails: ReadonlyArray<ChatImageAttachment>;
   readonly isEditing: boolean;
-  readonly position: number;
-  readonly singleRow: boolean;
   readonly timestampFormat: TimestampFormat;
   readonly onOpenThread: (threadId: ThreadId, environmentId?: EnvironmentId) => void;
   readonly children: ReactNode;
@@ -704,17 +750,6 @@ function QueuedMessage(props: {
         : null;
   const bodyVisible = fold === null || expanded;
 
-  const leadingMarker = props.singleRow ? (
-    <ListOrderedIcon aria-hidden="true" className="size-3.5 shrink-0" style={ACCENT_ICON_STYLE} />
-  ) : (
-    <span
-      aria-hidden="true"
-      className="inline-flex size-4.5 shrink-0 items-center justify-center rounded-full bg-foreground/8 text-3xs font-semibold tabular-nums text-muted-foreground"
-    >
-      {props.position + 1}
-    </span>
-  );
-
   const secondaryLinks = props.message ? (
     <span className="flex items-center gap-2 text-xs text-muted-foreground opacity-0 transition-opacity duration-200 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/queued:opacity-100">
       {attribution === "agent" &&
@@ -722,6 +757,7 @@ function QueuedMessage(props: {
       // Only an environment this client is connected to can open the sender's thread there.
       (props.message?.linkedSender === undefined || linkedSenderEnvironment !== null) ? (
         <InlineButton
+          type="button"
           tone="muted"
           onClick={() => props.onOpenThread(senderRef.threadId, senderRef.environmentId)}
         >
@@ -730,6 +766,7 @@ function QueuedMessage(props: {
       ) : null}
       {scheduledTaskId ? (
         <InlineButton
+          type="button"
           tone="muted"
           render={
             <Link
@@ -752,17 +789,16 @@ function QueuedMessage(props: {
   return (
     <div className="flex min-h-9 flex-col gap-1 px-3 py-1.5">
       {attribution === "prismux" ? (
-        <p className="ps-6 text-2xs text-muted-foreground">
+        <p className="text-2xs text-muted-foreground">
           <T>Sent by Prismux</T>
         </p>
       ) : null}
       {presentation?.guestName === undefined ? null : (
-        <div className="ps-6">
+        <div>
           <GuestMessageName name={presentation.guestName} />
         </div>
       )}
-      <div className="flex min-w-0 items-center gap-2.5">
-        {leadingMarker}
+      <div className="flex min-w-0 items-center gap-2">
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           {fold ? (
             <FoldedMessageHeader
@@ -855,7 +891,7 @@ function QueuedMessage(props: {
                 {props.previewText ? (
                   <p
                     className={cn(
-                      "min-w-0 flex-1 whitespace-pre-wrap wrap-anywhere text-sm leading-snug",
+                      "min-w-0 flex-1 truncate text-sm leading-snug",
                       props.isEditing ? "font-medium text-foreground" : "text-foreground/90",
                     )}
                   >
@@ -866,11 +902,11 @@ function QueuedMessage(props: {
             )
           ) : null}
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="flex shrink-0 items-center gap-0.5">
           {secondaryLinks}
           {props.children}
         </div>
       </div>
     </div>
   );
-}
+});

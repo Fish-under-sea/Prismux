@@ -8,6 +8,9 @@ import {
   createEscapeStopSequence,
   DOUBLE_ESCAPE_STOP_WINDOW_MS,
   filterSteerableQueuedRuns,
+  hasComposerTopAttachmentStrip,
+  resolveSafeComposerDispatchMode,
+  shouldAutoResumeOnEmptyEnter,
 } from "./composerCommandKey";
 
 function makeKeyEvent(key: string, overrides: Partial<KeyboardEvent> = {}): KeyboardEvent {
@@ -312,5 +315,165 @@ describe("filterSteerableQueuedRuns & canSteerEmptyQueuedRuns", () => {
     expect(canSteerEmptyQueuedRuns({ ...base, isSendHeld: true })).toBe(false);
     expect(canSteerEmptyQueuedRuns({ ...base, isEditingQueuedMessage: true })).toBe(false);
     expect(canSteerEmptyQueuedRuns({ ...base, hasMessageToSend: true })).toBe(false);
+  });
+});
+
+describe("resolveSafeComposerDispatchMode & anti-mis-send guards", () => {
+  it("never emits 'auto' under queue-first or live server runs so server cannot silently upgrade to steer_active", () => {
+    // Even when client phase briefly reads idle (`running: false`), queue-first uses `"queue"`,
+    // which starts immediately on an idle server and strictly queues if an active run exists.
+    expect(
+      resolveSafeComposerDispatchMode({
+        running: false,
+        alternateModifier: false,
+        activeTurnDefault: "queue",
+        canSteer: true,
+      }),
+    ).toBe("queue");
+
+    // When `hasActiveRun` is true despite `running: false` (e.g. backgroundWorkHoldsRun), still queues!
+    expect(
+      resolveSafeComposerDispatchMode({
+        running: false,
+        hasActiveRun: true,
+        alternateModifier: false,
+        activeTurnDefault: "queue",
+        canSteer: true,
+      }),
+    ).toBe("queue");
+
+    // Explicit alternate shortcut while active steers only when canSteer is true.
+    expect(
+      resolveSafeComposerDispatchMode({
+        running: false,
+        hasActiveRun: true,
+        alternateModifier: true,
+        activeTurnDefault: "queue",
+        canSteer: true,
+      }),
+    ).toBe("steer");
+    expect(
+      resolveSafeComposerDispatchMode({
+        running: true,
+        alternateModifier: true,
+        activeTurnDefault: "queue",
+        canSteer: false,
+      }),
+    ).toBe("queue");
+  });
+
+  it("blocks IME composition (isComposing or keyCode 229) and key repeat from submitting or steering", () => {
+    const onSteerQueuedMessages = vi.fn(() => true);
+    const { handler, submitComposer } = createHandler({
+      phase: "running",
+      followUpBehavior: "queue",
+      canSteer: true,
+      promptRef: { current: "你好" },
+      onSteerQueuedMessages,
+    });
+
+    expect(handler("Enter", makeKeyEvent("Enter", { isComposing: true }))).toBe(false);
+    expect(handler("Enter", makeKeyEvent("Enter", { isComposing: false, keyCode: 229 }))).toBe(
+      false,
+    );
+    expect(
+      handler("Enter", makeKeyEvent("Enter", { ctrlKey: true, isComposing: false, keyCode: 229 })),
+    ).toBe(false);
+    expect(handler("Enter", makeKeyEvent("Enter", { repeat: true }))).toBe(false);
+    expect(handler("Enter", makeKeyEvent("Enter", { ctrlKey: true, repeat: true }))).toBe(false);
+    expect(submitComposer).not.toHaveBeenCalled();
+    expect(onSteerQueuedMessages).not.toHaveBeenCalled();
+  });
+
+  it("does not trigger empty-draft queue steer when followUpBehavior is steer or non-prompt draft items exist", () => {
+    // When followUpBehavior is "steer", alternate (Ctrl+Enter) means "queue", NOT steer-queue!
+    const steerMode = createHandler({
+      phase: "running",
+      followUpBehavior: "steer",
+      canSteer: true,
+      promptRef: { current: "" },
+      onSteerQueuedMessages: vi.fn(() => true),
+    });
+    steerMode.handler("Enter", makeKeyEvent("Enter", { ctrlKey: true }));
+    expect(steerMode.onSteerQueuedMessages).not.toHaveBeenCalled();
+
+    // Non-prompt draft content (reply / thread context / env context / preparing images) is NOT empty.
+    for (const nonEmptyFlag of [
+      { hasReplyTo: true },
+      { hasThreadContexts: true },
+      { hasEnvironmentContexts: true },
+      { hasPreparingImages: true },
+    ] as const) {
+      const nonEmpty = createHandler({
+        phase: "running",
+        followUpBehavior: "queue",
+        canSteer: true,
+        promptRef: { current: "" },
+        onSteerQueuedMessages: vi.fn(() => true),
+        ...nonEmptyFlag,
+      });
+      nonEmpty.handler("Enter", makeKeyEvent("Enter", { ctrlKey: true }));
+      expect(nonEmpty.onSteerQueuedMessages).not.toHaveBeenCalled();
+      expect(nonEmpty.submitComposer).toHaveBeenCalledExactlyOnceWith(
+        undefined,
+        "steer",
+        "alternate",
+      );
+    }
+  });
+
+  it("queues on plain Enter even when phase briefly reads ready while hasActiveRun is true", () => {
+    const { handler, submitComposer } = createHandler({
+      phase: "ready",
+      hasActiveRun: true,
+      followUpBehavior: "queue",
+      canSteer: true,
+    });
+
+    expect(handler("Enter", makeKeyEvent("Enter"))).toBe(true);
+    expect(submitComposer).toHaveBeenCalledExactlyOnceWith(undefined, "queue", "foreground");
+  });
+
+  it("never silently resumes a held/paused queue or non-empty draft on bare Enter", () => {
+    const base = {
+      showResumeAction: true,
+      isQueueHeld: false,
+      hasActivePendingProgress: false,
+      hasMessageToSend: false,
+      trimmedPromptLength: 0,
+    };
+    expect(shouldAutoResumeOnEmptyEnter(base)).toBe(true);
+    expect(shouldAutoResumeOnEmptyEnter({ ...base, isQueueHeld: true })).toBe(false);
+    expect(shouldAutoResumeOnEmptyEnter({ ...base, hasMessageToSend: true })).toBe(false);
+    expect(shouldAutoResumeOnEmptyEnter({ ...base, trimmedPromptLength: 1 })).toBe(false);
+    expect(shouldAutoResumeOnEmptyEnter({ ...base, hasActivePendingProgress: true })).toBe(false);
+  });
+
+  it("shows the composer attachment divider only when at least one attachment/asset strip is rendered", () => {
+    const empty = {
+      collapsedMobile: false,
+      hasPendingUserInputs: false,
+      editingQueuedAttachmentCount: 0,
+      hasMediaRow: false,
+      hasFileList: false,
+    };
+    expect(hasComposerTopAttachmentStrip(empty)).toBe(false);
+    expect(hasComposerTopAttachmentStrip({ ...empty, hasMediaRow: true })).toBe(true);
+    expect(hasComposerTopAttachmentStrip({ ...empty, hasFileList: true })).toBe(true);
+    expect(hasComposerTopAttachmentStrip({ ...empty, editingQueuedAttachmentCount: 1 })).toBe(true);
+    expect(
+      hasComposerTopAttachmentStrip({
+        ...empty,
+        editingQueuedAttachmentCount: 1,
+        hasPendingUserInputs: true,
+      }),
+    ).toBe(false);
+    expect(
+      hasComposerTopAttachmentStrip({
+        ...empty,
+        editingQueuedAttachmentCount: 1,
+        collapsedMobile: true,
+      }),
+    ).toBe(false);
   });
 });

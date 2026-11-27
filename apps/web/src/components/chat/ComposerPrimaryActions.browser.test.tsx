@@ -1,7 +1,9 @@
 import "~/index.css";
 
-import type { ComponentProps } from "react";
+import { GTProvider, initializeGT } from "gt-react";
+import { Profiler, type ComponentProps } from "react";
 import { expect, it, vi } from "vite-plus/test";
+import { page } from "vite-plus/test/browser";
 import { act, fakeTimers, render } from "../../../test/render";
 
 vi.mock("~/hooks/useSettings", () => ({
@@ -374,4 +376,181 @@ it("isolates window double-Escape from other editable controls and sibling split
 
   // 6. Detached composer never claims Escape.
   expect(classify(null, rightTimeline)).toBe("reset");
+});
+
+it("renders right-arrow accent send button in idle and running states, stop square when empty, and zero nested backdrop-blur", async () => {
+  const props = setup();
+  await using screen = await render(
+    <div data-pmx-glass="1">
+      <ComposerPrimaryActions
+        {...props}
+        compact={false}
+        isRunning
+        canInterrupt
+        canSteer
+        hasSendableContent={false}
+        queuedCount={2}
+        escStopArmed
+        sendShortcutLabel="Enter"
+        alternateShortcutLabel="Ctrl+Enter / Shift+Enter"
+        stopShortcutLabel={null}
+        onSteerQueuedMessages={vi.fn()}
+      />
+    </div>,
+  );
+
+  // Running + empty composer -> red stop button, no right-arrow send icon.
+  await expect.element(screen.getByRole("button", { name: "Stop generation" })).toBeVisible();
+  expect(screen.container.querySelector('[data-composer-send-icon="arrow-right"]')).toBeNull();
+  // No nested backdrop-blur inside glass surface!
+  for (const el of Array.from(screen.container.querySelectorAll("*"))) {
+    expect(el.getAttribute("class") ?? "").not.toMatch(/backdrop-blur/);
+  }
+
+  // Typing while running -> accent circular right-arrow button + alternate pill without backdrop-blur.
+  await screen.rerender(
+    <div data-pmx-glass="1">
+      <ComposerPrimaryActions
+        {...props}
+        compact={false}
+        isRunning
+        canInterrupt
+        canSteer
+        hasSendableContent
+        sendShortcutLabel="Enter"
+        alternateShortcutLabel="Ctrl+Enter / Shift+Enter"
+        onAlternateSubmitMessage={vi.fn()}
+      />
+    </div>,
+  );
+  const queueBtn = screen
+    .getByRole("button", { name: "Queue message" })
+    .element() as HTMLButtonElement;
+  expect(queueBtn.getAttribute("data-composer-send-accent")).toBe("true");
+  expect(queueBtn.querySelector('[data-composer-send-icon="arrow-right"]')).not.toBeNull();
+  for (const el of Array.from(screen.container.querySelectorAll("*"))) {
+    expect(el.getAttribute("class") ?? "").not.toMatch(/backdrop-blur/);
+  }
+
+  // Idle with text -> same accent circular right-arrow send button.
+  await screen.rerender(
+    <div data-pmx-glass="1">
+      <ComposerPrimaryActions
+        {...props}
+        compact={false}
+        isRunning={false}
+        canInterrupt={false}
+        hasSendableContent
+        sendShortcutLabel="Enter"
+      />
+    </div>,
+  );
+  const idleSendBtn = screen
+    .getByRole("button", { name: "Submit message" })
+    .element() as HTMLButtonElement;
+  expect(idleSendBtn.getAttribute("data-composer-send-accent")).toBe("true");
+  expect(idleSendBtn.querySelector('[data-composer-send-icon="arrow-right"]')).not.toBeNull();
+});
+
+it("shows complete bilingual 2-line tooltips synced with live shortcuts and never hardcodes unbound shortcuts", async () => {
+  initializeGT({ defaultLocale: "en", locales: ["en", "zh"] });
+  const props = setup();
+  await using screen = await render(
+    <GTProvider locale="zh" translations={{}}>
+      <ComposerPrimaryActions
+        {...props}
+        compact={false}
+        isRunning
+        canInterrupt
+        canSteer
+        hasSendableContent
+        sendShortcutLabel="Enter"
+        alternateShortcutLabel="Ctrl+Enter / Shift+Enter"
+        onAlternateSubmitMessage={vi.fn()}
+      />
+    </GTProvider>,
+  );
+
+  await page.getByRole("button", { name: "Queue message" }).hover();
+  await expect.element(page.getByText("加入队列", { exact: true })).toBeVisible();
+  await expect
+    .element(page.getByText("立即发送 (Ctrl+Enter / Shift+Enter)", { exact: true }))
+    .toBeVisible();
+
+  // Unbinding alternate shortcut hides line 2 cleanly (no hardcoded Ctrl+Enter / Alt+Enter).
+  await screen.rerender(
+    <GTProvider locale="en" translations={{}}>
+      <ComposerPrimaryActions
+        {...props}
+        compact={false}
+        isRunning
+        canInterrupt
+        canSteer
+        hasSendableContent
+        sendShortcutLabel="Enter"
+        alternateShortcutLabel={null}
+      />
+    </GTProvider>,
+  );
+  await page.getByRole("button", { name: "Queue message" }).hover();
+  await expect.element(page.getByText("Queue Message", { exact: true })).toBeVisible();
+  expect(document.body.textContent).not.toContain("Alt+Enter");
+  expect(document.body.textContent).not.toContain("Ctrl+Enter");
+
+  // Stop button tooltip reflects live stopShortcutLabel (and omits hardcoded Esc Esc when null).
+  await screen.rerender(
+    <GTProvider locale="en" translations={{}}>
+      <ComposerPrimaryActions
+        {...props}
+        compact={false}
+        isRunning
+        canInterrupt
+        hasSendableContent={false}
+        stopShortcutLabel={null}
+      />
+    </GTProvider>,
+  );
+  await page.getByRole("button", { name: "Stop generation" }).hover();
+  await expect.element(page.getByText("Interrupt", { exact: true })).toBeVisible();
+  expect(document.body.textContent).not.toContain("Esc");
+
+  await screen.rerender(
+    <GTProvider locale="en" translations={{}}>
+      <ComposerPrimaryActions
+        {...props}
+        compact={false}
+        isRunning
+        canInterrupt
+        hasSendableContent={false}
+        stopShortcutLabel="Ctrl+Shift+X"
+      />
+    </GTProvider>,
+  );
+  await page.getByRole("button", { name: "Stop generation" }).hover();
+  await expect.element(page.getByText("Ctrl+Shift+X", { exact: true })).toBeVisible();
+});
+
+it("does not re-render ComposerPrimaryActions on Shift key presses while typing during a run", async () => {
+  const props = setup();
+  let renders = 0;
+  await using _screen = await render(
+    <Profiler id="primary-actions" onRender={() => (renders += 1)}>
+      <ComposerPrimaryActions
+        {...props}
+        compact={false}
+        isRunning
+        canInterrupt
+        canSteer
+        hasSendableContent
+        sendShortcutLabel="Enter"
+        alternateShortcutLabel="Ctrl+Enter"
+      />
+    </Profiler>,
+  );
+  const settled = renders;
+  await act(() => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift", shiftKey: true }));
+    window.dispatchEvent(new KeyboardEvent("keyup", { key: "Shift", shiftKey: false }));
+  });
+  expect(renders).toBe(settled);
 });

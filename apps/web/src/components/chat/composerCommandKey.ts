@@ -50,6 +50,62 @@ const EDITABLE_ESCAPE_TARGET_SELECTOR =
 const BLOCKED_ESCAPE_CONTAINER_SELECTOR = ".xterm, iframe, [inert]";
 
 /**
+ * Never emits `"auto"` under queue-first or live runs: server CommandPolicy upgrades
+ * `deliveryIntent: "auto"` to `steer_active`, while `"queue"` starts immediately when idle.
+ */
+export function resolveSafeComposerDispatchMode(input: {
+  readonly running: boolean;
+  readonly hasActiveRun?: boolean | undefined;
+  readonly alternateModifier: boolean;
+  readonly activeTurnDefault: "queue" | "steer";
+  readonly canSteer: boolean;
+}): ComposerDispatchMode {
+  const liveRun = input.running || input.hasActiveRun === true;
+  const resolved = resolveComposerDispatchMode({
+    running: liveRun,
+    alternateModifier: input.alternateModifier,
+    activeTurnDefault: input.activeTurnDefault,
+    canSteer: input.canSteer,
+  });
+  if (resolved === "auto" && (liveRun || input.activeTurnDefault === "queue")) {
+    return "queue";
+  }
+  return resolved;
+}
+
+/**
+ * Bare Enter on an empty composer never silently unpauses a held queue; users must click Resume.
+ */
+export function shouldAutoResumeOnEmptyEnter(input: {
+  readonly showResumeAction: boolean;
+  readonly isQueueHeld: boolean;
+  readonly hasActivePendingProgress: boolean;
+  readonly hasMessageToSend: boolean;
+  readonly trimmedPromptLength: number;
+}): boolean {
+  return (
+    input.showResumeAction &&
+    !input.isQueueHeld &&
+    !input.hasActivePendingProgress &&
+    !input.hasMessageToSend &&
+    input.trimmedPromptLength === 0
+  );
+}
+
+/** True only when at least one top attachment/asset strip renders above the composer editor. */
+export function hasComposerTopAttachmentStrip(input: {
+  readonly collapsedMobile: boolean;
+  readonly hasPendingUserInputs: boolean;
+  readonly editingQueuedAttachmentCount: number;
+  readonly hasMediaRow: boolean;
+  readonly hasFileList: boolean;
+}): boolean {
+  const hasEditingQueuedAttachments =
+    !input.collapsedMobile && !input.hasPendingUserInputs && input.editingQueuedAttachmentCount > 0;
+  return hasEditingQueuedAttachments || input.hasMediaRow || input.hasFileList;
+}
+
+/**
  * Filters queued runs down to entries eligible to be promoted to steer against
  * the current active run (fresh-context runs are excluded unless promotion skips compaction).
  */
@@ -231,6 +287,8 @@ export function composerCommandKeyHandler(input: {
   readonly sendShortcut: ChatComposerProps["settings"]["sendShortcut"];
   readonly routeKind: ChatComposerProps["routeKind"];
   readonly phase: ChatComposerProps["phase"];
+  /** True when server projection/workflow reports a live run even if `phase` briefly reports ready. */
+  readonly hasActiveRun?: boolean;
   readonly canSteer: boolean;
   readonly followUpBehavior: ChatComposerProps["settings"]["followUpBehavior"];
   readonly isSoftwareKeyboardOpen: boolean;
@@ -248,6 +306,10 @@ export function composerCommandKeyHandler(input: {
   readonly composerTerminalContextsRef: ChatComposerProps["composerTerminalContextsRef"];
   readonly composerPreviewAnnotations: ReadonlyArray<PreviewAnnotationPayload>;
   readonly composerReviewComments: ReadonlyArray<ReviewCommentContext>;
+  readonly hasReplyTo?: boolean;
+  readonly hasThreadContexts?: boolean;
+  readonly hasEnvironmentContexts?: boolean;
+  readonly hasPreparingImages?: boolean;
   readonly composerEditorRef: RefObject<ComposerPromptEditorHandle | null>;
   readonly composerMenuItemsRef: RefObject<ComposerCommandItem[]>;
   readonly activeComposerMenuItemRef: RefObject<ComposerCommandItem | null>;
@@ -298,6 +360,7 @@ export function composerCommandKeyHandler(input: {
     sendShortcut,
     routeKind,
     phase,
+    hasActiveRun = false,
     canSteer,
     followUpBehavior,
     isSoftwareKeyboardOpen,
@@ -312,6 +375,10 @@ export function composerCommandKeyHandler(input: {
     composerTerminalContextsRef,
     composerPreviewAnnotations,
     composerReviewComments,
+    hasReplyTo = false,
+    hasThreadContexts = false,
+    hasEnvironmentContexts = false,
+    hasPreparingImages = false,
     composerEditorRef,
     composerMenuItemsRef,
     activeComposerMenuItemRef,
@@ -416,16 +483,20 @@ export function composerCommandKeyHandler(input: {
   };
 
   const onComposerCommandKey = (key: string, event: KeyboardEvent, isTaskItem = false) => {
-    const submissionIntent = composerSubmissionIntentForKey({
-      event,
-      keybindings,
-      context: getShortcutContext(event.target),
-      isSoftwareKeyboardOpen,
-      isDraftThread: routeKind === "draft",
-      isRunning: phase === "running" || phase === "connecting",
-      sendShortcut,
-      prompt: promptRef.current,
-    });
+    const isTurnLive = phase === "running" || phase === "connecting" || hasActiveRun;
+    const isImeComposition = event.isComposing || event.keyCode === 229;
+    const submissionIntent = isImeComposition
+      ? null
+      : composerSubmissionIntentForKey({
+          event,
+          keybindings,
+          context: getShortcutContext(event.target),
+          isSoftwareKeyboardOpen,
+          isDraftThread: routeKind === "draft",
+          isRunning: isTurnLive,
+          sendShortcut,
+          prompt: promptRef.current,
+        });
     if (key === "Tab" && event.shiftKey && submissionIntent === null) {
       return applyListEdit(event, listOutdentForTab);
     }
@@ -498,7 +569,7 @@ export function composerCommandKeyHandler(input: {
       return navigatePromptHistory(key === "ArrowUp" ? "backward" : "forward", event);
     }
     if (submissionIntent) {
-      const running = phase === "running" || phase === "connecting";
+      if (event.repeat || isImeComposition) return false;
       const isComposerEmpty =
         promptRef.current.trim().length === 0 &&
         composerImagesRef.current.length === 0 &&
@@ -506,9 +577,14 @@ export function composerCommandKeyHandler(input: {
         composerTerminalContextsRef.current.length === 0 &&
         composerPreviewAnnotations.length === 0 &&
         composerReviewComments.length === 0 &&
-        pendingUserInputs.length === 0;
+        pendingUserInputs.length === 0 &&
+        !hasReplyTo &&
+        !hasThreadContexts &&
+        !hasEnvironmentContexts &&
+        !hasPreparingImages;
       if (
-        running &&
+        isTurnLive &&
+        followUpBehavior === "queue" &&
         submissionIntent === "alternate" &&
         isComposerEmpty &&
         onSteerQueuedMessages?.() === true
@@ -517,8 +593,8 @@ export function composerCommandKeyHandler(input: {
       }
       submitComposer(
         undefined,
-        resolveComposerDispatchMode({
-          running,
+        resolveSafeComposerDispatchMode({
+          running: isTurnLive,
           alternateModifier: submissionIntent === "alternate",
           activeTurnDefault: followUpBehavior,
           canSteer,
