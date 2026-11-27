@@ -817,6 +817,141 @@ it.effect("shell snapshots omit idle children and older settled threads only on 
   }).pipe(Effect.scoped, Effect.provide(ReplayTestLayer)),
 );
 
+it.effect(
+  "shell snapshots preserve idle Prismux delegated subagents for kept parents without pulling older-settled parents",
+  () =>
+    Effect.gen(function* () {
+      const shell = (
+        id: string,
+        parent: string | null,
+        overrides: {
+          readonly root?: string;
+          readonly activityRunStatus?: "running" | null;
+          readonly settledDaysAgo?: number | null;
+          readonly creationSource?: OrchestrationV2ThreadShell["creationSource"];
+        } = {},
+      ) =>
+        ({
+          id: ThreadId.make(id),
+          projectId: "project",
+          archivedAt: null,
+          status: overrides.activityRunStatus ?? "completed",
+          activityRunStatus: overrides.activityRunStatus ?? null,
+          pendingRuntimeRequest: null,
+          pendingBackgroundTasks: [],
+          ...(overrides.creationSource !== undefined
+            ? { creationSource: overrides.creationSource }
+            : {}),
+          settledOverride:
+            overrides.settledDaysAgo === undefined || overrides.settledDaysAgo === null
+              ? null
+              : "settled",
+          settledAt:
+            overrides.settledDaysAgo === undefined || overrides.settledDaysAgo === null
+              ? null
+              : DateTime.makeUnsafe(-overrides.settledDaysAgo * 86_400_000),
+          lineage: {
+            parentThreadId: parent === null ? null : ThreadId.make(parent),
+            relationshipToParent: parent === null ? null : "subagent",
+            rootThreadId: ThreadId.make(overrides.root ?? parent ?? id),
+          },
+        }) as unknown as OrchestrationV2ThreadShell;
+
+      const recent = Array.from({ length: 25 }, (_, index) =>
+        shell(`recent-${index}`, null, { settledDaysAgo: 1, creationSource: "web" }),
+      );
+      const threads = [
+        shell("active-parent", null, { creationSource: "web" }),
+        shell("active-mcp-child", "active-parent", { creationSource: "mcp" }),
+        shell("active-mcp-grandchild", "active-mcp-child", {
+          root: "active-parent",
+          creationSource: "mcp",
+        }),
+        shell("active-provider-child", "active-parent", { creationSource: "provider" }),
+        ...recent,
+        shell("recent-0-mcp-child", "recent-0", { creationSource: "mcp" }),
+        shell("recent-0-provider-child", "recent-0", { creationSource: "provider" }),
+        shell("old-parent", null, { settledDaysAgo: 30, creationSource: "web" }),
+        shell("old-parent-mcp-child", "old-parent", { creationSource: "mcp" }),
+        shell("old-parent-mcp-grandchild", "old-parent-mcp-child", {
+          root: "old-parent",
+          creationSource: "mcp",
+        }),
+      ];
+
+      let requestedThreadIds: ReadonlyArray<string> | undefined;
+      const snapshot = yield* subscribeOrchestrationV2Shell({
+        omitIdleSubagents: true,
+        omitOlderSettled: true,
+      }).pipe(
+        Effect.flatMap((stream) => stream.pipe(Stream.take(1), Stream.runCollect)),
+        Effect.map(([item]) => (item?.kind === "snapshot" ? item.snapshot : null)),
+        Effect.provideService(ThreadManagement.ThreadManagementService, {
+          listActiveShellIndex: () =>
+            Effect.succeed(
+              threads.map((thread) => ({
+                ...thread,
+                creationSource:
+                  thread.lineage.relationshipToParent === "subagent"
+                    ? (thread.creationSource ?? null)
+                    : null,
+                pinnedAt: null,
+                snoozedUntil: null,
+                mayBeLive: thread.activityRunStatus !== null,
+                hasRemoteTasks: false,
+              })),
+            ),
+          readShellSnapshot: (options?: { readonly threadIds?: ReadonlyArray<string> }) => {
+            requestedThreadIds = options?.threadIds;
+            return Effect.succeed(
+              Effect.succeed({
+                schemaVersion: 1,
+                snapshotSequence: 0,
+                threads: threads.filter(
+                  (thread) => options?.threadIds?.includes(thread.id) ?? true,
+                ),
+                archivedThreads: [],
+              }),
+            );
+          },
+        } as unknown as ThreadManagement.ThreadManagementService["Service"]),
+        Effect.provideService(ProjectStore.ProjectStoreV2, {
+          listShells: () => Effect.succeed([]),
+        } as unknown as ProjectStore.ProjectStoreV2["Service"]),
+        Effect.provideService(ProjectService.ProjectService, {
+          getShell: () => Effect.succeedNone,
+        } as unknown as ProjectService.ProjectService["Service"]),
+        Effect.provideServiceEffect(
+          ProjectEnrichment.ProjectEnrichmentService,
+          PubSub.unbounded().pipe(
+            Effect.map(
+              (changes) =>
+                ({
+                  subscribeChanges: PubSub.subscribe(changes),
+                }) as unknown as ProjectEnrichment.ProjectEnrichmentService["Service"],
+            ),
+          ),
+        ),
+      );
+
+      const expectedIds = [
+        "active-parent",
+        "active-mcp-child",
+        "active-mcp-grandchild",
+        ...recent.map((thread) => thread.id),
+        "recent-0-mcp-child",
+      ];
+      assert.deepEqual(requestedThreadIds, expectedIds);
+      assert.deepEqual(
+        snapshot?.threads.map((thread) => thread.id),
+        expectedIds,
+      );
+      assert.deepEqual(snapshot?.olderSettled?.counts, [
+        { projectId: ProjectId.make("project"), count: 1 },
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(ReplayTestLayer)),
+);
+
 // Build the production RPC layer; unrelated capabilities fail if this test calls them.
 const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(DocumentText.DocumentText)({}),

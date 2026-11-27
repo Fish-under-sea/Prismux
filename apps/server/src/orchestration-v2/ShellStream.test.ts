@@ -198,6 +198,31 @@ describe("omitIdleSubagentShells", () => {
     ]);
   });
 
+  it("keeps idle Prismux delegated subagents of kept parents while still dropping idle provider subagents", () => {
+    const threads = [
+      row("root", null, { creationSource: "web" }),
+      row("mcp-child", "root", { creationSource: "mcp" }),
+      row("mcp-grandchild", "mcp-child", { creationSource: "mcp" }),
+      row("provider-child", "root", { creationSource: "provider" }),
+      row("fixture-no-source", "root"),
+      row("side-chat-subagent", "root", {
+        creationSource: "mcp",
+        lineage: {
+          parentThreadId: ThreadId.make("root"),
+          relationshipToParent: "subagent",
+          rootThreadId: ThreadId.make("root"),
+          sideChat: true,
+        },
+      }),
+      row("orphan-mcp", "deleted-parent", { creationSource: "mcp" }),
+    ];
+    expect(omitIdleSubagentShells(threads).map((thread) => thread.id)).toEqual([
+      "root",
+      "mcp-child",
+      "mcp-grandchild",
+    ]);
+  });
+
   it("still filters the transcript events of omitted children for a subscriber that opts in", () => {
     const threads = [row("root", null), row("idle", "root")];
     const omitted = activeShellRowsForSubscriber(threads, true);
@@ -327,6 +352,61 @@ describe("omitOlderSettledShells", () => {
       "side-chat",
     ]);
     expect(result.olderSettled.counts).toEqual([{ projectId: "project-a", count: 5 }]);
+  });
+
+  it("keeps idle delegated children of top-25/active parents without pulling older-settled parents into the window", () => {
+    const delegatedChild = (
+      id: string,
+      parent: string,
+      root: string,
+      overrides: Partial<OrchestrationV2ThreadShell> = {},
+    ) =>
+      shellFixture({
+        id: ThreadId.make(id),
+        projectId: ProjectId.make("project-a"),
+        creationSource: "mcp",
+        lineage: {
+          parentThreadId: ThreadId.make(parent),
+          relationshipToParent: "subagent",
+          rootThreadId: ThreadId.make(root),
+        },
+        status: "completed",
+        activityRunStatus: null,
+        pendingRuntimeRequest: null,
+        pendingBackgroundTasks: [],
+        settledOverride: null,
+        settledAt: null,
+        ...overrides,
+      });
+
+    const threads = [
+      ...newest,
+      delegatedChild("new-0-mcp", "new-0", "new-0"),
+      delegatedChild("new-0-mcp-grand", "new-0-mcp", "new-0"),
+      row("unsettled-parent", null),
+      delegatedChild("unsettled-mcp", "unsettled-parent", "unsettled-parent"),
+      row("old-parent", 30),
+      delegatedChild("old-mcp-child", "old-parent", "old-parent"),
+      delegatedChild("old-mcp-grand", "old-mcp-child", "old-parent"),
+      row("old-live-parent", 40),
+      delegatedChild("old-live-mid", "old-live-parent", "old-live-parent"),
+      delegatedChild("old-live-leaf", "old-live-mid", "old-live-parent", {
+        activityRunStatus: "running",
+      }),
+    ];
+
+    const result = omit(threads);
+    expect(result.threads.map((thread) => thread.id).slice(25)).toEqual([
+      "new-0-mcp",
+      "new-0-mcp-grand",
+      "unsettled-parent",
+      "unsettled-mcp",
+      "old-live-parent",
+      "old-live-mid",
+      "old-live-leaf",
+    ]);
+    // Both older-settled top-level parents are counted; delegated children are never counted.
+    expect(result.olderSettled.counts).toEqual([{ projectId: "project-a", count: 2 }]);
   });
 });
 
