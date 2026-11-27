@@ -339,15 +339,32 @@ prismux/
 | [`docs/agents/README.md`](docs/agents/README.md) | Contributor local environment profile naming rules, template &amp; maintenance workflow |
 | [`assets/readme/MAINTAINING.md`](assets/readme/MAINTAINING.md) | README pixel-art header/banner &amp; live demo asset maintenance guide |
 
-### Open-Source Credits
+### Open-Source &amp; Design Credits
 
-- [stablyai/orca](https://github.com/stablyai/orca) (MIT): Reference for the compact tree project/workspace sidebar, Split Anything arbitrary pane layout, port scanning &amp; resource monitoring, ultra-compact status bar, multi-window quota bar, and declarative plugin UI.
-- [can1357/oh-my-pi](https://github.com/can1357/oh-my-pi) (MIT): Reference for Mnemopi prompt-cache-friendly recall &amp; scoped caches and status-bar telemetry gauges.
-- `dsh-better-reasoning-effort-fish` ([HanaAyane/dsh-reasoning-effort](https://github.com/HanaAyane/dsh-reasoning-effort) PR #9 + [HaoyueQin/dsh-better-reasoning-effort](https://github.com/HaoyueQin/dsh-better-reasoning-effort), MIT) &amp; `DeepSeek Harness (dsh)`: Source for the model-recognizing animated reasoning effort slider (`<PrismuxReasoningEffortSlider />`, 8 model family themes &amp; RGBA WebP runners) and thinking / tool-call work-step presentation.
-- [yetone/magpie](https://github.com/yetone/magpie): Inspiration for passphrase-sealed AEAD sync, `If-Match` optimistic locking, 60-second stall watchdogs, and portable mode.
-- [Amp](https://ampcode.com/): Inspiration for `/handoff` distillation and `agent / oracle / review` dial workflows.
-- [FISH-Dock](https://github.com/Fish-under-sea/FISH-Dock): Reference for the Warm Paper / Dark Olive stereomorphic README design system, 1:1 Celestial capsule &amp; 360° Fresnel liquid-glass theme hooks.
-- Full historical upstream foundation and core dependency attributions are documented in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+Prismux stands on the shoulders of many outstanding open-source projects and developer-tool communities. We extend our sincere gratitude to the projects and authors below:
+
+#### Special Thanks · Work-Process &amp; Core Interaction References
+
+- **DeepSeek Harness (`dsh` / DSH NEXT)**: Prismux's core conversation work-process experience—including 1:1 expanded work-step convergence, frosted detail cards, collapsible reasoning with streaming translation, read-only `context_injection` &amp; `skill_load` inspection, end-of-turn usage popovers, local TTFT / Decode / TPS telemetry, and native ACP integration—draws deep inspiration and reference from DeepSeek Harness (`dsh`).
+- **`dsh-better-reasoning-effort-fish`** ([HanaAyane/dsh-reasoning-effort](https://github.com/HanaAyane/dsh-reasoning-effort) PR #9 + [HaoyueQin/dsh-better-reasoning-effort](https://github.com/HaoyueQin/dsh-better-reasoning-effort), MIT): Reference and open-source assets for the model-recognizing animated reasoning effort slider (`<PrismuxReasoningEffortSlider />`, 8 model-family themes &amp; RGBA WebP runners).
+- **[Google Antigravity (`agy`)](https://antigravity.google/)**: Reference for the 1:1 Swarm multi-agent 4-tab right sidebar (Overview / Board / Members / Graph), live message board, `/swarm` &amp; `/goal` workflows, and official CLI / ACP protocol integration.
+
+#### Architectural Foundations &amp; Workbench Design Inspiration
+
+- **[T3 Code (`pingdotgg/t3code`)](https://github.com/pingdotgg/t3code)** (MIT): Historical upstream foundation for Prismux's desktop host, orchestration server, and web workbench, now evolved and consolidated into the independent first-party `@prismux/*` monorepo.
+- **[Orca (`stablyai/orca`)](https://github.com/stablyai/orca)** (MIT): Reference for the compact tree project/workspace sidebar, lightweight Workspace Board &amp; Tasks views, Split Anything arbitrary pane layout, port scanning &amp; resource monitoring, ultra-compact status bar, and multi-window quota bar.
+- **[Cordis (`shigma/cordis`)](https://github.com/shigma/cordis)** (MIT): Architectural inspiration for `@prismux/cordis-kernel` reversible dual-realm plugin contexts, zero-residue `ctx.effect()` teardown, and declarative plugin UIs.
+- **[Oh-My-Pi (`can1357/oh-my-pi`)](https://github.com/can1357/oh-my-pi)** (MIT): Reference for Mnemopi prompt-cache-friendly recall, scoped caches, and status-bar telemetry gauges.
+- **[Magpie (`yetone/magpie`)](https://github.com/yetone/magpie)**: Inspiration for `@prismux/sync-vault` passphrase-sealed AEAD sync, `If-Match` optimistic locking, 60-second stall watchdogs, and portable mode.
+- **[Amp](https://ampcode.com/)**: Inspiration for `/handoff` context distillation and `agent / oracle / review` role-dial workflows.
+- **[FISH-Dock](https://github.com/Fish-under-sea/FISH-Dock)**: Reference for the Warm Paper / Dark Olive stereomorphic README design system, 1:1 optical Celestial capsule, and 360° Fresnel liquid-glass theme tokens.
+
+#### Agent Protocols, Local Offline Engines &amp; Core Open-Source Ecosystem
+
+- **Multi-Agent &amp; Messaging Ecosystem**: [Agent Client Protocol (ACP)](https://agentclientprotocol.com/), Claude Code, OpenAI Codex, OpenCode, [Pi Coding Agent](https://github.com/badlogic/pi-mono), [Tencent Agent Mail (`@tencent-qqmail/agently-cli`)](https://agent.qq.com/), and the [OneBot v11](https://onebot.dev/) (NapCatQQ / Lagrange.Core) community.
+- **Local Offline Translation &amp; Visual Ecosystem**: [Mozilla Bergamot Translator &amp; Firefox Translations](https://github.com/mozilla/firefox-translations-models) (MPL-2.0, powering the opt-in SHA-256-verified pure-local offline `en → zh-Hans` WASM reasoning translation engine with zero cloud calls), Steam **Wallpaper Engine (`431960`)** Workshop community, and WebGL live wallpaper tooling.
+- **Core Runtime &amp; Infrastructure**: [Electron](https://www.electronjs.org/), [Effect](https://effect.website/), [React](https://react.dev/), [TanStack](https://tanstack.com/), [Vite / Vite+](https://vite.dev/), [Oxc / Oxlint](https://oxc.rs/), [Tailwind CSS](https://tailwindcss.com/), [SQLite](https://www.sqlite.org/) &amp; [`sqlite-vec`](https://github.com/asg017/sqlite-vec), [`@pierre/*`](https://github.com/pierrecomputer/pierre) (Apache-2.0), [Ghostty (`libghostty-vt`)](https://github.com/ghostty-org/ghostty) &amp; [`node-pty`](https://github.com/microsoft/node-pty), [KaTeX](https://katex.org/), [Tailscale](https://tailscale.com/), [7-Zip](https://www.7-zip.org/), and [Jersey 20](https://fonts.google.com/specimen/Jersey+20) (SIL OFL 1.1).
+- Full historical attributions, third-party copyright notices, Apache-2.0 `NOTICE` texts, and dependency license inventories are preserved in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 ### License Boundary
 

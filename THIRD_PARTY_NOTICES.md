@@ -89,13 +89,18 @@ SOFTWARE.
 
 ---
 
-## 2. Design & Reference Open-Source Projects
+## 2. Design, Work-Process & Reference Open-Source Projects
 
-- **[stablyai/orca](https://github.com/stablyai/orca) (MIT License)** — Reference inspiration for the compact workspace sidebar, Split Anything arbitrary pane layout, port/resource monitoring, ultra-compact status bar, multi-window quota bar, and declarative plugin UI patterns.
-- **[can1357/oh-my-pi](https://github.com/can1357/oh-my-pi) (MIT License)** — Reference inspiration for prompt-cache-friendly memory recall and scoped cache architecture.
-- **`dsh-better-reasoning-effort-fish` ([HanaAyane/dsh-reasoning-effort](https://github.com/HanaAyane/dsh-reasoning-effort) / [HaoyueQin/dsh-better-reasoning-effort](https://github.com/HaoyueQin/dsh-better-reasoning-effort), MIT License) & DeepSeek Harness (`dsh`)** — Reference and assets for the model-recognizing animated reasoning effort slider and thinking / tool-call work-step presentation.
+- **DeepSeek Harness (`dsh` / DSH NEXT)** — Primary reference for Prismux's conversation work-process presentation: 1:1 expanded work-step convergence, frosted detail cards, collapsible reasoning &amp; streaming translation UX, read-only `context_injection` and `skill_load` inspection, per-turn usage popovers, local session TTFT / Decode / TPS telemetry, and native ACP integration.
+- **`dsh-better-reasoning-effort-fish` ([HanaAyane/dsh-reasoning-effort](https://github.com/HanaAyane/dsh-reasoning-effort) / [HaoyueQin/dsh-better-reasoning-effort](https://github.com/HaoyueQin/dsh-better-reasoning-effort), MIT License)** — Reference and assets for the model-recognizing animated reasoning effort slider (`<PrismuxReasoningEffortSlider />`, 8 model-family themes, and RGBA WebP runner sprites).
+- **[Google Antigravity (`agy`)](https://antigravity.google/)** — Design reference for the 1:1 Swarm multi-agent 4-tab right sidebar (Overview / Board / Members / Graph), live board telemetry, `/swarm` &amp; `/goal` workflows, and official CLI / ACP protocol integration.
+- **[stablyai/orca](https://github.com/stablyai/orca) (MIT License)** — Reference inspiration for the compact workspace sidebar, lightweight Workspace Board &amp; Tasks views, Split Anything arbitrary pane layout, port/resource monitoring, ultra-compact status bar, multi-window quota bar, and declarative plugin UI patterns.
+- **[can1357/oh-my-pi](https://github.com/can1357/oh-my-pi) (MIT License)** — Reference inspiration for prompt-cache-friendly memory recall, scoped cache architecture, and status-bar telemetry gauges.
 - **[yetone/magpie](https://github.com/yetone/magpie)** — Architectural inspiration for passphrase-sealed AEAD synchronization, `If-Match` optimistic locking, stall watchdogs, and portable mode.
-- **[FISH-Dock](https://github.com/Fish-under-sea/FISH-Dock)** — Reference for the 1:1 optical Celestial tri-state capsule, 360° Fresnel liquid-glass theme tokens, Warm Paper / Dark Olive documentation visuals, and Dynamic Island approval bridge.
+- **[Amp](https://ampcode.com/)** — Workflow inspiration for `/handoff` context distillation and `agent / oracle / review` role-dial orchestration.
+- **[FISH-Dock](https://github.com/Fish-under-sea/FISH-Dock)** — Reference for the 1:1 optical Celestial tri-state capsule, 360° Fresnel liquid-glass theme tokens, Warm Paper / Dark Olive documentation visuals, and liquid-glass surface conventions.
+- **[Mozilla Bergamot Translator &amp; Firefox Translations](https://github.com/mozilla/firefox-translations-models) (MPL-2.0)** — Optional, strictly opt-in on-demand downloadable WASM engine and quantized `en → zh-Hans` model pack (never bundled in installers and never fetched at startup; verified by pinned SHA-256 digests when explicitly downloaded by the user for offline reasoning translation).
+- **[Agent Client Protocol (ACP)](https://agentclientprotocol.com/), [Pi Coding Agent](https://github.com/badlogic/pi-mono), [Tencent Agent Mail (`@tencent-qqmail/agently-cli`)](https://agent.qq.com/), [OneBot v11](https://onebot.dev/), and [Tailscale](https://tailscale.com/)** — Open protocols, local CLI tools, and community standards integrated cleanly via Prismux's local-first runtime and opt-in plugins.
 
 ---
 

@@ -339,15 +339,32 @@ prismux/
 | [`docs/agents/README.md`](docs/agents/README.md) | 贡献者本机环境档案命名规范、模板与维护流程 |
 | [`assets/readme/MAINTAINING.md`](assets/readme/MAINTAINING.md) | README 立体像素头图、分栏横幅与动态演示维护指南 |
 
-### 开源致谢
+### 开源与设计致谢
 
-- [stablyai/orca](https://github.com/stablyai/orca)（MIT）：提供紧凑树状项目/工作区侧边栏、全要素任意分屏（Split Anything）、端口扫描与资源监控、超紧凑状态栏、多窗口额度条与声明式插件 UI 参考对标。
-- [can1357/oh-my-pi](https://github.com/can1357/oh-my-pi)（MIT）：提供 Mnemopi Prompt-Cache 召回与分域缓存及状态栏刻度参考。
-- `dsh-better-reasoning-effort-fish`（[HanaAyane/dsh-reasoning-effort](https://github.com/HanaAyane/dsh-reasoning-effort) PR #9 + [HaoyueQin/dsh-better-reasoning-effort](https://github.com/HaoyueQin/dsh-better-reasoning-effort)，MIT）与 `DeepSeek Harness (dsh)`：提供模型自动识别动态思考强度滑条（`<PrismuxReasoningEffortSlider />`、8 大家族主题与 RGBA WebP 奔跑小人）及对话思考与工具调用工作步骤展示参考。
-- [yetone/magpie](https://github.com/yetone/magpie)：启发口令密封 AEAD 加密同步、`If-Match` 乐观锁、60 秒停滞看门狗与便携模式设计规范。
-- [Amp](https://ampcode.com/)：启发 `/handoff` 上下文提纯交接与 `agent / oracle / review` 三档角色拨盘工作流。
-- [FISH-Dock](https://github.com/Fish-under-sea/FISH-Dock)：提供 Warm Paper / Dark Olive 立体像素视觉体系、1:1 光学天体胶囊与 360° Fresnel 液态玻璃主题规范。
-- 更多历史开源基础归属及全部核心依赖许可清单详见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+Prismux 站在众多优秀开源项目与前沿工具社区的肩膀之上，谨向以下给予关键启发、参考或底层支撑的项目与作者致以诚挚感谢：
+
+#### 特别致谢 · 工作过程与核心交互参考
+
+- **DeepSeek Harness（`dsh` / DSH NEXT）**：Prismux 的核心对话工作过程与交互体验——包括 1:1 展开工作步骤与工具调用收敛、磨砂详情卡片、思考过程折叠与流式译文对照、只读上下文注入（`context_injection`）与技能加载（`skill_load`）、消息末尾「本轮用量」统计浮窗、本地会话 TTFT / Decode / TPS 统计及原生 ACP 深度集成——均深度参考了 DeepSeek Harness（DSH）的设计与工程实践。
+- **`dsh-better-reasoning-effort-fish`**（[HanaAyane/dsh-reasoning-effort](https://github.com/HanaAyane/dsh-reasoning-effort) PR #9 + [HaoyueQin/dsh-better-reasoning-effort](https://github.com/HaoyueQin/dsh-better-reasoning-effort)，MIT）：提供模型自动识别动态思考强度滑条（`<PrismuxReasoningEffortSlider />`、8 大家族主题与 RGBA WebP 奔跑小人）的参考与开源资产。
+- **[Google Antigravity（`agy`）](https://antigravity.google/)**：启发并参考了 1:1 Swarm 蜂群多智能体四标签协同侧栏（概览 / 看板 / 成员 / 关系图）、实时消息看板、`/swarm` 与 `/goal` 工作流及官方 CLI / ACP 合规接入规范。
+
+#### 架构底座与工作台设计参考
+
+- **[T3 Code（`pingdotgg/t3code`）](https://github.com/pingdotgg/t3code)**（MIT）：Prismux 桌面宿主、编排服务端与 Web 工作台的早期历史基础来源，现已持续演进并收编为独立第一方 `@prismux/*` Monorepo。
+- **[Orca（`stablyai/orca`）](https://github.com/stablyai/orca)**（MIT）：提供紧凑树状项目 / 工作区侧边栏、轻量工作区板（Workspace Board）与任务视图、全要素任意分屏（Split Anything）、端口扫描与资源监控、超紧凑状态栏及多窗口额度条参考对标。
+- **[Cordis（`shigma/cordis`）](https://github.com/shigma/cordis)**（MIT）：启发 `@prismux/cordis-kernel` 时空可逆双域插件内核、`ctx.effect()` 卸载零残留与声明式插件 UI 架构。
+- **[Oh-My-Pi（`can1357/oh-my-pi`）](https://github.com/can1357/oh-my-pi)**（MIT）：提供 Mnemopi Prompt-Cache 友好召回、分域缓存与状态栏刻度参考。
+- **[Magpie（`yetone/magpie`）](https://github.com/yetone/magpie)**：启发 `@prismux/sync-vault` 口令密封 AEAD 加密同步、`If-Match` 乐观锁、60 秒停滞看门狗与便携模式设计规范。
+- **[Amp](https://ampcode.com/)**：启发 `/handoff` 上下文提纯交接与 `agent / oracle / review` 三档角色拨盘工作流。
+- **[FISH-Dock](https://github.com/Fish-under-sea/FISH-Dock)**：提供 Warm Paper / Dark Olive 立体像素 README 视觉体系、1:1 光学天体三态胶囊与 360° Fresnel 液态玻璃主题规范。
+
+#### 智能体协议、离线引擎与底层开源生态
+
+- **多智能体与通信生态**：[Agent Client Protocol（ACP）](https://agentclientprotocol.com/)、Claude Code、OpenAI Codex、OpenCode、[Pi Coding Agent](https://github.com/badlogic/pi-mono)、[Tencent Agent Mail（`@tencent-qqmail/agently-cli`）](https://agent.qq.com/) 与 [OneBot v11](https://onebot.dev/)（NapCatQQ / Lagrange.Core）社区。
+- **纯本地离线翻译与视觉生态**：[Mozilla Bergamot Translator &amp; Firefox Translations](https://github.com/mozilla/firefox-translations-models)（MPL-2.0，为按需校验下载的纯本地离线英→中 WASM 思考翻译提供引擎与量化模型）、Steam **Wallpaper Engine（`431960`）** 创意工坊壁纸生态与 WebGL 动态渲染社区。
+- **核心运行时与基础设施**：[Electron](https://www.electronjs.org/)、[Effect](https://effect.website/)、[React](https://react.dev/)、[TanStack](https://tanstack.com/)、[Vite / Vite+](https://vite.dev/)、[Oxc / Oxlint](https://oxc.rs/)、[Tailwind CSS](https://tailwindcss.com/)、[SQLite](https://www.sqlite.org/) 与 [`sqlite-vec`](https://github.com/asg017/sqlite-vec)、[`@pierre/*`](https://github.com/pierrecomputer/pierre)（Apache-2.0）、[Ghostty（`libghostty-vt`）](https://github.com/ghostty-org/ghostty) 与 [`node-pty`](https://github.com/microsoft/node-pty)、[KaTeX](https://katex.org/)、[Tailscale](https://tailscale.com/)、[7-Zip](https://www.7-zip.org/) 与 [Jersey 20](https://fonts.google.com/specimen/Jersey+20)（SIL OFL 1.1）。
+- 完整历史归属、第三方版权声明、Apache-2.0 `NOTICE` 与全部依赖许可清单详见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
 
 ### 许可边界
 
