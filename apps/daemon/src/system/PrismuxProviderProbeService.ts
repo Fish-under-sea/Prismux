@@ -32,7 +32,6 @@ import {
   type WindowsEnvRefreshResult
 } from "./WindowsEnvRefresh.js";
 
-const DEFAULT_CLI_TIMEOUT_MS = DEFAULT_DIAGNOSTICS_CLI_TIMEOUT_MS;
 const SERVER_AUTH_RPC_TIMEOUT_MS = 350;
 const SERVER_AUTH_SUCCESS_TTL_MS = 5_000;
 const SERVER_AUTH_FAILURE_BACKOFF_MS = 60_000;
@@ -1420,7 +1419,10 @@ export class PrismuxProviderProbeService {
         options.negativeCacheTtlMs ?? CLI_DISCOVERY_NEGATIVE_TTL_MS
       );
     }
-    this.cliTimeoutMs = Math.max(200, options.cliTimeoutMs ?? DEFAULT_CLI_TIMEOUT_MS);
+    this.cliTimeoutMs = Math.max(
+      200,
+      options.cliTimeoutMs ?? DEFAULT_DIAGNOSTICS_CLI_TIMEOUT_MS
+    );
     this.env = options.env ?? process.env;
     this.homeDir = options.homeDir ?? homedir();
     this.workspacePath = options.workspacePath;
