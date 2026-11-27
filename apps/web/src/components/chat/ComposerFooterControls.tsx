@@ -238,9 +238,7 @@ export function ComposerPermissionsSection(props: {
                 <div
                   className={cn(
                     "flex items-center gap-1.5 text-sm leading-5 font-semibold",
-                    fullAccess
-                      ? "text-amber-700 dark:text-amber-400"
-                      : "text-foreground",
+                    fullAccess ? "text-amber-700 dark:text-amber-400" : "text-foreground",
                   )}
                 >
                   <OptionIcon aria-hidden="true" className="size-3.5 shrink-0" />
@@ -279,6 +277,8 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
   followUpBehavior: "queue" | "steer";
   canSteer: boolean;
   alternateShortcutLabel: string | null;
+  escStopArmed?: boolean;
+  queuedCount?: number;
   voiceInputActive?: boolean;
   isSendBusy: boolean;
   isSendHeld?: boolean;
@@ -289,6 +289,8 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
   preserveComposerFocusOnPointerDown?: boolean;
   isEditingQueuedMessage: boolean;
   onSubmitMessage: React.MouseEventHandler<HTMLButtonElement>;
+  onAlternateSubmitMessage?: React.MouseEventHandler<HTMLButtonElement> | undefined;
+  onSteerQueuedMessages?: (() => void) | undefined;
   onResume: () => void;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
@@ -309,6 +311,8 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
         followUpBehavior={props.followUpBehavior}
         canSteer={props.canSteer}
         alternateShortcutLabel={props.alternateShortcutLabel}
+        escStopArmed={props.escStopArmed ?? false}
+        queuedCount={props.queuedCount ?? 0}
         voiceInputActive={props.voiceInputActive ?? false}
         isSendBusy={props.isSendBusy}
         isSendHeld={props.isSendHeld ?? false}
@@ -320,6 +324,8 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
         preserveComposerFocusOnPointerDown={props.preserveComposerFocusOnPointerDown ?? false}
         isEditingQueuedMessage={props.isEditingQueuedMessage}
         onSubmitMessage={props.onSubmitMessage}
+        onAlternateSubmitMessage={props.onAlternateSubmitMessage}
+        onSteerQueuedMessages={props.onSteerQueuedMessages}
         onResume={props.onResume}
         onPreviousPendingQuestion={props.onPreviousPendingQuestion}
         onInterrupt={props.onInterrupt}

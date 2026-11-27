@@ -24,6 +24,7 @@ const state = vi.hoisted(() => ({
   threadState: null as unknown as Atom.Writable<AsyncResult.AsyncResult<EnvironmentThreadState>>,
   workflow: null as unknown,
   commandResult: undefined as unknown,
+  commandCalls: [] as Array<{ readonly command: unknown; readonly payload: unknown }>,
 }));
 
 vi.mock(import("@prismux/client-runtime/state/thread-workflows"), async (importOriginal) => ({
@@ -74,7 +75,10 @@ vi.mock(import("../../state/threads"), async (importOriginal) => {
 
 vi.mock(import("../../state/use-atom-command"), async (importOriginal) => ({
   ...(await importOriginal()),
-  useAtomCommand: (() => async () => state.commandResult) as never,
+  useAtomCommand: ((command: unknown) => async (payload: unknown) => {
+    state.commandCalls.push({ command, payload });
+    return state.commandResult;
+  }) as never,
 }));
 
 vi.mock(import("../../assets/assetUrls"), async (importOriginal) => ({
@@ -96,6 +100,7 @@ import type { ExpandedImagePreview } from "./ExpandedImagePreview";
 function setup() {
   state.workflow = null;
   state.commandResult = undefined;
+  state.commandCalls = [];
 }
 
 const baseProps = {
@@ -442,4 +447,85 @@ it("tells the user why Send now was rejected", async () => {
 
   await page.getByRole("button", { name: "Send now" }).click();
   await vi.waitFor(() => expect(page.getByText(reason).element()).toBeVisible());
+});
+
+it("supports DSH dock collapse/expand, single-row removal, clear-all, and paused queue resume", async () => {
+  setup();
+  state.workflow = {
+    activeRun: { id: "run:active" },
+    canPromoteToSteer: true,
+    isHeld: false,
+    queuedRuns: [
+      {
+        run: { id: "run:first", userMessageId: "message:first" },
+        text: "First queued task",
+        attachments: [],
+      },
+      {
+        run: { id: "run:second", userMessageId: "message:second" },
+        text: "Second queued task",
+        attachments: [],
+      },
+    ],
+  };
+
+  await using screen = await renderQueue({ steerShortcutLabel: "Ctrl+Shift+Enter" });
+
+  // Multi-item dock header renders count, shortcut hint, collapse toggle, and Clear action.
+  const toggle = screen.container.querySelector<HTMLButtonElement>(
+    "[data-queue-dock-toggle='true']",
+  );
+  expect(toggle).not.toBeNull();
+  expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+  await expect.element(page.getByText("First queued task", { exact: true })).toBeVisible();
+  await expect.element(page.getByText("Second queued task", { exact: true })).toBeVisible();
+
+  // Clicking the dock header collapses the list cleanly; clicking again expands it.
+  await act(() => toggle?.click());
+  expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+  await expect
+    .element(page.getByText("First queued task", { exact: true }))
+    .not.toBeInTheDocument();
+
+  await act(() => toggle?.click());
+  expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+  await expect.element(page.getByText("First queued task", { exact: true })).toBeVisible();
+
+  // Removing a single queued message cancels that specific run.
+  await page.getByRole("button", { name: "Remove queued message", exact: true }).nth(0).click();
+  expect(state.commandCalls).toHaveLength(1);
+  expect(state.commandCalls[0]?.payload).toMatchObject({
+    input: { runId: "run:first" },
+  });
+
+  // Clearing all queued messages cancels every queued run in order.
+  state.commandCalls = [];
+  await page.getByRole("button", { name: "Clear queued messages", exact: true }).click();
+  await vi.waitFor(() => expect(state.commandCalls).toHaveLength(2));
+  expect(
+    state.commandCalls.map((call) => (call.payload as { input: { runId: string } }).input.runId),
+  ).toEqual(["run:first", "run:second"]);
+
+  // Held queue (after user interrupted active turn) shows Paused badge and Resume button.
+  state.commandCalls = [];
+  state.workflow = {
+    activeRun: null,
+    canSendNow: true,
+    canPromoteToSteer: false,
+    isHeld: true,
+    queuedRuns: [
+      {
+        run: { id: "run:held", userMessageId: "message:held", queueHeld: true },
+        text: "Kept after interrupt",
+        attachments: [],
+      },
+    ],
+  };
+  await screen.rerender(<QueuedRunsControl {...baseProps} />);
+  await expect.element(page.getByText("Paused", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Resume", exact: true }).click();
+  expect(state.commandCalls).toHaveLength(1);
+  expect(state.commandCalls[0]?.payload).toMatchObject({
+    input: { runId: "run:held" },
+  });
 });

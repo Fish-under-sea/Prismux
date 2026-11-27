@@ -622,7 +622,7 @@ export const ClientSettingsSchema = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed("enter")),
   ),
   followUpBehavior: Schema.Literals(["queue", "steer"]).pipe(
-    Schema.withDecodingDefault(Effect.succeed("steer")),
+    Schema.withDecodingDefault(Effect.succeed("queue")),
   ),
   sideThreadOpenTarget: SideThreadOpenTarget.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDE_THREAD_OPEN_TARGET)),

@@ -135,6 +135,20 @@ describe("ClientSettings terminal close confirmation", () => {
   });
 });
 
+describe("ClientSettings followUpBehavior (DSH queue-by-default parity)", () => {
+  it("defaults followUpBehavior to queue so messages do not interrupt running turns", () => {
+    expect(decodeClientSettings({}).followUpBehavior).toBe("queue");
+    expect(decodeClientSettings({ followUpBehavior: "steer" }).followUpBehavior).toBe("steer");
+    expect(decodeClientSettings({ followUpBehavior: "queue" }).followUpBehavior).toBe("queue");
+    expect(decodeClientSettingsPatch({ followUpBehavior: "queue" })).toEqual({
+      followUpBehavior: "queue",
+    });
+    expect(decodeClientSettingsPatch({ followUpBehavior: "steer" })).toEqual({
+      followUpBehavior: "steer",
+    });
+  });
+});
+
 describe("ServerSettings usage price overrides", () => {
   const prices = { inputCostPerMillionTokens: 2, outputCostPerMillionTokens: 8 };
 

@@ -1392,8 +1392,10 @@ export function useComposerSend(input: ComposerSendInput) {
       });
       return;
     }
+    const optimisticQueueBehindActiveRun =
+      shouldQueueBehindActiveRun || (phase === "connecting" && turnDispatchMode === "queue");
     const optimisticAttachments = optimisticMessageAttachments(composerAttachmentsSnapshot);
-    if (!shouldQueueBehindActiveRun) {
+    if (!optimisticQueueBehindActiveRun) {
       anchorNewTurn(
         scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
         messageIdForSend,
@@ -1409,7 +1411,7 @@ export function useComposerSend(input: ComposerSendInput) {
       createdAt: messageCreatedAt,
       updatedAt: messageCreatedAt,
       streaming: false,
-      ...(shouldQueueBehindActiveRun
+      ...(optimisticQueueBehindActiveRun
         ? { inputIntent: "queued_turn" as const }
         : phase === "running" && dispatchMode === "steer"
           ? { inputIntent: "steer" as const }

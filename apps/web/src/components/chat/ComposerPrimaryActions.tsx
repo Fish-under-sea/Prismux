@@ -3,11 +3,12 @@ import {
   useEffect,
   useState,
   useSyncExternalStore,
+  type CSSProperties,
   type MouseEventHandler,
   type PointerEventHandler,
   type ReactNode,
 } from "react";
-import { msg, useGT, useMessages } from "gt-react";
+import { msg, useGT, useLocale, useMessages } from "gt-react";
 import {
   CheckIcon,
   ChevronLeftIcon,
@@ -29,12 +30,88 @@ import {
   subscribeSkyClock,
 } from "../sidebarSkyBackdrop.logic";
 import { Button } from "../ui/button";
+import { Kbd } from "../ui/kbd";
 import { Spinner } from "../ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   alternateComposerDispatchAction,
   resolveComposerDispatchMode,
 } from "@prismux/client-runtime/state/composer-dispatch";
+
+function compactShortcutKeyLabel(shortcut: string | null | undefined): string | null {
+  if (!shortcut) return null;
+  return shortcut.replace(/Enter$/i, "↵");
+}
+
+const ACCENT_ICON_STYLE: CSSProperties = {
+  color: "var(--pmx-accent-text, var(--pmx-accent, var(--primary)))",
+};
+
+const STEER_PILL_STYLE: CSSProperties = {
+  borderColor:
+    "var(--pmx-accent-border, color-mix(in srgb, var(--pmx-accent, var(--primary)) 40%, var(--border)))",
+  backgroundColor:
+    "var(--pmx-accent-soft, color-mix(in srgb, var(--pmx-accent, var(--primary)) 12%, var(--background)))",
+};
+
+function getComposerActionCopy(locale: string | undefined) {
+  const isZh = typeof locale === "string" && locale.toLowerCase().startsWith("zh");
+  return {
+    escPrefix: isZh ? "再按" : "Press",
+    escSuffix: isZh ? "强行中断" : "again to stop",
+    steerQueueAction: isZh ? "插话队列" : "Steer queue",
+    steerQueueAria: (shortcut: string | null) =>
+      isZh
+        ? shortcut
+          ? `立即插话发送排队消息 (${shortcut})`
+          : "立即插话发送排队消息"
+        : shortcut
+          ? `Steer queued messages (${shortcut})`
+          : "Steer queued messages",
+    steerQueueTooltip: (count: number, shortcut: string | null) =>
+      isZh
+        ? shortcut
+          ? `按 ${shortcut} 将排队中的 ${count} 条消息立即插话发送`
+          : `将排队中的 ${count} 条消息立即插话发送`
+        : shortcut
+          ? `Press ${shortcut} to steer all ${count} queued messages`
+          : `Steer all ${count} queued messages`,
+    steerAction: isZh ? "插话" : "Steer",
+    queueAction: isZh ? "排队" : "Queue",
+    steerNowAria: (shortcut: string | null) =>
+      isZh
+        ? shortcut
+          ? `强行插话发送 (${shortcut})`
+          : "强行插话发送"
+        : shortcut
+          ? `Steer now (${shortcut})`
+          : "Steer now",
+    queueInsteadAria: (shortcut: string | null) =>
+      isZh
+        ? shortcut
+          ? `加入队列 (${shortcut})`
+          : "加入队列"
+        : shortcut
+          ? `Queue instead (${shortcut})`
+          : "Queue instead",
+    steerNowTooltip: (shortcut: string | null) =>
+      isZh
+        ? shortcut
+          ? `强行打断/插话发送当前输入（${shortcut}）`
+          : "强行打断/插话发送当前输入"
+        : shortcut
+          ? `Interrupt / steer current turn with this message (${shortcut})`
+          : "Interrupt / steer current turn with this message",
+    queueInsteadTooltip: (shortcut: string | null) =>
+      isZh
+        ? shortcut
+          ? `不打断当前运行，加入待发队列（${shortcut}）`
+          : "不打断当前运行，加入待发队列"
+        : shortcut
+          ? `Queue behind the active run without interrupting (${shortcut})`
+          : "Queue behind the active run without interrupting",
+  };
+}
 
 interface PendingActionState {
   questionIndex: number;
@@ -56,6 +133,10 @@ interface ComposerPrimaryActionsProps {
   followUpBehavior?: "queue" | "steer";
   canSteer?: boolean;
   alternateShortcutLabel?: string | null;
+  /** True during the 500ms window after the first Esc press (double-Esc force-interrupt). */
+  escStopArmed?: boolean;
+  /** Count of pending queued turns waiting behind the active run. */
+  queuedCount?: number;
   /** Dictation is running; Send finishes it and submits once the transcript lands. */
   voiceInputActive?: boolean;
   isSendBusy: boolean;
@@ -68,7 +149,9 @@ interface ComposerPrimaryActionsProps {
   canResume?: boolean;
   preserveComposerFocusOnPointerDown?: boolean;
   isEditingQueuedMessage?: boolean;
-  onSubmitMessage?: MouseEventHandler<HTMLButtonElement>;
+  onSubmitMessage?: MouseEventHandler<HTMLButtonElement> | undefined;
+  onAlternateSubmitMessage?: MouseEventHandler<HTMLButtonElement> | undefined;
+  onSteerQueuedMessages?: (() => void) | undefined;
   onResume?: () => void;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
@@ -188,9 +271,17 @@ function StopGenerationButton({
         </svg>
       </TooltipTrigger>
       <TooltipPopup>
-        {stopPhase === "pending"
-          ? gt("Stopping…")
-          : gt("Interrupt", { $context: "verb, stops the running agent" })}
+        {stopPhase === "pending" ? (
+          gt("Stopping…")
+        ) : (
+          <span className="inline-flex items-center gap-1.5">
+            <span>{gt("Interrupt", { $context: "verb, stops the running agent" })}</span>
+            <span className="inline-flex items-center gap-0.5">
+              <Kbd variant="outline">Esc</Kbd>
+              <Kbd variant="outline">Esc</Kbd>
+            </span>
+          </span>
+        )}
       </TooltipPopup>
     </Tooltip>
   );
@@ -248,9 +339,11 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   isRunning,
   canInterrupt,
   runId = null,
-  followUpBehavior = "steer",
+  followUpBehavior = "queue",
   canSteer = true,
   alternateShortcutLabel = null,
+  escStopArmed = false,
+  queuedCount = 0,
   voiceInputActive = false,
   isSendBusy,
   isSendHeld = false,
@@ -262,6 +355,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   preserveComposerFocusOnPointerDown = false,
   isEditingQueuedMessage = false,
   onSubmitMessage,
+  onAlternateSubmitMessage,
+  onSteerQueuedMessages,
   onResume,
   onPreviousPendingQuestion,
   onInterrupt,
@@ -271,6 +366,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   onToggleKeepFullHistory,
 }: ComposerPrimaryActionsProps) {
   const gt = useGT();
+  const locale = useLocale();
+  const actionCopy = getComposerActionCopy(locale);
   const m = useMessages();
   const [stopPhase, setStopPhase] = useStopPhase({ runId, canInterrupt, canOperateThread });
   const pointerFocusProps = preserveComposerFocusOnPointerDown
@@ -286,6 +383,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       alternateModifier: shortcutModifiers.metaKey || shortcutModifiers.ctrlKey,
     }) === "queue";
   const alternateAction = alternateComposerDispatchAction(followUpBehavior);
+  const compactAlternateShortcut = compactShortcutKeyLabel(alternateShortcutLabel);
   const isSendDisabled = !canOperateThread || sendDisabledReason !== null;
   const stageBackdropVariant = useSidebarStageBackdropVariant();
   const skyMinutes = useSyncExternalStore(
@@ -296,6 +394,20 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   const skyButtonTheme = stageBackdropVariant
     ? resolveCompactSkyButtonTheme(computeSkyScene(skyMinutes))
     : null;
+
+  const escStopArmedChip =
+    escStopArmed && canInterrupt && stopPhase !== "pending" ? (
+      <span
+        role="status"
+        aria-live="polite"
+        data-composer-esc-stop-armed="true"
+        className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full border border-destructive/35 bg-destructive/12 px-2.5 text-xs font-medium text-destructive select-none dark:border-destructive/45 dark:bg-destructive/20 [[data-pmx-glass='1']_&]:backdrop-blur-md"
+      >
+        <span>{actionCopy.escPrefix}</span>
+        <Kbd variant="outline">Esc</Kbd>
+        <span>{actionCopy.escSuffix}</span>
+      </span>
+    ) : null;
 
   const renderStopGenerationButton = (insidePendingAction: boolean) => (
     <StopGenerationButton
@@ -388,9 +500,48 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     !isEditingQueuedMessage &&
     !isSendHeld
   ) {
+    const showEmptySteerQueueAction =
+      !compact &&
+      !escStopArmed &&
+      isRunning &&
+      canSteer &&
+      queuedCount > 0 &&
+      onSteerQueuedMessages !== undefined &&
+      stopPhase !== "pending";
     return (
       <>
         {children}
+        {escStopArmedChip}
+        {showEmptySteerQueueAction ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  data-composer-steer-queue-action="true"
+                  className="inline-flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border/80 bg-background/90 px-2.5 text-xs font-medium text-foreground shadow-2xs transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:outline-none dark:border-border/70 dark:bg-card/85 [[data-pmx-glass='1']_&]:bg-background/82 [[data-pmx-glass='1']_&]:backdrop-blur-md"
+                  style={STEER_PILL_STYLE}
+                  {...pointerFocusProps}
+                  onClick={() => onSteerQueuedMessages()}
+                  aria-label={actionCopy.steerQueueAria(alternateShortcutLabel)}
+                />
+              }
+            >
+              <CornerUpRightIcon
+                aria-hidden="true"
+                className="size-3.5 shrink-0"
+                style={ACCENT_ICON_STYLE}
+              />
+              <span>{actionCopy.steerQueueAction}</span>
+              {compactAlternateShortcut ? (
+                <Kbd variant="outline">{compactAlternateShortcut}</Kbd>
+              ) : null}
+            </TooltipTrigger>
+            <TooltipPopup>
+              {actionCopy.steerQueueTooltip(queuedCount, alternateShortcutLabel)}
+            </TooltipPopup>
+          </Tooltip>
+        ) : null}
         {renderStopGenerationButton(false)}
       </>
     );
@@ -521,6 +672,63 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     </button>
   );
 
+  const showAlternateActionPill =
+    !compact &&
+    isRunning &&
+    !isEditingQueuedMessage &&
+    !showResume &&
+    hasSendableContent &&
+    canSteer &&
+    !isBusyOrHeld &&
+    !isSendDisabled &&
+    !isEnvironmentUnavailable &&
+    onAlternateSubmitMessage !== undefined;
+
+  const alternateActionPill = showAlternateActionPill ? (
+    <Tooltip key="alternate-dispatch">
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            data-composer-alternate-action={alternateAction}
+            className="inline-flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border/80 bg-background/90 px-2.5 text-xs font-medium text-foreground shadow-2xs transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:outline-none dark:border-border/70 dark:bg-card/85 [[data-pmx-glass='1']_&]:bg-background/82 [[data-pmx-glass='1']_&]:backdrop-blur-md"
+            style={alternateAction === "steer" ? STEER_PILL_STYLE : undefined}
+            {...pointerFocusProps}
+            onClick={(event) => {
+              if (stopPhase === "landed") {
+                event.preventDefault();
+                return;
+              }
+              onAlternateSubmitMessage(event);
+            }}
+            aria-label={
+              alternateAction === "steer"
+                ? actionCopy.steerNowAria(alternateShortcutLabel)
+                : actionCopy.queueInsteadAria(alternateShortcutLabel)
+            }
+          />
+        }
+      >
+        {alternateAction === "steer" ? (
+          <CornerUpRightIcon
+            aria-hidden="true"
+            className="size-3.5 shrink-0"
+            style={ACCENT_ICON_STYLE}
+          />
+        ) : (
+          <ListPlusIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+        )}
+        <span>{alternateAction === "steer" ? actionCopy.steerAction : actionCopy.queueAction}</span>
+        {compactAlternateShortcut ? <Kbd variant="outline">{compactAlternateShortcut}</Kbd> : null}
+      </TooltipTrigger>
+      <TooltipPopup>
+        {alternateAction === "steer"
+          ? actionCopy.steerNowTooltip(alternateShortcutLabel)
+          : actionCopy.queueInsteadTooltip(alternateShortcutLabel)}
+      </TooltipPopup>
+    </Tooltip>
+  ) : null;
+
   const submit = (
     <Tooltip key="submit">
       <TooltipTrigger render={<span className="inline-flex" />}>{sendButton}</TooltipTrigger>
@@ -531,6 +739,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     return withStopButton(
       <>
         {children}
+        {escStopArmedChip}
+        {alternateActionPill}
         {submit}
       </>,
     );
@@ -574,6 +784,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         </TooltipPopup>
       </Tooltip>
       {children}
+      {escStopArmedChip}
+      {alternateActionPill}
       {submit}
     </div>,
   );

@@ -35,8 +35,79 @@ import {
 import type { Dispatch, RefObject, SetStateAction } from "react";
 
 /**
+ * Maximum interval (ms) between two independent Escape presses that triggers
+ * force-interrupting the active turn, matching DSH NEXT `stopSequenceMs`.
+ */
+export const DOUBLE_ESCAPE_STOP_WINDOW_MS = 500;
+
+export type EscapeStopPressResult = "armed" | "stop";
+
+export interface EscapeStopSequence {
+  press: (input: { readonly runKey: string; readonly nowMs?: number }) => EscapeStopPressResult;
+  reset: () => void;
+  isArmed: () => boolean;
+  dispose: () => void;
+}
+
+/**
+ * Two independent Escape presses against the same active run within `windowMs`
+ * trigger force-interrupt, mirroring DSH NEXT `StopSequence`.
+ */
+export function createEscapeStopSequence(options?: {
+  readonly windowMs?: number;
+  readonly onArmedChange?: (armed: boolean) => void;
+}): EscapeStopSequence {
+  const windowMs = options?.windowMs ?? DOUBLE_ESCAPE_STOP_WINDOW_MS;
+  let first: { readonly runKey: string; readonly deadlineMs: number } | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearTimer = () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+
+  const reset = () => {
+    const wasArmed = first !== null;
+    first = null;
+    clearTimer();
+    if (wasArmed) {
+      options?.onArmedChange?.(false);
+    }
+  };
+
+  return {
+    press({ runKey, nowMs = performance.now() }) {
+      const previous = first;
+      clearTimer();
+      first = null;
+      if (previous !== null && nowMs <= previous.deadlineMs && previous.runKey === runKey) {
+        options?.onArmedChange?.(false);
+        return "stop";
+      }
+      first = { runKey, deadlineMs: nowMs + windowMs };
+      timer = setTimeout(() => {
+        reset();
+      }, windowMs + 1);
+      if (previous === null) {
+        options?.onArmedChange?.(true);
+      }
+      return "armed";
+    },
+    reset,
+    isArmed: () => first !== null,
+    dispose() {
+      first = null;
+      clearTimer();
+    },
+  };
+}
+
+/**
  * The composer's key handling inside the editor: send shortcuts, the slash/mention menu,
- * prompt history on ArrowUp/ArrowDown, plan-mode toggle, prompt suggestions on Tab, and list continuation.
+ * prompt history on ArrowUp/ArrowDown, plan-mode toggle, prompt suggestions on Tab,
+ * empty-draft accelerated queue steering, double-Escape stop sequencing, and list continuation.
  * Returns the editor's key handler; it reads the inputs captured by the render that built it.
  */
 export function composerCommandKeyHandler(input: {
@@ -96,6 +167,12 @@ export function composerCommandKeyHandler(input: {
     dispatchMode: ComposerDispatchMode,
     submissionIntent: ComposerSubmissionIntent,
   ) => void;
+  /** Steers queued messages when the user presses Mod+Enter on an empty draft while running. */
+  readonly onSteerQueuedMessages?: () => boolean;
+  /** Handles plain Escape when no overlay/menu/suggestion consumed it (e.g. double-Esc interrupt). */
+  readonly onEscapeWhenIdle?: (event: KeyboardEvent) => boolean;
+  /** Clears any armed double-Escape stop sequence when another Escape layer handles the press. */
+  readonly onResetEscapeStop?: () => void;
   /** Predicted next prompt that Tab fills into an empty composer; Escape dismisses it. */
   readonly promptSuggestion: string | null;
   readonly dismissPromptSuggestion: () => void;
@@ -136,6 +213,9 @@ export function composerCommandKeyHandler(input: {
     readComposerSnapshot,
     applyPromptReplacement,
     submitComposer,
+    onSteerQueuedMessages,
+    onEscapeWhenIdle,
+    onResetEscapeStop,
     promptSuggestion,
     dismissPromptSuggestion,
   } = input;
@@ -237,14 +317,32 @@ export function composerCommandKeyHandler(input: {
     const { trigger } = resolveActiveComposerTrigger();
     const menuIsActive = !isLiteralPendingAnswer && trigger !== null;
     if (key === "Escape") {
-      if (event.isComposing || event.keyCode === 229) return false;
+      if (event.isComposing || event.keyCode === 229) {
+        onResetEscapeStop?.();
+        return false;
+      }
       if (!menuIsActive && promptSuggestion !== null && promptRef.current.length === 0) {
+        onResetEscapeStop?.();
         dismissPromptSuggestion();
         return true;
       }
-      if (!menuIsActive) return false;
-      dismissComposerTrigger(trigger);
-      return true;
+      if (menuIsActive) {
+        onResetEscapeStop?.();
+        dismissComposerTrigger(trigger);
+        return true;
+      }
+      if (
+        onEscapeWhenIdle &&
+        !event.repeat &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.shiftKey
+      ) {
+        return onEscapeWhenIdle(event);
+      }
+      onResetEscapeStop?.();
+      return false;
     }
     if (
       menuIsActive &&
@@ -285,10 +383,27 @@ export function composerCommandKeyHandler(input: {
       return navigatePromptHistory(key === "ArrowUp" ? "backward" : "forward", event);
     }
     if (submissionIntent) {
+      const running = phase === "running" || phase === "connecting";
+      const isComposerEmpty =
+        promptRef.current.trim().length === 0 &&
+        composerImagesRef.current.length === 0 &&
+        composerFilesRef.current.length === 0 &&
+        composerTerminalContextsRef.current.length === 0 &&
+        composerPreviewAnnotations.length === 0 &&
+        composerReviewComments.length === 0 &&
+        pendingUserInputs.length === 0;
+      if (
+        running &&
+        submissionIntent === "alternate" &&
+        isComposerEmpty &&
+        onSteerQueuedMessages?.() === true
+      ) {
+        return true;
+      }
       submitComposer(
         undefined,
         resolveComposerDispatchMode({
-          running: phase === "running" || phase === "connecting",
+          running,
           alternateModifier: submissionIntent === "alternate",
           activeTurnDefault: followUpBehavior,
           canSteer,

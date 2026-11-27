@@ -56,6 +56,7 @@ vi.mock("../../state/use-atom-command", () => ({
 
 vi.mock("../../hooks/useSettings", () => ({
   useEnvironmentIdentificationMode: () => "none",
+  useClientSettings: () => false,
 }));
 
 const runsKey = (ref: ScopedThreadRef) => `${ref.environmentId}:${ref.threadId}`;

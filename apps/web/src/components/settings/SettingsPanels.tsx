@@ -1101,7 +1101,7 @@ export function ChatSettingsPanel() {
               >
                 <SelectTrigger
                   size="sm"
-                  className="w-full sm:w-48"
+                  className="w-full sm:w-56"
                   aria-label={gt("Follow-up behavior")}
                 >
                   <SelectValue>

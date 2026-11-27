@@ -194,3 +194,69 @@ it("swaps the collapsed composer's send button for Stop while a turn can be stop
   await screen.rerender(collapsed({ canInterrupt: false }));
   await expect.element(screen.getByRole("button", { name: "Send message" })).toBeVisible();
 });
+
+it("defaults to queueing without interrupting while running and exposes force-steer shortcut pill", async () => {
+  const props = setup();
+  const onAlternateSubmitMessage = vi.fn();
+  await using screen = await render(
+    <ComposerPrimaryActions
+      {...props}
+      compact={false}
+      isRunning
+      canSteer
+      hasSendableContent
+      alternateShortcutLabel="Ctrl+Enter"
+      onAlternateSubmitMessage={onAlternateSubmitMessage}
+    />,
+  );
+
+  // Primary button queues by default (non-interrupting).
+  await expect.element(screen.getByRole("button", { name: "Queue message" })).toBeVisible();
+  // Adjacent shortcut pill clearly surfaces the force-interrupt/steer action and triggers it on click.
+  const steerPill = screen.getByRole("button", { name: /Steer now \(Ctrl\+Enter\)/ });
+  await expect.element(steerPill).toBeVisible();
+  expect(steerPill.element().getAttribute("data-composer-alternate-action")).toBe("steer");
+  await act(() => (steerPill.element() as HTMLButtonElement).click());
+  expect(onAlternateSubmitMessage).toHaveBeenCalledTimes(1);
+});
+
+it("surfaces double-Esc confirmation chip and empty-draft steer-queue pill when running", async () => {
+  const props = setup();
+  const onSteerQueuedMessages = vi.fn();
+  await using screen = await render(
+    <ComposerPrimaryActions
+      {...props}
+      compact={false}
+      isRunning
+      canInterrupt
+      canSteer
+      hasSendableContent={false}
+      queuedCount={2}
+      alternateShortcutLabel="Ctrl+Enter"
+      onSteerQueuedMessages={onSteerQueuedMessages}
+    />,
+  );
+
+  const steerQueueButton = screen.getByRole("button", {
+    name: /Steer queued messages \(Ctrl\+Enter\)/,
+  });
+  await expect.element(steerQueueButton).toBeVisible();
+  await act(() => (steerQueueButton.element() as HTMLButtonElement).click());
+  expect(onSteerQueuedMessages).toHaveBeenCalledTimes(1);
+
+  await screen.rerender(
+    <ComposerPrimaryActions
+      {...props}
+      compact={false}
+      isRunning
+      canInterrupt
+      canSteer
+      hasSendableContent={false}
+      queuedCount={2}
+      escStopArmed
+      alternateShortcutLabel="Ctrl+Enter"
+      onSteerQueuedMessages={onSteerQueuedMessages}
+    />,
+  );
+  await expect.element(screen.getByText(/again to stop/)).toBeVisible();
+});
