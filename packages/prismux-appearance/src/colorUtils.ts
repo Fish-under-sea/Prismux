@@ -167,3 +167,47 @@ export function selectHighContrastInk(bgHex: string): '#ffffff' | '#000000' {
     ? '#ffffff'
     : '#000000';
 }
+
+/**
+ * Resolves a WCAG 2.1 AA (>= 4.5:1) readable text color derived from an accent hex
+ * for both Light (#ffffff / #f4f4f5) and Dark (#000000 / #181a24) polarity surfaces.
+ * Preserves the raw accent color verbatim whenever it already meets >= 4.6:1 contrast.
+ */
+export function resolveReadableAccentText(accentHex: string, isDark: boolean): string {
+  const fallback = isDark ? '#5e9bff' : '#005fb8';
+  const clean = normalizeHex(accentHex, true) || fallback;
+  const rgb = hexToRgb(clean);
+  // Worst-case polarity surface: #f4f4f5 (zinc-100) in Light, #181a24 (raised card/glass) in Dark.
+  const surfaceLum = relativeLuminance(
+    isDark ? { r: 24, g: 26, b: 36 } : { r: 244, g: 244, b: 245 },
+  );
+  const targetContrast = 4.6; // +0.1 safety margin for 8-bit hex rounding
+
+  const passes = (r: number, g: number, b: number): boolean =>
+    contrastRatioFromLuminance(relativeLuminance({ r, g, b }), surfaceLum) >= targetContrast;
+
+  if (passes(rgb.r, rgb.g, rgb.b)) {
+    return clean;
+  }
+
+  const target = isDark ? { r: 255, g: 255, b: 255 } : { r: 15, g: 23, b: 42 };
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 16; i++) {
+    const t = (lo + hi) / 2;
+    const tr = rgb.r * (1 - t) + target.r * t;
+    const tg = rgb.g * (1 - t) + target.g * t;
+    const tb = rgb.b * (1 - t) + target.b * t;
+    if (passes(tr, tg, tb)) {
+      hi = t;
+    } else {
+      lo = t;
+    }
+  }
+
+  return rgbToHex(
+    rgb.r * (1 - hi) + target.r * hi,
+    rgb.g * (1 - hi) + target.g * hi,
+    rgb.b * (1 - hi) + target.b * hi,
+  );
+}

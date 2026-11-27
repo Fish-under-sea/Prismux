@@ -80,6 +80,31 @@ html[data-pmx-theme="dark"][data-theme-id]:not([data-theme-id=""]) {
   );
 }
 
+/* ── 0.5. Mode-Agnostic Accent Semantic Token Bridge (Light, Dark & Liquid Glass) ──
+ * Propagates Prismux's global accent color into Tailwind/shadcn semantic primary, ring,
+ * sidebar-primary, action & update tokens across ALL modes (Light, Dark, and Liquid Glass)
+ * while yielding cleanly to Theme Editor live preview (`data-theme-id="__preview"`). */
+html[data-pmx-theme],
+html.dark[data-pmx-theme],
+html:not(.dark)[data-pmx-theme],
+html[data-pmx-theme][data-theme-id]:not([data-theme-id=""]):not([data-theme-id="__preview"]) {
+  --primary: var(--pmx-accent, #005fb8);
+  --primary-foreground: var(--pmx-accent-ink, #ffffff);
+  --ring: var(--pmx-accent, #005fb8);
+  --sidebar-primary: var(--pmx-accent, #005fb8);
+  --sidebar-primary-foreground: var(--pmx-accent-ink, #ffffff);
+  --sidebar-ring: var(--pmx-accent, #005fb8);
+  --message-action: var(--pmx-accent, #005fb8);
+  --message-action-foreground: var(--pmx-accent-ink, #ffffff);
+  --message-action-hover: color-mix(
+    in srgb,
+    var(--message-action, var(--pmx-accent, #005fb8)) 90%,
+    var(--background)
+  );
+  --update: var(--pmx-accent, #005fb8);
+  --update-foreground: var(--pmx-accent-text, var(--pmx-accent, #005fb8));
+}
+
 /* Zero-seam monolithic outer chrome (Left Sidebar + Top Tab Bar + Bottom Status Bar + Right Edge / Right Sidebar):
  * Eliminates ALL internal vertical/horizontal T-seams, cross-seams, and box-shadow hairlines between outer frame bars.
  * ONLY `[data-pmx-stage-frame='1']::after` draws the continuous 1px rounded inner frame ring around the center canvas. */
@@ -2570,6 +2595,12 @@ html:not(.dark)[data-pmx-ui-colors="1"],
 html[data-pmx-ui-colors="1"][data-theme-id]:not([data-theme-id=""]),
 html[data-pmx-theme][data-pmx-ui-colors="1"][data-theme-id]:not([data-theme-id=""]) {
   --message-action: var(--pmx-ui-send, var(--pmx-accent, #5e9bff));
+  --message-action-foreground: var(--pmx-ui-send-ink, var(--pmx-accent-ink, #ffffff));
+  --message-action-hover: color-mix(
+    in srgb,
+    var(--pmx-ui-send, var(--pmx-accent, #5e9bff)) 90%,
+    var(--background)
+  );
   --info-foreground: var(--pmx-ui-link, var(--pmx-accent-text, var(--pmx-accent, #5e9bff)));
   --context-chip-mention: var(
     --pmx-ui-file-icon,
@@ -3130,6 +3161,39 @@ html[data-pmx-theme="light"][data-pmx-glass="1"]
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.94),
     0 2px 8px rgba(15, 23, 42, 0.1);
+}
+
+/* Non-glass Light & Dark active sidebar session cards follow --pmx-accent cleanly */
+html:not(.dark)[data-pmx-glass="0"]
+  [data-app-sidebar]
+  [data-sidebar-card="1"][data-sidebar-card-active="1"]:not([data-sidebar-agent-active="1"]),
+html[data-pmx-theme="light"][data-pmx-glass="0"]
+  [data-app-sidebar]
+  [data-sidebar-card="1"][data-sidebar-card-active="1"]:not([data-sidebar-agent-active="1"]),
+html:not(.dark)[data-pmx-glass="0"]
+  [data-pmx-sidebar-peek="1"]
+  [data-sidebar-card="1"][data-sidebar-card-active="1"]:not([data-sidebar-agent-active="1"]),
+html[data-pmx-theme="light"][data-pmx-glass="0"]
+  [data-pmx-sidebar-peek="1"]
+  [data-sidebar-card="1"][data-sidebar-card-active="1"]:not([data-sidebar-agent-active="1"]) {
+  background: color-mix(in srgb, var(--pmx-accent, #005fb8) 12%, var(--sidebar-row-active, #ffffff));
+  border-color: color-mix(in srgb, var(--pmx-accent, #005fb8) 46%, rgba(15, 23, 42, 0.14));
+}
+
+html.dark[data-pmx-glass="0"]
+  [data-app-sidebar]
+  [data-sidebar-card="1"][data-sidebar-card-active="1"]:not([data-sidebar-agent-active="1"]),
+html[data-pmx-theme="dark"][data-pmx-glass="0"]
+  [data-app-sidebar]
+  [data-sidebar-card="1"][data-sidebar-card-active="1"]:not([data-sidebar-agent-active="1"]),
+html.dark[data-pmx-glass="0"]
+  [data-pmx-sidebar-peek="1"]
+  [data-sidebar-card="1"][data-sidebar-card-active="1"]:not([data-sidebar-agent-active="1"]),
+html[data-pmx-theme="dark"][data-pmx-glass="0"]
+  [data-pmx-sidebar-peek="1"]
+  [data-sidebar-card="1"][data-sidebar-card-active="1"]:not([data-sidebar-agent-active="1"]) {
+  background: color-mix(in srgb, var(--pmx-accent, #5e9bff) 18%, var(--sidebar-row-active, #191a1d));
+  border-color: color-mix(in srgb, var(--pmx-accent, #5e9bff) 52%, rgba(255, 255, 255, 0.16));
 }
 
 /* Active agent session RGB border marquee & breathing logo (works in Light, Dark, and Liquid Glass) */

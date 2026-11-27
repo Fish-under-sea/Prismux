@@ -37,6 +37,7 @@ import {
   hexToRgb,
   normalizeHex,
   relativeLuminance,
+  resolveReadableAccentText,
   rgbToHex,
   selectHighContrastInk,
   toRgbTriple,
@@ -130,7 +131,11 @@ export interface ResolvedAppearanceRuntime {
   isDark: boolean;
   glassActive: boolean;
   accent: string;
+  accentRgb: string;
   accentInk: '#ffffff' | '#000000';
+  accentText: string;
+  accentSoft: string;
+  accentBorder: string;
   accentCleared: boolean;
   glassTinted: boolean;
   clampedLightTint: string;
@@ -1299,7 +1304,11 @@ export function resolveAppearanceRuntime(
     config.accentMode === 'custom'
       ? cleanCustomAccent || fallbackAccent
       : cleanSysAccent || fallbackAccent;
+  const accentRgb = toRgbTriple(accent, isDark ? '94, 155, 255' : '0, 95, 184');
   const accentInk = selectHighContrastInk(accent);
+  const accentText = resolveReadableAccentText(accent, isDark);
+  const accentSoft = `rgba(${accentRgb}, ${isDark ? '0.18' : '0.14'})`;
+  const accentBorder = `rgba(${accentRgb}, ${isDark ? '0.40' : '0.36'})`;
   const glassTinted = config.accentMode === 'system' || Boolean(cleanCustomAccent);
 
   const rawLightTint = normalizeHex(config.glassColor, true) || DEFAULT_LIGHT_GLASS_TINT;
@@ -1427,7 +1436,11 @@ export function resolveAppearanceRuntime(
     isDark,
     glassActive,
     accent,
+    accentRgb,
     accentInk,
+    accentText,
+    accentSoft,
+    accentBorder,
     accentCleared,
     glassTinted,
     clampedLightTint,
@@ -1517,9 +1530,27 @@ const MANAGED_ROOT_ATTRS: readonly string[] = [
 
 const MANAGED_CSS_VARS: readonly string[] = [
   '--pmx-accent',
+  '--pmx-accent-rgb',
   '--pmx-accent-ink',
+  '--pmx-accent-text',
+  '--pmx-accent-soft',
+  '--pmx-accent-border',
   '--prismux-accent',
   '--dock-accent',
+  '--primary',
+  '--primary-foreground',
+  '--ring',
+  '--sidebar-primary',
+  '--sidebar-primary-foreground',
+  '--sidebar-ring',
+  '--message-action',
+  '--message-action-foreground',
+  '--message-action-hover',
+  '--update',
+  '--update-foreground',
+  '--context-chip-mention',
+  '--context-chip-file',
+  '--context-chip-citation',
   '--pmx-glass-tint-light',
   '--pmx-glass-tint-light-rgb',
   '--pmx-glass-tint-dark',
@@ -1593,6 +1624,7 @@ const MANAGED_CSS_VARS: readonly string[] = [
   '--pmx-right-sidebar-radius',
   '--pmx-inner-stage-radius',
   '--pmx-ui-send',
+  '--pmx-ui-send-ink',
   '--pmx-ui-link',
   '--pmx-ui-file-icon',
   '--pmx-ui-tab',
@@ -1744,9 +1776,23 @@ export function applyPrismuxAppearanceToDocument(
 
   const s = html.style;
   s.setProperty('--pmx-accent', runtime.accent);
+  s.setProperty('--pmx-accent-rgb', runtime.accentRgb);
   s.setProperty('--pmx-accent-ink', runtime.accentInk);
+  s.setProperty('--pmx-accent-text', runtime.accentText);
+  s.setProperty('--pmx-accent-soft', runtime.accentSoft);
+  s.setProperty('--pmx-accent-border', runtime.accentBorder);
   s.setProperty('--prismux-accent', runtime.accent);
   s.setProperty('--dock-accent', runtime.accent);
+
+  // Host semantic accent/primary tokens — active across Light, Dark, AND Liquid Glass modes.
+  s.setProperty('--primary', runtime.accent);
+  s.setProperty('--primary-foreground', runtime.accentInk);
+  s.setProperty('--ring', runtime.accent);
+  s.setProperty('--sidebar-primary', runtime.accent);
+  s.setProperty('--sidebar-primary-foreground', runtime.accentInk);
+  s.setProperty('--sidebar-ring', runtime.accent);
+  s.setProperty('--update', runtime.accent);
+  s.setProperty('--update-foreground', runtime.accentText);
 
   s.setProperty('--pmx-glass-tint-light', runtime.clampedLightTint);
   s.setProperty('--pmx-glass-tint-light-rgb', toRgbTriple(runtime.clampedLightTint, '255, 255, 255'));
@@ -1952,11 +1998,25 @@ export function applyPrismuxAppearanceToDocument(
 
   // 5 custom UI element colors (non-destructive: fall back to effective accent when enabled).
   const ui = cfg.uiColorCustom;
+  const effectiveSend = ui.enabled && ui.send ? ui.send : runtime.accent;
+  const effectiveSendInk = selectHighContrastInk(effectiveSend);
+  const effectiveFileChip = ui.enabled && ui.fileIcon ? ui.fileIcon : runtime.accentText;
+  const effectiveLinkChip = ui.enabled && ui.link ? ui.link : runtime.accentText;
   s.setProperty('--pmx-ui-send', ui.send || runtime.accent);
+  s.setProperty('--pmx-ui-send-ink', selectHighContrastInk(ui.send || runtime.accent));
   s.setProperty('--pmx-ui-link', ui.link || runtime.accent);
   s.setProperty('--pmx-ui-file-icon', ui.fileIcon || runtime.accent);
   s.setProperty('--pmx-ui-tab', ui.tab || runtime.accent);
   s.setProperty('--pmx-ui-deep-diving', ui.deepDiving || (runtime.isDark ? '#6cb6ff' : runtime.accent));
+  s.setProperty('--message-action', effectiveSend);
+  s.setProperty('--message-action-foreground', effectiveSendInk);
+  s.setProperty(
+    '--message-action-hover',
+    `color-mix(in srgb, ${effectiveSend} 90%, var(--background))`,
+  );
+  s.setProperty('--context-chip-mention', effectiveFileChip);
+  s.setProperty('--context-chip-file', effectiveFileChip);
+  s.setProperty('--context-chip-citation', effectiveLinkChip);
 
   // Caret color.
   if (cleanCaret) {

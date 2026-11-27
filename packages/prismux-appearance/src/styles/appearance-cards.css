@@ -345,9 +345,9 @@ html[data-pmx-theme='light'][data-pmx-glass='1'] .pmx-appearance .seg > button[a
 }
 
 .pmx-appearance .pbtn.al {
-  border-color: #005fb8;
-  background: #005fb8;
-  color: #ffffff;
+  border-color: var(--pmx-accent, #005fb8);
+  background: var(--pmx-accent, #005fb8);
+  color: var(--pmx-accent-ink, #ffffff);
 }
 
 /* Accent & Glass Regions */
@@ -754,7 +754,7 @@ html[data-pmx-theme='light'][data-pmx-glass='1'] .pmx-appearance .seg > button[a
 .pmx-appearance.pmx-decl-root {
   --pmx-decl-fg: #f5f5f7;
   --pmx-decl-muted: #b8b8bf;
-  --pmx-decl-accent: #7ab4ff;
+  --pmx-decl-accent: var(--pmx-accent-text, #7ab4ff);
   --pmx-decl-ok: #4ade80;
   --pmx-decl-warn: #fbbf24;
   --pmx-decl-bad: #ff8592;
@@ -762,8 +762,8 @@ html[data-pmx-theme='light'][data-pmx-glass='1'] .pmx-appearance .seg > button[a
   --pmx-decl-surface-subtle: rgba(255, 255, 255, 0.045);
   --pmx-decl-border: rgba(255, 255, 255, 0.16);
   --pmx-decl-input-bg: rgba(12, 16, 26, 0.84);
-  --pmx-decl-primary-bg: #005fb8;
-  --pmx-decl-primary-fg: #ffffff;
+  --pmx-decl-primary-bg: var(--pmx-accent, #005fb8);
+  --pmx-decl-primary-fg: var(--pmx-accent-ink, #ffffff);
   --pmx-decl-danger-bg: #b91c1c;
   --pmx-decl-danger-fg: #ffffff;
   display: flex;
@@ -781,7 +781,7 @@ html[data-pmx-theme='light'][data-pmx-glass='1'] .pmx-appearance .seg > button[a
 .tb-light .pmx-appearance.pmx-decl-root {
   --pmx-decl-fg: #1b1b1f;
   --pmx-decl-muted: #52525b;
-  --pmx-decl-accent: #0055a8;
+  --pmx-decl-accent: var(--pmx-accent-text, #0055a8);
   --pmx-decl-ok: #0d6e38;
   --pmx-decl-warn: #8a4b08;
   --pmx-decl-bad: #b42333;
@@ -789,8 +789,8 @@ html[data-pmx-theme='light'][data-pmx-glass='1'] .pmx-appearance .seg > button[a
   --pmx-decl-surface-subtle: rgba(0, 0, 0, 0.035);
   --pmx-decl-border: rgba(0, 0, 0, 0.18);
   --pmx-decl-input-bg: #ffffff;
-  --pmx-decl-primary-bg: #005fb8;
-  --pmx-decl-primary-fg: #ffffff;
+  --pmx-decl-primary-bg: var(--pmx-accent, #005fb8);
+  --pmx-decl-primary-fg: var(--pmx-accent-ink, #ffffff);
   --pmx-decl-danger-bg: #b42333;
   --pmx-decl-danger-fg: #ffffff;
 }

@@ -38,7 +38,11 @@ import {
   type ReactNode,
 } from "react";
 
-import { setAppearanceMode, syncBrowserChromeTheme } from "../hooks/useTheme";
+import {
+  setAppearanceMode,
+  subscribeRenderedAppearance,
+  syncBrowserChromeTheme,
+} from "../hooks/useTheme";
 import type { AppRouter } from "../router";
 import {
   prismuxDaemonClient,
@@ -969,6 +973,22 @@ export function PrismuxRuntimeProvider({ router, children }: PrismuxRuntimeProvi
       document.body?.style.removeProperty("background-color");
     }
   }, [appearance, reducedTransparency, wallpaperSelectedId]);
+
+  // Re-apply Prismux accent & appearance tokens whenever host theme/polarity changes externally
+  // (prevents useTheme/applyThemePalette from leaving stale inline --context-chip-* or overriding
+  // accent tokens in Light/Dark modes, while yielding cleanly to Theme Editor `__preview`).
+  useEffect(() => {
+    return subscribeRenderedAppearance(() => {
+      if (typeof document === "undefined") return;
+      if (document.documentElement.dataset?.themeId === "__preview") return;
+      const wallpaperActive = Boolean(wallpaperStore.getSnapshot().settings.selectedId);
+      applyPrismuxAppearanceToDocument(appearanceRef.current, {
+        wallpaperActive,
+        reducedTransparency,
+        syncDarkClass: false,
+      });
+    });
+  }, [reducedTransparency, wallpaperStore]);
 
   // Guard against subsequent Prismux theme mutations re-stamping inline background-color on html/body
   // while a wallpaper is active in Light/Dark/Glass mode.

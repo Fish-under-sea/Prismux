@@ -33,6 +33,7 @@ import {
   hexToRgb,
   hsvToRgb,
   normalizeHex,
+  resolveReadableAccentText,
   rgbToHex,
   rgbToHsv,
   selectHighContrastInk,
@@ -76,7 +77,7 @@ import {
   InlineAppearanceStudio,
   type InlineAppearanceStudioProps,
 } from '../InlineAppearanceStudio.js';
-import { LiquidGlassCard } from '../AppearanceHeroAndCards.js';
+import { LiquidGlassCard, ThemePaletteCard } from '../AppearanceHeroAndCards.js';
 import {
   exportWbThemeSnapshot,
   importWbThemeSnapshot,
@@ -651,28 +652,28 @@ describe('T3 glass bridge CSS specificity & solid fallback invariants', () => {
     const closes = (css.match(/\}/g) ?? []).length;
     assert.equal(opens, closes, 'CSS braces must be balanced');
 
-    // Gap B: custom text, muted, fonts, and UI colors must match [data-theme-id]:not([data-theme-id='']).
-    assert.match(css, /html\[data-pmx-custom-text='1'\]\[data-theme-id\]:not\(\[data-theme-id=''\]\)/);
-    assert.match(css, /html\[data-pmx-custom-muted='1'\]\[data-theme-id\]:not\(\[data-theme-id=''\]\)/);
-    assert.match(css, /html\[data-pmx-ui-colors='1'\]\[data-theme-id\]:not\(\[data-theme-id=''\]\)/);
-    assert.match(css, /html\[data-pmx-custom-font-sans='1'\]\[data-theme-id\]:not\(\[data-theme-id=''\]\)/);
-    assert.match(css, /html\[data-pmx-custom-font-mono='1'\]\[data-theme-id\]:not\(\[data-theme-id=''\]\)/);
+    // Gap B: custom text, muted, fonts, and UI colors must match [data-theme-id]:not([data-theme-id=""]).
+    assert.match(css, /html\[data-pmx-custom-text=['"]1['"]\]\[data-theme-id\]:not\(\[data-theme-id=['"]['"]\]\)/);
+    assert.match(css, /html\[data-pmx-custom-muted=['"]1['"]\]\[data-theme-id\]:not\(\[data-theme-id=['"]['"]\]\)/);
+    assert.match(css, /html\[data-pmx-ui-colors=['"]1['"]\]\[data-theme-id\]:not\(\[data-theme-id=['"]['"]\]\)/);
+    assert.match(css, /html\[data-pmx-custom-font-sans=['"]1['"]\]\[data-theme-id\]:not\(\[data-theme-id=['"]['"]\]\)/);
+    assert.match(css, /html\[data-pmx-custom-font-mono=['"]1['"]\]\[data-theme-id\]:not\(\[data-theme-id=['"]['"]\]\)/);
 
     // Gap A: all 3 fallback sections must appear after section 7 marker and revert independent surfaces + canvas + sheen.
     const fallbackSection = css.slice(css.indexOf('/* ── 7. Three Mandatory Solid Fallbacks'));
     assert.ok(fallbackSection.length > 0);
     assert.match(fallbackSection, /@supports not \(\(backdrop-filter: blur\(1px\)\)/);
     assert.match(fallbackSection, /@media \(prefers-reduced-transparency: reduce\)/);
-    assert.match(fallbackSection, /\[data-pmx-gpu='0'\]/);
+    assert.match(fallbackSection, /\[data-pmx-gpu=['"]0['"]\]/);
 
     // Every fallback path must cover themed root, wallpaper canvas, left/right sidebars, titlebar, and remove sheen.
-    assert.ok((fallbackSection.match(/\[data-theme-id\]:not\(\[data-theme-id=''\]\)/g) ?? []).length >= 3);
+    assert.ok((fallbackSection.match(/\[data-theme-id\]:not\(\[data-theme-id=['"]['"]\]\)/g) ?? []).length >= 3);
     assert.ok((fallbackSection.match(/--pmx-left-sidebar-bg:/g) ?? []).length >= 3);
     assert.ok((fallbackSection.match(/--pmx-titlebar-bg:/g) ?? []).length >= 3);
     assert.ok((fallbackSection.match(/--pmx-right-sidebar-bg:/g) ?? []).length >= 3);
     assert.ok((fallbackSection.match(/--message-surface:/g) ?? []).length >= 3);
     assert.ok((fallbackSection.match(/background-image:\s*none;/g) ?? []).length >= 12);
-    assert.ok((fallbackSection.match(/\[data-pmx-wallpaper='1'\]/g) ?? []).length >= 6);
+    assert.ok((fallbackSection.match(/\[data-pmx-wallpaper=['"]1['"]\]/g) ?? []).length >= 6);
   });
 
   it('beats Tailwind v4 dark specificity, avoids double-compositing, clears Windows 6px seam, and protects color popover', () => {
@@ -680,16 +681,16 @@ describe('T3 glass bridge CSS specificity & solid fallback invariants', () => {
     const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/prismux-glass-bridge.css'), 'utf8');
     const popoverCss = fs.readFileSync(path.resolve(here, '../styles/color-popover.css'), 'utf8');
 
-    // Root token bridge must beat :root:is(.dark, .dark *) (0,2,0) via html.dark[data-pmx-glass='1'] (0,2,1).
-    assert.match(bridgeCss, /html\.dark\[data-pmx-glass='1'\]/);
-    assert.match(bridgeCss, /html:not\(\.dark\)\[data-pmx-glass='1'\]/);
+    // Root token bridge must beat :root:is(.dark, .dark *) (0,2,0) via html.dark[data-pmx-glass="1"] (0,2,1).
+    assert.match(bridgeCss, /html\.dark\[data-pmx-glass=['"]1['"]\]/);
+    assert.match(bridgeCss, /html:not\(\.dark\)\[data-pmx-glass=['"]1['"]\]/);
     // Single-pass center canvas + transparent nested ChatView wrapper & unbroken sidebar (zero 256px tiling seam).
-    assert.match(bridgeCss, /main\[data-slot='sidebar-inset'\]/);
+    assert.match(bridgeCss, /main\[data-slot=['"]sidebar-inset['"]\]/);
     assert.match(bridgeCss, /--pmx-canvas-bg:/);
-    assert.match(bridgeCss, /main\[data-slot='sidebar-inset'\]\s*>\s*\.bg-background/);
+    assert.match(bridgeCss, /main\[data-slot=['"]sidebar-inset['"]\]\s*>\s*\.bg-background/);
     assert.match(bridgeCss, /background-size:\s*100%\s*100%/);
     assert.match(bridgeCss, /background-repeat:\s*no-repeat/);
-    assert.match(bridgeCss, /\[data-slot='sidebar-header'\]/);
+    assert.match(bridgeCss, /\[data-slot=['"]sidebar-header['"]\]/);
     // Windows 6px right-edge seam elimination.
     assert.match(bridgeCss, /--desktop-window-right-resize-inset:\s*0px/);
 
@@ -704,7 +705,7 @@ describe('T3 glass bridge CSS specificity & solid fallback invariants', () => {
     // Issue #4: Non-glass Light & Dark wallpaper reveal (unblurred readability veil) + solid fallbacks.
     assert.match(
       bridgeCss,
-      /html:is\(\[data-pmx-wallpaper='1'\],\s*\[data-pmx-wallpaper-visible='1'\]\)\[data-pmx-glass='0'\]:not/,
+      /html:is\(\[data-pmx-wallpaper=['"]1['"]\],\s*\[data-pmx-wallpaper-visible=['"]1['"]\]\)\[data-pmx-glass=['"]0['"]\]:not/,
     );
     assert.match(bridgeCss, /--pmx-wallpaper-veil:\s*rgba\(10,\s*14,\s*22,/);
     assert.match(bridgeCss, /--pmx-wallpaper-veil:\s*rgba\(248,\s*250,\s*255,/);
@@ -1596,38 +1597,39 @@ describe('Unified 5-zone liquid-glass architecture (shellFrame + rightSidebar), 
     // All 5 canonical zone selectors (+ legacy leftSidebar/chromeBars & right-frame-edge), Backdrop-Root elimination,
     // composer pseudo takeover, overlays & zero corner bleed, inner-stage radius.
     for (const id of GLASS_ZONE_IDS) {
-      assert.ok(
-        bridgeCss.includes(`[data-pmx-glass-zone='${id}']`),
-        `prismux-glass-bridge.css must bind [data-pmx-glass-zone='${id}']`,
+      assert.match(
+        bridgeCss,
+        new RegExp(`\\[data-pmx-glass-zone=['"]${id}['"]\\]`),
+        `prismux-glass-bridge.css must bind [data-pmx-glass-zone="${id}"]`,
       );
       assert.ok(
         bridgeCss.includes(`--pmx-glass-zone-${GLASS_ZONE_CSS_NAMES[id]}-bg`),
         `prismux-glass-bridge.css must consume --pmx-glass-zone-${GLASS_ZONE_CSS_NAMES[id]}-bg`,
       );
     }
-    assert.ok(bridgeCss.includes("[data-pmx-glass-zone='leftSidebar']"));
-    assert.ok(bridgeCss.includes("[data-pmx-glass-zone='chromeBars']"));
-    assert.ok(bridgeCss.includes("[data-pmx-right-frame-edge='1']"));
-    assert.match(bridgeCss, /main\[data-slot='sidebar-inset'\]:has\(\[data-pmx-glass-zone='mainCanvas'\]\)/);
-    assert.match(bridgeCss, /\[data-slot='composer-host'\]::before/);
-    assert.match(bridgeCss, /\[data-chat-composer-main-surface='true'\]/);
-    assert.match(bridgeCss, /\[data-slot='combobox-positioner'\]/);
-    assert.match(bridgeCss, /\[data-slot='tooltip-popup'\]/);
-    assert.match(bridgeCss, /\[data-pmx-status-popover='1'\]/);
+    assert.match(bridgeCss, /\[data-pmx-glass-zone=['"]leftSidebar['"]\]/);
+    assert.match(bridgeCss, /\[data-pmx-glass-zone=['"]chromeBars['"]\]/);
+    assert.match(bridgeCss, /\[data-pmx-right-frame-edge=['"]1['"]\]/);
+    assert.match(bridgeCss, /main\[data-slot=['"]sidebar-inset['"]\]:has\(\[data-pmx-glass-zone=['"]mainCanvas['"]\]\)/);
+    assert.match(bridgeCss, /\[data-slot=['"]composer-host['"]\]::before/);
+    assert.match(bridgeCss, /\[data-chat-composer-main-surface=['"]true['"]\]/);
+    assert.match(bridgeCss, /\[data-slot=['"]combobox-positioner['"]\]/);
+    assert.match(bridgeCss, /\[data-slot=['"]tooltip-popup['"]\]/);
+    assert.match(bridgeCss, /\[data-pmx-status-popover=['"]1['"]\]/);
     assert.match(bridgeCss, /\[data-pmx-overlay-shell\]/);
     assert.match(bridgeCss, /:not\(\[data-pmx-overlay-shell\]\)/);
     assert.match(bridgeCss, /background-clip:\s*padding-box;/);
-    assert.match(bridgeCss, /\[data-pmx-inner-stage='1'\]/);
+    assert.match(bridgeCss, /\[data-pmx-inner-stage=['"]1['"]\]/);
     assert.match(bridgeCss, /--pmx-inner-stage-radius,\s*14px/);
 
     // AGY 2.0 dual-layer composer, Claude Code Desktop sidebar peek drawer & chat width handles.
-    assert.match(bridgeCss, /\[data-pmx-composer-layout='agy'\]/);
-    assert.match(bridgeCss, /\[data-pmx-composer-top-tray='1'\]/);
-    assert.match(bridgeCss, /\[data-pmx-composer-inner-card='1'\]/);
+    assert.match(bridgeCss, /\[data-pmx-composer-layout=['"]agy['"]\]/);
+    assert.match(bridgeCss, /\[data-pmx-composer-top-tray=['"]1['"]\]/);
+    assert.match(bridgeCss, /\[data-pmx-composer-inner-card=['"]1['"]\]/);
     assert.match(bridgeCss, /--pmx-chat-content-max-width/);
-    assert.match(bridgeCss, /\[data-pmx-sidebar-peek='1'\]/);
+    assert.match(bridgeCss, /\[data-pmx-sidebar-peek=['"]1['"]\]/);
     assert.match(bridgeCss, /\[data-pmx-chat-width-handle\]/);
-    assert.match(bridgeCss, /\[data-pmx-chat-width-badge='1'\]/);
+    assert.match(bridgeCss, /\[data-pmx-chat-width-badge=['"]1['"]\]/);
 
     // Balanced braces & zero prefers-color-scheme in cardsCss.
     assert.equal((cardsCss.match(/\{/g) ?? []).length, (cardsCss.match(/\}/g) ?? []).length);
@@ -1742,8 +1744,8 @@ describe('Unified 5-zone liquid-glass architecture (shellFrame + rightSidebar), 
     assert.match(bridgeCss, /--sidebar-muted-foreground:\s*rgba\(203,\s*213,\s*225,\s*0\.66\)/);
     assert.match(bridgeCss, /text-shadow:\s*0 1px 2px rgba\(0,\s*0,\s*0,\s*0\.4[58]\)/);
     assert.match(bridgeCss, /filter:\s*drop-shadow\(0 1px 1\.5px rgba\(0,\s*0,\s*0,\s*0\.38\)\)/);
-    assert.match(bridgeCss, /\[data-pmx-sidebar-peek='1'\][\s\S]*?isolation:\s*isolate;/);
-    assert.match(bridgeCss, /\[data-pmx-sidebar-peek='1'\][\s\S]*?backdrop-filter:\s*blur\(22px\) saturate\(1\.1\) !important;/);
+    assert.match(bridgeCss, /\[data-pmx-sidebar-peek=['"]1['"]\][\s\S]*?isolation:\s*isolate;/);
+    assert.match(bridgeCss, /\[data-pmx-sidebar-peek=['"]1['"]\][\s\S]*?backdrop-filter:\s*blur\(22px\) saturate\(1\.1\) !important;/);
     assert.match(bridgeCss, /var\(--pmx-glass-tint,\s*#0d1524\)\s*80%/);
     assert.match(bridgeCss, /var\(--pmx-glass-tint,\s*#ffffff\)\s*86%/);
   });
@@ -1796,28 +1798,28 @@ describe('Arc / AGY 2.0 monolithic outer frame, 4 concave corners & clear mainCa
     const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/prismux-glass-bridge.css'), 'utf8');
 
     // Monolithic zero-seam chrome border removal (eliminating ALL internal T-seams & cross-seams in Figs 3–6)
-    assert.match(bridgeCss, /html:has\(\[data-pmx-stage-frame='1'\]\)[\s\S]*?\[data-slot='sidebar-container'\][\s\S]*?border-right-width:\s*0 !important/);
-    assert.match(bridgeCss, /html:has\(\[data-pmx-stage-frame='1'\]\)[\s\S]*?\[data-workspace-tabbar\][\s\S]*?header\[data-pmx-glass-zone='shellFrame'\][\s\S]*?border-bottom-width:\s*0 !important/);
+    assert.match(bridgeCss, /html:has\(\[data-pmx-stage-frame=['"]1['"]\]\)[\s\S]*?\[data-slot=['"]sidebar-container['"]\][\s\S]*?border-right-width:\s*0 !important/);
+    assert.match(bridgeCss, /html:has\(\[data-pmx-stage-frame=['"]1['"]\]\)[\s\S]*?\[data-workspace-tabbar\][\s\S]*?header\[data-pmx-glass-zone=['"]shellFrame['"]\][\s\S]*?border-bottom-width:\s*0 !important/);
     assert.match(bridgeCss, /--pmx-native-frame-bg:\s*var\(--sidebar\)[\s\S]*?background-image:\s*none;/);
-    assert.match(bridgeCss, /html:has\(\[data-pmx-stage-frame='1'\]\)[\s\S]*?\[data-prismux-status-bar='true'\][\s\S]*?border-top-width:\s*0 !important/);
-    assert.match(bridgeCss, /html:has\(\[data-pmx-stage-frame='1'\]\)\s*\[data-pmx-right-frame-edge='1'\][\s\S]*?border:\s*0 !important/);
-    assert.match(bridgeCss, /html:has\(\[data-pmx-stage-frame='1'\]\)[\s\S]*?\[data-preview-panel-mode='inline'\][\s\S]*?border-left-width:\s*0 !important/);
+    assert.match(bridgeCss, /html:has\(\[data-pmx-stage-frame=['"]1['"]\]\)[\s\S]*?\[data-prismux-status-bar=['"]true['"]\][\s\S]*?border-top-width:\s*0 !important/);
+    assert.match(bridgeCss, /html:has\(\[data-pmx-stage-frame=['"]1['"]\]\)\s*\[data-pmx-right-frame-edge=['"]1['"]\][\s\S]*?border:\s*0 !important/);
+    assert.match(bridgeCss, /html:has\(\[data-pmx-stage-frame=['"]1['"]\]\)[\s\S]*?\[data-preview-panel-mode=['"]inline['"]\][\s\S]*?border-left-width:\s*0 !important/);
     assert.match(bridgeCss, /--pmx-stage-frame-bg:\s*var\(--pmx-glass-zone-shell-frame-bg/);
     assert.match(bridgeCss, /--pmx-stage-frame-backdrop:\s*var\(--pmx-glass-zone-shell-frame-backdrop/);
 
     // Flush inner stage & 4 concave corners + pure-CSS fallback + continuous 1px ring
-    assert.match(bridgeCss, /\[data-pmx-stage-frame='1'\]\s*\{[^}]*margin:\s*0 !important;[^}]*padding:\s*0 !important;/s);
-    assert.match(bridgeCss, /\[data-pmx-stage-frame='1'\]\s*>\s*\[data-pmx-inner-stage='1'\][^}]*margin:\s*0 !important;/s);
+    assert.match(bridgeCss, /\[data-pmx-stage-frame=['"]1['"]\]\s*\{[^}]*margin:\s*0 !important;[^}]*padding:\s*0 !important;/s);
+    assert.match(bridgeCss, /\[data-pmx-stage-frame=['"]1['"]\]\s*>\s*\[data-pmx-inner-stage=['"]1['"]\][^}]*margin:\s*0 !important;/s);
     for (const corner of ['tl', 'tr', 'bl', 'br']) {
       assert.match(
         bridgeCss,
-        new RegExp(`\\[data-pmx-stage-corner='${corner}'\\][^}]*clip-path:\\s*path\\(`, 's'),
+        new RegExp(`\\[data-pmx-stage-corner=['"]${corner}['"]\\][^}]*clip-path:\\s*path\\(`, 's'),
         `must define exact SVG clip-path for concave corner '${corner}'`,
       );
     }
-    assert.match(bridgeCss, /\[data-pmx-stage-frame='1'\]:not\(:has\(>\s*\[data-pmx-stage-corner\]\)\)::before[\s\S]*?radial-gradient/);
-    assert.match(bridgeCss, /\[data-pmx-stage-frame='1'\]::after[\s\S]*?inset 0 0 0 1px/);
-    assert.match(bridgeCss, /\[data-pmx-stage-frame='1'\]\[data-pmx-right-open='1'\]/);
+    assert.match(bridgeCss, /\[data-pmx-stage-frame=['"]1['"]\]:not\(:has\(>\s*\[data-pmx-stage-corner\]\)\)::before[\s\S]*?radial-gradient/);
+    assert.match(bridgeCss, /\[data-pmx-stage-frame=['"]1['"]\]::after[\s\S]*?inset 0 0 0 1px/);
+    assert.match(bridgeCss, /\[data-pmx-stage-frame=['"]1['"]\]\[data-pmx-right-open=['"]1['"]\]/);
 
     // Clear default mainCanvas fallback (no 18px blur fallback)
     assert.match(bridgeCss, /backdrop-filter:\s*var\(--pmx-glass-zone-main-canvas-backdrop,\s*none\);/);
@@ -1825,7 +1827,7 @@ describe('Arc / AGY 2.0 monolithic outer frame, 4 concave corners & clear mainCa
     // All 3 solid fallbacks + forced-colors cover concave corners & right frame edge
     const fallbackSection = bridgeCss.slice(bridgeCss.indexOf('/* ── 7. Three Mandatory Solid Fallbacks'));
     assert.ok((fallbackSection.match(/\[data-pmx-stage-corner\]/g) ?? []).length >= 4);
-    assert.ok((fallbackSection.match(/\[data-pmx-right-frame-edge='1'\]/g) ?? []).length >= 4);
+    assert.ok((fallbackSection.match(/\[data-pmx-right-frame-edge=['"]1['"]\]/g) ?? []).length >= 4);
     assert.ok((fallbackSection.match(/--pmx-glass-zone-shell-frame-bg:/g) ?? []).length >= 3);
     assert.ok((fallbackSection.match(/--pmx-stage-frame-backdrop:\s*none;/g) ?? []).length >= 3);
   });
@@ -2781,38 +2783,38 @@ describe('Single-layer viewport SVG <mask> shell cutout backdrop (#468)', () => 
     // Section 2.7 single-layer continuous backdrop & active cutout rules
     assert.match(
       bridgeCss,
-      /\[data-pmx-shell-backdrop='1'\]\s*\{[^}]*position:\s*fixed;[^}]*inset:\s*0;[^}]*z-index:\s*0;[^}]*pointer-events:\s*none;[^}]*display:\s*none;/s,
+      /\[data-pmx-shell-backdrop=['"]1['"]\]\s*\{[^}]*position:\s*fixed;[^}]*inset:\s*0;[^}]*z-index:\s*0;[^}]*pointer-events:\s*none;[^}]*display:\s*none;/s,
     );
-    assert.match(bridgeCss, /\[data-pmx-shell-backdrop='1'\]\[data-pmx-cutout-active='1'\]\s*\{\s*display:\s*block;\s*\}/);
+    assert.match(bridgeCss, /\[data-pmx-shell-backdrop=['"]1['"]\]\[data-pmx-cutout-active=['"]1['"]\]\s*\{\s*display:\s*block;\s*\}/);
     assert.match(
       bridgeCss,
-      /html\[data-pmx-glass='1'\]\s*\[data-pmx-shell-backdrop='1'\][\s\S]*?--pmx-glass-zone-shell-frame-bg[\s\S]*?--pmx-glass-zone-shell-frame-backdrop/,
-    );
-    assert.match(
-      bridgeCss,
-      /html\[data-pmx-shell-cutout='1'\][\s\S]*?\[data-workspace-tabbar\][\s\S]*?\[data-prismux-status-bar\][\s\S]*?\[data-pmx-right-frame-edge='1'\][\s\S]*?background-color:\s*transparent !important;[\s\S]*?backdrop-filter:\s*none !important;/,
+      /html\[data-pmx-glass=['"]1['"]\]\s*\[data-pmx-shell-backdrop=['"]1['"]\][\s\S]*?--pmx-glass-zone-shell-frame-bg[\s\S]*?--pmx-glass-zone-shell-frame-backdrop/,
     );
     assert.match(
       bridgeCss,
-      /html\[data-pmx-shell-cutout='1'\]\s*\[data-pmx-stage-frame='1'\]\s*>\s*\[data-pmx-stage-corner\][\s\S]*?display:\s*none !important;/,
+      /html\[data-pmx-shell-cutout=['"]1['"]\][\s\S]*?\[data-workspace-tabbar\][\s\S]*?\[data-prismux-status-bar\][\s\S]*?\[data-pmx-right-frame-edge=['"]1['"]\][\s\S]*?background-color:\s*transparent !important;[\s\S]*?backdrop-filter:\s*none !important;/,
+    );
+    assert.match(
+      bridgeCss,
+      /html\[data-pmx-shell-cutout=['"]1['"]\]\s*\[data-pmx-stage-frame=['"]1['"]\]\s*>\s*\[data-pmx-stage-corner\][\s\S]*?display:\s*none !important;/,
     );
     // Floating collapsed sidebar peek drawer & mobile sheet stay excluded from cutout transparentization
     assert.match(
       bridgeCss,
-      /\[data-pmx-glass-zone='shellFrame'\]:not\(\[data-pmx-sidebar-peek='1'\]\):not\(\[data-mobile='true'\]\)/,
+      /\[data-pmx-glass-zone=['"]shellFrame['"]\]:not\(\[data-pmx-sidebar-peek=['"]1['"]\]\):not\(\[data-mobile=['"]true['"]\]\)/,
     );
     // Inline right sidebar inherits continuous sheet in Glass inherit & Non-Glass modes
     assert.match(
       bridgeCss,
-      /html\[data-pmx-shell-cutout='1'\]\[data-pmx-glass='1'\]:is\([\s\S]*?\[data-pmx-zone-right-sidebar-mode='inherit'\][\s\S]*?\):not\(\[data-pmx-right-sidebar-fullclear='1'\]\)[\s\S]*?\[data-preview-panel-mode='inline'\]/,
+      /html\[data-pmx-shell-cutout=['"]1['"]\]\[data-pmx-glass=['"]1['"]\]:is\([\s\S]*?\[data-pmx-zone-right-sidebar-mode=['"]inherit['"]\][\s\S]*?\):not\(\[data-pmx-right-sidebar-fullclear=['"]1['"]\]\)[\s\S]*?\[data-preview-panel-mode=['"]inline['"]\]/,
     );
 
-    // All 3 mandatory solid fallbacks + forced-colors explicitly cover [data-pmx-shell-backdrop='1']
+    // All 3 mandatory solid fallbacks + forced-colors explicitly cover [data-pmx-shell-backdrop="1"]
     const fallbackSection = bridgeCss.slice(
       bridgeCss.indexOf('/* ── 7. Three Mandatory Solid Fallbacks'),
     );
     assert.ok(
-      (fallbackSection.match(/\[data-pmx-shell-backdrop='1'\]/g) ?? []).length >= 6,
+      (fallbackSection.match(/\[data-pmx-shell-backdrop=['"]1['"]\]/g) ?? []).length >= 6,
       'every solid fallback path + forced-colors must cover [data-pmx-shell-backdrop="1"]',
     );
   });
@@ -2924,19 +2926,20 @@ describe('Single-layer viewport SVG <mask> shell cutout backdrop (#468)', () => 
     assert.equal(noComments.includes('prefers-color-scheme'), false);
 
     // Maximized right panel excluded from rightSidebar fill/backdrop/cutout/substrate rules
-    assert.ok(bridgeCss.includes("[data-preview-panel-mode='inline']:not([data-preview-panel-maximized='true'])"));
-    assert.ok(
-      bridgeCss.includes("[data-preview-panel-mode='inline'][data-preview-panel-maximized='true']:has("),
+    assert.match(bridgeCss, /\[data-preview-panel-mode=['"]inline['"]\]:not\(\[data-preview-panel-maximized=['"]true['"]\]\)/);
+    assert.match(
+      bridgeCss,
+      /\[data-preview-panel-mode=['"]inline['"]\]\[data-preview-panel-maximized=['"]true['"]\]:has\(/,
     );
-    assert.ok(bridgeCss.includes("[data-right-panel-maximized-stage='1']"));
+    assert.match(bridgeCss, /\[data-right-panel-maximized-stage=['"]1['"]\]/);
 
     // File tree / FileExplorerPane glass stripping & custom typography propagation
-    assert.ok(bridgeCss.includes("[data-pmx-glass-zone='mainCanvas'] [data-file-browser-panel]"));
-    assert.ok(bridgeCss.includes("[data-pmx-glass-zone='mainCanvas'] [data-surface-subheader]"));
-    assert.ok(bridgeCss.includes("[data-pmx-file-tree='1']"));
-    assert.ok(bridgeCss.includes("[data-pmx-file-explorer-pane='1'][data-pmx-file-explorer-resizable='1']"));
+    assert.match(bridgeCss, /\[data-pmx-glass-zone=['"]mainCanvas['"]\]\s+\[data-file-browser-panel\]/);
+    assert.match(bridgeCss, /\[data-pmx-glass-zone=['"]mainCanvas['"]\]\s+\[data-surface-subheader\]/);
+    assert.match(bridgeCss, /\[data-pmx-file-tree=['"]1['"]\]/);
+    assert.match(bridgeCss, /\[data-pmx-file-explorer-pane=['"]1['"]\]\[data-pmx-file-explorer-resizable=['"]1['"]\]/);
     assert.ok(
-      (bridgeCss.match(/\[data-pmx-file-tree='1'\]/g) ?? []).length >= 4,
+      (bridgeCss.match(/\[data-pmx-file-tree=['"]1['"]\]/g) ?? []).length >= 4,
       'custom-text & custom-muted (regular + [data-theme-id]) must include [data-pmx-file-tree="1"]',
     );
 
@@ -2944,7 +2947,7 @@ describe('Single-layer viewport SVG <mask> shell cutout backdrop (#468)', () => 
       bridgeCss.indexOf('/* ── 7. Three Mandatory Solid Fallbacks'),
     );
     assert.ok(
-      (cssFallbacks.match(/\[data-pmx-file-explorer-pane='1'\]\[data-pmx-file-explorer-resizable='1'\]/g) ?? [])
+      (cssFallbacks.match(/\[data-pmx-file-explorer-pane=['"]1['"]\]\[data-pmx-file-explorer-resizable=['"]1['"]\]/g) ?? [])
         .length >= 7,
       'all 3 solid fallbacks (Dark + Light) + forced-colors must cover resizable FileExplorerPane',
     );
@@ -3167,13 +3170,13 @@ describe('6th glass zone `workPanels` (Tasks / Workspace Board / Scheduled Tasks
     const here = path.dirname(fileURLToPath(import.meta.url));
     const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/prismux-glass-bridge.css'), 'utf8');
 
-    assert.match(bridgeCss, /html\.dark\[data-pmx-glass='1'\]\s+\.text-background[\s\S]*?color:\s*#0b0f17;/);
-    assert.match(bridgeCss, /html:not\(\.dark\)\[data-pmx-glass='1'\]\s+\.text-background[\s\S]*?color:\s*#ffffff;/);
-    assert.match(bridgeCss, /\[data-pmx-work-panel='1'\][\s\S]*?--pmx-glass-work-panels-bg/);
-    assert.match(bridgeCss, /\[data-pmx-work-panel-card='1'\][\s\S]*?--pmx-glass-work-panels-card-bg/);
+    assert.match(bridgeCss, /html\.dark\[data-pmx-glass=['"]1['"]\]\s+\.text-background[\s\S]*?color:\s*#0b0f17;/);
+    assert.match(bridgeCss, /html:not\(\.dark\)\[data-pmx-glass=['"]1['"]\]\s+\.text-background[\s\S]*?color:\s*#ffffff;/);
+    assert.match(bridgeCss, /\[data-pmx-work-panel=['"]1['"]\][\s\S]*?--pmx-glass-work-panels-bg/);
+    assert.match(bridgeCss, /\[data-pmx-work-panel-card=['"]1['"]\][\s\S]*?--pmx-glass-work-panels-card-bg/);
     assert.match(
       bridgeCss,
-      /main\[data-slot='sidebar-inset'\]:has\(\[data-pmx-glass-zone='workPanels'\]\)/,
+      /main\[data-slot=['"]sidebar-inset['"]\]:has\(\[data-pmx-glass-zone=['"]workPanels['"]\]\)/,
     );
 
     const fallbackSection = bridgeCss.slice(
@@ -3184,7 +3187,7 @@ describe('6th glass zone `workPanels` (Tasks / Workspace Board / Scheduled Tasks
       'all 3 solid fallbacks must reset --pmx-glass-work-panels-bg',
     );
     assert.ok(
-      (fallbackSection.match(/\[data-pmx-work-panel='1'\]/g) ?? []).length >= 5,
+      (fallbackSection.match(/\[data-pmx-work-panel=['"]1['"]\]/g) ?? []).length >= 5,
       'all solid fallbacks + forced-colors must cover [data-pmx-work-panel="1"]',
     );
   });
@@ -3209,21 +3212,21 @@ describe('6th glass zone `workPanels` (Tasks / Workspace Board / Scheduled Tasks
     }
 
     // 1. prismux-glass-bridge.css covers ToggleGroup segmented, Toggle [data-pressed], TabsList & TabsTrigger across Light / Dark / Glass
-    assert.match(bridgeCss, /\[data-slot='toggle-group'\]\[data-variant='segmented'\],\s*\[data-slot='tabs-list'\]/);
-    assert.match(bridgeCss, /html\.dark \[data-slot='toggle-group'\]\[data-variant='segmented'\]/);
-    assert.match(bridgeCss, /html\.dark\[data-pmx-glass='1'\] \[data-slot='toggle-group'\]\[data-variant='segmented'\]/);
-    assert.match(bridgeCss, /html:not\(\.dark\)\[data-pmx-glass='1'\] \[data-slot='toggle-group'\]\[data-variant='segmented'\]/);
-    assert.match(bridgeCss, /\[data-slot='toggle'\]\[data-variant='segmented'\]\[data-pressed\]/);
-    assert.match(bridgeCss, /html\.dark \[data-slot='toggle'\]\[data-variant='segmented'\]\[data-pressed\][\s\S]*?font-weight:\s*600;/);
-    assert.match(bridgeCss, /html\.dark\[data-pmx-glass='1'\] \[data-slot='toggle'\]\[data-pressed\][\s\S]*?color:\s*#ffffff;/);
-    assert.match(bridgeCss, /html:not\(\.dark\)\[data-pmx-glass='1'\] \[data-slot='toggle'\]\[data-pressed\][\s\S]*?color:\s*#0f172a;/);
-    assert.match(bridgeCss, /\[data-slot='tabs-trigger'\]\[data-active\]/);
-    assert.match(bridgeCss, /\[data-slot='tabs-trigger'\]\[aria-selected='true'\]/);
+    assert.match(bridgeCss, /\[data-slot=['"]toggle-group['"]\]\[data-variant=['"]segmented['"]\],\s*\[data-slot=['"]tabs-list['"]\]/);
+    assert.match(bridgeCss, /html\.dark\s+\[data-slot=['"]toggle-group['"]\]\[data-variant=['"]segmented['"]\]/);
+    assert.match(bridgeCss, /html\.dark\[data-pmx-glass=['"]1['"]\]\s+\[data-slot=['"]toggle-group['"]\]\[data-variant=['"]segmented['"]\]/);
+    assert.match(bridgeCss, /html:not\(\.dark\)\[data-pmx-glass=['"]1['"]\]\s+\[data-slot=['"]toggle-group['"]\]\[data-variant=['"]segmented['"]\]/);
+    assert.match(bridgeCss, /\[data-slot=['"]toggle['"]\]\[data-variant=['"]segmented['"]\]\[data-pressed\]/);
+    assert.match(bridgeCss, /html\.dark\s+\[data-slot=['"]toggle['"]\]\[data-variant=['"]segmented['"]\]\[data-pressed\][\s\S]*?font-weight:\s*600;/);
+    assert.match(bridgeCss, /html\.dark\[data-pmx-glass=['"]1['"]\]\s+\[data-slot=['"]toggle['"]\]\[data-pressed\][\s\S]*?color:\s*#ffffff;/);
+    assert.match(bridgeCss, /html:not\(\.dark\)\[data-pmx-glass=['"]1['"]\]\s+\[data-slot=['"]toggle['"]\]\[data-pressed\][\s\S]*?color:\s*#0f172a;/);
+    assert.match(bridgeCss, /\[data-slot=['"]tabs-trigger['"]\]\[data-active\]/);
+    assert.match(bridgeCss, /\[data-slot=['"]tabs-trigger['"]\]\[aria-selected=['"]true['"]\]/);
 
     // 2. appearance-cards.css reinforces .seg > button.on / [aria-pressed='true'] and .pmx-gz-pill.on across Dark / Light / Glass
-    assert.match(cardsCss, /\.pmx-appearance \.seg > button\.on,\s*\.pmx-appearance \.seg > button\[aria-pressed='true'\][\s\S]*?font-weight:\s*600;/);
-    assert.match(cardsCss, /html\.dark\[data-pmx-glass='1'\] \.pmx-appearance \.seg > button\.on[\s\S]*?color:\s*#ffffff;/);
-    assert.match(cardsCss, /html:not\(\.dark\)\[data-pmx-glass='1'\] \.pmx-appearance \.seg > button\.on[\s\S]*?color:\s*#0f172a;/);
+    assert.match(cardsCss, /\.pmx-appearance \.seg > button\.on,\s*\.pmx-appearance \.seg > button\[aria-pressed=['"]true['"]\][\s\S]*?font-weight:\s*600;/);
+    assert.match(cardsCss, /html\.dark\[data-pmx-glass=['"]1['"]\] \.pmx-appearance \.seg > button\.on[\s\S]*?color:\s*#ffffff;/);
+    assert.match(cardsCss, /html:not\(\.dark\)\[data-pmx-glass=['"]1['"]\] \.pmx-appearance \.seg > button\.on[\s\S]*?color:\s*#0f172a;/);
     assert.match(cardsCss, /\.pmx-appearance \.pmx-gz-pill\.on[\s\S]*?font-weight:\s*600;/);
   });
 
@@ -3232,18 +3235,18 @@ describe('6th glass zone `workPanels` (Tasks / Workspace Board / Scheduled Tasks
 
     assert.match(bridgeCss, /@keyframes pmx-wallpaper-rgb-flow\b/);
     assert.match(bridgeCss, /@keyframes pmx-wallpaper-rgb-flow-light\b/);
-    assert.match(bridgeCss, /\[data-pmx-topbar-icon-toggle='1'\]::after[\s\S]*?width:\s*12px\s*!important;[\s\S]*?height:\s*2px\s*!important;/);
+    assert.match(bridgeCss, /\[data-pmx-topbar-icon-toggle=['"]1['"]\]::after[\s\S]*?width:\s*12px\s*!important;[\s\S]*?height:\s*2px\s*!important;/);
     assert.match(
       bridgeCss,
-      /html\.dark\[data-pmx-glass='1'\] \[data-pmx-topbar-icon-toggle='1'\]:is\(\[data-pressed\], \[aria-pressed='true'\], \[data-popup-open\]\)[\s\S]*?background-color:\s*rgba\(255,\s*255,\s*255,\s*0\.13\)\s*!important;/,
+      /html\.dark\[data-pmx-glass=['"]1['"]\]\s+\[data-pmx-topbar-icon-toggle=['"]1['"]\]:is\(\[data-pressed\],\s*\[aria-pressed=['"]true['"]\],\s*\[data-popup-open\]\)[\s\S]*?background-color:\s*rgba\(255,\s*255,\s*255,\s*0\.13\)\s*!important;/,
     );
     assert.match(
       bridgeCss,
-      /html:not\(\.dark\)\[data-pmx-glass='1'\] \[data-pmx-topbar-icon-toggle='1'\]:is\(\[data-pressed\], \[aria-pressed='true'\], \[data-popup-open\]\)[\s\S]*?background-color:\s*rgba\(255,\s*255,\s*255,\s*0\.88\)\s*!important;/,
+      /html:not\(\.dark\)\[data-pmx-glass=['"]1['"]\]\s+\[data-pmx-topbar-icon-toggle=['"]1['"]\]:is\(\[data-pressed\],\s*\[aria-pressed=['"]true['"]\],\s*\[data-popup-open\]\)[\s\S]*?background-color:\s*rgba\(255,\s*255,\s*255,\s*0\.88\)\s*!important;/,
     );
     assert.match(
       bridgeCss,
-      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\[data-pmx-topbar-toggle-kind='wallpaper'\] \[data-pmx-wallpaper-icon='1'\][\s\S]*?animation:\s*none\s*!important;/,
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\[data-pmx-topbar-toggle-kind=['"]wallpaper['"]\]\s+\[data-pmx-wallpaper-icon=['"]1['"]\][\s\S]*?animation:\s*none\s*!important;/,
     );
   });
 
@@ -3262,50 +3265,50 @@ describe('6th glass zone `workPanels` (Tasks / Workspace Board / Scheduled Tasks
     // 1. Sidebar Dark & Light Glass calibrated 3-tier contrast token overrides + custom-muted binding
     assert.match(
       bridgeCss,
-      /html\.dark\[data-pmx-glass='1'\]:not\(\[data-pmx-custom-muted='1'\]\)[\s\S]*?\[data-app-sidebar\][\s\S]*?--secondary-label:\s*rgba\(203,\s*213,\s*225,\s*0\.66\);[\s\S]*?--contrast-secondary-label:\s*rgba\(203,\s*213,\s*225,\s*0\.66\);[\s\S]*?--contrast-icon-muted:\s*rgba\(203,\s*213,\s*225,\s*0\.72\);/,
+      /html\.dark\[data-pmx-glass=['"]1['"]\]:not\(\[data-pmx-custom-muted=['"]1['"]\]\)[\s\S]*?\[data-app-sidebar\][\s\S]*?--secondary-label:\s*rgba\(203,\s*213,\s*225,\s*0\.66\);[\s\S]*?--contrast-secondary-label:\s*rgba\(203,\s*213,\s*225,\s*0\.66\);[\s\S]*?--contrast-icon-muted:\s*rgba\(203,\s*213,\s*225,\s*0\.72\);/,
     );
     assert.match(
       bridgeCss,
-      /html:not\(\.dark\)\[data-pmx-glass='1'\]:not\(\[data-pmx-custom-muted='1'\]\)[\s\S]*?\[data-app-sidebar\][\s\S]*?--secondary-label:\s*rgba\(51,\s*65,\s*85,\s*0\.70\);[\s\S]*?--contrast-secondary-label:\s*rgba\(51,\s*65,\s*85,\s*0\.70\);[\s\S]*?--contrast-icon-muted:\s*rgba\(51,\s*65,\s*85,\s*0\.72\);/,
+      /html:not\(\.dark\)\[data-pmx-glass=['"]1['"]\]:not\(\[data-pmx-custom-muted=['"]1['"]\]\)[\s\S]*?\[data-app-sidebar\][\s\S]*?--secondary-label:\s*rgba\(51,\s*65,\s*85,\s*0\.70?\);[\s\S]*?--contrast-secondary-label:\s*rgba\(51,\s*65,\s*85,\s*0\.70?\);[\s\S]*?--contrast-icon-muted:\s*rgba\(51,\s*65,\s*85,\s*0\.72\);/,
     );
     assert.match(
       bridgeCss,
-      /html\[data-pmx-custom-muted='1'\]\[data-theme-id\]\s*\[data-app-sidebar\]\s*\{[\s\S]*?--contrast-secondary-label:\s*var\(--pmx-muted-color\);[\s\S]*?--contrast-icon-muted:\s*var\(--pmx-muted-color\);/,
+      /html\[data-pmx-custom-muted=['"]1['"]\]\[data-theme-id\]\s*\[data-app-sidebar\]\s*\{[\s\S]*?--contrast-secondary-label:\s*var\(--pmx-muted-color\);[\s\S]*?--contrast-icon-muted:\s*var\(--pmx-muted-color\);/,
     );
 
     // 2. 4-edge Sidebar session glass cards (Dark & Light rest/hover/active, zero nested blur)
     assert.match(
       bridgeCss,
-      /html\.dark\[data-pmx-glass='1'\]\s+\[data-app-sidebar\]\s+\[data-sidebar-card='1'\][\s\S]*?background:\s*rgba\(16,\s*20,\s*32,\s*0\.34\);[\s\S]*?border:\s*1px solid rgba\(255,\s*255,\s*255,\s*0\.16\);[\s\S]*?backdrop-filter:\s*none;/,
+      /html\.dark\[data-pmx-glass=['"]1['"]\]\s+\[data-app-sidebar\]\s+\[data-sidebar-card=['"]1['"]\][\s\S]*?background:\s*rgba\(16,\s*20,\s*32,\s*0\.34\);[\s\S]*?border:\s*1px solid rgba\(255,\s*255,\s*255,\s*0\.16\);[\s\S]*?backdrop-filter:\s*none;/,
     );
     assert.match(
       bridgeCss,
-      /html\.dark\[data-pmx-glass='1'\]\s+\[data-app-sidebar\]\s+\[data-sidebar-card='1'\]\[data-sidebar-card-active='1'\]/,
+      /html\.dark\[data-pmx-glass=['"]1['"]\]\s+\[data-app-sidebar\]\s+\[data-sidebar-card=['"]1['"]\]\[data-sidebar-card-active=['"]1['"]\]/,
     );
     assert.match(
       bridgeCss,
-      /html:not\(\.dark\)\[data-pmx-glass='1'\]\s+\[data-app-sidebar\]\s+\[data-sidebar-card='1'\][\s\S]*?background:\s*rgba\(255,\s*255,\s*255,\s*0\.52\);[\s\S]*?border:\s*1px solid rgba\(15,\s*23,\s*42,\s*0\.13\);[\s\S]*?backdrop-filter:\s*none;/,
+      /html:not\(\.dark\)\[data-pmx-glass=['"]1['"]\]\s+\[data-app-sidebar\]\s+\[data-sidebar-card=['"]1['"]\][\s\S]*?background:\s*rgba\(255,\s*255,\s*255,\s*0\.52\);[\s\S]*?border:\s*1px solid rgba\(15,\s*23,\s*42,\s*0\.13\);[\s\S]*?backdrop-filter:\s*none;/,
     );
     assert.match(
       bridgeCss,
-      /html:not\(\.dark\)\[data-pmx-glass='1'\]\s+\[data-app-sidebar\]\s+\[data-sidebar-card='1'\]\[data-sidebar-card-active='1'\]/,
+      /html:not\(\.dark\)\[data-pmx-glass=['"]1['"]\]\s+\[data-app-sidebar\]\s+\[data-sidebar-card=['"]1['"]\]\[data-sidebar-card-active=['"]1['"]\]/,
     );
 
     // 3. Active agent RGB border marquee + breathing logo + reduced-motion fallback
-    assert.match(bridgeCss, /@property --pmx-rgb-border-angle\s*\{[\s\S]*?syntax:\s*'<angle>';/);
+    assert.match(bridgeCss, /@property --pmx-rgb-border-angle\s*\{[\s\S]*?syntax:\s*['"]<angle>['"];/);
     assert.match(bridgeCss, /@keyframes pmx-rgb-border-spin\b/);
     assert.match(bridgeCss, /@keyframes pmx-agent-logo-breathe\b/);
     assert.match(
       bridgeCss,
-      /\[data-sidebar-card='1'\]\[data-sidebar-agent-active='1'\]::before[\s\S]*?conic-gradient\([\s\S]*?from var\(--pmx-rgb-border-angle\)[\s\S]*?mask-composite:\s*exclude;[\s\S]*?animation:\s*pmx-rgb-border-spin 3\.2s linear infinite;/,
+      /\[data-sidebar-card=['"]1['"]\]\[data-sidebar-agent-active=['"]1['"]\]::before[\s\S]*?conic-gradient\([\s\S]*?from var\(--pmx-rgb-border-angle\)[\s\S]*?mask-composite:\s*exclude;[\s\S]*?animation:\s*pmx-rgb-border-spin 3\.2s linear infinite;/,
     );
     assert.match(
       bridgeCss,
-      /\[data-agent-logo-breathing='1'\][\s\S]*?animation:\s*pmx-agent-logo-breathe 2\.2s ease-in-out infinite;/,
+      /\[data-agent-logo-breathing=['"]1['"]\][\s\S]*?animation:\s*pmx-agent-logo-breathe 2\.2s ease-in-out infinite;/,
     );
     assert.match(
       bridgeCss,
-      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\[data-sidebar-card='1'\]\[data-sidebar-agent-active='1'\]::before[\s\S]*?animation:\s*none\s*!important;[\s\S]*?\[data-agent-logo-breathing='1'\][\s\S]*?animation:\s*none\s*!important;/,
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\[data-sidebar-card=['"]1['"]\]\[data-sidebar-agent-active=['"]1['"]\]::before[\s\S]*?animation:\s*none\s*!important;[\s\S]*?\[data-agent-logo-breathing=['"]1['"]\][\s\S]*?animation:\s*none\s*!important;/,
     );
 
     // 4. AGY flat large-radius user message capsule bubbles (8-zone userBubble + directional Fresnel rim + 3 fallbacks)
@@ -3316,25 +3319,25 @@ describe('6th glass zone `workPanels` (Tasks / Workspace Board / Scheduled Tasks
     );
     assert.match(
       bridgeCss,
-      /html\.dark\[data-pmx-glass='1'\][\s\S]*?\[data-pmx-glass-zone='userBubble'\][\s\S]*?background-color:\s*var\(--pmx-glass-zone-user-bubble-bg,[\s\S]*?backdrop-filter:\s*var\(--pmx-glass-zone-user-bubble-backdrop,[\s\S]*?border:\s*1px solid transparent;/,
+      /html\.dark\[data-pmx-glass=['"]1['"]\][\s\S]*?\[data-pmx-glass-zone=['"]userBubble['"]\][\s\S]*?background-color:\s*var\(--pmx-glass-zone-user-bubble-bg,[\s\S]*?backdrop-filter:\s*var\(--pmx-glass-zone-user-bubble-backdrop,[\s\S]*?border:\s*1px solid transparent;/,
     );
     assert.match(
       bridgeCss,
-      /html\.dark\[data-pmx-glass='1'\][\s\S]*?\[data-user-message-bubble\]\[data-user-message-bubble-surface='1'\][\s\S]*?::before[\s\S]*?border-radius:\s*inherit;[\s\S]*?pointer-events:\s*none;[\s\S]*?linear-gradient\(\s*135deg,[\s\S]*?-webkit-mask-composite:\s*xor;[\s\S]*?mask-composite:\s*exclude;/,
+      /html\.dark\[data-pmx-glass=['"]1['"]\][\s\S]*?\[data-user-message-bubble\]\[data-user-message-bubble-surface=['"]1['"]\][\s\S]*?::before[\s\S]*?border-radius:\s*inherit;[\s\S]*?pointer-events:\s*none;[\s\S]*?linear-gradient\(\s*135deg,[\s\S]*?-webkit-mask-composite:\s*xor;[\s\S]*?mask-composite:\s*exclude;/,
     );
     assert.match(
       bridgeCss,
-      /html:not\(\.dark\)\[data-pmx-glass='1'\][\s\S]*?\[data-pmx-glass-zone='userBubble'\][\s\S]*?background-color:\s*var\(--pmx-glass-zone-user-bubble-bg,[\s\S]*?backdrop-filter:\s*var\(--pmx-glass-zone-user-bubble-backdrop,[\s\S]*?border:\s*1px solid transparent;/,
+      /html:not\(\.dark\)\[data-pmx-glass=['"]1['"]\][\s\S]*?\[data-pmx-glass-zone=['"]userBubble['"]\][\s\S]*?background-color:\s*var\(--pmx-glass-zone-user-bubble-bg,[\s\S]*?backdrop-filter:\s*var\(--pmx-glass-zone-user-bubble-backdrop,[\s\S]*?border:\s*1px solid transparent;/,
     );
     const fallbackSection = bridgeCss.slice(
       bridgeCss.indexOf('/* ── 7. Three Mandatory Solid Fallbacks'),
     );
     assert.ok(
-      (fallbackSection.match(/\[data-user-message-bubble\]\[data-user-message-bubble-surface='1'\]/g) ?? []).length >= 10,
+      (fallbackSection.match(/\[data-user-message-bubble\]\[data-user-message-bubble-surface=['"]1['"]\]/g) ?? []).length >= 10,
       'all 3 solid fallbacks (dark + light + ::before disable) + forced-colors must cover user message capsule bubbles',
     );
     assert.ok(
-      (fallbackSection.match(/\[data-sidebar-card='1'\]/g) ?? []).length >= 13,
+      (fallbackSection.match(/\[data-sidebar-card=['"]1['"]\]/g) ?? []).length >= 13,
       'all 3 solid fallbacks (dark + light, rest + active) + forced-colors must cover sidebar cards',
     );
   });
@@ -3502,12 +3505,12 @@ describe('8-zone liquid glass expansion (`userBubble` + `overviewPanel`), legacy
     assert.match(cardsCss, /\.pmx-gz-pill-bar\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s);
 
     // Overview panel single-pass glass + popover-popup overlay stripping + solid fallbacks
-    assert.match(bridgeCss, /\[data-slot='popover-popup'\]:has\(\[data-pmx-glass-zone='overviewPanel'\]\)/);
-    assert.match(bridgeCss, /\[data-thread-details-card\]:has\(\[data-pmx-glass-zone='overviewPanel'\]\)/);
+    assert.match(bridgeCss, /\[data-slot=['"]popover-popup['"]\]:has\(\[data-pmx-glass-zone=['"]overviewPanel['"]\]\)/);
+    assert.match(bridgeCss, /\[data-thread-details-card\]:has\(\[data-pmx-glass-zone=['"]overviewPanel['"]\]\)/);
     assert.match(bridgeCss, /--pmx-glass-zone-overview-panel-bg/);
     assert.match(bridgeCss, /--pmx-glass-zone-overview-panel-backdrop/);
-    assert.match(bridgeCss, /data-pmx-zone-overview-panel-mode='solid'/);
-    assert.match(bridgeCss, /data-pmx-zone-user-bubble-mode='solid'/);
+    assert.match(bridgeCss, /data-pmx-zone-overview-panel-mode=['"]solid['"]/);
+    assert.match(bridgeCss, /data-pmx-zone-user-bubble-mode=['"]solid['"]/);
     const fallbackSection = bridgeCss.slice(
       bridgeCss.indexOf('/* ── 7. Three Mandatory Solid Fallbacks'),
     );
@@ -3520,14 +3523,14 @@ describe('8-zone liquid glass expansion (`userBubble` + `overviewPanel`), legacy
       'all 3 solid fallback blocks must reset --pmx-glass-zone-overview-panel-bg',
     );
     assert.ok(
-      (fallbackSection.match(/\[data-thread-details-card\]:has\(\[data-pmx-glass-zone='overviewPanel'\]\)/g) ?? [])
+      (fallbackSection.match(/\[data-thread-details-card\]:has\(\[data-pmx-glass-zone=['"]overviewPanel['"]\]\)/g) ?? [])
         .length >= 4,
       'all 3 solid fallback blocks + forced-colors must cover overviewPanel card wrapper',
     );
     assert.ok(
       (
         fallbackSection.match(
-          /\[data-pmx-glass-zone='userBubble'\](?:\s*\))?::before/g,
+          /\[data-pmx-glass-zone=['"]userBubble['"]\](?:\s*\))?::before/g,
         ) ?? []
       ).length >= 4,
       'all 3 solid fallback blocks + forced-colors must disable userBubble Fresnel ::before rim',
@@ -3574,28 +3577,29 @@ describe('8-zone liquid glass expansion (`userBubble` + `overviewPanel`), legacy
     // Global Prismux theme accent binding for context chips & info-foreground
     assert.match(
       bridgeCss,
-      /html\[data-pmx-theme\],\s*html\.dark\[data-pmx-theme\],\s*html:not\(\.dark\)\[data-pmx-theme\],\s*html\[data-pmx-theme\]\[data-theme-id\]:not\(\[data-theme-id=''\]\)\s*\{[^}]*--context-chip-mention:\s*var\(--pmx-accent,\s*#5e9bff\);[^}]*--context-chip-file:\s*var\(--pmx-accent,\s*#5e9bff\);[^}]*--context-chip-citation:\s*var\(--pmx-accent,\s*#5e9bff\);[^}]*--info-foreground:\s*var\(--pmx-accent,\s*#5e9bff\);/s,
+      /html\[data-pmx-theme\],\s*html\.dark\[data-pmx-theme\],\s*html:not\(\.dark\)\[data-pmx-theme\],\s*html\[data-pmx-theme\]\[data-theme-id\]:not\(\[data-theme-id=['"]['"]\]\)\s*\{[^}]*--context-chip-mention:\s*var\(--pmx-accent-text,\s*var\(--pmx-accent,\s*#5e9bff\)\);[^}]*--context-chip-file:\s*var\(--pmx-accent-text,\s*var\(--pmx-accent,\s*#5e9bff\)\);[^}]*--context-chip-citation:\s*var\(--pmx-accent-text,\s*var\(--pmx-accent,\s*#5e9bff\)\);[^}]*--info-foreground:\s*var\(--pmx-accent-text,\s*var\(--pmx-accent,\s*#5e9bff\)\);/s,
     );
 
-    // .chat-markdown-file-link & [data-slot="context-chip"].chat-markdown-file-link follow --pmx-accent and preserve --context-chip-message-ink
+    // .chat-markdown-file-link & [data-slot="context-chip"].chat-markdown-file-link follow --pmx-accent-text/--pmx-accent and preserve --context-chip-message-ink
     assert.match(
       bridgeCss,
-      /html\[data-pmx-theme\] \.chat-markdown-file-link,\s*html\[data-pmx-theme\] \[data-slot="context-chip"\]\.chat-markdown-file-link\s*\{[^}]*--context-chip-accent:\s*var\(--pmx-accent,\s*#5e9bff\);[^}]*--context-chip-ink:\s*var\(--context-chip-message-ink,\s*var\(--pmx-accent,\s*#5e9bff\)\);[^}]*color:\s*var\(--context-chip-ink\);/s,
+      /html\[data-pmx-theme\] \.chat-markdown-file-link,\s*html\[data-pmx-theme\] \[data-slot=['"]context-chip['"]\]\.chat-markdown-file-link\s*\{[^}]*--context-chip-accent:\s*var\(--pmx-accent-text,\s*var\(--pmx-accent,\s*#5e9bff\)\);[^}]*--context-chip-ink:\s*var\(\s*--context-chip-message-ink,\s*var\(--pmx-accent-text,\s*var\(--pmx-accent,\s*#5e9bff\)\)\s*\);[^}]*color:\s*var\(--context-chip-ink\);/s,
     );
 
-    // Explicit UI custom colors (data-pmx-ui-colors='1') override afterward while preserving --context-chip-message-ink
+    // Explicit UI custom colors (data-pmx-ui-colors="1") override afterward while preserving --context-chip-message-ink
     const baseIdx = bridgeCss.indexOf('html[data-pmx-theme] .chat-markdown-file-link');
-    const customIdx = bridgeCss.indexOf(
-      'html[data-pmx-theme][data-pmx-ui-colors=\'1\'] .chat-markdown-file-link',
+    const customMatch = /html\[data-pmx-theme\]\[data-pmx-ui-colors=['"]1['"]\] \.chat-markdown-file-link/.exec(
+      bridgeCss,
     );
+    const customIdx = customMatch?.index ?? -1;
     assert.ok(baseIdx > 0 && customIdx > baseIdx, 'custom UI color override must appear after base accent binding');
     assert.match(
       bridgeCss.slice(customIdx),
-      /--context-chip-accent:\s*var\(--pmx-ui-file-icon,\s*var\(--pmx-accent,\s*#5e9bff\)\);/,
+      /--context-chip-accent:\s*var\(\s*--pmx-ui-file-icon,\s*var\(--pmx-accent-text,\s*var\(--pmx-accent,\s*#5e9bff\)\)\s*\);/,
     );
     assert.match(
       bridgeCss.slice(customIdx),
-      /--context-chip-ink:\s*var\(\s*--context-chip-message-ink,\s*var\(--pmx-ui-file-icon,\s*var\(--pmx-accent,\s*#5e9bff\)\)\s*\);/,
+      /--context-chip-ink:\s*var\(\s*--context-chip-message-ink,\s*var\(--pmx-ui-file-icon,\s*var\(--pmx-accent-text,\s*var\(--pmx-accent,\s*#5e9bff\)\)\)\s*\);/,
     );
   });
 
@@ -3615,18 +3619,18 @@ describe('8-zone liquid glass expansion (`userBubble` + `overviewPanel`), legacy
     // 2. Dark & Light Glass 3-tier separation (Primary vs cool/slate Secondary vs Placeholder)
     assert.match(bridgeCss, /--foreground:\s*rgba\(255,\s*255,\s*255,\s*0\.96\);/);
     assert.match(bridgeCss, /--muted-foreground:\s*rgba\(203,\s*213,\s*225,\s*0\.66\);/);
-    assert.match(bridgeCss, /--placeholder:\s*rgba\(203,\s*213,\s*225,\s*0\.50\);/);
+    assert.match(bridgeCss, /--placeholder:\s*rgba\(203,\s*213,\s*225,\s*0\.50?\);/);
     assert.match(bridgeCss, /--icon-muted:\s*rgba\(203,\s*213,\s*225,\s*0\.72\);/);
 
     assert.match(bridgeCss, /--foreground:\s*rgba\(15,\s*23,\s*42,\s*0\.95\);/);
-    assert.match(bridgeCss, /--muted-foreground:\s*rgba\(51,\s*65,\s*85,\s*0\.70\);/);
+    assert.match(bridgeCss, /--muted-foreground:\s*rgba\(51,\s*65,\s*85,\s*0\.70?\);/);
     assert.match(bridgeCss, /--placeholder:\s*rgba\(51,\s*65,\s*85,\s*0\.54\);/);
     assert.match(bridgeCss, /--icon-muted:\s*rgba\(51,\s*65,\s*85,\s*0\.72\);/);
 
     // 3. Custom typography color overrides scope cleanly across Settings, Work Panels, Sidebar & Status Bar
-    assert.ok(bridgeCss.includes("[data-slot='settings-row']"));
-    assert.ok(bridgeCss.includes("[data-pmx-work-panel='1']"));
-    assert.ok(bridgeCss.includes(":not([data-pmx-setting-title='1'])"));
+    assert.match(bridgeCss, /\[data-slot=['"]settings-row['"]\]/);
+    assert.match(bridgeCss, /\[data-pmx-work-panel=['"]1['"]\]/);
+    assert.match(bridgeCss, /:not\(\[data-pmx-setting-title=['"]1['"]\]\)/);
 
     // 4. TypographyCard renders clear 3-role labels, subtitles & compact live hierarchy preview
     assert.ok(heroSrc.includes('一级标题字色'));
@@ -3917,12 +3921,14 @@ describe('RC.3 Liquid Glass Theme Substrates (`GlassThemeBase` 6-substrate syste
       'ocean-caustics',
       'gilded-lunar',
     ] as const) {
-      assert.ok(
-        bridgeCss.includes(`html.dark[data-pmx-glass='1'][data-pmx-glass-base='${base}']`),
+      assert.match(
+        bridgeCss,
+        new RegExp(`html\\.dark\\[data-pmx-glass=['"]1['"]\\]\\[data-pmx-glass-base=['"]${base}['"]\\]`),
         `bridge CSS must define Dark Glass rules for ${base}`,
       );
-      assert.ok(
-        bridgeCss.includes(`html:not(.dark)[data-pmx-glass='1'][data-pmx-glass-base='${base}']`),
+      assert.match(
+        bridgeCss,
+        new RegExp(`html:not\\(\\.dark\\)\\[data-pmx-glass=['"]1['"]\\]\\[data-pmx-glass-base=['"]${base}['"]\\]`),
         `bridge CSS must define Light Glass rules for ${base}`,
       );
     }
@@ -3931,7 +3937,7 @@ describe('RC.3 Liquid Glass Theme Substrates (`GlassThemeBase` 6-substrate syste
     assert.ok(bridgeCss.includes('inset 3px 0 #bda2f2'));
     assert.ok(bridgeCss.includes('inset 0 -2px #b99bea'));
     assert.ok(bridgeCss.includes("data:image/svg+xml"));
-    assert.ok(bridgeCss.includes("[data-pmx-shell-backdrop='1']::before"));
+    assert.match(bridgeCss, /\[data-pmx-shell-backdrop=['"]1['"]\]::before/);
     assert.ok(bridgeCss.includes("body::before"));
     assert.ok(bridgeCss.includes('--pmx-glass-base-rim'));
     assert.ok(bridgeCss.includes('--pmx-glass-base-glow'));
@@ -3941,7 +3947,7 @@ describe('RC.3 Liquid Glass Theme Substrates (`GlassThemeBase` 6-substrate syste
       bridgeCss.indexOf('/* ── 7. Three Mandatory Solid Fallbacks'),
     );
     assert.ok(
-      (fallbackSection.match(/\[data-pmx-shell-backdrop='1'\]::before/g) ?? []).length >= 3,
+      (fallbackSection.match(/\[data-pmx-shell-backdrop=['"]1['"]\]::before/g) ?? []).length >= 3,
       'solid fallbacks must hide [data-pmx-shell-backdrop="1"]::before',
     );
     assert.ok(
@@ -3967,47 +3973,47 @@ describe('Composer outer-ring open-gap flowing RGB light-arc & sidebar tree RGB 
     // 1. Glass pseudo-layer suppression must exempt active composer ::before so RGB light-arc renders in Liquid Glass.
     assert.match(
       bridgeCss,
-      /html\[data-pmx-glass='1'\]\s+\[data-pmx-composer-layout='agy'\]:not\(\[data-pmx-composer-active='1'\]\)::before/,
+      /html\[data-pmx-glass=['"]1['"]\]\s+\[data-pmx-composer-layout=['"]agy['"]\]:not\(\[data-pmx-composer-active=['"]1['"]\]\)::before/,
     );
 
     // 2. Open-gap RGB comet arc stops (~40% transparent 0deg..135deg gap + ~60% glowing comet arc ending at white head -> transparent 360deg).
     assert.match(
       bridgeCss,
-      /\[data-pmx-composer-layout='agy'\]\[data-pmx-composer-active='1'\]::before[\s\S]*?content:\s*''\s*!important;[\s\S]*?display:\s*block\s*!important;[\s\S]*?border-radius:\s*inherit;[\s\S]*?padding:\s*1\.5px;[\s\S]*?pointer-events:\s*none;[\s\S]*?conic-gradient\(\s*from var\(--pmx-rgb-border-angle\),\s*transparent 0deg,\s*transparent 135deg,\s*rgba\(255,\s*59,\s*127,\s*0\.18\) 155deg,\s*#ff3b7f 185deg,\s*#ff9f1c 220deg,\s*#34d399 258deg,\s*#38bdf8 295deg,\s*#818cf8 328deg,\s*#c084fc 348deg,\s*#ffffff 356deg,\s*transparent 360deg\s*\)[\s\S]*?mask-composite:\s*exclude;[\s\S]*?animation:\s*pmx-rgb-border-spin 3\.2s linear infinite;/,
+      /\[data-pmx-composer-layout=['"]agy['"]\]\[data-pmx-composer-active=['"]1['"]\]::before[\s\S]*?content:\s*['"]['"]\s*!important;[\s\S]*?display:\s*block\s*!important;[\s\S]*?border-radius:\s*inherit;[\s\S]*?padding:\s*1\.5px;[\s\S]*?pointer-events:\s*none;[\s\S]*?conic-gradient\(\s*from var\(--pmx-rgb-border-angle\),\s*transparent 0deg,\s*transparent 135deg,\s*rgba\(255,\s*59,\s*127,\s*0\.18\) 155deg,\s*#ff3b7f 185deg,\s*#ff9f1c 220deg,\s*#34d399 258deg,\s*#38bdf8 295deg,\s*#818cf8 328deg,\s*#c084fc 348deg,\s*#ffffff 356deg,\s*transparent 360deg\s*\)[\s\S]*?mask-composite:\s*exclude;[\s\S]*?animation:\s*pmx-rgb-border-spin 3\.2s linear infinite;/,
     );
 
     // 3. Ambient outer glow rules for Light, Dark, Liquid Glass, and all 5 patterned substrates.
     assert.match(
       bridgeCss,
-      /html\.dark \[data-pmx-composer-layout='agy'\]\[data-pmx-composer-active='1'\]/,
+      /html\.dark\s+\[data-pmx-composer-layout=['"]agy['"]\]\[data-pmx-composer-active=['"]1['"]\]/,
     );
     assert.match(
       bridgeCss,
-      /html\[data-pmx-glass='1'\] \[data-pmx-composer-layout='agy'\]\[data-pmx-composer-active='1'\]/,
+      /html\[data-pmx-glass=['"]1['"]\]\s+\[data-pmx-composer-layout=['"]agy['"]\]\[data-pmx-composer-active=['"]1['"]\]/,
     );
     assert.match(
       bridgeCss,
-      /\[data-pmx-glass-base\]:not\(\[data-pmx-glass-base='pure'\]\)[\s\S]*?\[data-pmx-composer-layout='agy'\]\[data-pmx-composer-active='1'\]/,
+      /\[data-pmx-glass-base\]:not\(\[data-pmx-glass-base=['"]pure['"]\]\)[\s\S]*?\[data-pmx-composer-layout=['"]agy['"]\]\[data-pmx-composer-active=['"]1['"]\]/,
     );
 
     // 4. Sidebar level-2 delegated tree RGB branch beam keyframes + selector.
     assert.match(bridgeCss, /@keyframes pmx-tree-rgb-flow\b/);
     assert.match(
       bridgeCss,
-      /\[data-pmx-tree-rgb-beam='1'\]\s*\{[^}]*stroke-dasharray:[^}]*animation:\s*pmx-tree-rgb-flow/s,
+      /\[data-pmx-tree-rgb-beam=['"]1['"]\]\s*\{[^}]*stroke-dasharray:[^}]*animation:\s*pmx-tree-rgb-flow/s,
     );
 
     // 5. Reduced-motion calm fallback stops both composer spin and tree beam flow.
     assert.match(
       bridgeCss,
-      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\[data-pmx-composer-layout='agy'\]\[data-pmx-composer-active='1'\]::before[\s\S]*?animation:\s*none\s*!important;[\s\S]*?\[data-pmx-tree-rgb-beam='1'\][\s\S]*?animation:\s*none\s*!important;/,
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\[data-pmx-composer-layout=['"]agy['"]\]\[data-pmx-composer-active=['"]1['"]\]::before[\s\S]*?animation:\s*none\s*!important;[\s\S]*?\[data-pmx-tree-rgb-beam=['"]1['"]\][\s\S]*?animation:\s*none\s*!important;/,
     );
 
     // 6. Forced-colors fallback uses Highlight and hides ::before gradient.
     const forcedColorsSection = bridgeCss.slice(bridgeCss.indexOf('@media (forced-colors: active)'));
-    assert.ok(forcedColorsSection.includes("[data-pmx-composer-layout='agy'][data-pmx-composer-active='1']"));
-    assert.ok(forcedColorsSection.includes("[data-pmx-composer-layout='agy'][data-pmx-composer-active='1']::before"));
-    assert.ok(forcedColorsSection.includes("[data-pmx-tree-rgb-beam='1']"));
+    assert.match(forcedColorsSection, /\[data-pmx-composer-layout=['"]agy['"]\]\[data-pmx-composer-active=['"]1['"]\]/);
+    assert.match(forcedColorsSection, /\[data-pmx-composer-layout=['"]agy['"]\]\[data-pmx-composer-active=['"]1['"]\]::before/);
+    assert.match(forcedColorsSection, /\[data-pmx-tree-rgb-beam=['"]1['"]\]/);
 
     // 7. Braces remain balanced and zero prefers-color-scheme leaks.
     const noComments = bridgeCss.replace(/\/\*[\s\S]*?\*\//g, '');
@@ -4016,5 +4022,267 @@ describe('Composer outer-ring open-gap flowing RGB light-arc & sidebar tree RGB 
       (noComments.match(/\{/g) ?? []).length,
       (noComments.match(/\}/g) ?? []).length,
     );
+  });
+});
+
+describe('Light, Dark & Liquid Glass accent color propagation & WCAG contrast', () => {
+  it('resolves WCAG >= 4.5:1 readable accent text across full swatch spectrum in both Light and Dark polarity', () => {
+    const swatches = [
+      '#000000',
+      '#0d1524',
+      '#005fb8',
+      '#5e9bff',
+      '#38bdf8',
+      '#8b5cf6',
+      '#f472b6',
+      '#10b981',
+      '#f59e0b',
+      '#facc15',
+      '#ef4444',
+      '#ffffff',
+    ];
+
+    for (const hex of swatches) {
+      const lightText = resolveReadableAccentText(hex, false);
+      const darkText = resolveReadableAccentText(hex, true);
+      assert.match(lightText, /^#[0-9a-f]{6}$/);
+      assert.match(darkText, /^#[0-9a-f]{6}$/);
+
+      // Light mode: must pass >= 4.5:1 on both pure white canvas and zinc-100 subtle surface
+      assert.ok(
+        contrastRatioHex(lightText, '#ffffff') >= 4.5,
+        `light accent text for ${hex} (${lightText}) must have >= 4.5:1 contrast on #ffffff, got ${contrastRatioHex(lightText, '#ffffff').toFixed(2)}`,
+      );
+      assert.ok(
+        contrastRatioHex(lightText, '#f4f4f5') >= 4.5,
+        `light accent text for ${hex} (${lightText}) must have >= 4.5:1 contrast on #f4f4f5, got ${contrastRatioHex(lightText, '#f4f4f5').toFixed(2)}`,
+      );
+
+      // Dark mode: must pass >= 4.5:1 on both true black canvas and raised dark/glass card surface
+      assert.ok(
+        contrastRatioHex(darkText, '#000000') >= 4.5,
+        `dark accent text for ${hex} (${darkText}) must have >= 4.5:1 contrast on #000000, got ${contrastRatioHex(darkText, '#000000').toFixed(2)}`,
+      );
+      assert.ok(
+        contrastRatioHex(darkText, '#181a24') >= 4.5,
+        `dark accent text for ${hex} (${darkText}) must have >= 4.5:1 contrast on #181a24, got ${contrastRatioHex(darkText, '#181a24').toFixed(2)}`,
+      );
+    }
+
+    // Already-compliant accents remain faithful without unnecessary washing
+    assert.equal(resolveReadableAccentText('#005fb8', false), '#005fb8');
+    assert.equal(resolveReadableAccentText('#5e9bff', true), '#5e9bff');
+  });
+
+  it('drives all accent & host semantic CSS variables across light, dark, and glass modes with contrast-safe foregrounds and clean teardown', () => {
+    const html = createMockElement();
+    const body = createMockElement();
+    const doc: DocumentLike = { documentElement: html, body };
+
+    const modes = [
+      { themeMode: 'light' as const, glassBasePolarity: 'light' as const, expectGlass: '0', isDark: false },
+      { themeMode: 'dark' as const, glassBasePolarity: 'dark' as const, expectGlass: '0', isDark: true },
+      { themeMode: 'glass' as const, glassBasePolarity: 'dark' as const, expectGlass: '1', isDark: true },
+      { themeMode: 'glass' as const, glassBasePolarity: 'light' as const, expectGlass: '1', isDark: false },
+    ];
+
+    const scenarios = [
+      {
+        label: 'default system accent (fallback)',
+        patch: { accentMode: 'system' as const, accent: '' },
+        systemAccent: undefined,
+        expectedAccent: (isDark: boolean) => (isDark ? '#5e9bff' : '#005fb8'),
+      },
+      {
+        label: 'OS system accent',
+        patch: { accentMode: 'system' as const, accent: '' },
+        systemAccent: '#0078d4',
+        expectedAccent: () => '#0078d4',
+      },
+      {
+        label: 'custom violet swatch',
+        patch: { accentMode: 'custom' as const, accent: '#8b5cf6' },
+        systemAccent: '#0078d4',
+        expectedAccent: () => '#8b5cf6',
+      },
+      {
+        label: 'custom bright yellow swatch (dark ink foreground)',
+        patch: { accentMode: 'custom' as const, accent: '#facc15' },
+        systemAccent: '#0078d4',
+        expectedAccent: () => '#facc15',
+      },
+      {
+        label: 'custom deep navy swatch (white ink foreground)',
+        patch: { accentMode: 'custom' as const, accent: '#0d1524' },
+        systemAccent: '#0078d4',
+        expectedAccent: () => '#0d1524',
+      },
+      {
+        label: 'cleared custom accent falls back to polarity default',
+        patch: { accentMode: 'custom' as const, accent: '' },
+        systemAccent: '#0078d4',
+        expectedAccent: (isDark: boolean) => (isDark ? '#5e9bff' : '#005fb8'),
+      },
+    ];
+
+    for (const m of modes) {
+      for (const sc of scenarios) {
+        const cfg = normalizeAppearanceConfig({
+          themeMode: m.themeMode,
+          glassBasePolarity: m.glassBasePolarity,
+          glassPreset: 'balanced',
+          ...sc.patch,
+        });
+        const rt = applyPrismuxAppearanceToDocument(cfg, {
+          document: doc,
+          systemAccent: sc.systemAccent,
+        });
+        const wantAccent = sc.expectedAccent(m.isDark);
+        const wantInk = selectHighContrastInk(wantAccent);
+        const wantText = resolveReadableAccentText(wantAccent, m.isDark);
+        const { r, g, b } = hexToRgb(wantAccent);
+        const wantRgb = `${r}, ${g}, ${b}`;
+
+        assert.equal(html.attrs.get('data-pmx-glass'), m.expectGlass, `${m.themeMode} ${sc.label}`);
+        assert.equal(rt.accent, wantAccent, `${m.themeMode} ${sc.label} runtime.accent`);
+        assert.equal(rt.accentInk, wantInk, `${m.themeMode} ${sc.label} runtime.accentInk`);
+        assert.equal(rt.accentRgb, wantRgb, `${m.themeMode} ${sc.label} runtime.accentRgb`);
+        assert.equal(rt.accentText, wantText, `${m.themeMode} ${sc.label} runtime.accentText`);
+
+        // Accent CSS variables
+        assert.equal(html.styles.get('--pmx-accent'), wantAccent);
+        assert.equal(html.styles.get('--pmx-accent-rgb'), wantRgb);
+        assert.equal(html.styles.get('--pmx-accent-ink'), wantInk);
+        assert.equal(html.styles.get('--pmx-accent-text'), wantText);
+        assert.match(html.styles.get('--pmx-accent-soft') ?? '', new RegExp(`^rgba\\(${wantRgb}, `));
+        assert.match(html.styles.get('--pmx-accent-border') ?? '', new RegExp(`^rgba\\(${wantRgb}, `));
+        assert.equal(html.styles.get('--prismux-accent'), wantAccent);
+        assert.equal(html.styles.get('--dock-accent'), wantAccent);
+
+        // Host semantic UI variables consumed across buttons, switches, focus rings, sliders, sidebar & send action
+        assert.equal(html.styles.get('--primary'), wantAccent);
+        assert.equal(html.styles.get('--primary-foreground'), wantInk);
+        assert.equal(html.styles.get('--ring'), wantAccent);
+        assert.equal(html.styles.get('--sidebar-primary'), wantAccent);
+        assert.equal(html.styles.get('--sidebar-primary-foreground'), wantInk);
+        assert.equal(html.styles.get('--sidebar-ring'), wantAccent);
+        assert.equal(html.styles.get('--message-action'), wantAccent);
+        assert.equal(html.styles.get('--message-action-foreground'), wantInk);
+        assert.equal(html.styles.get('--update'), wantAccent);
+        assert.equal(html.styles.get('--update-foreground'), wantText);
+        assert.equal(html.styles.get('--context-chip-mention'), wantText);
+        assert.equal(html.styles.get('--context-chip-file'), wantText);
+        assert.equal(html.styles.get('--context-chip-citation'), wantText);
+
+        // Primary foreground contrast on accent fill is strictly >= 4.5:1
+        assert.ok(
+          contrastRatioHex(wantInk, wantAccent) >= 4.5,
+          `--primary-foreground (${wantInk}) over --primary (${wantAccent}) must pass WCAG >= 4.5:1`,
+        );
+      }
+    }
+
+    // Custom UI color overrides still override message-action and context chips with high-contrast send ink
+    const customUiCfg = normalizeAppearanceConfig({
+      themeMode: 'light',
+      accentMode: 'custom',
+      accent: '#8b5cf6',
+      uiColorCustom: {
+        enabled: true,
+        send: '#facc15',
+        fileIcon: '#10b981',
+        link: '#f472b6',
+      },
+    });
+    applyPrismuxAppearanceToDocument(customUiCfg, { document: doc });
+    assert.equal(html.styles.get('--primary'), '#8b5cf6');
+    assert.equal(html.styles.get('--message-action'), '#facc15');
+    assert.equal(html.styles.get('--message-action-foreground'), '#000000');
+    assert.equal(html.styles.get('--pmx-ui-send-ink'), '#000000');
+    assert.equal(html.styles.get('--context-chip-file'), '#10b981');
+    assert.equal(html.styles.get('--context-chip-citation'), '#f472b6');
+
+    // Full teardown removes every managed CSS variable cleanly
+    clearPrismuxAppearanceFromDocument(doc);
+    assert.equal(html.styles.size, 0);
+    assert.equal(html.attrs.size, 0);
+  });
+
+  it('bridges accent tokens & active sidebar cards in non-glass Light/Dark CSS and renders interactive accent controls in both InlineAppearanceStudio and ThemePaletteCard', () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const bridgeCss = fs.readFileSync(path.resolve(here, '../styles/prismux-glass-bridge.css'), 'utf8');
+    const cardsCss = fs.readFileSync(path.resolve(here, '../styles/appearance-cards.css'), 'utf8');
+
+    // Mode-agnostic accent token bridge (must NOT be gated behind data-pmx-glass="1")
+    assert.match(
+      bridgeCss,
+      /html\[data-pmx-theme\],\s*html\.dark\[data-pmx-theme\],\s*html:not\(\.dark\)\[data-pmx-theme\],\s*html\[data-pmx-theme\]\[data-theme-id\]:not\(\[data-theme-id=["']["']\]\):not\(\[data-theme-id=["']__preview["']\]\)\s*\{[^}]*--primary:\s*var\(--pmx-accent,[^}]*--primary-foreground:\s*var\(--pmx-accent-ink,[^}]*--ring:\s*var\(--pmx-accent,[^}]*--sidebar-primary:\s*var\(--pmx-accent,[^}]*--sidebar-ring:\s*var\(--pmx-accent,/s,
+    );
+
+    // Non-glass Light & Dark active sidebar session cards consume --pmx-accent
+    assert.match(
+      bridgeCss,
+      /html:not\(\.dark\)\[data-pmx-glass=["']0["']\][\s\S]*?\[data-sidebar-card=["']1["']\]\[data-sidebar-card-active=["']1["']\][\s\S]*?var\(--pmx-accent,/,
+    );
+    assert.match(
+      bridgeCss,
+      /html\.dark\[data-pmx-glass=["']0["']\][\s\S]*?\[data-sidebar-card=["']1["']\]\[data-sidebar-card-active=["']1["']\][\s\S]*?var\(--pmx-accent,/,
+    );
+
+    // appearance-cards.css .pbtn.al follows --pmx-accent & --pmx-accent-ink instead of hardcoded #005fb8
+    assert.match(
+      cardsCss,
+      /\.pmx-appearance\s+\.pbtn\.al\s*\{[^}]*background:\s*var\(--pmx-accent,[^}]*color:\s*var\(--pmx-accent-ink,/s,
+    );
+
+    // Both InlineAppearanceStudio and ThemePaletteCard render accent controls cleanly in Light & Dark modes
+    for (const mode of ['light', 'dark'] as const) {
+      const cfg = normalizeAppearanceConfig({
+        themeMode: mode,
+        accentMode: 'custom',
+        accent: '#10b981',
+      });
+      const noop = () => undefined;
+      const inlineHtml = renderToStaticMarkup(
+        createElement(InlineAppearanceStudio, { config: cfg, onChange: noop }),
+      );
+      const paletteHtml = renderToStaticMarkup(
+        createElement(ThemePaletteCard, {
+          config: cfg,
+          onChange: noop,
+          onOpenColorPicker: noop,
+        }),
+      );
+      assert.ok(inlineHtml.includes('#10b981'), `InlineAppearanceStudio must display active custom accent in ${mode}`);
+      assert.match(
+        inlineHtml,
+        /aria-label="选择强调色 薄荷绿"[^>]*aria-pressed="true"/,
+        `InlineAppearanceStudio must mark matching swatch active in ${mode}`,
+      );
+      assert.ok(paletteHtml.includes('#10b981'), `ThemePaletteCard must display active custom accent in ${mode}`);
+      assert.ok(paletteHtml.includes('全局强调色'), `ThemePaletteCard must render accent section in ${mode}`);
+
+      // Omitted systemAccent uses polarity default (#005fb8 light / #5e9bff dark) matching glassEngine
+      const sysCfg = normalizeAppearanceConfig({ themeMode: mode, accentMode: 'system' });
+      const expectedDefault = mode === 'light' ? '#005fb8' : '#5e9bff';
+      const inlineSysHtml = renderToStaticMarkup(
+        createElement(InlineAppearanceStudio, { config: sysCfg, onChange: noop }),
+      );
+      const paletteSysHtml = renderToStaticMarkup(
+        createElement(ThemePaletteCard, {
+          config: sysCfg,
+          onChange: noop,
+          onOpenColorPicker: noop,
+        }),
+      );
+      assert.ok(
+        inlineSysHtml.includes(expectedDefault),
+        `InlineAppearanceStudio omitted systemAccent should match polarity default ${expectedDefault} in ${mode}`,
+      );
+      assert.ok(
+        paletteSysHtml.includes(expectedDefault),
+        `ThemePaletteCard omitted systemAccent should match polarity default ${expectedDefault} in ${mode}`,
+      );
+    }
   });
 });

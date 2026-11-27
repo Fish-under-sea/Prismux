@@ -293,6 +293,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(prismux-
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--contrast-sidebar-foreground);
   --color-sidebar-muted-foreground: var(--contrast-sidebar-muted-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-control-surface: var(--sidebar-control-surface);
   --color-sidebar-row-hover: var(--sidebar-row-hover);
   --color-sidebar-row-active: var(--sidebar-row-active);
@@ -1236,8 +1239,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(prismux-
   --card-foreground: var(--color-zinc-900);
   --popover: var(--color-white);
   --popover-foreground: var(--color-zinc-900);
-  --primary: oklch(0.488 0.217 264);
-  --primary-foreground: var(--color-white);
+  --primary: var(--pmx-accent, oklch(0.488 0.217 264));
+  --primary-foreground: var(--pmx-accent-ink, var(--color-white));
   /* Contrast-safe dynamic accent text/tint tokens (WCAG >= 4.5:1 across Light, Dark, and Liquid Glass). */
   --pmx-accent-text: color-mix(
     in srgb,
@@ -1268,7 +1271,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(prismux-
   --destructive: var(--error);
   --border: var(--color-zinc-200);
   --input: var(--color-zinc-300);
-  --ring: var(--primary);
+  --ring: var(--pmx-accent, var(--primary));
   --destructive-foreground: var(--error-foreground);
   --info: var(--color-blue-500);
   --info-foreground: var(--color-blue-700);
@@ -1282,12 +1285,15 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(prismux-
   --warning-foreground: var(--color-amber-700);
   --warning-surface: color-mix(in srgb, var(--warning) 8%, transparent);
   --update: var(--primary);
-  --update-foreground: var(--primary);
+  --update-foreground: var(--pmx-accent-text, var(--primary));
   /* Keep every sidebar primitive on the same light surface hierarchy, including
      portaled mobile sheets and settings navigation outside the app sidebar. */
   --sidebar: var(--color-zinc-50);
   --sidebar-foreground: var(--foreground);
   --sidebar-muted-foreground: var(--muted-foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-ring: var(--ring);
   --sidebar-control-surface: var(--color-zinc-100);
   --sidebar-row-hover: var(--color-zinc-25);
   --sidebar-row-active: var(--color-white);
@@ -1313,7 +1319,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(prismux-
     --card-foreground: #f5f5f7;
     --popover: color-mix(in srgb, var(--color-neutral-950) 97%, var(--color-white));
     --popover-foreground: #f5f5f7;
-    --primary: oklch(0.571 0.21 264);
+    --primary: var(--pmx-accent, oklch(0.571 0.21 264));
+    --primary-foreground: var(--pmx-accent-ink, var(--color-white));
     --pmx-accent-text: color-mix(in srgb, var(--pmx-accent, var(--primary)) 74%, #ffffff);
     --pmx-accent-soft: color-mix(in srgb, var(--pmx-accent, var(--primary)) 18%, transparent);
     --pmx-accent-border: color-mix(in srgb, var(--pmx-accent, var(--primary)) 40%, transparent);
@@ -1336,7 +1343,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(prismux-
     --success-foreground: var(--color-emerald-400);
     --warning-foreground: var(--color-amber-400);
     --warning-surface: color-mix(in srgb, var(--warning) 16%, transparent);
-    --update-foreground: var(--color-blue-400);
+    --update-foreground: var(--pmx-accent-text, var(--color-blue-400));
     --sidebar: var(--card);
     --sidebar-control-surface: var(--muted);
     --sidebar-row-hover: var(--accent);
@@ -1512,6 +1519,16 @@ html[data-theme-id]:not([data-theme-id=""]) {
   --terminal-foreground: var(--app-theme-terminal-foreground);
   --terminal-cursor: var(--app-theme-terminal-cursor);
   --terminal-selection-background: var(--app-theme-terminal-selection-background);
+}
+
+/* Theme Editor live preview keeps precedence over Prismux inline accent tokens while open. */
+html[data-theme-id="__preview"] {
+  --primary: var(--app-theme-message-action) !important;
+  --primary-foreground: var(--app-theme-message-action-foreground) !important;
+  --ring: var(--app-theme-focus) !important;
+  --message-action: var(--app-theme-message-action) !important;
+  --message-action-foreground: var(--app-theme-message-action-foreground) !important;
+  --message-action-hover: var(--app-theme-message-action-hover) !important;
 }
 
 /* Theme-token dependency probes are restored synchronously, before paint. Keep

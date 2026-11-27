@@ -54,6 +54,7 @@ export {
   isValidHex6,
   normalizeHex,
   relativeLuminance,
+  resolveReadableAccentText,
   rgbToHex,
   rgbToHsv,
   selectHighContrastInk,

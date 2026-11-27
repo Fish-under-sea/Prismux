@@ -171,7 +171,7 @@ export interface ThemeHeroCardProps {
 export function ThemeHeroCard({
   config,
   onChange,
-  systemAccent = '#0078d4',
+  systemAccent: _systemAccent = '',
   size = 'default',
   title = '主题与背景',
   note = '一键切换浅色、深色与全工作台液态玻璃模式；所有面板毫秒同步。',
@@ -186,9 +186,8 @@ export function ThemeHeroCard({
     if (config.accentMode === 'custom') {
       return `${modeLabel} · ${config.accent ? config.accent.toLowerCase() : '默认'}`;
     }
-    const cleanSys = normalizeHex(systemAccent, true);
-    return `${modeLabel} · ${cleanSys ? '跟随系统' : '默认'}`;
-  }, [config.accent, config.accentMode, config.glassPreset, config.themeMode, systemAccent]);
+    return `${modeLabel} · 跟随系统`;
+  }, [config.accent, config.accentMode, config.glassPreset, config.themeMode]);
 
   return (
     <section
@@ -240,7 +239,7 @@ export interface LiquidGlassCardProps {
 export function LiquidGlassCard({
   config,
   onChange,
-  systemAccent = '#0078d4',
+  systemAccent = '',
   activeSlot = null,
   onOpenColorPicker,
   alwaysShow = false,
@@ -817,7 +816,7 @@ export interface ThemePaletteCardProps {
 export function ThemePaletteCard({
   config,
   onChange,
-  systemAccent = '#0078d4',
+  systemAccent = '',
   activeSlot = null,
   onOpenColorPicker,
   className,
@@ -988,7 +987,7 @@ export function ThemePaletteCard({
               const fallback =
                 row.key === 'deepDiving' && polarity === 'dark'
                   ? '#6cb6ff'
-                  : normalizeHex(config.accent, true) || '#5e9bff';
+                  : effectiveAccent;
               const open = isSameSlot(activeSlot, { kind: 'uiColor', key: row.key });
               return (
                 <div key={row.key} className="ilook-typo-row">
@@ -1131,7 +1130,8 @@ export function UiColorsCard({
               const fallback =
                 row.key === 'deepDiving' && polarity === 'dark'
                   ? '#6cb6ff'
-                  : normalizeHex(config.accent, true) || '#5e9bff';
+                  : (config.accentMode === 'custom' ? normalizeHex(config.accent, true) : '') ||
+                    (polarity === 'light' ? '#005fb8' : '#5e9bff');
               const open = isSameSlot(activeSlot, { kind: 'uiColor', key: row.key });
               return (
                 <div key={row.key} className="ilook-typo-row">
@@ -1985,7 +1985,7 @@ export interface AppearanceHeroAndCardsProps {
 export function AppearanceHeroAndCards({
   config,
   onChange,
-  systemAccent = '#0078d4',
+  systemAccent = '',
   size = 'default',
   alwaysShowGlassCard = false,
   showCornersCard: _deprecatedShowCornersCard = false,

@@ -84,7 +84,7 @@ export function InlineAppearanceStudio({
   config,
   onChange,
   onThemeModeChange,
-  systemAccent = '#0078d4',
+  systemAccent = '',
   onBack,
   backLabel = '返回壁纸',
   title = '外观与玻璃',
