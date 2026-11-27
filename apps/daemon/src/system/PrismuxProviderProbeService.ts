@@ -1906,8 +1906,15 @@ export class PrismuxProviderProbeService {
       }
     }
 
-    if (!this.coreRpcClient?.isConnected()) {
+    const coreRpc = this.coreRpcClient;
+    if (!coreRpc?.isConnected()) {
       return new Map<string, ServerProviderAuthMetadata>();
+    }
+    if (
+      typeof coreRpc.isLegacyMethodAvailable === "function" &&
+      !coreRpc.isLegacyMethodAvailable("provider.list")
+    ) {
+      return this.lastServerAuthByProvider;
     }
 
     const nowMs = this.now();
@@ -1928,19 +1935,18 @@ export class PrismuxProviderProbeService {
       SERVER_AUTH_RPC_TIMEOUT_MS,
       Math.max(150, Math.floor(timeoutMs / 4)),
     );
-    const coreRpc = this.coreRpcClient;
 
     const run = (async (): Promise<Map<string, ServerProviderAuthMetadata>> => {
       const map = new Map<string, ServerProviderAuthMetadata>();
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const listPromise = coreRpc.listProviders();
-        // Prevent late CoreRpcClient 15s timeouts from triggering UnhandledPromiseRejection.
+        const listPromise = coreRpc.listProviders(rpcTimeoutMs);
+        // Prevent late timeouts from custom mock clients from triggering UnhandledPromiseRejection.
         listPromise.catch(() => undefined);
         const list = await Promise.race<CoreProviderSummary[] | null>([
           listPromise,
           new Promise<null>((resolveTimeout) => {
-            timer = setTimeout(() => resolveTimeout(null), rpcTimeoutMs);
+            timer = setTimeout(() => resolveTimeout(null), rpcTimeoutMs + 50);
           }),
         ]);
         if (list === null) {

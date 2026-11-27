@@ -4,14 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { SqliteMemoryStore } from "@prismux/memory-core";
-import {
-  CANONICAL_PROVIDER_DISPLAY_NAMES,
-  DEFAULT_CHIEF_SECRETARY_NAME
-} from "@prismux/protocol";
+import { CANONICAL_PROVIDER_DISPLAY_NAMES, DEFAULT_CHIEF_SECRETARY_NAME } from "@prismux/protocol";
 import {
   CHIEF_IDENTITY_HEADER_BEGIN,
   CHIEF_IDENTITY_HEADER_END,
-  ChiefThreadManager
+  ChiefThreadManager,
 } from "../chief/ChiefThreadManager.js";
 import { formatProviderDisplay } from "../chief/ChiefObsidianCurator.js";
 import { HandoffEngine } from "../handoff/HandoffEngine.js";
@@ -54,7 +51,7 @@ describe("Chief custom identity, independent AGENTS.md & Obsidian Agent curation
     // User customizes AGENTS.md prose below controlled header
     const customBodyMarker = "## 我的专属工作纪律\n- 每次部署前必须跑完回归测试并汇报摘要。\n";
     manager.saveAgentsMd({
-      content: `${initialMd.content.trimEnd()}\n\n${customBodyMarker}`
+      content: `${initialMd.content.trimEnd()}\n\n${customBodyMarker}`,
     });
 
     // Rename secretary to "猫猫" -> header updates, user body stays untouched
@@ -120,9 +117,9 @@ describe("Chief custom identity, independent AGENTS.md & Obsidian Agent curation
         "# 工作偏好与经验",
         "",
         "偏好使用 pnpm 管理 Monorepo 依赖，严禁混用 npm install。",
-        "临时密钥误写：ghp_1234567890abcdefghijklmnopqrstuvwx"
+        "临时密钥误写：ghp_1234567890abcdefghijklmnopqrstuvwx",
       ].join("\n"),
-      "utf8"
+      "utf8",
     );
     writeFileSync(join(vaultDir, "daily", "empty.md"), "# {{date}}\n\nTODO:\n", "utf8");
 
@@ -134,7 +131,7 @@ describe("Chief custom identity, independent AGENTS.md & Obsidian Agent curation
       dbPath: join(dataDir, "memory.db"),
       machineId: "daemon-test-machine",
       embeddingDimensions: 8,
-      enableWal: true
+      enableWal: true,
     });
     await memoryStore.initialize();
 
@@ -154,17 +151,17 @@ describe("Chief custom identity, independent AGENTS.md & Obsidian Agent curation
             summary: "统一使用 pnpm 管理 Monorepo 依赖，避免混用 npm install 造成锁文件污染。",
             kind: "preference",
             tags: ["pnpm", "monorepo"],
-            sourceFile: "daily/work.md"
+            sourceFile: "daily/work.md",
           },
           {
             title: "不需要导入的候选项",
             summary: "这条候选记忆将在审核阶段由用户取消勾选，不会被写入数据库。",
             kind: "knowledge",
             tags: ["skip-me"],
-            sourceFile: "daily/work.md"
-          }
-        ]
-      })
+            sourceFile: "daily/work.md",
+          },
+        ],
+      }),
     });
 
     const token = "test-daemon-bearer-token";
@@ -180,18 +177,18 @@ describe("Chief custom identity, independent AGENTS.md & Obsidian Agent curation
       chiefManager,
       handoffEngine,
       memoryStore,
-      businessService
+      businessService,
     });
 
     await server.start();
     const baseUrl = server.getHttpUrl();
     const headers = {
       Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
     };
     const qqGroupHeaders = {
       Authorization: `Bearer ${qqGroupToken}`,
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
     };
 
     try {
@@ -199,7 +196,7 @@ describe("Chief custom identity, independent AGENTS.md & Obsidian Agent curation
       const profileRes = await fetch(`${baseUrl}/v1/chief/profile`, {
         method: "PUT",
         headers,
-        body: JSON.stringify({ secretaryName: "小棱" })
+        body: JSON.stringify({ secretaryName: "小棱" }),
       });
       assert.equal(profileRes.status, 200);
       const profileJson = (await profileRes.json()) as {
@@ -223,7 +220,7 @@ describe("Chief custom identity, independent AGENTS.md & Obsidian Agent curation
       const mdPutRes = await fetch(`${baseUrl}/v1/chief/agents-md`, {
         method: "PUT",
         headers,
-        body: JSON.stringify({ content: customMd })
+        body: JSON.stringify({ content: customMd }),
       });
       assert.equal(mdPutRes.status, 200);
       const mdPutJson = (await mdPutRes.json()) as { ok: boolean; content: string };
@@ -233,7 +230,7 @@ describe("Chief custom identity, independent AGENTS.md & Obsidian Agent curation
       const switchRes = await fetch(`${baseUrl}/v1/chief/switch`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ provider: "codex", model: "gpt-5.4", dialMode: "oracle" })
+        body: JSON.stringify({ provider: "codex", model: "gpt-5.4", dialMode: "oracle" }),
       });
       assert.equal(switchRes.status, 200);
       const switchJson = (await switchRes.json()) as {
@@ -254,8 +251,8 @@ describe("Chief custom identity, independent AGENTS.md & Obsidian Agent curation
         body: JSON.stringify({
           vaultPath: vaultDir,
           namespace: "private/chief",
-          useAgentCuration: true
-        })
+          useAgentCuration: true,
+        }),
       });
       assert.equal(planRes.status, 200);
       const planJson = (await planRes.json()) as {
@@ -278,18 +275,98 @@ describe("Chief custom identity, independent AGENTS.md & Obsidian Agent curation
         method: "POST",
         headers,
         body: JSON.stringify({
-          items: planJson.items.map((item, idx) => ({ ...item, selected: idx === 0 }))
-        })
+          items: planJson.items.map((item, idx) => ({ ...item, selected: idx === 0 })),
+        }),
       });
       assert.equal(commitRes.status, 200);
       const commitJson = (await commitRes.json()) as {
         ok: boolean;
         committedCount: number;
         skippedCount: number;
+        namespace: string;
+        namespaces: string[];
       };
       assert.equal(commitJson.ok, true);
       assert.equal(commitJson.committedCount, 1);
       assert.equal(commitJson.skippedCount, 1);
+      assert.equal(commitJson.namespace, "private/chief");
+      assert.deepEqual(commitJson.namespaces, ["private/chief"]);
+
+      // 5b. Verify GET /v1/memory/stats reports dbSizeBytes (> 0) and POST /v1/memory/search honors singular `namespace`
+      const statsRes = await fetch(`${baseUrl}/v1/memory/stats`, { headers });
+      assert.equal(statsRes.status, 200);
+      const statsJson = (await statsRes.json()) as {
+        ok: boolean;
+        totalEntries: number;
+        dbSizeBytes?: number;
+      };
+      assert.equal(statsJson.ok, true);
+      assert.equal(statsJson.totalEntries, 1);
+      assert.equal(typeof statsJson.dbSizeBytes, "number");
+      assert.ok(
+        (statsJson.dbSizeBytes ?? 0) > 0,
+        "memory stats should report real dbSizeBytes > 0",
+      );
+
+      const searchMatchRes = await fetch(`${baseUrl}/v1/memory/search`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ query: "Monorepo", namespace: "private/chief", limit: 10 }),
+      });
+      assert.equal(searchMatchRes.status, 200);
+      const searchMatchJson = (await searchMatchRes.json()) as {
+        hits: Array<{ entry: { title: string; namespace: string } }>;
+      };
+      assert.equal(searchMatchJson.hits.length, 1);
+      assert.equal(searchMatchJson.hits[0]?.entry.namespace, "private/chief");
+
+      const searchMismatchRes = await fetch(`${baseUrl}/v1/memory/search`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ query: "Monorepo", namespace: "workspace/other-repo", limit: 10 }),
+      });
+      assert.equal(searchMismatchRes.status, 200);
+      const searchMismatchJson = (await searchMismatchRes.json()) as {
+        hits: Array<{ entry: { title: string } }>;
+      };
+      assert.equal(searchMismatchJson.hits.length, 0);
+
+      // 5c. Verify structured-fallback Obsidian plan formats provider display label (respecting override) and reports fallbackReason + warnings
+      const fallbackBusiness = new DaemonBusinessService({
+        dataDir,
+        hostVersion: "0.2.4-rc.4",
+        machineId: "test-machine",
+        chiefManager,
+        handoffEngine,
+        memoryStore,
+        memoryDbPath: join(dataDir, "memory.db"),
+        obsidianAgentCurator: async () => null,
+      });
+      const fallbackPlan = (await fallbackBusiness.planObsidianVaultImport(
+        {
+          vaultPath: vaultDir,
+          namespace: "private/chief",
+          useAgentCuration: true,
+          provider: "dsh",
+        },
+        "owner_chief",
+      )) as {
+        curationSource: string;
+        curatorLabel?: string;
+        fallbackReason?: string;
+        warnings: string[];
+      };
+      assert.equal(fallbackPlan.curationSource, "structured-fallback");
+      assert.equal(fallbackPlan.curatorLabel, "小棱 · DSH");
+      assert.ok(
+        typeof fallbackPlan.fallbackReason === "string" &&
+          fallbackPlan.fallbackReason.includes("DSH"),
+        "fallbackReason should explain DSH fallback clearly",
+      );
+      assert.ok(
+        fallbackPlan.warnings.includes(fallbackPlan.fallbackReason),
+        "warnings should include fallbackReason",
+      );
 
       const entries = await memoryStore.listEntries("owner_chief", { limit: 10 });
       assert.equal(entries.length, 1);
@@ -297,14 +374,14 @@ describe("Chief custom identity, independent AGENTS.md & Obsidian Agent curation
 
       // 6. Verify qq_group caller is physically blocked (403) from chief/obsidian routes
       const forbiddenRes = await fetch(`${baseUrl}/v1/chief/agents-md`, {
-        headers: qqGroupHeaders
+        headers: qqGroupHeaders,
       });
       assert.equal(forbiddenRes.status, 403);
 
       const forbiddenPlanRes = await fetch(`${baseUrl}/v1/memory/import-obsidian/plan`, {
         method: "POST",
         headers: qqGroupHeaders,
-        body: JSON.stringify({ vaultPath: vaultDir })
+        body: JSON.stringify({ vaultPath: vaultDir }),
       });
       assert.equal(forbiddenPlanRes.status, 403);
     } finally {

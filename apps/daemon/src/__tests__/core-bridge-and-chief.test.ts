@@ -1,12 +1,5 @@
 import assert from "node:assert/strict";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,7 +9,7 @@ import { after, describe, it } from "node:test";
 import {
   isRetiredChiefProviderKind,
   normalizeChiefProviderKind,
-  type CoreSupervisorState
+  type CoreSupervisorState,
 } from "@prismux/protocol";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
@@ -24,19 +17,18 @@ import {
   CHIEF_README_FILENAME,
   CHIEF_SLOT_FILENAME,
   ChiefThreadManager,
-  DEFAULT_CHIEF_MCP_SERVERS
+  DEFAULT_CHIEF_MCP_SERVERS,
 } from "../chief/ChiefThreadManager.js";
 import {
   CoreRpcClient,
   CoreRpcHandshakeError,
   CoreRpcRemoteError,
-  type CoreRpcPushEvent
+  CoreRpcUnsupportedProtocolError,
+  type CoreRpcPushEvent,
 } from "../core/CoreRpcClient.js";
-import {
-  CoreServerSupervisor,
-  sanitizeChildEnv
-} from "../core/CoreServerSupervisor.js";
+import { CoreServerSupervisor, sanitizeChildEnv } from "../core/CoreServerSupervisor.js";
 import { PrismuxDaemon } from "../index.js";
+import { PrismuxProviderProbeService } from "../system/PrismuxProviderProbeService.js";
 
 const tempDirs: string[] = [];
 
@@ -50,7 +42,7 @@ function waitForCondition(
   check: () => boolean,
   subscribe: (trigger: () => void) => () => void,
   timeoutMs: number,
-  label: string
+  label: string,
 ): Promise<void> {
   if (check()) {
     return Promise.resolve();
@@ -115,8 +107,8 @@ async function startMockCoreServer(options: {
     ws.send(
       JSON.stringify({
         event: "provider.status",
-        data: { generation: options.generation, ready: true }
-      })
+        data: { generation: options.generation, ready: true },
+      }),
     );
 
     ws.on("message", (raw) => {
@@ -131,8 +123,8 @@ async function startMockCoreServer(options: {
           JSON.stringify({
             id: msg.id,
             ok: true,
-            result: { ok: true, generation: options.generation }
-          })
+            result: { ok: true, generation: options.generation },
+          }),
         );
         return;
       }
@@ -147,10 +139,10 @@ async function startMockCoreServer(options: {
                 { id: "claude-code", state: "ready" },
                 { id: "codex", state: "ready" },
                 { id: "antigravity", state: "ready" },
-                { id: "opencode", state: "ready" }
-              ]
-            }
-          })
+                { id: "opencode", state: "ready" },
+              ],
+            },
+          }),
         );
         return;
       }
@@ -160,7 +152,7 @@ async function startMockCoreServer(options: {
         ensureCalls.push({
           workspacePath: String(params.workspacePath ?? ""),
           provider: String(params.provider ?? ""),
-          ...(typeof params.model === "string" ? { model: params.model } : {})
+          ...(typeof params.model === "string" ? { model: params.model } : {}),
         });
         ws.send(
           JSON.stringify({
@@ -170,9 +162,9 @@ async function startMockCoreServer(options: {
               ensured: true,
               workspacePath: params.workspacePath,
               provider: params.provider,
-              ...(params.model !== undefined ? { model: params.model } : {})
-            }
-          })
+              ...(params.model !== undefined ? { model: params.model } : {}),
+            },
+          }),
         );
         return;
       }
@@ -185,9 +177,9 @@ async function startMockCoreServer(options: {
             result: {
               accepted: true,
               threadId: msg.params?.threadId,
-              payload: msg.params?.payload
-            }
-          })
+              payload: msg.params?.payload,
+            },
+          }),
         );
         return;
       }
@@ -199,9 +191,9 @@ async function startMockCoreServer(options: {
             ok: false,
             error: {
               code: "bad_request",
-              message: "Intentional mock RPC error"
-            }
-          })
+              message: "Intentional mock RPC error",
+            },
+          }),
         );
         return;
       }
@@ -217,9 +209,9 @@ async function startMockCoreServer(options: {
           ok: false,
           error: {
             code: "method_not_found",
-            message: `Unknown method ${msg.method}`
-          }
-        })
+            message: `Unknown method ${msg.method}`,
+          },
+        }),
       );
     });
   });
@@ -229,44 +221,39 @@ async function startMockCoreServer(options: {
     res.end(JSON.stringify({ ok: true, generation: options.generation }));
   });
 
-  httpServer.on(
-    "upgrade",
-    (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-      const parsed = new URL(req.url ?? "/", "http://127.0.0.1");
-      if (parsed.pathname !== "/ws") {
-        socket.write(
-          "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
-        );
-        socket.destroy();
-        return;
-      }
-
-      if (parsed.searchParams.get("orchestrationProtocol") !== "2") {
-        const body = JSON.stringify({
-          code: "orchestration_protocol_incompatible",
-          orchestrationProtocolVersion: 2
-        });
-        socket.write(
-          `HTTP/1.1 426 Upgrade Required\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`
-        );
-        socket.destroy();
-        return;
-      }
-
-      if (req.headers.authorization !== `Bearer ${options.expectedToken}`) {
-        const body = JSON.stringify({ code: "unauthorized" });
-        socket.write(
-          `HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`
-        );
-        socket.destroy();
-        return;
-      }
-
-      wss.handleUpgrade(req, socket, head, (ws) => {
-        wss.emit("connection", ws, req);
-      });
+  httpServer.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    const parsed = new URL(req.url ?? "/", "http://127.0.0.1");
+    if (parsed.pathname !== "/ws") {
+      socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+      socket.destroy();
+      return;
     }
-  );
+
+    if (parsed.searchParams.get("orchestrationProtocol") !== "2") {
+      const body = JSON.stringify({
+        code: "orchestration_protocol_incompatible",
+        orchestrationProtocolVersion: 2,
+      });
+      socket.write(
+        `HTTP/1.1 426 Upgrade Required\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`,
+      );
+      socket.destroy();
+      return;
+    }
+
+    if (req.headers.authorization !== `Bearer ${options.expectedToken}`) {
+      const body = JSON.stringify({ code: "unauthorized" });
+      socket.write(
+        `HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`,
+      );
+      socket.destroy();
+      return;
+    }
+
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, req);
+    });
+  });
 
   await new Promise<void>((resolveListen, rejectListen) => {
     httpServer.once("error", rejectListen);
@@ -300,7 +287,7 @@ async function startMockCoreServer(options: {
       await new Promise<void>((resolveHttp) => {
         httpServer.close(() => resolveHttp());
       });
-    }
+    },
   };
 }
 
@@ -316,7 +303,7 @@ describe("CoreServerSupervisor", () => {
       ELECTRON_RUN_AS_NODE: "1",
       ELECTRON_NO_ATTACH_CONSOLE: "1",
       OMITTED: undefined,
-      KEEP_ME: "ok"
+      KEEP_ME: "ok",
     });
     assert.deepEqual(cleaned, { KEEP_ME: "ok" });
 
@@ -332,9 +319,9 @@ describe("CoreServerSupervisor", () => {
         "};",
         'console.log("ENV_REPORT:" + JSON.stringify(report));',
         "const keepAlive = setInterval(() => {}, 1000);",
-        'process.on("SIGTERM", () => { clearInterval(keepAlive); process.exit(0); });'
+        'process.on("SIGTERM", () => { clearInterval(keepAlive); process.exit(0); });',
       ].join("\n"),
-      "utf8"
+      "utf8",
     );
 
     const prevRunAsNode = process.env.ELECTRON_RUN_AS_NODE;
@@ -349,9 +336,9 @@ describe("CoreServerSupervisor", () => {
       env: {
         ELECTRON_RUN_AS_NODE: "1",
         ELECTRON_NO_ATTACH_CONSOLE: "1",
-        PRISMUX_KEEP: "clean-child"
+        PRISMUX_KEEP: "clean-child",
       },
-      stopTimeoutMs: 1000
+      stopTimeoutMs: 1000,
     });
 
     try {
@@ -360,25 +347,18 @@ describe("CoreServerSupervisor", () => {
       assert.equal(typeof supervisor.getStatus().pid, "number");
 
       await waitForCondition(
-        () =>
-          supervisor
-            .getLogs()
-            .some((line) => line.includes("ENV_REPORT:")),
+        () => supervisor.getLogs().some((line) => line.includes("ENV_REPORT:")),
         (trigger) => {
           supervisor.on("log", trigger);
           return () => supervisor.off("log", trigger);
         },
         5000,
-        "child env probe output"
+        "child env probe output",
       );
 
-      const reportLine = supervisor
-        .getLogs()
-        .find((line) => line.includes("ENV_REPORT:"));
+      const reportLine = supervisor.getLogs().find((line) => line.includes("ENV_REPORT:"));
       assert.ok(reportLine !== undefined);
-      const jsonPart = reportLine.slice(
-        reportLine.indexOf("ENV_REPORT:") + "ENV_REPORT:".length
-      );
+      const jsonPart = reportLine.slice(reportLine.indexOf("ENV_REPORT:") + "ENV_REPORT:".length);
       const parsed = JSON.parse(jsonPart) as {
         hasElectronRunAsNode: boolean;
         hasElectronNoAttach: boolean;
@@ -424,9 +404,9 @@ describe("CoreServerSupervisor", () => {
         '  console.log("boot-" + next + "-healthy");',
         "  const timer = setInterval(() => {}, 1000);",
         '  process.on("SIGTERM", () => { clearInterval(timer); process.exit(0); });',
-        "}"
+        "}",
       ].join("\n"),
-      "utf8"
+      "utf8",
     );
 
     const observedStates: CoreSupervisorState[] = [];
@@ -438,7 +418,7 @@ describe("CoreServerSupervisor", () => {
       baseBackoffMs: 40,
       maxBackoffMs: 200,
       stopTimeoutMs: 1000,
-      logCapacity: 50
+      logCapacity: 50,
     });
 
     supervisor.on("stateChange", (evt: { current: CoreSupervisorState }) => {
@@ -462,18 +442,14 @@ describe("CoreServerSupervisor", () => {
           };
         },
         6000,
-        "supervisor restart to running"
+        "supervisor restart to running",
       );
 
       assert.ok(observedStates.includes("restarting"));
       assert.equal(supervisor.getStatus().restartCount, 1);
       assert.equal(supervisor.getStatus().state, "running");
-      assert.ok(
-        supervisor.getLogs().some((line) => line.includes("boot-1-crashing"))
-      );
-      assert.ok(
-        supervisor.getLogs().some((line) => line.includes("boot-2-healthy"))
-      );
+      assert.ok(supervisor.getLogs().some((line) => line.includes("boot-1-crashing")));
+      assert.ok(supervisor.getLogs().some((line) => line.includes("boot-2-healthy")));
     } finally {
       await supervisor.stop();
       assert.equal(supervisor.getStatus().state, "stopped");
@@ -488,9 +464,9 @@ describe("CoreServerSupervisor", () => {
       scriptPath,
       [
         'for (let i = 1; i <= 10; i++) console.log("line-" + i);',
-        "setTimeout(() => process.exit(1), 20);"
+        "setTimeout(() => process.exit(1), 20);",
       ].join("\n"),
-      "utf8"
+      "utf8",
     );
 
     const supervisor = new CoreServerSupervisor({
@@ -500,7 +476,7 @@ describe("CoreServerSupervisor", () => {
       maxRestarts: 1,
       baseBackoffMs: 25,
       maxBackoffMs: 50,
-      logCapacity: 5
+      logCapacity: 5,
     });
 
     try {
@@ -513,7 +489,7 @@ describe("CoreServerSupervisor", () => {
           return () => supervisor.off("stateChange", trigger);
         },
         6000,
-        "supervisor failed after maxRestarts"
+        "supervisor failed after maxRestarts",
       );
 
       assert.equal(supervisor.getStatus().restartCount, 1);
@@ -555,9 +531,9 @@ describe("CoreServerSupervisor", () => {
       healthyScript,
       [
         "const keep = setInterval(() => {}, 1000);",
-        'process.on("SIGTERM", () => { clearInterval(keep); process.exit(0); });'
+        'process.on("SIGTERM", () => { clearInterval(keep); process.exit(0); });',
       ].join("\n"),
-      "utf8"
+      "utf8",
     );
 
     const healthSup = new CoreServerSupervisor({
@@ -567,7 +543,7 @@ describe("CoreServerSupervisor", () => {
       healthUrl,
       healthCheckIntervalMs: 25,
       healthTimeoutMs: 500,
-      startTimeoutMs: 5000
+      startTimeoutMs: 5000,
     });
 
     try {
@@ -591,7 +567,7 @@ describe("CoreServerSupervisor", () => {
       cwd: dir,
       maxRestarts: 3,
       baseBackoffMs: 5_000,
-      maxBackoffMs: 10_000
+      maxBackoffMs: 10_000,
     });
 
     try {
@@ -603,7 +579,7 @@ describe("CoreServerSupervisor", () => {
           return () => restartSup.off("stateChange", trigger);
         },
         3000,
-        "supervisor entering restarting backoff"
+        "supervisor entering restarting backoff",
       );
 
       const stopStart = Date.now();
@@ -627,12 +603,12 @@ describe("CoreRpcClient", () => {
       url: server.wsUrl,
       token,
       protocolVersion: "1",
-      autoReconnect: false
+      autoReconnect: false,
     });
     const badAuthClient = new CoreRpcClient({
       url: server.wsUrl,
       token: "wrong-token",
-      autoReconnect: false
+      autoReconnect: false,
     });
     const client = new CoreRpcClient({
       url: server.wsUrl,
@@ -640,7 +616,7 @@ describe("CoreRpcClient", () => {
       requestTimeoutMs: 1000,
       baseReconnectMs: 40,
       maxReconnectMs: 120,
-      autoReconnect: true
+      autoReconnect: true,
     });
 
     try {
@@ -648,14 +624,12 @@ describe("CoreRpcClient", () => {
 
       await assert.rejects(
         () => badProtocolClient.connect(),
-        (err: unknown) =>
-          err instanceof CoreRpcHandshakeError && err.statusCode === 426
+        (err: unknown) => err instanceof CoreRpcHandshakeError && err.statusCode === 426,
       );
 
       await assert.rejects(
         () => badAuthClient.connect(),
-        (err: unknown) =>
-          err instanceof CoreRpcHandshakeError && err.statusCode === 401
+        (err: unknown) => err instanceof CoreRpcHandshakeError && err.statusCode === 401,
       );
 
       const events: CoreRpcPushEvent[] = [];
@@ -671,7 +645,7 @@ describe("CoreRpcClient", () => {
         () => events.some((e) => e.event === "provider.status"),
         (trigger) => client.onEvent(trigger),
         3000,
-        "initial push event"
+        "initial push event",
       );
 
       const ping1 = await client.ping();
@@ -682,33 +656,25 @@ describe("CoreRpcClient", () => {
       assert.equal(providers.length, 4);
       assert.equal(providers[0]?.id, "claude-code");
 
-      const ensured = await client.ensureChiefThread(
-        "/tmp/chief-workspace",
-        "codex",
-        "gpt-5"
-      );
+      const ensured = await client.ensureChiefThread("/tmp/chief-workspace", "codex", "gpt-5");
       assert.equal(ensured.ensured, true);
       assert.equal(ensured.provider, "codex");
 
       const dispatched = await client.dispatchThreadCommand("chief-1", {
-        action: "continue"
+        action: "continue",
       });
       assert.deepEqual(dispatched, {
         accepted: true,
         threadId: "chief-1",
-        payload: { action: "continue" }
+        payload: { action: "continue" },
       });
 
       await assert.rejects(
         () => client.request("rpc.fail", {}),
-        (err: unknown) =>
-          err instanceof CoreRpcRemoteError && err.code === "bad_request"
+        (err: unknown) => err instanceof CoreRpcRemoteError && err.code === "bad_request",
       );
 
-      await assert.rejects(
-        () => client.request("rpc.slow", {}, 60),
-        /timed out/
-      );
+      await assert.rejects(() => client.request("rpc.slow", {}, 60), /timed out/);
 
       // Simulate T3 server shutdown and restart on the exact same port.
       await server.close();
@@ -716,13 +682,13 @@ describe("CoreRpcClient", () => {
         () => !client.isConnected(),
         (trigger) => client.onStateChange(trigger),
         3000,
-        "client disconnect on server shutdown"
+        "client disconnect on server shutdown",
       );
 
       server = await startMockCoreServer({
         port,
         expectedToken: token,
-        generation: 2
+        generation: 2,
       });
 
       await client.waitForConnected(5000);
@@ -760,7 +726,7 @@ describe("CoreRpcClient", () => {
               : "Upgrade Required";
         const body = JSON.stringify({ code: "rejected" });
         socket.write(
-          `HTTP/1.1 ${statusCode} ${reason}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`
+          `HTTP/1.1 ${statusCode} ${reason}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`,
         );
         socket.destroy();
       });
@@ -791,7 +757,7 @@ describe("CoreRpcClient", () => {
         authToken: "daemon-test-token",
         t3Url: `ws://127.0.0.1:${addr.port}/ws`,
         t3Token: "raw-unsigned-bootstrap-token",
-        disableAutoUpdateCheck: true
+        disableAutoUpdateCheck: true,
       });
 
       try {
@@ -805,15 +771,13 @@ describe("CoreRpcClient", () => {
         assert.equal(
           upgradeAttempts,
           1,
-          `expected exactly 1 handshake attempt on HTTP ${statusCode}, got ${upgradeAttempts}`
+          `expected exactly 1 handshake attempt on HTTP ${statusCode}, got ${upgradeAttempts}`,
         );
-        const handshakeWarnings = warnings.filter((msg) =>
-          msg.includes(`HTTP ${statusCode}`)
-        );
+        const handshakeWarnings = warnings.filter((msg) => msg.includes(`HTTP ${statusCode}`));
         assert.equal(
           handshakeWarnings.length,
           1,
-          `expected exactly 1 warning for HTTP ${statusCode}, got ${handshakeWarnings.length}`
+          `expected exactly 1 warning for HTTP ${statusCode}, got ${handshakeWarnings.length}`,
         );
       } finally {
         console.warn = origWarn;
@@ -855,7 +819,7 @@ describe("CoreRpcClient", () => {
       resolveFirstUpgrade?.();
       const body = JSON.stringify({ code: "MalformedSessionTokenError" });
       socket.write(
-        `HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`
+        `HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`,
       );
       socket.destroy();
     });
@@ -875,7 +839,7 @@ describe("CoreRpcClient", () => {
       authToken: "daemon-test-token",
       t3Url: `ws://127.0.0.1:${reservedPort}/ws`,
       t3Token: "malformed-token",
-      disableAutoUpdateCheck: true
+      disableAutoUpdateCheck: true,
     });
 
     let listening = false;
@@ -894,8 +858,8 @@ describe("CoreRpcClient", () => {
       await Promise.race([
         firstUpgradeHit,
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Timed out waiting for first 401 attempt")), 3_000)
-        )
+          setTimeout(() => reject(new Error("Timed out waiting for first 401 attempt")), 3_000),
+        ),
       ]);
       assert.equal(upgradeAttempts, 1);
 
@@ -929,7 +893,7 @@ describe("ChiefThreadManager", () => {
     const rpcClient = new CoreRpcClient({
       url: server.wsUrl,
       token,
-      autoReconnect: false
+      autoReconnect: false,
     });
 
     try {
@@ -937,17 +901,14 @@ describe("ChiefThreadManager", () => {
 
       const manager = new ChiefThreadManager({
         dataDir,
-        rpcClient
+        rpcClient,
       });
 
       const initial = await manager.init();
       assert.equal(initial.activeProvider, "claude-code");
       assert.equal(initial.workspacePath, workspaceDir);
       assert.deepEqual(initial.injectedMcpServers, [...DEFAULT_CHIEF_MCP_SERVERS]);
-      assert.deepEqual(initial.injectedMcpServers, [
-        "prismux-memory",
-        "prismux-orchestrator"
-      ]);
+      assert.deepEqual(initial.injectedMcpServers, ["prismux-memory", "prismux-orchestrator"]);
       assert.equal(initial.switchHistory.length, 0);
       assert.equal(existsSync(join(dataDir, CHIEF_SLOT_FILENAME)), true);
 
@@ -962,10 +923,7 @@ describe("ChiefThreadManager", () => {
         injectedMcpServers: string[];
       };
       assert.equal(markerJson.protected, true);
-      assert.deepEqual(markerJson.injectedMcpServers, [
-        "prismux-memory",
-        "prismux-orchestrator"
-      ]);
+      assert.deepEqual(markerJson.injectedMcpServers, ["prismux-memory", "prismux-orchestrator"]);
 
       // Verify existing workspace files are never overwritten on subsequent ensureWorkspace().
       writeFileSync(readmePath, "custom-user-readme", "utf8");
@@ -980,10 +938,7 @@ describe("ChiefThreadManager", () => {
       for (const state of [step1, step2, step3]) {
         assert.equal(state.threadId, initial.threadId);
         assert.equal(state.workspacePath, initial.workspacePath);
-        assert.deepEqual(state.injectedMcpServers, [
-          "prismux-memory",
-          "prismux-orchestrator"
-        ]);
+        assert.deepEqual(state.injectedMcpServers, ["prismux-memory", "prismux-orchestrator"]);
       }
 
       assert.equal(step1.activeProvider, "codex");
@@ -1009,9 +964,9 @@ describe("ChiefThreadManager", () => {
         {
           workspacePath: workspaceDir,
           provider: "antigravity",
-          model: "gemini-4-neon"
+          model: "gemini-4-neon",
         },
-        { workspacePath: workspaceDir, provider: "opencode" }
+        { workspacePath: workspaceDir, provider: "opencode" },
       ]);
 
       // Re-instantiate manager from scratch and verify full disk recovery.
@@ -1029,7 +984,7 @@ describe("ChiefThreadManager", () => {
     const dataDir = createTempDir("prismux-chief-effort-");
     const manager = new ChiefThreadManager({
       dataDir,
-      defaultProvider: "codex"
+      defaultProvider: "codex",
     });
     const initSlot = await manager.init();
     assert.equal(initSlot.activeProvider, "codex");
@@ -1040,7 +995,7 @@ describe("ChiefThreadManager", () => {
     const clearedManager = new ChiefThreadManager({
       dataDir: clearedDefaultDir,
       defaultProvider: "codex",
-      defaultReasoningEffort: ""
+      defaultReasoningEffort: "",
     });
     assert.equal((await clearedManager.init()).reasoningEffort, undefined);
 
@@ -1048,7 +1003,7 @@ describe("ChiefThreadManager", () => {
     const switchedClaude = await manager.switchProvider(
       "claudeAgent" as unknown as "claude-code",
       "claude-opus-4-6",
-      "ultracode"
+      "ultracode",
     );
     assert.equal(switchedClaude.activeProvider, "claude-code");
     assert.equal(switchedClaude.model, "claude-opus-4-6");
@@ -1066,7 +1021,7 @@ describe("ChiefThreadManager", () => {
     const switchedAgy = await restarted.switchProvider(
       "agy" as unknown as "antigravity",
       undefined,
-      ""
+      "",
     );
     assert.equal(switchedAgy.activeProvider, "antigravity");
     assert.equal(switchedAgy.model, undefined);
@@ -1075,7 +1030,7 @@ describe("ChiefThreadManager", () => {
     // Retired omp / oh-my-pi aliases are rejected cleanly.
     await assert.rejects(
       () => restarted.switchProvider("omp" as unknown as "codex"),
-      /Invalid Chief provider/
+      /Invalid Chief provider/,
     );
 
     // Legacy disk file using `defaultEffort` is recovered seamlessly into `reasoningEffort`.
@@ -1117,7 +1072,7 @@ describe("ChiefThreadManager", () => {
       "omp:default",
       "omp-custom",
       "omp_alt",
-      "oh-my-pi-v2"
+      "oh-my-pi-v2",
     ]) {
       assert.equal(isRetiredChiefProviderKind(retired), true, `expected retired: ${retired}`);
       assert.equal(normalizeChiefProviderKind(retired), null, `expected rejected: ${retired}`);
@@ -1134,12 +1089,12 @@ describe("ChiefThreadManager", () => {
       "prototype",
       "claude\ncode",
       null,
-      123
+      123,
     ]) {
       assert.equal(
         normalizeChiefProviderKind(invalid),
         null,
-        `expected invalid rejected: ${String(invalid)}`
+        `expected invalid rejected: ${String(invalid)}`,
       );
     }
 
@@ -1154,7 +1109,7 @@ describe("ChiefThreadManager", () => {
       ["pi-coding-agent", "pi"],
       ["glm-acp-agent", "glm-acp-agent"],
       ["qwen-code", "qwen-code"],
-      ["kimi-code", "kimi-code"]
+      ["kimi-code", "kimi-code"],
     ];
 
     for (const [requested, expected] of cases) {
@@ -1169,10 +1124,566 @@ describe("ChiefThreadManager", () => {
     }
 
     for (const rejected of ["omp", "oh-my-pi", "", "bad provider!", "../etc", "__proto__"]) {
-      await assert.rejects(
-        () => manager.switchProvider(rejected),
-        /Invalid Chief provider/
+      await assert.rejects(() => manager.switchProvider(rejected), /Invalid Chief provider/);
+    }
+  });
+});
+
+interface MockUnresponsiveCoreServerHandle {
+  port: number;
+  wsUrl: string;
+  receivedFrames: Record<string, unknown>[];
+  close: () => Promise<void>;
+}
+
+async function startNonLegacyCoreServer(options: {
+  mode: "effect_rpc" | "silent_drop";
+  expectedToken: string;
+}): Promise<MockUnresponsiveCoreServerHandle> {
+  const wss = new WebSocketServer({ noServer: true });
+  const sockets = new Set<WebSocket>();
+  const receivedFrames: Record<string, unknown>[] = [];
+
+  wss.on("connection", (ws: WebSocket) => {
+    sockets.add(ws);
+    ws.on("close", () => {
+      sockets.delete(ws);
+    });
+
+    ws.on("message", (raw) => {
+      let parsed: Record<string, unknown> = {};
+      try {
+        const value: unknown = JSON.parse(raw.toString("utf8"));
+        if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+          parsed = value as Record<string, unknown>;
+        }
+      } catch {
+        return;
+      }
+      receivedFrames.push(parsed);
+
+      if (options.mode === "silent_drop") {
+        // Intentionally never reply (simulates WS server dropping unknown frames).
+        return;
+      }
+
+      // Mirror real apps/server Effect RPC (`RpcServer.make` + `RpcSerialization.layerJson`):
+      // - `{ _tag: "Ping" }` -> `{ _tag: "Pong" }`
+      // - Legacy `{ id, method, params }` (missing `_tag`) -> `{ _tag: "Defect", defect: "Unknown request tag: undefined" }`
+      if (parsed._tag === "Ping") {
+        ws.send(JSON.stringify({ _tag: "Pong" }));
+        return;
+      }
+      ws.send(
+        JSON.stringify({
+          _tag: "Defect",
+          defect: `Unknown request tag: ${String(parsed._tag)}`,
+        }),
       );
+    });
+  });
+
+  const httpServer: Server = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true, mode: options.mode }));
+  });
+
+  httpServer.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    const parsed = new URL(req.url ?? "/", "http://127.0.0.1");
+    if (parsed.pathname !== "/ws") {
+      socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    if (parsed.searchParams.get("orchestrationProtocol") !== "2") {
+      socket.write(
+        "HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+      );
+      socket.destroy();
+      return;
+    }
+    if (req.headers.authorization !== `Bearer ${options.expectedToken}`) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, req);
+    });
+  });
+
+  await new Promise<void>((resolveListen, rejectListen) => {
+    httpServer.once("error", rejectListen);
+    httpServer.listen(0, "127.0.0.1", () => {
+      httpServer.off("error", rejectListen);
+      resolveListen();
+    });
+  });
+
+  const addr = httpServer.address();
+  assert(addr !== null && typeof addr === "object");
+
+  return {
+    port: addr.port,
+    wsUrl: `ws://127.0.0.1:${addr.port}/ws`,
+    receivedFrames,
+    close: async () => {
+      for (const ws of sockets) {
+        try {
+          ws.terminate();
+        } catch {
+          // Ignore terminate error.
+        }
+      }
+      sockets.clear();
+      await new Promise<void>((resolveWss) => {
+        wss.close(() => resolveWss());
+      });
+      httpServer.closeAllConnections?.();
+      await new Promise<void>((resolveHttp) => {
+        httpServer.close(() => resolveHttp());
+      });
+    },
+  };
+}
+
+describe("CoreRpcClient Effect RPC / non-responsive peer fast degradation", () => {
+  it("fast-fails legacy JSON-RPC calls on Effect RPC Defect frames without 15s hang and supports Effect Ping/Pong", async () => {
+    const token = "effect-rpc-token";
+    const server = await startNonLegacyCoreServer({
+      mode: "effect_rpc",
+      expectedToken: token,
+    });
+    const client = new CoreRpcClient({
+      url: server.wsUrl,
+      token,
+      requestTimeoutMs: 15_000,
+      autoReconnect: false,
+    });
+
+    try {
+      await client.connect();
+      assert.equal(client.isConnected(), true);
+      assert.equal(client.getProtocolMode(), "unknown");
+
+      // oxlint-disable-next-line prismux/no-wall-clock-in-tests -- verifies Effect RPC Defect fast-fails without waiting 15s
+      const started = performance.now();
+      await assert.rejects(
+        () => client.ensureChiefThread("/tmp/chief", "codex", "gpt-5.4"),
+        (err: unknown) =>
+          err instanceof CoreRpcUnsupportedProtocolError && err.method === "chief.ensureThread",
+      );
+      // oxlint-disable-next-line prismux/no-wall-clock-in-tests -- verifies Effect RPC Defect fast-fails without waiting 15s
+      const firstElapsedMs = performance.now() - started;
+      assert.ok(
+        firstElapsedMs < 1_000,
+        `Expected millisecond fast-fail on Effect RPC Defect, took ${Math.round(firstElapsedMs)}ms`,
+      );
+      assert.equal(client.getProtocolMode(), "effect_rpc");
+      assert.equal(client.supportsLegacyJsonRpc(), false);
+      assert.equal(client.isLegacyMethodAvailable("chief.ensureThread"), false);
+      assert.equal(client.isLegacyMethodAvailable("provider.list"), false);
+      assert.equal(client.getStatus().pendingRequestCount, 0);
+
+      const frameCountAfterFirst = server.receivedFrames.length;
+      assert.equal(frameCountAfterFirst, 1);
+
+      // Subsequent legacy calls short-circuit locally in 0ms without sending extra frames.
+      await assert.rejects(
+        () => client.listProviders(),
+        (err: unknown) =>
+          err instanceof CoreRpcUnsupportedProtocolError && err.method === "provider.list",
+      );
+      await assert.rejects(
+        () => client.dispatchThreadCommand("chief-1", { action: "noop" }),
+        (err: unknown) =>
+          err instanceof CoreRpcUnsupportedProtocolError &&
+          err.method === "orchestration.dispatchCommand",
+      );
+      assert.equal(server.receivedFrames.length, frameCountAfterFirst);
+
+      // ping() transparently uses Effect RPC Ping -> Pong.
+      const pingResult = await client.ping();
+      assert.equal(pingResult.ok, true);
+      assert.deepEqual(pingResult.payload, { protocol: "effect_rpc", pong: true });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("completes ChiefThreadManager.switchProvider and POST /v1/chief/switch immediately across multi-agent switches against Effect RPC and silent-drop WS peers", async () => {
+    const token = "chief-fast-switch-token";
+    const daemonAuthToken = "daemon-chief-auth-token";
+    const targetAgents: ReadonlyArray<{
+      requested: string;
+      expected: string;
+      model?: string;
+    }> = [
+      { requested: "codex", expected: "codex", model: "gpt-5.4" },
+      { requested: "claude-code", expected: "claude-code", model: "claude-opus-4-6" },
+      { requested: "dsh", expected: "dsh", model: "deepseek-reasoner" },
+      {
+        requested: "acpRegistry_qwen-code",
+        expected: "acpregistry_qwen-code",
+        model: "qwen3-coder",
+      },
+    ];
+
+    for (const mode of ["effect_rpc", "silent_drop"] as const) {
+      const server = await startNonLegacyCoreServer({
+        mode,
+        expectedToken: token,
+      });
+      const standaloneDir = createTempDir(`prismux-chief-standalone-${mode}-`);
+      const daemonDir = createTempDir(`prismux-chief-daemon-${mode}-`);
+      const standaloneClient = new CoreRpcClient({
+        url: server.wsUrl,
+        token,
+        requestTimeoutMs: 15_000,
+        autoReconnect: false,
+      });
+      const daemon = new PrismuxDaemon({
+        headless: true,
+        host: "127.0.0.1",
+        port: 0,
+        dataDir: daemonDir,
+        authToken: daemonAuthToken,
+        coreUrl: server.wsUrl,
+        coreToken: token,
+        disableAutoUpdateCheck: true,
+      });
+
+      const origWarn = console.warn;
+      console.warn = () => undefined;
+
+      try {
+        // 1. Standalone ChiefThreadManager connected to non-legacy WS peer.
+        await standaloneClient.connect();
+        const manager = new ChiefThreadManager({
+          dataDir: standaloneDir,
+          rpcClient: standaloneClient,
+        });
+        const initialSlot = await manager.init();
+
+        // oxlint-disable-next-line prismux/no-wall-clock-in-tests -- verifies multi-agent switchProvider avoids 15s timeout hang
+        const standaloneStarted = performance.now();
+        for (const agent of targetAgents) {
+          const updated = await manager.switchProvider(agent.requested, agent.model, "high");
+          assert.equal(updated.threadId, initialSlot.threadId);
+          assert.equal(updated.activeProvider, agent.expected);
+          assert.equal(updated.model, agent.model);
+        }
+        // oxlint-disable-next-line prismux/no-wall-clock-in-tests -- verifies multi-agent switchProvider avoids 15s timeout hang
+        const standaloneElapsedMs = performance.now() - standaloneStarted;
+        assert.ok(
+          standaloneElapsedMs < 2_000,
+          `[${mode}] standalone multi-agent switchProvider hung (${Math.round(standaloneElapsedMs)}ms)`,
+        );
+        assert.equal(standaloneClient.getStatus().pendingRequestCount, 0);
+
+        const persistedStandalone = await new ChiefThreadManager({
+          dataDir: standaloneDir,
+        }).init();
+        assert.equal(
+          persistedStandalone.activeProvider,
+          targetAgents[targetAgents.length - 1]?.expected,
+        );
+
+        // 2. Full PrismuxDaemon HTTP POST /v1/chief/switch against the same non-legacy WS peer.
+        const ready = await daemon.start();
+        assert.equal(ready.coreConnected, true);
+
+        // oxlint-disable-next-line prismux/no-wall-clock-in-tests -- verifies HTTP POST /v1/chief/switch avoids 15s timeout hang
+        const httpStarted = performance.now();
+        for (const agent of targetAgents) {
+          const res = await fetch(`${ready.httpUrl}/v1/chief/switch`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${daemonAuthToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              provider: agent.requested,
+              ...(agent.model !== undefined ? { model: agent.model } : {}),
+              dialMode: "agent",
+              reasoningEffort: "high",
+            }),
+          });
+          assert.equal(
+            res.status,
+            200,
+            `[${mode}] POST /v1/chief/switch failed for ${agent.requested} with HTTP ${res.status}`,
+          );
+          const payload = (await res.json()) as {
+            ok: boolean;
+            slot: { activeProvider: string; model?: string };
+          };
+          assert.equal(payload.ok, true);
+          assert.equal(payload.slot.activeProvider, agent.expected);
+          assert.equal(payload.slot.model, agent.model);
+        }
+        // oxlint-disable-next-line prismux/no-wall-clock-in-tests -- verifies HTTP POST /v1/chief/switch avoids 15s timeout hang
+        const httpElapsedMs = performance.now() - httpStarted;
+        assert.ok(
+          httpElapsedMs < 2_000,
+          `[${mode}] HTTP POST /v1/chief/switch hung (${Math.round(httpElapsedMs)}ms)`,
+        );
+        assert.equal(daemon.coreRpcClient?.getStatus().pendingRequestCount, 0);
+      } finally {
+        console.warn = origWarn;
+        await standaloneClient.close();
+        await daemon.stop();
+        await server.close();
+      }
+    }
+  });
+
+  it("delivers chief.ensureThread normally on POST /v1/chief/switch when connected to a legacy JSON-RPC peer", async () => {
+    const token = "legacy-chief-http-token";
+    const daemonAuthToken = "legacy-daemon-auth-token";
+    const server = await startMockCoreServer({ expectedToken: token, generation: 1 });
+    const dataDir = createTempDir("prismux-chief-legacy-http-");
+    const daemon = new PrismuxDaemon({
+      headless: true,
+      host: "127.0.0.1",
+      port: 0,
+      dataDir,
+      authToken: daemonAuthToken,
+      coreUrl: server.wsUrl,
+      coreToken: token,
+      disableAutoUpdateCheck: true,
+    });
+
+    try {
+      const ready = await daemon.start();
+      assert.equal(ready.coreConnected, true);
+      assert.equal(daemon.coreRpcClient?.getProtocolMode(), "legacy_json_rpc");
+
+      const res = await fetch(`${ready.httpUrl}/v1/chief/switch`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${daemonAuthToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          provider: "dsh",
+          model: "deepseek-reasoner",
+          reasoningEffort: "high",
+        }),
+      });
+      assert.equal(res.status, 200);
+      const body = (await res.json()) as {
+        ok: boolean;
+        slot: { activeProvider: string; model?: string };
+      };
+      assert.equal(body.ok, true);
+      assert.equal(body.slot.activeProvider, "dsh");
+      assert.equal(body.slot.model, "deepseek-reasoner");
+
+      assert.ok(
+        server.ensureCalls.some(
+          (call) => call.provider === "dsh" && call.model === "deepseek-reasoner",
+        ),
+        "Expected chief.ensureThread to be delivered to compatible JSON-RPC server",
+      );
+    } finally {
+      await daemon.stop();
+      await server.close();
+    }
+  });
+
+  it("degrades PrismuxProviderProbeService cleanly and without 15s hangs against real Effect RPC and silent-drop WS peers", async () => {
+    const token = "probe-fast-degrade-token";
+    for (const mode of ["effect_rpc", "silent_drop"] as const) {
+      const server = await startNonLegacyCoreServer({
+        mode,
+        expectedToken: token,
+      });
+      const root = createTempDir(`prismux-probe-rpc-${mode}-`);
+      const client = new CoreRpcClient({
+        url: server.wsUrl,
+        token,
+        requestTimeoutMs: 15_000,
+        autoReconnect: false,
+      });
+
+      try {
+        await client.connect();
+        const probeService = new PrismuxProviderProbeService({
+          coreRpcClient: client,
+          homeDir: root,
+          env: { OPENAI_BASE_URL: "https://relay.example/v1" },
+          refreshEnv: () => undefined,
+          cliProbe: async (cmd) => {
+            if (cmd === "codex") {
+              return {
+                found: true,
+                path: join(root, "codex"),
+                version: "codex-cli 0.999.0",
+                latencyMs: 5,
+              };
+            }
+            return { found: false, path: null, version: null, latencyMs: 1 };
+          },
+        });
+
+        // oxlint-disable-next-line prismux/no-wall-clock-in-tests -- verifies provider probe avoids 15s CoreRpcClient hang
+        const started = performance.now();
+        const firstReport = await probeService.probeAll({ refresh: true });
+        // oxlint-disable-next-line prismux/no-wall-clock-in-tests -- verifies provider probe avoids 15s CoreRpcClient hang
+        const firstElapsedMs = performance.now() - started;
+
+        assert.ok(
+          firstElapsedMs < 2_000,
+          `[${mode}] first probeAll took too long (${Math.round(firstElapsedMs)}ms)`,
+        );
+        const codexSnap = firstReport.providers.find((p) => p.providerId === "codex");
+        assert.ok(codexSnap !== undefined);
+        assert.equal(codexSnap.status, "ready");
+        assert.equal(client.getStatus().pendingRequestCount, 0);
+        assert.equal(client.isLegacyMethodAvailable("provider.list"), false);
+
+        const framesAfterFirstProbe = server.receivedFrames.length;
+        // oxlint-disable-next-line prismux/no-wall-clock-in-tests -- verifies cached probe short-circuits immediately
+        const secondStarted = performance.now();
+        await probeService.probeAll({ refresh: true });
+        // oxlint-disable-next-line prismux/no-wall-clock-in-tests -- verifies cached probe short-circuits immediately
+        const secondElapsedMs = performance.now() - secondStarted;
+        assert.ok(
+          secondElapsedMs < 1_000,
+          `[${mode}] second probeAll should short-circuit immediately (${Math.round(secondElapsedMs)}ms)`,
+        );
+        assert.equal(
+          server.receivedFrames.length,
+          framesAfterFirstProbe,
+          `[${mode}] second probeAll must not resend unsupported provider.list frames`,
+        );
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    }
+  });
+
+  it("persists chief dialMode across PrismuxDaemon restarts and syncs live switched slot on Core WS reconnect", async () => {
+    const token = "chief-persist-reconnect-token";
+    const daemonAuthToken = "chief-persist-auth-token";
+    let server = await startMockCoreServer({ expectedToken: token, generation: 1 });
+    const port = server.port;
+    const dataDir = createTempDir("prismux-chief-dialmode-reconnect-");
+
+    const daemon1 = new PrismuxDaemon({
+      headless: true,
+      host: "127.0.0.1",
+      port: 0,
+      dataDir,
+      authToken: daemonAuthToken,
+      coreUrl: server.wsUrl,
+      coreToken: token,
+      disableAutoUpdateCheck: true,
+    });
+
+    let daemon2: PrismuxDaemon | undefined;
+    try {
+      const ready1 = await daemon1.start();
+      assert.equal(ready1.coreConnected, true);
+
+      // Hot-switch provider + model + dialMode ("oracle")
+      const switchRes = await fetch(`${ready1.httpUrl}/v1/chief/switch`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${daemonAuthToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          provider: "codex",
+          model: "gpt-5.4",
+          dialMode: "oracle",
+          reasoningEffort: "high",
+        }),
+      });
+      assert.equal(switchRes.status, 200);
+      const switchBody = (await switchRes.json()) as {
+        ok: boolean;
+        dialMode: string;
+        slot: { activeProvider: string; model?: string };
+      };
+      assert.equal(switchBody.ok, true);
+      assert.equal(switchBody.dialMode, "oracle");
+
+      // Restart Core WS server on same port and confirm daemon reconnects with LIVE slot (codex/gpt-5.4), not stale startup claude-code!
+      await server.close();
+      await waitForCondition(
+        () => daemon1.coreRpcClient?.isConnected() === false,
+        (trigger) => daemon1.coreRpcClient?.onStateChange(trigger) ?? (() => undefined),
+        3_000,
+        "daemon coreRpcClient disconnect",
+      );
+
+      server = await startMockCoreServer({
+        port,
+        expectedToken: token,
+        generation: 2,
+      });
+      await daemon1.coreRpcClient?.waitForConnected(5_000);
+      await waitForCondition(
+        () => server.ensureCalls.length >= 1,
+        (trigger) => {
+          const id = setInterval(trigger, 20);
+          return () => clearInterval(id);
+        },
+        3_000,
+        "reconnect chief.ensureThread delivery",
+      );
+      assert.equal(server.ensureCalls[0]?.provider, "codex");
+      assert.equal(server.ensureCalls[0]?.model, "gpt-5.4");
+
+      await daemon1.stop();
+
+      // Restart PrismuxDaemon from the same dataDir and verify dialMode === "oracle" survives restart.
+      daemon2 = new PrismuxDaemon({
+        headless: true,
+        host: "127.0.0.1",
+        port: 0,
+        dataDir,
+        authToken: daemonAuthToken,
+        disableAutoUpdateCheck: true,
+      });
+      const ready2 = await daemon2.start();
+      const chiefRes = await fetch(`${ready2.httpUrl}/v1/chief`, {
+        headers: { Authorization: `Bearer ${daemonAuthToken}` },
+      });
+      assert.equal(chiefRes.status, 200);
+      const chiefBody = (await chiefRes.json()) as {
+        ok: boolean;
+        dialMode: string;
+        slot: { threadId: string; activeProvider: string; model?: string };
+      };
+      assert.equal(chiefBody.ok, true);
+      assert.equal(chiefBody.dialMode, "oracle");
+      assert.equal(chiefBody.slot.activeProvider, "codex");
+      assert.equal(chiefBody.slot.model, "gpt-5.4");
+      assert.equal(daemon2.handoffEngine.getDialMode(chiefBody.slot.threadId), "oracle");
+
+      // Updating secretary profile preserves dialMode === "oracle".
+      const profileRes = await fetch(`${ready2.httpUrl}/v1/chief/profile`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${daemonAuthToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ secretaryName: "星澜" }),
+      });
+      assert.equal(profileRes.status, 200);
+      const profileBody = (await profileRes.json()) as { dialMode: string };
+      assert.equal(profileBody.dialMode, "oracle");
+    } finally {
+      await daemon1.stop();
+      if (daemon2 !== undefined) {
+        await daemon2.stop();
+      }
+      await server.close();
     }
   });
 });

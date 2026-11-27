@@ -6,8 +6,11 @@ import WebSocket from "ws";
 export const CORE_ORCHESTRATION_PROTOCOL_QUERY_PARAM = "orchestrationProtocol";
 export const CORE_ORCHESTRATION_PROTOCOL_VERSION = "2";
 export const DEFAULT_CORE_RPC_TIMEOUT_MS = 15_000;
+export const DEFAULT_CORE_EFFECT_PING_TIMEOUT_MS = 2_000;
 export const DEFAULT_CORE_BASE_RECONNECT_MS = 200;
 export const DEFAULT_CORE_MAX_RECONNECT_MS = 5_000;
+
+export type CoreRpcProtocolMode = "unknown" | "legacy_json_rpc" | "effect_rpc";
 
 export type CoreRpcConnectionState =
   | "disconnected"
@@ -31,6 +34,7 @@ export interface CoreRpcClientStatus {
   connected: boolean;
   wsUrl: string;
   protocolVersion: string;
+  protocolMode?: CoreRpcProtocolMode;
   reconnectAttempts: number;
   pendingRequestCount: number;
   lastError?: string;
@@ -81,12 +85,10 @@ export class CoreRpcHandshakeError extends Error {
 }
 
 export const NON_RETRYABLE_CORE_HANDSHAKE_STATUS_CODES: ReadonlySet<number> = new Set([
-  401, 403, 426
+  401, 403, 426,
 ]);
 
-export function isNonRetryableCoreHandshakeError(
-  error: unknown
-): error is CoreRpcHandshakeError {
+export function isNonRetryableCoreHandshakeError(error: unknown): error is CoreRpcHandshakeError {
   return (
     error instanceof CoreRpcHandshakeError &&
     NON_RETRYABLE_CORE_HANDSHAKE_STATUS_CODES.has(error.statusCode)
@@ -103,13 +105,36 @@ export class CoreRpcRemoteError extends Error {
   }
 }
 
+export class CoreRpcUnsupportedProtocolError extends Error {
+  readonly code: string;
+  readonly method: string;
+  readonly detail?: string;
+
+  constructor(method: string, detail?: string, code: string = "unsupported_legacy_json_rpc") {
+    const suffix = detail !== undefined && detail.length > 0 ? `: ${detail}` : "";
+    super(`Core RPC peer does not support legacy JSON-RPC method "${method}"${suffix}`);
+    this.name = "CoreRpcUnsupportedProtocolError";
+    this.code = code;
+    this.method = method;
+    if (detail !== undefined && detail.length > 0) {
+      this.detail = detail;
+    }
+  }
+}
+
+export function isCoreRpcUnsupportedProtocolError(
+  error: unknown,
+): error is CoreRpcUnsupportedProtocolError {
+  return error instanceof CoreRpcUnsupportedProtocolError;
+}
+
 /**
  * Ensures the target WebSocket URL carries `orchestrationProtocol=<version>`
  * and normalizes `http:`/`https:` schemes to `ws:`/`wss:`.
  */
 export function buildCoreWebSocketUrl(
   rawUrl: string,
-  protocolVersion: string = CORE_ORCHESTRATION_PROTOCOL_VERSION
+  protocolVersion: string = CORE_ORCHESTRATION_PROTOCOL_VERSION,
 ): string {
   const parsed = new URL(rawUrl);
   if (parsed.protocol === "http:") {
@@ -125,7 +150,14 @@ export function buildCoreWebSocketUrl(
 }
 
 interface PendingRpcRequest {
+  method: string;
   resolve: (value: unknown) => void;
+  reject: (reason: Error) => void;
+  timer: NodeJS.Timeout;
+}
+
+interface EffectPingWaiter {
+  resolve: () => void;
   reject: (reason: Error) => void;
   timer: NodeJS.Timeout;
 }
@@ -164,6 +196,7 @@ export class CoreRpcClient {
 
   private ws: WebSocket | undefined;
   private state: CoreRpcConnectionState = "disconnected";
+  private protocolMode: CoreRpcProtocolMode = "unknown";
   private closedManually = false;
   private hasEverConnected = false;
   private reconnectAttempts = 0;
@@ -174,13 +207,15 @@ export class CoreRpcClient {
   private activeClosePromise: Promise<void> | undefined;
 
   private readonly pendingRequests = new Map<string, PendingRpcRequest>();
+  private readonly unsupportedLegacyMethods = new Set<string>();
+  private readonly silentLegacyMethods = new Set<string>();
+  private readonly effectPingWaiters = new Set<EffectPingWaiter>();
   private readonly eventListeners = new Set<(event: CoreRpcPushEvent) => void>();
   private readonly stateListeners = new Set<(connected: boolean) => void>();
   private readonly connectedWaiters = new Set<ConnectedWaiter>();
 
   constructor(options: CoreRpcClientOptions) {
-    this.protocolVersion =
-      options.protocolVersion ?? CORE_ORCHESTRATION_PROTOCOL_VERSION;
+    this.protocolVersion = options.protocolVersion ?? CORE_ORCHESTRATION_PROTOCOL_VERSION;
     this.wsUrl = buildCoreWebSocketUrl(options.url, this.protocolVersion);
     const urlToken = new URL(this.wsUrl).searchParams.get("token")?.trim();
     this.token =
@@ -189,26 +224,18 @@ export class CoreRpcClient {
         : urlToken !== undefined && urlToken.length > 0
           ? urlToken
           : undefined;
-    this.requestTimeoutMs = Math.max(
-      50,
-      options.requestTimeoutMs ?? DEFAULT_CORE_RPC_TIMEOUT_MS
-    );
-    this.baseReconnectMs = Math.max(
-      10,
-      options.baseReconnectMs ?? DEFAULT_CORE_BASE_RECONNECT_MS
-    );
+    this.requestTimeoutMs = Math.max(50, options.requestTimeoutMs ?? DEFAULT_CORE_RPC_TIMEOUT_MS);
+    this.baseReconnectMs = Math.max(10, options.baseReconnectMs ?? DEFAULT_CORE_BASE_RECONNECT_MS);
     this.maxReconnectMs = Math.max(
       this.baseReconnectMs,
-      options.maxReconnectMs ?? DEFAULT_CORE_MAX_RECONNECT_MS
+      options.maxReconnectMs ?? DEFAULT_CORE_MAX_RECONNECT_MS,
     );
     this.autoReconnect = options.autoReconnect ?? true;
   }
 
   isConnected(): boolean {
     return (
-      this.state === "connected" &&
-      this.ws !== undefined &&
-      this.ws.readyState === WebSocket.OPEN
+      this.state === "connected" && this.ws !== undefined && this.ws.readyState === WebSocket.OPEN
     );
   }
 
@@ -218,10 +245,35 @@ export class CoreRpcClient {
       connected: this.isConnected(),
       wsUrl: this.wsUrl,
       protocolVersion: this.protocolVersion,
+      protocolMode: this.protocolMode,
       reconnectAttempts: this.reconnectAttempts,
       pendingRequestCount: this.pendingRequests.size,
-      ...(this.lastError !== undefined ? { lastError: this.lastError } : {})
+      ...(this.lastError !== undefined ? { lastError: this.lastError } : {}),
     };
+  }
+
+  getProtocolMode(): CoreRpcProtocolMode {
+    return this.protocolMode;
+  }
+
+  supportsLegacyJsonRpc(): boolean {
+    return this.protocolMode !== "effect_rpc";
+  }
+
+  isLegacyMethodAvailable(method: string): boolean {
+    if (!this.isConnected()) {
+      return false;
+    }
+    if (this.protocolMode === "effect_rpc") {
+      return false;
+    }
+    if (this.unsupportedLegacyMethods.has(method)) {
+      return false;
+    }
+    if (this.protocolMode === "unknown" && this.silentLegacyMethods.has(method)) {
+      return false;
+    }
+    return true;
   }
 
   onEvent(listener: (event: CoreRpcPushEvent) => void): () => void {
@@ -260,12 +312,8 @@ export class CoreRpcClient {
         },
         timer: setTimeout(() => {
           this.connectedWaiters.delete(waiter);
-          reject(
-            new Error(
-              `Timed out after ${timeoutMs}ms waiting for CoreRpcClient to connect.`
-            )
-          );
-        }, timeoutMs)
+          reject(new Error(`Timed out after ${timeoutMs}ms waiting for CoreRpcClient to connect.`));
+        }, timeoutMs),
       };
       this.connectedWaiters.add(waiter);
     });
@@ -308,11 +356,31 @@ export class CoreRpcClient {
   async request<TResult = unknown>(
     method: string,
     params: unknown = {},
-    timeoutMs: number = this.requestTimeoutMs
+    timeoutMs: number = this.requestTimeoutMs,
   ): Promise<TResult> {
     const ws = this.ws;
     if (!this.isConnected() || ws === undefined) {
       throw new Error(`Cannot send RPC "${method}": CoreRpcClient is not connected.`);
+    }
+    if (this.protocolMode === "effect_rpc") {
+      throw new CoreRpcUnsupportedProtocolError(
+        method,
+        "Peer speaks Effect RPC protocol instead of legacy JSON-RPC.",
+      );
+    }
+    if (this.unsupportedLegacyMethods.has(method)) {
+      throw new CoreRpcUnsupportedProtocolError(
+        method,
+        "Method was rejected as unsupported by peer on this connection.",
+        "method_not_found",
+      );
+    }
+    if (this.protocolMode === "unknown" && this.silentLegacyMethods.has(method)) {
+      throw new CoreRpcUnsupportedProtocolError(
+        method,
+        "Method previously timed out without reply from unverified peer on this connection.",
+        "method_unresponsive",
+      );
     }
 
     const id = randomUUID();
@@ -321,18 +389,20 @@ export class CoreRpcClient {
     return new Promise<TResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         if (this.pendingRequests.delete(id)) {
+          if (this.protocolMode === "unknown") {
+            this.silentLegacyMethods.add(method);
+          }
           reject(
-            new Error(
-              `Core RPC request "${method}" timed out after ${effectiveTimeoutMs}ms.`
-            )
+            new Error(`Core RPC request "${method}" timed out after ${effectiveTimeoutMs}ms.`),
           );
         }
       }, effectiveTimeoutMs);
 
       this.pendingRequests.set(id, {
+        method,
         resolve: (value) => resolve(value as TResult),
         reject,
-        timer
+        timer,
       });
 
       const frame = JSON.stringify({ id, method, params });
@@ -342,29 +412,56 @@ export class CoreRpcClient {
           if (pending !== undefined) {
             clearTimeout(pending.timer);
             this.pendingRequests.delete(id);
-            pending.reject(
-              sendErr instanceof Error ? sendErr : new Error(String(sendErr))
-            );
+            pending.reject(sendErr instanceof Error ? sendErr : new Error(String(sendErr)));
           }
         }
       });
     });
   }
 
-  async ping(): Promise<CorePingResult> {
+  async ping(timeoutMs?: number): Promise<CorePingResult> {
     const startedAt = Date.now();
-    const payload = await this.request<unknown>("server.probe", {});
-    return {
-      ok: true,
-      latencyMs: Math.max(0, Date.now() - startedAt),
-      payload
-    };
+    if (this.protocolMode === "effect_rpc") {
+      await this.sendEffectRpcPing(
+        timeoutMs ?? Math.min(this.requestTimeoutMs, DEFAULT_CORE_EFFECT_PING_TIMEOUT_MS),
+      );
+      return {
+        ok: true,
+        latencyMs: Math.max(0, Date.now() - startedAt),
+        payload: { protocol: "effect_rpc", pong: true },
+      };
+    }
+
+    try {
+      const payload = await this.request<unknown>("server.probe", {}, timeoutMs);
+      return {
+        ok: true,
+        latencyMs: Math.max(0, Date.now() - startedAt),
+        payload,
+      };
+    } catch (error: unknown) {
+      if (
+        isCoreRpcUnsupportedProtocolError(error) &&
+        this.getProtocolMode() === "effect_rpc" &&
+        this.isConnected()
+      ) {
+        await this.sendEffectRpcPing(
+          timeoutMs ?? Math.min(this.requestTimeoutMs, DEFAULT_CORE_EFFECT_PING_TIMEOUT_MS),
+        );
+        return {
+          ok: true,
+          latencyMs: Math.max(0, Date.now() - startedAt),
+          payload: { protocol: "effect_rpc", pong: true },
+        };
+      }
+      throw error;
+    }
   }
 
-  async listProviders(): Promise<CoreProviderSummary[]> {
+  async listProviders(timeoutMs?: number): Promise<CoreProviderSummary[]> {
     const result = await this.request<
       CoreProviderSummary[] | { providers?: CoreProviderSummary[] }
-    >("provider.list", {});
+    >("provider.list", {}, timeoutMs);
     if (Array.isArray(result)) {
       return result;
     }
@@ -377,23 +474,33 @@ export class CoreRpcClient {
   async ensureChiefThread(
     workspacePath: string,
     provider: ChiefProviderKind,
-    model?: string
+    model?: string,
+    timeoutMs?: number,
   ): Promise<CoreEnsureChiefThreadResult> {
-    return this.request<CoreEnsureChiefThreadResult>("chief.ensureThread", {
-      workspacePath,
-      provider,
-      ...(model !== undefined ? { model } : {})
-    });
+    return this.request<CoreEnsureChiefThreadResult>(
+      "chief.ensureThread",
+      {
+        workspacePath,
+        provider,
+        ...(model !== undefined ? { model } : {}),
+      },
+      timeoutMs,
+    );
   }
 
   async dispatchThreadCommand(
     threadId: string,
-    payload: Record<string, unknown>
+    payload: Record<string, unknown>,
+    timeoutMs?: number,
   ): Promise<unknown> {
-    return this.request("orchestration.dispatchCommand", {
-      threadId,
-      payload
-    });
+    return this.request(
+      "orchestration.dispatchCommand",
+      {
+        threadId,
+        payload,
+      },
+      timeoutMs,
+    );
   }
 
   private async performClose(): Promise<void> {
@@ -401,9 +508,11 @@ export class CoreRpcClient {
     this.closedManually = true;
     this.state = "closed";
     this.clearReconnectTimer();
+    this.resetConnectionProtocolState();
 
     const closeError = new Error("CoreRpcClient closed.");
     this.rejectAllPendingRequests(closeError);
+    this.rejectAllEffectPingWaiters(closeError);
     this.rejectAllConnectedWaiters(closeError);
 
     const ws = this.ws;
@@ -481,7 +590,7 @@ export class CoreRpcClient {
       }
 
       const ws = new WebSocket(this.wsUrl, {
-        headers
+        headers,
       });
       this.ws = ws;
 
@@ -518,6 +627,7 @@ export class CoreRpcClient {
         this.hasEverConnected = true;
         this.reconnectAttempts = 0;
         this.lastError = undefined;
+        this.resetConnectionProtocolState();
         this.state = "connected";
         this.resolveAllConnectedWaiters();
         this.notifyStateListeners(true);
@@ -574,9 +684,13 @@ export class CoreRpcClient {
 
         const reason = reasonBuffer.toString("utf8");
         const closeError = new Error(
-          `Core WebSocket closed (code=${code}${reason.length > 0 ? `, reason=${reason}` : ""}).`
+          `Core WebSocket closed (code=${code}${reason.length > 0 ? `, reason=${reason}` : ""}).`,
         );
         this.rejectAllPendingRequests(closeError);
+        this.rejectAllEffectPingWaiters(closeError);
+        if (wasCurrentSocket) {
+          this.resetConnectionProtocolState();
+        }
 
         if (this.closedManually) {
           if (!settled) {
@@ -625,7 +739,7 @@ export class CoreRpcClient {
     this.state = "reconnecting";
     const delayMs = Math.min(
       this.maxReconnectMs,
-      this.baseReconnectMs * 2 ** this.reconnectAttempts
+      this.baseReconnectMs * 2 ** this.reconnectAttempts,
     );
     this.reconnectAttempts += 1;
 
@@ -669,31 +783,52 @@ export class CoreRpcClient {
     if (typeof id === "string") {
       const pending = this.pendingRequests.get(id);
       if (pending !== undefined) {
+        this.protocolMode = "legacy_json_rpc";
+        this.silentLegacyMethods.clear();
         this.pendingRequests.delete(id);
         clearTimeout(pending.timer);
 
         if (parsed.ok === false || (parsed.ok !== true && parsed.error !== undefined)) {
           const rawErr = parsed.error;
+          let code = "rpc_error";
+          let message = "Core RPC request failed.";
           if (isRecord(rawErr)) {
-            const code =
-              typeof rawErr.code === "string" ? rawErr.code : "rpc_error";
-            const message =
-              typeof rawErr.message === "string"
-                ? rawErr.message
-                : "Core RPC request failed.";
-            pending.reject(new CoreRpcRemoteError(code, message));
-          } else {
-            pending.reject(
-              new CoreRpcRemoteError(
-                "rpc_error",
-                typeof rawErr === "string" ? rawErr : "Core RPC request failed."
-              )
-            );
+            if (typeof rawErr.code === "string") {
+              code = rawErr.code;
+            }
+            if (typeof rawErr.message === "string") {
+              message = rawErr.message;
+            }
+          } else if (typeof rawErr === "string") {
+            message = rawErr;
           }
+          if (code === "method_not_found" || code === "unknown_method") {
+            this.unsupportedLegacyMethods.add(pending.method);
+          }
+          pending.reject(new CoreRpcRemoteError(code, message));
           return;
         }
 
         pending.resolve(parsed.result);
+        return;
+      }
+    } else if (typeof parsed._tag === "string") {
+      if (parsed._tag === "Pong") {
+        this.protocolMode = "effect_rpc";
+        this.resolveAllEffectPingWaiters();
+        return;
+      }
+      if (parsed._tag === "Defect") {
+        this.protocolMode = "effect_rpc";
+        const detail = this.extractEffectDefectDetail(parsed.defect);
+        this.rejectAllPendingLegacyAsUnsupported(detail);
+        return;
+      }
+      if (
+        (parsed._tag === "Exit" || parsed._tag === "Chunk") &&
+        (typeof parsed.requestId === "string" || typeof parsed.requestId === "number")
+      ) {
+        this.protocolMode = "effect_rpc";
         return;
       }
     }
@@ -705,6 +840,63 @@ export class CoreRpcClient {
         // Isolate listener failures.
       }
     }
+  }
+
+  private sendEffectRpcPing(timeoutMs: number): Promise<void> {
+    const ws = this.ws;
+    if (!this.isConnected() || ws === undefined) {
+      return Promise.reject(
+        new Error('Cannot send Effect RPC "Ping": CoreRpcClient is not connected.'),
+      );
+    }
+
+    const effectiveTimeoutMs = Math.max(10, timeoutMs);
+    return new Promise<void>((resolve, reject) => {
+      const waiter: EffectPingWaiter = {
+        resolve: () => {
+          clearTimeout(waiter.timer);
+          this.effectPingWaiters.delete(waiter);
+          resolve();
+        },
+        reject: (err: Error) => {
+          clearTimeout(waiter.timer);
+          this.effectPingWaiters.delete(waiter);
+          reject(err);
+        },
+        timer: setTimeout(() => {
+          this.effectPingWaiters.delete(waiter);
+          reject(new Error(`Core Effect RPC "Ping" timed out after ${effectiveTimeoutMs}ms.`));
+        }, effectiveTimeoutMs),
+      };
+      this.effectPingWaiters.add(waiter);
+
+      ws.send(JSON.stringify({ _tag: "Ping" }), (sendErr) => {
+        if (sendErr !== undefined && sendErr !== null) {
+          waiter.reject(sendErr instanceof Error ? sendErr : new Error(String(sendErr)));
+        }
+      });
+    });
+  }
+
+  private extractEffectDefectDetail(defect: unknown): string | undefined {
+    if (typeof defect === "string" && defect.trim().length > 0) {
+      return defect.trim();
+    }
+    if (isRecord(defect)) {
+      if (typeof defect.message === "string" && defect.message.trim().length > 0) {
+        return defect.message.trim();
+      }
+      if (typeof defect.defect === "string" && defect.defect.trim().length > 0) {
+        return defect.defect.trim();
+      }
+    }
+    return undefined;
+  }
+
+  private resetConnectionProtocolState(): void {
+    this.protocolMode = "unknown";
+    this.unsupportedLegacyMethods.clear();
+    this.silentLegacyMethods.clear();
   }
 
   private clearReconnectTimer(): void {
@@ -719,6 +911,26 @@ export class CoreRpcClient {
       clearTimeout(pending.timer);
       this.pendingRequests.delete(id);
       pending.reject(error);
+    }
+  }
+
+  private rejectAllPendingLegacyAsUnsupported(detail?: string): void {
+    for (const [id, pending] of this.pendingRequests.entries()) {
+      clearTimeout(pending.timer);
+      this.pendingRequests.delete(id);
+      pending.reject(new CoreRpcUnsupportedProtocolError(pending.method, detail));
+    }
+  }
+
+  private resolveAllEffectPingWaiters(): void {
+    for (const waiter of Array.from(this.effectPingWaiters)) {
+      waiter.resolve();
+    }
+  }
+
+  private rejectAllEffectPingWaiters(error: Error): void {
+    for (const waiter of Array.from(this.effectPingWaiters)) {
+      waiter.reject(error);
     }
   }
 

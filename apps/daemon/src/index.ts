@@ -18,7 +18,10 @@ import {
 } from "@prismux/protocol";
 import { SyncVaultEngine } from "@prismux/sync-vault";
 import { AppearanceConfigStore } from "./appearance/AppearanceConfigStore.js";
-import { ChiefThreadManager } from "./chief/ChiefThreadManager.js";
+import {
+  ChiefThreadManager,
+  DEFAULT_CHIEF_RPC_SYNC_TIMEOUT_MS,
+} from "./chief/ChiefThreadManager.js";
 import {
   CoreRpcClient,
   type CoreRpcHandshakeError,
@@ -266,6 +269,7 @@ export class PrismuxDaemon {
   private coreConnectStopped = false;
   private coreHandshakeWarningLogged = false;
   private coreStateUnsubscribe: (() => void) | undefined;
+  private inflightChiefSyncPromise: Promise<void> | undefined;
 
   constructor(options: DaemonStartOptions) {
     this.options = options;
@@ -664,23 +668,51 @@ export class PrismuxDaemon {
     this.coreStateUnsubscribe = undefined;
   }
 
-  private async tryEnsureChiefThread(slot: {
+  private async tryEnsureChiefThread(slot?: {
     workspacePath: string;
     activeProvider: ChiefProviderKind;
     model?: string;
   }): Promise<void> {
-    if (!this.coreRpcClient || !this.coreRpcClient.isConnected()) {
+    const client = this.coreRpcClient;
+    if (!client || !client.isConnected()) {
       return;
     }
-    try {
-      await this.coreRpcClient.ensureChiefThread(
-        slot.workspacePath,
-        slot.activeProvider,
-        slot.model,
-      );
-    } catch {
-      // Transient chief sync failure will retry on next reconnect
+    if (!client.isLegacyMethodAvailable("chief.ensureThread")) {
+      return;
     }
+    if (this.inflightChiefSyncPromise !== undefined) {
+      return this.inflightChiefSyncPromise;
+    }
+    const targetSlot = (() => {
+      try {
+        return this.chiefManager.getSlot();
+      } catch {
+        return slot;
+      }
+    })();
+    if (targetSlot === undefined) {
+      return;
+    }
+
+    const run = (async () => {
+      try {
+        await client.ensureChiefThread(
+          targetSlot.workspacePath,
+          targetSlot.activeProvider,
+          targetSlot.model,
+          DEFAULT_CHIEF_RPC_SYNC_TIMEOUT_MS,
+        );
+      } catch {
+        // Optional legacy chief.ensureThread sync degraded (e.g. Effect RPC server or transient timeout).
+      }
+    })().finally(() => {
+      if (this.inflightChiefSyncPromise === run) {
+        this.inflightChiefSyncPromise = undefined;
+      }
+    });
+
+    this.inflightChiefSyncPromise = run;
+    return run;
   }
 
   private handleNonRetryableCoreHandshakeError(error: CoreRpcHandshakeError): void {
@@ -704,11 +736,7 @@ export class PrismuxDaemon {
     }
   }
 
-  private startCoreConnectLoop(slot: {
-    workspacePath: string;
-    activeProvider: ChiefProviderKind;
-    model?: string;
-  }): void {
+  private startCoreConnectLoop(): void {
     const client = this.coreRpcClient;
     if (!client) {
       return;
@@ -725,7 +753,7 @@ export class PrismuxDaemon {
         };
       }
       if (connected && !this.coreConnectStopped) {
-        void this.tryEnsureChiefThread(slot);
+        void this.tryEnsureChiefThread();
       }
     });
 
@@ -762,7 +790,7 @@ export class PrismuxDaemon {
             coreConnected: true,
           };
         }
-        await this.tryEnsureChiefThread(slot);
+        await this.tryEnsureChiefThread();
       } catch (error: unknown) {
         if (isNonRetryableCoreHandshakeError(error)) {
           this.handleNonRetryableCoreHandshakeError(error);
@@ -781,6 +809,7 @@ export class PrismuxDaemon {
       await this.memoryStore.initialize();
       await this.businessService.hydrateInstalledPlugins();
       const slot = await this.chiefManager.init();
+      this.handoffEngine.setDialMode(slot.threadId, this.chiefManager.getDialMode());
 
       if (this.coreSupervisor !== undefined) {
         await this.coreSupervisor.start();
@@ -804,7 +833,7 @@ export class PrismuxDaemon {
           .connect()
           .then(async () => {
             if (!this.coreConnectStopped) {
-              await this.tryEnsureChiefThread(slot);
+              await this.tryEnsureChiefThread();
             }
           })
           .catch((error: unknown) => {
@@ -833,7 +862,7 @@ export class PrismuxDaemon {
         if (initialHandshakeError !== undefined) {
           this.handleNonRetryableCoreHandshakeError(initialHandshakeError);
         } else if (!this.coreRpcClient.isConnected()) {
-          this.startCoreConnectLoop(slot);
+          this.startCoreConnectLoop();
         } else {
           this.coreStateUnsubscribe?.();
           this.coreStateUnsubscribe = this.coreRpcClient.onStateChange((connected) => {
@@ -845,7 +874,7 @@ export class PrismuxDaemon {
               };
             }
             if (connected && !this.coreConnectStopped) {
-              void this.tryEnsureChiefThread(slot);
+              void this.tryEnsureChiefThread();
             }
           });
         }

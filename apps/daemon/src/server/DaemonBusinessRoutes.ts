@@ -5,7 +5,8 @@ import {
   readFileSync,
   renameSync,
   rmSync,
-  writeFileSync
+  statSync,
+  writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -20,13 +21,13 @@ import {
   RegistryHttpError,
   RegistryNetworkError,
   type CordisPluginModule,
-  type InstalledPluginDetails
+  type InstalledPluginDetails,
 } from "@prismux/cordis-kernel";
 import {
   commitObsidianImportPlan,
   planObsidianImport,
   type ObsidianAgentCurator,
-  type SqliteMemoryStore
+  type SqliteMemoryStore,
 } from "@prismux/memory-core";
 import {
   CHIEF_PROVIDER_KINDS,
@@ -58,7 +59,7 @@ import {
   type SyncChannelOperationResult,
   type SyncNowResponse,
   type SyncOperationChannel,
-  type SyncTestResponse
+  type SyncTestResponse,
 } from "@prismux/protocol";
 import type {
   GitHubSyncConfig,
@@ -68,15 +69,18 @@ import type {
   SyncDomainMatrix,
   SyncVaultEngine,
   SyncVaultPayload,
-  WebDavSyncConfig
+  WebDavSyncConfig,
 } from "@prismux/sync-vault";
-import { createChiefObsidianAgentCurator } from "../chief/ChiefObsidianCurator.js";
+import {
+  createChiefObsidianAgentCurator,
+  formatProviderDisplay,
+} from "../chief/ChiefObsidianCurator.js";
 import type { ChiefThreadManager } from "../chief/ChiefThreadManager.js";
 import type { HandoffEngine } from "../handoff/HandoffEngine.js";
 import {
   normalizeHostMetricsReport,
   type HostMetricsIngestResult,
-  type ResourceMonitorService
+  type ResourceMonitorService,
 } from "../system/ResourceMonitorService.js";
 import type { CoreRpcClient } from "../core/CoreRpcClient.js";
 import type { AppUpdater } from "../updater/AppUpdater.js";
@@ -84,7 +88,7 @@ import { isPathStrictlyInsideDir } from "../wallpapers/WallpaperMediaService.js"
 import {
   downloadOfficialPluginReleaseArchive,
   getOfficialNpmFallbackSpecs,
-  type OfficialPluginSourceConfig
+  type OfficialPluginSourceConfig,
 } from "./OfficialPluginDownloader.js";
 
 const SYNC_CREDENTIAL_BUCKET = "sync-vault" as const;
@@ -94,13 +98,10 @@ const TRUSTED_PLUGIN_REGISTRY_HOSTS = new Set<string>([
   "registry.npmjs.org",
   "registry.npmmirror.com",
   "cdn.npmmirror.com",
-  "npm.pkg.github.com"
+  "npm.pkg.github.com",
 ]);
 
-function validateTrustedPluginRegistryUrl(
-  rawUrl: unknown,
-  fieldName: string
-): string | undefined {
+function validateTrustedPluginRegistryUrl(rawUrl: unknown, fieldName: string): string | undefined {
   if (rawUrl === undefined || rawUrl === null) {
     return undefined;
   }
@@ -108,7 +109,7 @@ function validateTrustedPluginRegistryUrl(
     throw new BusinessRouteError(
       400,
       "INVALID_REGISTRY_URL",
-      `${fieldName} 必须是合法的 HTTPS 镜像源 URL 字符串。`
+      `${fieldName} 必须是合法的 HTTPS 镜像源 URL 字符串。`,
     );
   }
   const trimmed = rawUrl.trim();
@@ -119,24 +120,20 @@ function validateTrustedPluginRegistryUrl(
   try {
     parsed = new URL(trimmed);
   } catch {
-    throw new BusinessRouteError(
-      400,
-      "INVALID_REGISTRY_URL",
-      `${fieldName} 格式无效：${trimmed}`
-    );
+    throw new BusinessRouteError(400, "INVALID_REGISTRY_URL", `${fieldName} 格式无效：${trimmed}`);
   }
   if (parsed.protocol !== "https:") {
     throw new BusinessRouteError(
       400,
       "INVALID_REGISTRY_URL",
-      `${fieldName} 仅允许使用 HTTPS 协议，禁止明文 HTTP 或其他协议：${trimmed}`
+      `${fieldName} 仅允许使用 HTTPS 协议，禁止明文 HTTP 或其他协议：${trimmed}`,
     );
   }
   if (parsed.username !== "" || parsed.password !== "") {
     throw new BusinessRouteError(
       400,
       "INVALID_REGISTRY_URL",
-      `${fieldName} 禁止在 URL 中内嵌凭据。`
+      `${fieldName} 禁止在 URL 中内嵌凭据。`,
     );
   }
   const host = parsed.hostname.toLowerCase();
@@ -144,7 +141,7 @@ function validateTrustedPluginRegistryUrl(
     throw new BusinessRouteError(
       400,
       "INVALID_REGISTRY_URL",
-      `${fieldName} 主机 "${host}" 不在受信任的插件镜像白名单内（仅允许 registry.npmjs.org / registry.npmmirror.com / cdn.npmmirror.com / npm.pkg.github.com）。`
+      `${fieldName} 主机 "${host}" 不在受信任的插件镜像白名单内（仅允许 registry.npmjs.org / registry.npmmirror.com / cdn.npmmirror.com / npm.pkg.github.com）。`,
     );
   }
   return trimmed;
@@ -155,12 +152,7 @@ export class BusinessRouteError extends Error {
   readonly code: string;
   readonly details?: unknown;
 
-  constructor(
-    statusCode: number,
-    code: string,
-    message: string,
-    details?: unknown
-  ) {
+  constructor(statusCode: number, code: string, message: string, details?: unknown) {
     super(message);
     this.name = "BusinessRouteError";
     this.statusCode = statusCode;
@@ -234,11 +226,11 @@ export interface DaemonBusinessContext {
   resourceMonitorService?: ResourceMonitorService;
   onMountPlugin?: (
     record: InstalledPluginRecord,
-    module: PrismuxPluginModule | CordisPluginModule
+    module: PrismuxPluginModule | CordisPluginModule,
   ) => Promise<void>;
   onTogglePlugin?: (
     pluginId: string,
-    enabled: boolean
+    enabled: boolean,
   ) => Promise<{ pluginId: string; enabled: boolean }>;
   onUninstallPlugin?: (pluginId: string) => Promise<void>;
 }
@@ -250,10 +242,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 function writeJsonAtomic(filePath: string, payload: unknown): void {
   const dir = dirname(filePath);
   mkdirSync(dir, { recursive: true });
-  const tmpPath = join(
-    dir,
-    `.tmp-${basename(filePath)}-${process.pid}-${randomUUID()}`
-  );
+  const tmpPath = join(dir, `.tmp-${basename(filePath)}-${process.pid}-${randomUUID()}`);
   try {
     writeFileSync(tmpPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
     renameSync(tmpPath, filePath);
@@ -281,7 +270,7 @@ export function resolveDefaultOfficialCatalogPath(explicitPath?: string): string
     resolve(moduleDir, "catalog", "official.json"),
     resolve(moduleDir, "..", "catalog", "official.json"),
     resolve(moduleDir, "..", "..", "catalog", "official.json"),
-    resolve(process.cwd(), "catalog", "official.json")
+    resolve(process.cwd(), "catalog", "official.json"),
   ];
   for (const candidate of cliRelativeCandidates) {
     if (existsSync(candidate)) {
@@ -307,15 +296,12 @@ export function resolveDefaultOfficialCatalogPath(explicitPath?: string): string
   return null;
 }
 
-function assertOwnerChief(
-  trustedCallerScope: CallerScope,
-  resourceName: string
-): void {
+function assertOwnerChief(trustedCallerScope: CallerScope, resourceName: string): void {
   if (trustedCallerScope !== "owner_chief") {
     throw new BusinessRouteError(
       403,
       "FORBIDDEN_SCOPE",
-      `Scope "${trustedCallerScope}" is not permitted to access ${resourceName}.`
+      `Scope "${trustedCallerScope}" is not permitted to access ${resourceName}.`,
     );
   }
 }
@@ -325,7 +311,7 @@ function parseProvider(value: unknown): ChiefProviderKind {
     throw new BusinessRouteError(
       400,
       "INVALID_PROVIDER",
-      `provider "${String(value)}" is retired and no longer supported. Expected a valid non-retired agent identifier (builtin: ${CHIEF_PROVIDER_KINDS.join(", ")}, or a configured ACP/custom provider ID).`
+      `provider "${String(value)}" is retired and no longer supported. Expected a valid non-retired agent identifier (builtin: ${CHIEF_PROVIDER_KINDS.join(", ")}, or a configured ACP/custom provider ID).`,
     );
   }
   const normalized = normalizeChiefProviderKind(value);
@@ -335,7 +321,7 @@ function parseProvider(value: unknown): ChiefProviderKind {
   throw new BusinessRouteError(
     400,
     "INVALID_PROVIDER",
-    `Invalid provider "${String(value)}". Expected a valid non-retired agent identifier (builtin: ${CHIEF_PROVIDER_KINDS.join(", ")}, or a configured ACP/custom provider ID).`
+    `Invalid provider "${String(value)}". Expected a valid non-retired agent identifier (builtin: ${CHIEF_PROVIDER_KINDS.join(", ")}, or a configured ACP/custom provider ID).`,
   );
 }
 
@@ -345,7 +331,7 @@ function parseReasoningEffort(value: unknown): string | undefined {
     throw new BusinessRouteError(
       400,
       "INVALID_REASONING_EFFORT",
-      "reasoningEffort must be a valid effort token or empty."
+      "reasoningEffort must be a valid effort token or empty.",
     );
   }
   return normalized;
@@ -357,28 +343,25 @@ function parseSecretaryName(value: unknown): string | undefined {
     throw new BusinessRouteError(
       400,
       "INVALID_SECRETARY_NAME",
-      "secretaryName must be a string up to 32 characters."
+      "secretaryName must be a string up to 32 characters.",
     );
   }
   return normalized;
 }
 
 function parseDialMode(value: unknown): DialMode {
-  if (
-    typeof value === "string" &&
-    (DIAL_MODES as readonly string[]).includes(value)
-  ) {
+  if (typeof value === "string" && (DIAL_MODES as readonly string[]).includes(value)) {
     return value as DialMode;
   }
   throw new BusinessRouteError(
     400,
     "INVALID_DIAL_MODE",
-    `dialMode must be one of: ${DIAL_MODES.join(", ")}.`
+    `dialMode must be one of: ${DIAL_MODES.join(", ")}.`,
   );
 }
 
 function sanitizeWebDavConfig(
-  cfg: WebDavSyncConfig | undefined
+  cfg: WebDavSyncConfig | undefined,
 ): PersistedSanitizedSyncConfig["channels"]["webdav"] | undefined {
   if (!cfg) {
     return undefined;
@@ -388,21 +371,15 @@ function sanitizeWebDavConfig(
     endpointUrl: cfg.endpointUrl,
     username: cfg.username,
     ...(cfg.remotePath !== undefined ? { remotePath: cfg.remotePath } : {}),
-    ...(cfg.allowSelfSignedTls !== undefined
-      ? { allowSelfSignedTls: cfg.allowSelfSignedTls }
-      : {}),
-    ...(cfg.stallTimeoutMs !== undefined
-      ? { stallTimeoutMs: cfg.stallTimeoutMs }
-      : {}),
-    ...(cfg.metadataTimeoutMs !== undefined
-      ? { metadataTimeoutMs: cfg.metadataTimeoutMs }
-      : {}),
-    ...(cfg.passwordRef !== undefined ? { passwordRef: cfg.passwordRef } : {})
+    ...(cfg.allowSelfSignedTls !== undefined ? { allowSelfSignedTls: cfg.allowSelfSignedTls } : {}),
+    ...(cfg.stallTimeoutMs !== undefined ? { stallTimeoutMs: cfg.stallTimeoutMs } : {}),
+    ...(cfg.metadataTimeoutMs !== undefined ? { metadataTimeoutMs: cfg.metadataTimeoutMs } : {}),
+    ...(cfg.passwordRef !== undefined ? { passwordRef: cfg.passwordRef } : {}),
   };
 }
 
 function sanitizeS3Config(
-  cfg: S3SyncConfig | undefined
+  cfg: S3SyncConfig | undefined,
 ): PersistedSanitizedSyncConfig["channels"]["s3"] | undefined {
   if (!cfg) {
     return undefined;
@@ -417,18 +394,14 @@ function sanitizeS3Config(
     accessKeyId: cfg.accessKeyId,
     ...(cfg.keyPrefix !== undefined ? { keyPrefix: cfg.keyPrefix } : {}),
     ...(cfg.remoteKey !== undefined ? { remoteKey: cfg.remoteKey } : {}),
-    ...(cfg.stallTimeoutMs !== undefined
-      ? { stallTimeoutMs: cfg.stallTimeoutMs }
-      : {}),
-    ...(cfg.metadataTimeoutMs !== undefined
-      ? { metadataTimeoutMs: cfg.metadataTimeoutMs }
-      : {}),
-    ...(cfg.secretKeyRef !== undefined ? { secretKeyRef: cfg.secretKeyRef } : {})
+    ...(cfg.stallTimeoutMs !== undefined ? { stallTimeoutMs: cfg.stallTimeoutMs } : {}),
+    ...(cfg.metadataTimeoutMs !== undefined ? { metadataTimeoutMs: cfg.metadataTimeoutMs } : {}),
+    ...(cfg.secretKeyRef !== undefined ? { secretKeyRef: cfg.secretKeyRef } : {}),
   };
 }
 
 function sanitizeGitHubConfig(
-  cfg: GitHubSyncConfig | undefined
+  cfg: GitHubSyncConfig | undefined,
 ): PersistedSanitizedSyncConfig["channels"]["github"] | undefined {
   if (!cfg) {
     return undefined;
@@ -440,19 +413,13 @@ function sanitizeGitHubConfig(
     branch: cfg.branch,
     ...(cfg.apiBaseUrl !== undefined ? { apiBaseUrl: cfg.apiBaseUrl } : {}),
     ...(cfg.filePath !== undefined ? { filePath: cfg.filePath } : {}),
-    ...(cfg.stallTimeoutMs !== undefined
-      ? { stallTimeoutMs: cfg.stallTimeoutMs }
-      : {}),
-    ...(cfg.metadataTimeoutMs !== undefined
-      ? { metadataTimeoutMs: cfg.metadataTimeoutMs }
-      : {}),
-    ...(cfg.tokenRef !== undefined ? { tokenRef: cfg.tokenRef } : {})
+    ...(cfg.stallTimeoutMs !== undefined ? { stallTimeoutMs: cfg.stallTimeoutMs } : {}),
+    ...(cfg.metadataTimeoutMs !== undefined ? { metadataTimeoutMs: cfg.metadataTimeoutMs } : {}),
+    ...(cfg.tokenRef !== undefined ? { tokenRef: cfg.tokenRef } : {}),
   };
 }
 
-function isSyncDomainKey(
-  value: string
-): value is keyof SyncDomainMatrix {
+function isSyncDomainKey(value: string): value is keyof SyncDomainMatrix {
   return (
     value === "privateMemory" ||
     value === "workspaceMemory" ||
@@ -466,26 +433,21 @@ function isSyncDomainKey(
 
 export function getOfficialPluginArchiveCandidateFilenames(
   pluginId: string,
-  version: string
+  version: string,
 ): string[] {
   const canonicalName = pluginId.startsWith("prismux-plugin-")
     ? `${pluginId}-${version}.wb-plugin`
     : `prismux-plugin-${pluginId}-${version}.wb-plugin`;
   const legacyName = `${pluginId}-${version}.wb-plugin`;
-  return canonicalName === legacyName
-    ? [canonicalName]
-    : [canonicalName, legacyName];
+  return canonicalName === legacyName ? [canonicalName] : [canonicalName, legacyName];
 }
 
 function findOfficialArchiveInSearchDirs(
   entry: OfficialPluginCatalogEntry,
   searchRoots: readonly string[],
-  extraDirs: readonly string[] = []
+  extraDirs: readonly string[] = [],
 ): { bytes: Buffer; filePath: string } | null {
-  const filenames = getOfficialPluginArchiveCandidateFilenames(
-    entry.id,
-    entry.version
-  );
+  const filenames = getOfficialPluginArchiveCandidateFilenames(entry.id, entry.version);
   const expectedSha = entry.sha256?.trim().toLowerCase() ?? "";
   if (!/^[0-9a-f]{64}$/.test(expectedSha)) {
     return null;
@@ -498,10 +460,7 @@ function findOfficialArchiveInSearchDirs(
     }
   }
   for (const root of searchRoots) {
-    candidateDirs.push(
-      join(root, "plugins-official", "dist"),
-      join(root, ".work", "plugin-dist")
-    );
+    candidateDirs.push(join(root, "plugins-official", "dist"), join(root, ".work", "plugin-dist"));
   }
 
   for (const dir of candidateDirs) {
@@ -530,7 +489,7 @@ function findOfficialArchiveInSearchDirs(
 
 function updateInstallMetadataEnabledFlag(
   installDir: string,
-  enabled: boolean
+  enabled: boolean,
 ): InstalledPluginRecord | null {
   const metaPath = join(installDir, SYNC_INSTALL_META_FILENAME);
   if (!existsSync(metaPath)) {
@@ -552,7 +511,7 @@ function updateInstallMetadataEnabledFlag(
 async function tryLoadDaemonPluginModule(
   pluginsDir: string,
   record: InstalledPluginRecord,
-  onError?: (reason: string) => void
+  onError?: (reason: string) => void,
 ): Promise<PrismuxPluginModule | CordisPluginModule | null> {
   const pluginDir = join(pluginsDir, record.manifest.id);
   if (!existsSync(pluginDir)) {
@@ -586,10 +545,7 @@ async function tryLoadDaemonPluginModule(
       return null;
     }
     const candidate = resolve(pluginDir, relEntry);
-    if (
-      !isPathStrictlyInsideDir(candidate, pluginDir) ||
-      !existsSync(candidate)
-    ) {
+    if (!isPathStrictlyInsideDir(candidate, pluginDir) || !existsSync(candidate)) {
       onError?.(`插件入口文件不存在或越界：${relEntry}`);
       return null;
     }
@@ -597,8 +553,7 @@ async function tryLoadDaemonPluginModule(
     const entryHref = `${pathToFileURL(candidate).href}?v=${encodeURIComponent(cacheTag)}`;
     const loaded = (await import(entryHref)) as Record<string, unknown>;
     const modCandidate =
-      isPlainRecord(loaded["default"]) &&
-      typeof loaded["default"]["apply"] === "function"
+      isPlainRecord(loaded["default"]) && typeof loaded["default"]["apply"] === "function"
         ? loaded["default"]
         : typeof loaded["apply"] === "function"
           ? loaded
@@ -612,12 +567,10 @@ async function tryLoadDaemonPluginModule(
       : record.manifest;
     return {
       manifest: modManifest as PrismuxPluginModule["manifest"],
-      apply: modCandidate["apply"] as CordisPluginModule["apply"]
+      apply: modCandidate["apply"] as CordisPluginModule["apply"],
     };
   } catch (err) {
-    onError?.(
-      `加载插件模块失败：${err instanceof Error ? err.message : String(err)}`
-    );
+    onError?.(`加载插件模块失败：${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
 }
@@ -656,7 +609,7 @@ export class DaemonBusinessService {
     pluginId: string,
     level: PluginRuntimeLogRecord["level"],
     source: string,
-    message: string
+    message: string,
   ): PluginRuntimeLogRecord {
     const normalizedId = pluginId.trim();
     this.pluginLogSeq += 1;
@@ -666,7 +619,7 @@ export class DaemonBusinessService {
       timestamp: Date.now(),
       level,
       source,
-      message
+      message,
     };
     const bucket = this.pluginLogsById.get(normalizedId) ?? [];
     bucket.push(entry);
@@ -697,7 +650,7 @@ export class DaemonBusinessService {
           if (isSyncDomainKey(key) && isPlainRecord(val)) {
             partial[key] = {
               upload: Boolean(val["upload"]),
-              download: Boolean(val["download"])
+              download: Boolean(val["download"]),
             };
           }
         }
@@ -710,8 +663,7 @@ export class DaemonBusinessService {
           syncVault.setChannelConfig("webdav", {
             enabled: Boolean(webdav["enabled"]),
             endpointUrl: webdav["endpointUrl"],
-            username:
-              typeof webdav["username"] === "string" ? webdav["username"] : "",
+            username: typeof webdav["username"] === "string" ? webdav["username"] : "",
             ...(typeof webdav["remotePath"] === "string"
               ? { remotePath: webdav["remotePath"] }
               : {}),
@@ -720,7 +672,7 @@ export class DaemonBusinessService {
               : {}),
             ...(typeof webdav["passwordRef"] === "string"
               ? { passwordRef: webdav["passwordRef"] }
-              : {})
+              : {}),
           });
         }
 
@@ -733,17 +685,10 @@ export class DaemonBusinessService {
             bucket: typeof s3["bucket"] === "string" ? s3["bucket"] : "",
             forcePathStyle: s3["forcePathStyle"] !== false,
             allowSelfSignedTls: Boolean(s3["allowSelfSignedTls"]),
-            accessKeyId:
-              typeof s3["accessKeyId"] === "string" ? s3["accessKeyId"] : "",
-            ...(typeof s3["keyPrefix"] === "string"
-              ? { keyPrefix: s3["keyPrefix"] }
-              : {}),
-            ...(typeof s3["remoteKey"] === "string"
-              ? { remoteKey: s3["remoteKey"] }
-              : {}),
-            ...(typeof s3["secretKeyRef"] === "string"
-              ? { secretKeyRef: s3["secretKeyRef"] }
-              : {})
+            accessKeyId: typeof s3["accessKeyId"] === "string" ? s3["accessKeyId"] : "",
+            ...(typeof s3["keyPrefix"] === "string" ? { keyPrefix: s3["keyPrefix"] } : {}),
+            ...(typeof s3["remoteKey"] === "string" ? { remoteKey: s3["remoteKey"] } : {}),
+            ...(typeof s3["secretKeyRef"] === "string" ? { secretKeyRef: s3["secretKeyRef"] } : {}),
           });
         }
 
@@ -753,17 +698,12 @@ export class DaemonBusinessService {
             enabled: Boolean(github["enabled"]),
             owner: github["owner"],
             repo: typeof github["repo"] === "string" ? github["repo"] : "",
-            branch:
-              typeof github["branch"] === "string" ? github["branch"] : "main",
+            branch: typeof github["branch"] === "string" ? github["branch"] : "main",
             ...(typeof github["apiBaseUrl"] === "string"
               ? { apiBaseUrl: github["apiBaseUrl"] }
               : {}),
-            ...(typeof github["filePath"] === "string"
-              ? { filePath: github["filePath"] }
-              : {}),
-            ...(typeof github["tokenRef"] === "string"
-              ? { tokenRef: github["tokenRef"] }
-              : {})
+            ...(typeof github["filePath"] === "string" ? { filePath: github["filePath"] } : {}),
+            ...(typeof github["tokenRef"] === "string" ? { tokenRef: github["tokenRef"] } : {}),
           });
         }
       }
@@ -778,12 +718,12 @@ export class DaemonBusinessService {
       throw new BusinessRouteError(
         503,
         "CHIEF_UNAVAILABLE",
-        "ChiefThreadManager is not initialized."
+        "ChiefThreadManager is not initialized.",
       );
     }
     const slot = this.ctx.chiefManager.getSlot();
     const dialMode =
-      this.ctx.handoffEngine?.getDialMode(slot.threadId) ?? "agent";
+      this.ctx.handoffEngine?.getDialMode(slot.threadId) ?? this.ctx.chiefManager.getDialMode();
     return {
       ok: true,
       slot: {
@@ -791,41 +731,33 @@ export class DaemonBusinessService {
         provider: slot.activeProvider,
         secretaryName: slot.secretaryName ?? DEFAULT_CHIEF_SECRETARY_NAME,
         agentsMdPath: slot.agentsMdPath,
-        ...(slot.reasoningEffort !== undefined
-          ? { defaultEffort: slot.reasoningEffort }
-          : {})
+        ...(slot.reasoningEffort !== undefined ? { defaultEffort: slot.reasoningEffort } : {}),
       },
       secretaryName: slot.secretaryName ?? DEFAULT_CHIEF_SECRETARY_NAME,
       agentsMdPath: slot.agentsMdPath,
       dialMode,
-      availableProviders: (CHIEF_PROVIDER_KINDS as readonly string[]).includes(
-        slot.activeProvider
-      )
+      availableProviders: (CHIEF_PROVIDER_KINDS as readonly string[]).includes(slot.activeProvider)
         ? [...CHIEF_PROVIDER_KINDS]
         : [...CHIEF_PROVIDER_KINDS, slot.activeProvider],
       availableDialModes: [...DIAL_MODES],
-      t3Connected: (this.ctx.coreRpcClient ?? this.ctx.t3RpcClient)?.isConnected() ?? false
+      t3Connected: (this.ctx.coreRpcClient ?? this.ctx.t3RpcClient)?.isConnected() ?? false,
     };
   }
 
   async switchChief(
     rawBody: unknown,
-    trustedCallerScope: CallerScope
+    trustedCallerScope: CallerScope,
   ): Promise<Record<string, unknown>> {
     assertOwnerChief(trustedCallerScope, "/v1/chief/switch");
     if (!this.ctx.chiefManager) {
       throw new BusinessRouteError(
         503,
         "CHIEF_UNAVAILABLE",
-        "ChiefThreadManager is not initialized."
+        "ChiefThreadManager is not initialized.",
       );
     }
     if (!isPlainRecord(rawBody)) {
-      throw new BusinessRouteError(
-        400,
-        "INVALID_PARAMS",
-        "Request body must be a JSON object."
-      );
+      throw new BusinessRouteError(400, "INVALID_PARAMS", "Request body must be a JSON object.");
     }
 
     const provider = parseProvider(rawBody["provider"]);
@@ -834,22 +766,25 @@ export class DaemonBusinessService {
         ? rawBody["model"].trim()
         : undefined;
     const dialMode =
-      rawBody["dialMode"] !== undefined
-        ? parseDialMode(rawBody["dialMode"])
-        : undefined;
+      rawBody["dialMode"] !== undefined ? parseDialMode(rawBody["dialMode"]) : undefined;
     const reasoningEffort = parseReasoningEffort(
       rawBody["reasoningEffort"] !== undefined
         ? rawBody["reasoningEffort"]
-        : rawBody["defaultEffort"]
+        : rawBody["defaultEffort"],
     );
     const secretaryName = parseSecretaryName(rawBody["secretaryName"]);
 
+    const switchOptions = {
+      ...(secretaryName !== undefined ? { secretaryName } : {}),
+      ...(dialMode !== undefined ? { dialMode } : {}),
+    };
     const slot = await this.ctx.chiefManager.switchProvider(
       provider,
       model,
       reasoningEffort,
-      secretaryName !== undefined ? { secretaryName } : undefined
+      Object.keys(switchOptions).length > 0 ? switchOptions : undefined,
     );
+    const effectiveDialMode = this.ctx.chiefManager.getDialMode();
     if (dialMode !== undefined && this.ctx.handoffEngine) {
       this.ctx.handoffEngine.setDialMode(slot.threadId, dialMode);
     }
@@ -861,38 +796,29 @@ export class DaemonBusinessService {
         provider: slot.activeProvider,
         secretaryName: slot.secretaryName ?? DEFAULT_CHIEF_SECRETARY_NAME,
         agentsMdPath: slot.agentsMdPath,
-        ...(slot.reasoningEffort !== undefined
-          ? { defaultEffort: slot.reasoningEffort }
-          : {})
+        ...(slot.reasoningEffort !== undefined ? { defaultEffort: slot.reasoningEffort } : {}),
       },
       secretaryName: slot.secretaryName ?? DEFAULT_CHIEF_SECRETARY_NAME,
       agentsMdPath: slot.agentsMdPath,
-      dialMode: this.ctx.handoffEngine?.getDialMode(slot.threadId) ?? "agent"
+      dialMode: this.ctx.handoffEngine?.getDialMode(slot.threadId) ?? effectiveDialMode,
     };
   }
 
-  updateChiefProfile(
-    rawBody: unknown,
-    trustedCallerScope: CallerScope
-  ): Record<string, unknown> {
+  updateChiefProfile(rawBody: unknown, trustedCallerScope: CallerScope): Record<string, unknown> {
     assertOwnerChief(trustedCallerScope, "/v1/chief/profile");
     if (!this.ctx.chiefManager) {
       throw new BusinessRouteError(
         503,
         "CHIEF_UNAVAILABLE",
-        "ChiefThreadManager is not initialized."
+        "ChiefThreadManager is not initialized.",
       );
     }
     if (!isPlainRecord(rawBody)) {
-      throw new BusinessRouteError(
-        400,
-        "INVALID_PARAMS",
-        "Request body must be a JSON object."
-      );
+      throw new BusinessRouteError(400, "INVALID_PARAMS", "Request body must be a JSON object.");
     }
     const secretaryName = parseSecretaryName(rawBody["secretaryName"]);
     const slot = this.ctx.chiefManager.updateProfile(
-      secretaryName !== undefined ? { secretaryName } : {}
+      secretaryName !== undefined ? { secretaryName } : {},
     );
     return {
       ok: true,
@@ -901,13 +827,12 @@ export class DaemonBusinessService {
         provider: slot.activeProvider,
         secretaryName: slot.secretaryName ?? DEFAULT_CHIEF_SECRETARY_NAME,
         agentsMdPath: slot.agentsMdPath,
-        ...(slot.reasoningEffort !== undefined
-          ? { defaultEffort: slot.reasoningEffort }
-          : {})
+        ...(slot.reasoningEffort !== undefined ? { defaultEffort: slot.reasoningEffort } : {}),
       },
       secretaryName: slot.secretaryName ?? DEFAULT_CHIEF_SECRETARY_NAME,
       agentsMdPath: slot.agentsMdPath,
-      dialMode: this.ctx.handoffEngine?.getDialMode(slot.threadId) ?? "agent"
+      dialMode:
+        this.ctx.handoffEngine?.getDialMode(slot.threadId) ?? this.ctx.chiefManager.getDialMode(),
     };
   }
 
@@ -917,30 +842,23 @@ export class DaemonBusinessService {
       throw new BusinessRouteError(
         503,
         "CHIEF_UNAVAILABLE",
-        "ChiefThreadManager is not initialized."
+        "ChiefThreadManager is not initialized.",
       );
     }
     return this.ctx.chiefManager.getAgentsMd();
   }
 
-  saveChiefAgentsMd(
-    rawBody: unknown,
-    trustedCallerScope: CallerScope
-  ): ChiefAgentsMdResponse {
+  saveChiefAgentsMd(rawBody: unknown, trustedCallerScope: CallerScope): ChiefAgentsMdResponse {
     assertOwnerChief(trustedCallerScope, "/v1/chief/agents-md");
     if (!this.ctx.chiefManager) {
       throw new BusinessRouteError(
         503,
         "CHIEF_UNAVAILABLE",
-        "ChiefThreadManager is not initialized."
+        "ChiefThreadManager is not initialized.",
       );
     }
     if (!isPlainRecord(rawBody)) {
-      throw new BusinessRouteError(
-        400,
-        "INVALID_PARAMS",
-        "Request body must be a JSON object."
-      );
+      throw new BusinessRouteError(400, "INVALID_PARAMS", "Request body must be a JSON object.");
     }
     const reset = rawBody["reset"] === true;
     const content = typeof rawBody["content"] === "string" ? rawBody["content"] : undefined;
@@ -948,36 +866,27 @@ export class DaemonBusinessService {
       throw new BusinessRouteError(
         400,
         "INVALID_PARAMS",
-        "Request body must include string 'content' or 'reset: true'."
+        "Request body must include string 'content' or 'reset: true'.",
       );
     }
     return this.ctx.chiefManager.saveAgentsMd({
       ...(content !== undefined ? { content } : {}),
-      ...(reset ? { reset: true } : {})
+      ...(reset ? { reset: true } : {}),
     });
   }
 
   async planObsidianVaultImport(
     rawBody: unknown,
-    trustedCallerScope: CallerScope
+    trustedCallerScope: CallerScope,
   ): Promise<ObsidianImportPlanResponse> {
     assertOwnerChief(trustedCallerScope, "/v1/memory/import-obsidian/plan");
     if (!isPlainRecord(rawBody)) {
-      throw new BusinessRouteError(
-        400,
-        "INVALID_PARAMS",
-        "Request body must be a JSON object."
-      );
+      throw new BusinessRouteError(400, "INVALID_PARAMS", "Request body must be a JSON object.");
     }
 
-    const vaultPath =
-      typeof rawBody["vaultPath"] === "string" ? rawBody["vaultPath"].trim() : "";
+    const vaultPath = typeof rawBody["vaultPath"] === "string" ? rawBody["vaultPath"].trim() : "";
     if (!vaultPath) {
-      throw new BusinessRouteError(
-        400,
-        "INVALID_PARAMS",
-        "vaultPath is required."
-      );
+      throw new BusinessRouteError(400, "INVALID_PARAMS", "vaultPath is required.");
     }
 
     const rawNamespace =
@@ -993,7 +902,7 @@ export class DaemonBusinessService {
         throw new BusinessRouteError(
           400,
           "INVALID_NAMESPACE",
-          `Invalid namespace: "${rawNamespace}".`
+          `Invalid namespace: "${rawNamespace}".`,
         );
       }
       namespace = rawNamespace;
@@ -1009,92 +918,155 @@ export class DaemonBusinessService {
         ? rawBody["model"].trim()
         : undefined;
 
-    const slot = this.ctx.chiefManager ? (() => {
-      try {
-        return this.ctx.chiefManager.getSlot();
-      } catch {
-        return null;
-      }
-    })() : null;
-    const defaultCuratorLabel = slot
-      ? `${slot.secretaryName ?? DEFAULT_CHIEF_SECRETARY_NAME} · ${slot.activeProvider}`
-      : undefined;
+    const slot = this.ctx.chiefManager
+      ? (() => {
+          try {
+            return this.ctx.chiefManager.getSlot();
+          } catch {
+            return null;
+          }
+        })()
+      : null;
+    const effectiveProvider =
+      normalizeChiefProviderKind(provider) ?? slot?.activeProvider ?? "claude-code";
+    const defaultCuratorLabel =
+      slot !== null || provider !== undefined
+        ? `${slot?.secretaryName ?? DEFAULT_CHIEF_SECRETARY_NAME} · ${formatProviderDisplay(effectiveProvider)}`
+        : undefined;
 
     const agentCurator =
       this.ctx.obsidianAgentCurator ??
       createChiefObsidianAgentCurator({
-        ...(this.ctx.chiefManager ? { chiefManager: this.ctx.chiefManager } : {})
+        ...(this.ctx.chiefManager ? { chiefManager: this.ctx.chiefManager } : {}),
       });
 
     try {
-      return await planObsidianImport(
+      const plan = await planObsidianImport(
         {
           vaultPath,
           ...(namespace !== undefined ? { namespace } : {}),
           useAgentCuration,
           ...(provider !== undefined ? { provider } : {}),
-          ...(model !== undefined ? { model } : {})
+          ...(model !== undefined ? { model } : {}),
         },
         {
           agentCurator,
-          ...(defaultCuratorLabel ? { curatorLabel: defaultCuratorLabel } : {})
-        }
+          ...(defaultCuratorLabel ? { curatorLabel: defaultCuratorLabel } : {}),
+        },
       );
+
+      if (useAgentCuration && plan.curationSource === "structured-fallback") {
+        const providerDisplay = formatProviderDisplay(effectiveProvider);
+        const supportsDirectCliCuration =
+          effectiveProvider === "claude-code" ||
+          effectiveProvider === "codex" ||
+          effectiveProvider === "gemini";
+        const fallbackReason = supportsDirectCliCuration
+          ? `主秘书引擎 ${providerDisplay} CLI 策展暂不可用或未返回有效结果，已自动降级为本地结构化语义提炼。`
+          : `当前主秘书引擎 ${providerDisplay} 暂不支持离线 CLI 策展通道，已自动降级为本地结构化语义提炼。`;
+        const warnings = plan.warnings.includes(fallbackReason)
+          ? plan.warnings
+          : [...plan.warnings, fallbackReason];
+        return {
+          ...plan,
+          warnings,
+          fallbackReason,
+        } as ObsidianImportPlanResponse & { fallbackReason: string };
+      }
+
+      return plan;
     } catch (error: unknown) {
       const errCode =
-        isPlainRecord(error) && typeof error["code"] === "string"
-          ? error["code"]
-          : undefined;
+        isPlainRecord(error) && typeof error["code"] === "string" ? error["code"] : undefined;
       if (errCode === "ENOENT" || errCode === "ENOTDIR") {
         throw new BusinessRouteError(
           400,
           "VAULT_NOT_FOUND",
-          `Obsidian Vault 目录不存在或无法访问：${vaultPath}`
+          `Obsidian Vault 目录不存在或无法访问：${vaultPath}`,
         );
       }
       throw new BusinessRouteError(
         400,
         "OBSIDIAN_PLAN_FAILED",
-        error instanceof Error ? error.message : String(error)
+        error instanceof Error ? error.message : String(error),
       );
     }
   }
 
   async commitObsidianVaultImport(
     rawBody: unknown,
-    trustedCallerScope: CallerScope
-  ): Promise<ObsidianImportCommitResponse> {
+    trustedCallerScope: CallerScope,
+  ): Promise<
+    ObsidianImportCommitResponse & {
+      namespace: MemoryNamespace;
+      namespaces: MemoryNamespace[];
+    }
+  > {
     assertOwnerChief(trustedCallerScope, "/v1/memory/import-obsidian/commit");
     if (!this.ctx.memoryStore) {
       throw new BusinessRouteError(
         503,
         "MEMORY_UNAVAILABLE",
-        "SqliteMemoryStore is not configured."
+        "SqliteMemoryStore is not configured.",
       );
     }
     if (!isPlainRecord(rawBody) || !Array.isArray(rawBody["items"])) {
       throw new BusinessRouteError(
         400,
         "INVALID_PARAMS",
-        "Request body must contain an 'items' array."
+        "Request body must contain an 'items' array.",
       );
     }
     const items = rawBody["items"] as ObsidianCuratedItem[];
-    return commitObsidianImportPlan(
+    const commitResult = await commitObsidianImportPlan(
       this.ctx.memoryStore,
       this.ctx.machineId ?? "prismux-local",
-      { items }
+      { items },
     );
+
+    const committedNamespaces: MemoryNamespace[] = [];
+    for (const item of items) {
+      if (
+        item &&
+        item.selected !== false &&
+        typeof item.namespace === "string" &&
+        isValidMemoryNamespace(item.namespace) &&
+        !committedNamespaces.includes(item.namespace)
+      ) {
+        committedNamespaces.push(item.namespace);
+      }
+    }
+    const rawExplicitNs =
+      typeof rawBody["namespace"] === "string" && rawBody["namespace"].trim().length > 0
+        ? rawBody["namespace"].trim()
+        : typeof rawBody["targetNamespace"] === "string" &&
+            rawBody["targetNamespace"].trim().length > 0
+          ? rawBody["targetNamespace"].trim()
+          : undefined;
+    const explicitNs =
+      rawExplicitNs !== undefined && isValidMemoryNamespace(rawExplicitNs)
+        ? rawExplicitNs
+        : undefined;
+    const firstItemNs = items.find(
+      (item) =>
+        item && typeof item.namespace === "string" && isValidMemoryNamespace(item.namespace),
+    )?.namespace;
+    const primaryNamespace: MemoryNamespace =
+      committedNamespaces[0] ?? explicitNs ?? firstItemNs ?? "private/chief";
+
+    return {
+      ...commitResult,
+      namespace: primaryNamespace,
+      namespaces: committedNamespaces.length > 0 ? committedNamespaces : [primaryNamespace],
+    };
   }
 
-  async getMemoryStats(
-    trustedCallerScope: CallerScope
-  ): Promise<Record<string, unknown>> {
+  async getMemoryStats(trustedCallerScope: CallerScope): Promise<Record<string, unknown>> {
     if (!this.ctx.memoryStore) {
       throw new BusinessRouteError(
         503,
         "MEMORY_UNAVAILABLE",
-        "SqliteMemoryStore is not configured."
+        "SqliteMemoryStore is not configured.",
       );
     }
 
@@ -1108,7 +1080,7 @@ export class DaemonBusinessService {
     while (true) {
       const batch = await this.ctx.memoryStore.listEntries(trustedCallerScope, {
         limit: pageSize,
-        offset
+        offset,
       });
       for (const entry of batch) {
         totalEntries += 1;
@@ -1124,6 +1096,29 @@ export class DaemonBusinessService {
       offset += batch.length;
     }
 
+    let dbSizeBytes: number | undefined;
+    if (this.ctx.memoryDbPath !== undefined && this.ctx.memoryDbPath.length > 0) {
+      let totalBytes = 0;
+      let foundAny = false;
+      for (const candidatePath of [
+        this.ctx.memoryDbPath,
+        `${this.ctx.memoryDbPath}-wal`,
+        `${this.ctx.memoryDbPath}-shm`,
+      ]) {
+        try {
+          if (existsSync(candidatePath)) {
+            totalBytes += statSync(candidatePath).size;
+            foundAny = true;
+          }
+        } catch {
+          // Ignore transient stat race on SQLite WAL/SHM sidecar files.
+        }
+      }
+      if (foundAny) {
+        dbSizeBytes = totalBytes;
+      }
+    }
+
     const sqliteVecLoaded = this.ctx.memoryStore.isVectorSearchEnabled();
     const retrievalMode = this.ctx.memoryStore.getRetrievalMode();
     return {
@@ -1136,56 +1131,58 @@ export class DaemonBusinessService {
       byNamespace,
       byKind,
       latestUpdatedAt,
-      ...(this.ctx.memoryDbPath !== undefined
-        ? { dbPath: this.ctx.memoryDbPath }
-        : {})
+      ...(this.ctx.memoryDbPath !== undefined ? { dbPath: this.ctx.memoryDbPath } : {}),
+      ...(dbSizeBytes !== undefined ? { dbSizeBytes } : {}),
     };
   }
 
   async searchMemory(
     rawBody: unknown,
-    trustedCallerScope: CallerScope
+    trustedCallerScope: CallerScope,
   ): Promise<MemoryQueryResponse> {
     if (!this.ctx.memoryStore) {
       throw new BusinessRouteError(
         503,
         "MEMORY_UNAVAILABLE",
-        "SqliteMemoryStore is not configured."
+        "SqliteMemoryStore is not configured.",
       );
     }
     if (!isPlainRecord(rawBody)) {
-      throw new BusinessRouteError(
-        400,
-        "INVALID_PARAMS",
-        "Request body must be a JSON object."
-      );
+      throw new BusinessRouteError(400, "INVALID_PARAMS", "Request body must be a JSON object.");
     }
 
-    const queryText =
-      typeof rawBody["query"] === "string" ? rawBody["query"].trim() : "";
+    const queryText = typeof rawBody["query"] === "string" ? rawBody["query"].trim() : "";
 
     let namespaces: MemoryNamespace[] | undefined;
     if (Array.isArray(rawBody["namespaces"])) {
       const valid = rawBody["namespaces"].filter(
-        (ns): ns is MemoryNamespace =>
-          typeof ns === "string" && isValidMemoryNamespace(ns)
+        (ns): ns is MemoryNamespace => typeof ns === "string" && isValidMemoryNamespace(ns),
       );
       if (valid.length === 0 && rawBody["namespaces"].length > 0) {
         return {
           hits: [],
           totalCandidates: 0,
-          degradedToFtsOnly: !this.ctx.memoryStore.isVectorSearchEnabled()
+          degradedToFtsOnly: !this.ctx.memoryStore.isVectorSearchEnabled(),
         };
       }
       namespaces = valid;
+    } else if (typeof rawBody["namespace"] === "string" && rawBody["namespace"].trim().length > 0) {
+      const singleNamespace = rawBody["namespace"].trim();
+      if (!isValidMemoryNamespace(singleNamespace)) {
+        return {
+          hits: [],
+          totalCandidates: 0,
+          degradedToFtsOnly: !this.ctx.memoryStore.isVectorSearchEnabled(),
+        };
+      }
+      namespaces = [singleNamespace];
     }
 
     let kinds: MemoryKind[] | undefined;
     if (Array.isArray(rawBody["kinds"])) {
       const validKinds = rawBody["kinds"].filter(
         (k): k is MemoryKind =>
-          typeof k === "string" &&
-          (MEMORY_KINDS as readonly string[]).includes(k)
+          typeof k === "string" && (MEMORY_KINDS as readonly string[]).includes(k),
       );
       kinds = validKinds;
     }
@@ -1196,35 +1193,30 @@ export class DaemonBusinessService {
         : 20;
 
     if (queryText.length === 0) {
-      const entries = await this.ctx.memoryStore.listEntries(
-        trustedCallerScope,
-        {
-          ...(namespaces !== undefined ? { namespaces } : {}),
-          ...(kinds !== undefined ? { kinds } : {}),
-          limit
-        }
-      );
+      const entries = await this.ctx.memoryStore.listEntries(trustedCallerScope, {
+        ...(namespaces !== undefined ? { namespaces } : {}),
+        ...(kinds !== undefined ? { kinds } : {}),
+        limit,
+      });
       return {
         hits: entries.map((entry) => ({
           entry,
           score: 1,
-          matchSource: "fts" as const
+          matchSource: "fts" as const,
         })),
         totalCandidates: entries.length,
-        degradedToFtsOnly: !this.ctx.memoryStore.isVectorSearchEnabled()
+        degradedToFtsOnly: !this.ctx.memoryStore.isVectorSearchEnabled(),
       };
     }
 
     const mode: MemoryQueryRequest["mode"] =
-      rawBody["mode"] === "hybrid" ||
-      rawBody["mode"] === "fts" ||
-      rawBody["mode"] === "vector"
+      rawBody["mode"] === "hybrid" || rawBody["mode"] === "fts" || rawBody["mode"] === "vector"
         ? rawBody["mode"]
         : undefined;
 
     const queryEmbedding = Array.isArray(rawBody["queryEmbedding"])
       ? rawBody["queryEmbedding"].filter(
-          (n): n is number => typeof n === "number" && Number.isFinite(n)
+          (n): n is number => typeof n === "number" && Number.isFinite(n),
         )
       : undefined;
 
@@ -1235,27 +1227,20 @@ export class DaemonBusinessService {
         ...(namespaces !== undefined ? { namespaces } : {}),
         ...(kinds !== undefined ? { kinds } : {}),
         limit,
-        ...(mode !== undefined ? { mode } : {})
+        ...(mode !== undefined ? { mode } : {}),
       },
       trustedCallerScope,
-      queryEmbedding
+      queryEmbedding,
     );
   }
 
-  async getSyncStatus(
-    trustedCallerScope: CallerScope
-  ): Promise<Record<string, unknown>> {
+  async getSyncStatus(trustedCallerScope: CallerScope): Promise<Record<string, unknown>> {
     assertOwnerChief(trustedCallerScope, "/v1/sync/status");
     if (!this.ctx.syncVault) {
-      throw new BusinessRouteError(
-        503,
-        "SYNC_UNAVAILABLE",
-        "SyncVaultEngine is not initialized."
-      );
+      throw new BusinessRouteError(503, "SYNC_UNAVAILABLE", "SyncVaultEngine is not initialized.");
     }
 
-    const credHandle =
-      this.ctx.pluginCredentialStore?.openForPlugin(SYNC_CREDENTIAL_BUCKET);
+    const credHandle = this.ctx.pluginCredentialStore?.openForPlugin(SYNC_CREDENTIAL_BUCKET);
     const hasWebdavSecret = credHandle
       ? (await credHandle.get("webdav.password")) !== undefined
       : false;
@@ -1269,13 +1254,9 @@ export class DaemonBusinessService {
       ? (await credHandle.get("vault.passphrase")) !== undefined
       : false;
 
-    const webdavCfg = sanitizeWebDavConfig(
-      this.ctx.syncVault.getChannelConfig("webdav")
-    );
+    const webdavCfg = sanitizeWebDavConfig(this.ctx.syncVault.getChannelConfig("webdav"));
     const s3Cfg = sanitizeS3Config(this.ctx.syncVault.getChannelConfig("s3"));
-    const githubCfg = sanitizeGitHubConfig(
-      this.ctx.syncVault.getChannelConfig("github")
-    );
+    const githubCfg = sanitizeGitHubConfig(this.ctx.syncVault.getChannelConfig("github"));
 
     return {
       ok: true,
@@ -1285,52 +1266,36 @@ export class DaemonBusinessService {
       channels: {
         webdav: webdavCfg ? { ...webdavCfg, hasSecret: hasWebdavSecret } : null,
         s3: s3Cfg ? { ...s3Cfg, hasSecret: hasS3Secret } : null,
-        github: githubCfg ? { ...githubCfg, hasSecret: hasGithubSecret } : null
+        github: githubCfg ? { ...githubCfg, hasSecret: hasGithubSecret } : null,
       },
       hasPassphrase,
-      configPath: this.syncConfigPath
+      configPath: this.syncConfigPath,
     };
   }
 
   async updateSyncConfig(
     rawBody: unknown,
-    trustedCallerScope: CallerScope
+    trustedCallerScope: CallerScope,
   ): Promise<Record<string, unknown>> {
     assertOwnerChief(trustedCallerScope, "/v1/sync/config");
     if (!this.ctx.syncVault) {
-      throw new BusinessRouteError(
-        503,
-        "SYNC_UNAVAILABLE",
-        "SyncVaultEngine is not initialized."
-      );
+      throw new BusinessRouteError(503, "SYNC_UNAVAILABLE", "SyncVaultEngine is not initialized.");
     }
     if (!isPlainRecord(rawBody)) {
-      throw new BusinessRouteError(
-        400,
-        "INVALID_PARAMS",
-        "Request body must be a JSON object."
-      );
+      throw new BusinessRouteError(400, "INVALID_PARAMS", "Request body must be a JSON object.");
     }
 
-    const credHandle =
-      this.ctx.pluginCredentialStore?.openForPlugin(SYNC_CREDENTIAL_BUCKET);
+    const credHandle = this.ctx.pluginCredentialStore?.openForPlugin(SYNC_CREDENTIAL_BUCKET);
 
-    const channelsRaw = isPlainRecord(rawBody["channels"])
-      ? rawBody["channels"]
-      : null;
+    const channelsRaw = isPlainRecord(rawBody["channels"]) ? rawBody["channels"] : null;
 
     // Validate all enabled channel payloads upfront so invalid configs return 400
     // cleanly without partially mutating stored credentials or channel configs.
     const webdavRaw =
-      channelsRaw && isPlainRecord(channelsRaw["webdav"])
-        ? channelsRaw["webdav"]
-        : null;
-    const s3Raw =
-      channelsRaw && isPlainRecord(channelsRaw["s3"]) ? channelsRaw["s3"] : null;
+      channelsRaw && isPlainRecord(channelsRaw["webdav"]) ? channelsRaw["webdav"] : null;
+    const s3Raw = channelsRaw && isPlainRecord(channelsRaw["s3"]) ? channelsRaw["s3"] : null;
     const githubRaw =
-      channelsRaw && isPlainRecord(channelsRaw["github"])
-        ? channelsRaw["github"]
-        : null;
+      channelsRaw && isPlainRecord(channelsRaw["github"]) ? channelsRaw["github"] : null;
 
     const assertValidHttpUrl = (rawUrl: string, label: string): void => {
       try {
@@ -1342,14 +1307,12 @@ export class DaemonBusinessService {
         throw new BusinessRouteError(
           400,
           "INVALID_SYNC_CHANNEL",
-          `${label} 的 Endpoint URL 格式无效，请以 http:// 或 https:// 开头。`
+          `${label} 的 Endpoint URL 格式无效，请以 http:// 或 https:// 开头。`,
         );
       }
     };
 
-    const existingWebdav = webdavRaw
-      ? this.ctx.syncVault.getChannelConfig("webdav")
-      : undefined;
+    const existingWebdav = webdavRaw ? this.ctx.syncVault.getChannelConfig("webdav") : undefined;
     const webdavEnabled = webdavRaw
       ? typeof webdavRaw["enabled"] === "boolean"
         ? webdavRaw["enabled"]
@@ -1365,15 +1328,13 @@ export class DaemonBusinessService {
         throw new BusinessRouteError(
           400,
           "INVALID_SYNC_CHANNEL",
-          "启用 WebDAV 通道时必须填写 Endpoint URL。"
+          "启用 WebDAV 通道时必须填写 Endpoint URL。",
         );
       }
       assertValidHttpUrl(webdavEndpointUrl, "WebDAV 通道");
     }
 
-    const existingS3 = s3Raw
-      ? this.ctx.syncVault.getChannelConfig("s3")
-      : undefined;
+    const existingS3 = s3Raw ? this.ctx.syncVault.getChannelConfig("s3") : undefined;
     const s3Enabled = s3Raw
       ? typeof s3Raw["enabled"] === "boolean"
         ? s3Raw["enabled"]
@@ -1397,15 +1358,13 @@ export class DaemonBusinessService {
         throw new BusinessRouteError(
           400,
           "INVALID_SYNC_CHANNEL",
-          `启用 S3 对象存储通道时必须填写：${missing.join("、")}。`
+          `启用 S3 对象存储通道时必须填写：${missing.join("、")}。`,
         );
       }
       assertValidHttpUrl(s3EndpointUrl, "S3 对象存储通道");
     }
 
-    const existingGithub = githubRaw
-      ? this.ctx.syncVault.getChannelConfig("github")
-      : undefined;
+    const existingGithub = githubRaw ? this.ctx.syncVault.getChannelConfig("github") : undefined;
     const githubEnabled = githubRaw
       ? typeof githubRaw["enabled"] === "boolean"
         ? githubRaw["enabled"]
@@ -1429,7 +1388,7 @@ export class DaemonBusinessService {
         throw new BusinessRouteError(
           400,
           "INVALID_SYNC_CHANNEL",
-          `启用 GitHub 私有仓库通道时必须填写：${missing.join("、")}。`
+          `启用 GitHub 私有仓库通道时必须填写：${missing.join("、")}。`,
         );
       }
     }
@@ -1454,7 +1413,7 @@ export class DaemonBusinessService {
             download:
               typeof entry["download"] === "boolean"
                 ? entry["download"]
-                : this.ctx.syncVault.getSyncMatrix()[key].download
+                : this.ctx.syncVault.getSyncMatrix()[key].download,
           };
         }
       }
@@ -1472,18 +1431,13 @@ export class DaemonBusinessService {
         }
         if (webdavEndpointUrl.length > 0) {
           const hasStoredWebdavSecret =
-            (typeof webdavRaw["password"] === "string" &&
-              webdavRaw["password"].length > 0) ||
-            (credHandle
-              ? (await credHandle.get("webdav.password")) !== undefined
-              : false);
+            (typeof webdavRaw["password"] === "string" && webdavRaw["password"].length > 0) ||
+            (credHandle ? (await credHandle.get("webdav.password")) !== undefined : false);
           const passwordRef =
             typeof webdavRaw["passwordRef"] === "string"
               ? webdavRaw["passwordRef"]
               : (existingWebdav?.passwordRef ??
-                (hasStoredWebdavSecret
-                  ? `${SYNC_CREDENTIAL_BUCKET}:webdav.password`
-                  : undefined));
+                (hasStoredWebdavSecret ? `${SYNC_CREDENTIAL_BUCKET}:webdav.password` : undefined));
           const remotePath =
             typeof webdavRaw["remotePath"] === "string"
               ? webdavRaw["remotePath"].trim()
@@ -1505,7 +1459,7 @@ export class DaemonBusinessService {
               : existingWebdav?.allowSelfSignedTls !== undefined
                 ? { allowSelfSignedTls: existingWebdav.allowSelfSignedTls }
                 : {}),
-            ...(passwordRef !== undefined ? { passwordRef } : {})
+            ...(passwordRef !== undefined ? { passwordRef } : {}),
           });
         } else if (typeof webdavRaw["enabled"] === "boolean" && existingWebdav) {
           this.ctx.syncVault.setChannelEnabled("webdav", webdavRaw["enabled"]);
@@ -1522,25 +1476,18 @@ export class DaemonBusinessService {
         }
         if (s3EndpointUrl.length > 0 && s3Bucket.length > 0) {
           const hasStoredS3Secret =
-            (typeof s3Raw["secretAccessKey"] === "string" &&
-              s3Raw["secretAccessKey"].length > 0) ||
-            (credHandle
-              ? (await credHandle.get("s3.secretAccessKey")) !== undefined
-              : false);
+            (typeof s3Raw["secretAccessKey"] === "string" && s3Raw["secretAccessKey"].length > 0) ||
+            (credHandle ? (await credHandle.get("s3.secretAccessKey")) !== undefined : false);
           const secretKeyRef =
             typeof s3Raw["secretKeyRef"] === "string"
               ? s3Raw["secretKeyRef"]
               : (existingS3?.secretKeyRef ??
-                (hasStoredS3Secret
-                  ? `${SYNC_CREDENTIAL_BUCKET}:s3.secretAccessKey`
-                  : undefined));
-          const regionRaw =
-            typeof s3Raw["region"] === "string" ? s3Raw["region"].trim() : "";
+                (hasStoredS3Secret ? `${SYNC_CREDENTIAL_BUCKET}:s3.secretAccessKey` : undefined));
+          const regionRaw = typeof s3Raw["region"] === "string" ? s3Raw["region"].trim() : "";
           this.ctx.syncVault.setChannelConfig("s3", {
             enabled: s3Enabled,
             endpointUrl: s3EndpointUrl,
-            region:
-              regionRaw.length > 0 ? regionRaw : (existingS3?.region ?? "us-east-1"),
+            region: regionRaw.length > 0 ? regionRaw : (existingS3?.region ?? "us-east-1"),
             bucket: s3Bucket,
             forcePathStyle:
               typeof s3Raw["forcePathStyle"] === "boolean"
@@ -1564,7 +1511,7 @@ export class DaemonBusinessService {
               : existingS3?.remoteKey !== undefined
                 ? { remoteKey: existingS3.remoteKey }
                 : {}),
-            ...(secretKeyRef !== undefined ? { secretKeyRef } : {})
+            ...(secretKeyRef !== undefined ? { secretKeyRef } : {}),
           });
         } else if (typeof s3Raw["enabled"] === "boolean" && existingS3) {
           this.ctx.syncVault.setChannelEnabled("s3", s3Raw["enabled"]);
@@ -1572,43 +1519,27 @@ export class DaemonBusinessService {
       }
 
       if (githubRaw) {
-        if (
-          typeof githubRaw["token"] === "string" &&
-          githubRaw["token"].length > 0 &&
-          credHandle
-        ) {
+        if (typeof githubRaw["token"] === "string" && githubRaw["token"].length > 0 && credHandle) {
           await credHandle.set("github.token", githubRaw["token"]);
         }
         if (githubOwner.length > 0 && githubRepo.length > 0) {
           const hasStoredGithubSecret =
-            (typeof githubRaw["token"] === "string" &&
-              githubRaw["token"].length > 0) ||
-            (credHandle
-              ? (await credHandle.get("github.token")) !== undefined
-              : false);
+            (typeof githubRaw["token"] === "string" && githubRaw["token"].length > 0) ||
+            (credHandle ? (await credHandle.get("github.token")) !== undefined : false);
           const tokenRef =
             typeof githubRaw["tokenRef"] === "string"
               ? githubRaw["tokenRef"]
               : (existingGithub?.tokenRef ??
-                (hasStoredGithubSecret
-                  ? `${SYNC_CREDENTIAL_BUCKET}:github.token`
-                  : undefined));
+                (hasStoredGithubSecret ? `${SYNC_CREDENTIAL_BUCKET}:github.token` : undefined));
           const branchRaw =
-            typeof githubRaw["branch"] === "string"
-              ? githubRaw["branch"].trim()
-              : "";
+            typeof githubRaw["branch"] === "string" ? githubRaw["branch"].trim() : "";
           const filePathRaw =
-            typeof githubRaw["filePath"] === "string"
-              ? githubRaw["filePath"].trim()
-              : "";
+            typeof githubRaw["filePath"] === "string" ? githubRaw["filePath"].trim() : "";
           this.ctx.syncVault.setChannelConfig("github", {
             enabled: githubEnabled,
             owner: githubOwner,
             repo: githubRepo,
-            branch:
-              branchRaw.length > 0
-                ? branchRaw
-                : (existingGithub?.branch ?? "main"),
+            branch: branchRaw.length > 0 ? branchRaw : (existingGithub?.branch ?? "main"),
             ...(typeof githubRaw["apiBaseUrl"] === "string"
               ? { apiBaseUrl: githubRaw["apiBaseUrl"] }
               : existingGithub?.apiBaseUrl !== undefined
@@ -1619,7 +1550,7 @@ export class DaemonBusinessService {
               : existingGithub?.filePath !== undefined
                 ? { filePath: existingGithub.filePath }
                 : {}),
-            ...(tokenRef !== undefined ? { tokenRef } : {})
+            ...(tokenRef !== undefined ? { tokenRef } : {}),
           });
         } else if (typeof githubRaw["enabled"] === "boolean" && existingGithub) {
           this.ctx.syncVault.setChannelEnabled("github", githubRaw["enabled"]);
@@ -1633,25 +1564,21 @@ export class DaemonBusinessService {
       channels: {
         ...(this.ctx.syncVault.getChannelConfig("webdav")
           ? {
-              webdav: sanitizeWebDavConfig(
-                this.ctx.syncVault.getChannelConfig("webdav")
-              )
+              webdav: sanitizeWebDavConfig(this.ctx.syncVault.getChannelConfig("webdav")),
             }
           : {}),
         ...(this.ctx.syncVault.getChannelConfig("s3")
           ? {
-              s3: sanitizeS3Config(this.ctx.syncVault.getChannelConfig("s3"))
+              s3: sanitizeS3Config(this.ctx.syncVault.getChannelConfig("s3")),
             }
           : {}),
         ...(this.ctx.syncVault.getChannelConfig("github")
           ? {
-              github: sanitizeGitHubConfig(
-                this.ctx.syncVault.getChannelConfig("github")
-              )
+              github: sanitizeGitHubConfig(this.ctx.syncVault.getChannelConfig("github")),
             }
-          : {})
+          : {}),
       },
-      syncMatrix: this.ctx.syncVault.getSyncMatrix()
+      syncMatrix: this.ctx.syncVault.getSyncMatrix(),
     };
 
     writeJsonAtomic(this.syncConfigPath, sanitizedPersist);
@@ -1663,21 +1590,18 @@ export class DaemonBusinessService {
     const secretsToScrub: string[] = [];
     if (this.ctx.syncVault) {
       try {
-        secretsToScrub.push(
-          ...(await this.ctx.syncVault.collectConfiguredRemoteSecrets())
-        );
+        secretsToScrub.push(...(await this.ctx.syncVault.collectConfiguredRemoteSecrets()));
       } catch {
         // ignore
       }
     }
-    const credHandle =
-      this.ctx.pluginCredentialStore?.openForPlugin(SYNC_CREDENTIAL_BUCKET);
+    const credHandle = this.ctx.pluginCredentialStore?.openForPlugin(SYNC_CREDENTIAL_BUCKET);
     if (credHandle) {
       for (const key of [
         "vault.passphrase",
         "webdav.password",
         "s3.secretAccessKey",
-        "github.token"
+        "github.token",
       ]) {
         try {
           const val = await credHandle.get(key);
@@ -1697,27 +1621,20 @@ export class DaemonBusinessService {
     // Redact common Authorization / token patterns in error text
     message = message.replace(
       /(authorization\s*[:=]\s*(?:basic|bearer|token)\s+)[^\s,;"']+/gi,
-      "$1[REDACTED]"
+      "$1[REDACTED]",
     );
-    message = message.replace(
-      /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]+\b/g,
-      "[REDACTED]"
-    );
-    message = message.replace(
-      /\bgithub_pat_[A-Za-z0-9_]+\b/g,
-      "[REDACTED]"
-    );
+    message = message.replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]+\b/g, "[REDACTED]");
+    message = message.replace(/\bgithub_pat_[A-Za-z0-9_]+\b/g, "[REDACTED]");
     return message;
   }
 
   private parseRequestedSyncChannels(
     rawBody: unknown,
-    fallback: SyncOperationChannel[]
+    fallback: SyncOperationChannel[],
   ): SyncOperationChannel[] {
     if (isPlainRecord(rawBody) && Array.isArray(rawBody["channels"])) {
       const parsed = rawBody["channels"].filter(
-        (c): c is SyncOperationChannel =>
-          c === "webdav" || c === "s3" || c === "github"
+        (c): c is SyncOperationChannel => c === "webdav" || c === "s3" || c === "github",
       );
       if (parsed.length > 0) {
         return [...new Set(parsed)];
@@ -1741,7 +1658,7 @@ export class DaemonBusinessService {
         const batch = await this.ctx.memoryStore.listEntries("owner_chief", {
           limit: pageSize,
           offset,
-          includeDeleted: true
+          includeDeleted: true,
         });
         for (const entry of batch) {
           const record: MergeableMemoryRecord = {
@@ -1755,7 +1672,7 @@ export class DaemonBusinessService {
             machineId: entry.machineId,
             createdAt: entry.createdAt,
             updatedAt: entry.updatedAt,
-            deletedAt: entry.deletedAt ?? null
+            deletedAt: entry.deletedAt ?? null,
           };
           if (entry.namespace === "private/chief") {
             privateMemory.push(record);
@@ -1772,8 +1689,7 @@ export class DaemonBusinessService {
       }
     }
 
-    const total =
-      privateMemory.length + workspaceMemory.length + socialMemory.length;
+    const total = privateMemory.length + workspaceMemory.length + socialMemory.length;
     return {
       payload: {
         schemaVersion: 1,
@@ -1781,9 +1697,9 @@ export class DaemonBusinessService {
         exportedAt: Date.now(),
         privateMemory,
         workspaceMemory,
-        socialMemory
+        socialMemory,
       },
-      entryCount: total
+      entryCount: total,
     };
   }
 
@@ -1793,15 +1709,11 @@ export class DaemonBusinessService {
    */
   async testSyncConnection(
     rawBody: unknown,
-    trustedCallerScope: CallerScope
+    trustedCallerScope: CallerScope,
   ): Promise<SyncTestResponse> {
     assertOwnerChief(trustedCallerScope, "/v1/sync/test");
     if (!this.ctx.syncVault) {
-      throw new BusinessRouteError(
-        503,
-        "SYNC_UNAVAILABLE",
-        "SyncVaultEngine is not initialized."
-      );
+      throw new BusinessRouteError(503, "SYNC_UNAVAILABLE", "SyncVaultEngine is not initialized.");
     }
 
     const getSyncChannelCfg = (kind: SyncOperationChannel) =>
@@ -1812,11 +1724,9 @@ export class DaemonBusinessService {
           : this.ctx.syncVault!.getChannelConfig("github");
 
     const allKinds: SyncOperationChannel[] = ["webdav", "s3", "github"];
-    const configuredKinds = allKinds.filter(
-      (kind) => getSyncChannelCfg(kind) !== undefined
-    );
+    const configuredKinds = allKinds.filter((kind) => getSyncChannelCfg(kind) !== undefined);
     const enabledKinds = configuredKinds.filter(
-      (kind) => getSyncChannelCfg(kind)?.enabled === true
+      (kind) => getSyncChannelCfg(kind)?.enabled === true,
     );
     const defaultTargetKinds =
       enabledKinds.length > 0
@@ -1824,10 +1734,7 @@ export class DaemonBusinessService {
         : configuredKinds.length > 0
           ? configuredKinds
           : allKinds;
-    const targetChannels = this.parseRequestedSyncChannels(
-      rawBody,
-      defaultTargetKinds
-    );
+    const targetChannels = this.parseRequestedSyncChannels(rawBody, defaultTargetKinds);
 
     const results: SyncChannelOperationResult[] = [];
     for (const kind of targetChannels) {
@@ -1840,7 +1747,7 @@ export class DaemonBusinessService {
           configured: false,
           reachable: false,
           latencyMs: 0,
-          error: `同步通道「${kind}」尚未配置。`
+          error: `同步通道「${kind}」尚未配置。`,
         });
         continue;
       }
@@ -1853,8 +1760,7 @@ export class DaemonBusinessService {
           const probe = await client.verifyAccess();
           const latencyMs = Math.max(0, Math.round(performance.now() - started));
           const repoLabel =
-            probe.repoFullName ??
-            (ghCfg ? `${ghCfg.owner}/${ghCfg.repo}` : "github");
+            probe.repoFullName ?? (ghCfg ? `${ghCfg.owner}/${ghCfg.repo}` : "github");
           const readOnlyHint =
             probe.canPush === false
               ? "（注意：当前 Token 仅有只读权限，无法上传）"
@@ -1874,7 +1780,7 @@ export class DaemonBusinessService {
               ? `连接成功（仓库 ${repoLabel} 已存在加密快照）${readOnlyHint}`
               : probe.emptyRepo
                 ? `连接成功（仓库 ${repoLabel} 当前为空仓库，首次同步将自动创建快照）${readOnlyHint}`
-                : `连接成功（仓库 ${repoLabel} 可访问，远端尚未上传首次快照）${readOnlyHint}`
+                : `连接成功（仓库 ${repoLabel} 可访问，远端尚未上传首次快照）${readOnlyHint}`,
           });
         } else {
           const client =
@@ -1894,13 +1800,13 @@ export class DaemonBusinessService {
             latencyMs,
             message: headResult.exists
               ? "连接成功（远端已存在加密快照）"
-              : "连接成功（远端尚未上传首次快照）"
+              : "连接成功（远端尚未上传首次快照）",
           });
         }
       } catch (err) {
         const latencyMs = Math.max(0, Math.round(performance.now() - started));
         const safeErr = await this.scrubSyncErrorMessage(
-          err instanceof Error ? err.message : String(err)
+          err instanceof Error ? err.message : String(err),
         );
         results.push({
           channel: kind,
@@ -1909,15 +1815,14 @@ export class DaemonBusinessService {
           configured: true,
           reachable: false,
           latencyMs,
-          error: safeErr
+          error: safeErr,
         });
       }
     }
 
     const now = Date.now();
     const configuredResults = results.filter((r) => r.configured);
-    const overallOk =
-      configuredResults.length > 0 && configuredResults.every((r) => r.ok);
+    const overallOk = configuredResults.length > 0 && configuredResults.every((r) => r.ok);
     const firstError = configuredResults.find((r) => !r.ok)?.error;
 
     return {
@@ -1929,22 +1834,22 @@ export class DaemonBusinessService {
       ...(configuredResults.length === 0
         ? {
             error: "尚未配置任何同步通道（WebDAV / S3 / GitHub）。",
-            message: "尚未配置任何同步通道。"
+            message: "尚未配置任何同步通道。",
           }
         : overallOk
           ? {
               message:
                 enabledKinds.length > 0
                   ? `全部 ${configuredResults.length} 个已启用同步通道连通性测试通过。`
-                  : `已检测 ${configuredResults.length} 个已配置同步通道（当前未启用），连通性测试通过。`
+                  : `已检测 ${configuredResults.length} 个已配置同步通道（当前未启用），连通性测试通过。`,
             }
           : {
               ...(firstError !== undefined ? { error: firstError } : {}),
               message:
                 configuredResults.length === 1 && firstError
                   ? firstError
-                  : "部分同步通道连通性测试失败，请检查端点地址与认证凭据。"
-            })
+                  : "部分同步通道连通性测试失败，请检查端点地址与认证凭据。",
+            }),
     };
   }
 
@@ -1953,22 +1858,15 @@ export class DaemonBusinessService {
    */
   async triggerSyncNow(
     rawBody: unknown,
-    trustedCallerScope: CallerScope
+    trustedCallerScope: CallerScope,
   ): Promise<SyncNowResponse> {
     assertOwnerChief(trustedCallerScope, "/v1/sync/now");
     if (!this.ctx.syncVault) {
-      throw new BusinessRouteError(
-        503,
-        "SYNC_UNAVAILABLE",
-        "SyncVaultEngine is not initialized."
-      );
+      throw new BusinessRouteError(503, "SYNC_UNAVAILABLE", "SyncVaultEngine is not initialized.");
     }
 
     const enabledChannels = this.ctx.syncVault.getEnabledChannels();
-    const targetChannels = this.parseRequestedSyncChannels(
-      rawBody,
-      enabledChannels
-    );
+    const targetChannels = this.parseRequestedSyncChannels(rawBody, enabledChannels);
     const now = Date.now();
 
     if (targetChannels.length === 0) {
@@ -1983,12 +1881,11 @@ export class DaemonBusinessService {
         channels: [],
         results: [],
         error: "当前未启用任何同步通道，请先启用 WebDAV / S3 / GitHub 通道。",
-        message: "当前未启用任何同步通道。"
+        message: "当前未启用任何同步通道。",
       };
     }
 
-    const credHandle =
-      this.ctx.pluginCredentialStore?.openForPlugin(SYNC_CREDENTIAL_BUCKET);
+    const credHandle = this.ctx.pluginCredentialStore?.openForPlugin(SYNC_CREDENTIAL_BUCKET);
     let passphrase =
       isPlainRecord(rawBody) &&
       typeof rawBody["passphrase"] === "string" &&
@@ -2004,12 +1901,11 @@ export class DaemonBusinessService {
       throw new BusinessRouteError(
         400,
         "SYNC_PASSPHRASE_REQUIRED",
-        "未配置端到端加密口令（Passphrase），请先在「记忆与同步」设置加密口令后再执行同步。"
+        "未配置端到端加密口令（Passphrase），请先在「记忆与同步」设置加密口令后再执行同步。",
       );
     }
 
-    const { payload: localPayload, entryCount } =
-      await this.buildLocalSyncPayload();
+    const { payload: localPayload, entryCount } = await this.buildLocalSyncPayload();
 
     const channelResults: SyncChannelOperationResult[] = [];
     let primaryEtag: string | null = null;
@@ -2032,7 +1928,7 @@ export class DaemonBusinessService {
           enabled: Boolean(cfg?.enabled),
           configured: Boolean(cfg),
           latencyMs: 0,
-          error: `同步通道「${kind}」未配置或未启用。`
+          error: `同步通道「${kind}」未配置或未启用。`,
         });
         continue;
       }
@@ -2059,7 +1955,7 @@ export class DaemonBusinessService {
           localPayload,
           expectedEtag,
           autoMergeOnConflict: true,
-          retryOnCleanMerge: true
+          retryOnCleanMerge: true,
         });
         const latencyMs = Math.max(0, Math.round(performance.now() - started));
         const single = outcome.channelResults[0];
@@ -2077,7 +1973,7 @@ export class DaemonBusinessService {
           const mergedAll = [
             ...(outcome.mergedPayload.privateMemory ?? []),
             ...(outcome.mergedPayload.workspaceMemory ?? []),
-            ...(outcome.mergedPayload.socialMemory ?? [])
+            ...(outcome.mergedPayload.socialMemory ?? []),
           ];
           for (const rec of mergedAll) {
             if (
@@ -2098,14 +1994,12 @@ export class DaemonBusinessService {
                   kind: rec["kind"] as MemoryKind,
                   title: rec["title"],
                   content: rec["content"],
-                  sourceRef:
-                    typeof rec["sourceRef"] === "string" ? rec["sourceRef"] : null,
-                  importance:
-                    typeof rec["importance"] === "number" ? rec["importance"] : 0.5,
+                  sourceRef: typeof rec["sourceRef"] === "string" ? rec["sourceRef"] : null,
+                  importance: typeof rec["importance"] === "number" ? rec["importance"] : 0.5,
                   machineId:
                     typeof rec["machineId"] === "string"
                       ? rec["machineId"]
-                      : (this.ctx.machineId ?? "local")
+                      : (this.ctx.machineId ?? "local"),
                 });
               }
               mergedInboundCount += 1;
@@ -2129,12 +2023,12 @@ export class DaemonBusinessService {
           downloaded: mergedInboundCount,
           message: outcome.conflictDetected
             ? "检测到远端并发写入冲突，请复核合并状态"
-            : "加密快照同步成功"
+            : "加密快照同步成功",
         });
       } catch (err) {
         const latencyMs = Math.max(0, Math.round(performance.now() - started));
         const safeErr = await this.scrubSyncErrorMessage(
-          err instanceof Error ? err.message : String(err)
+          err instanceof Error ? err.message : String(err),
         );
         channelResults.push({
           channel: kind,
@@ -2143,14 +2037,13 @@ export class DaemonBusinessService {
           configured: true,
           reachable: false,
           latencyMs,
-          error: safeErr
+          error: safeErr,
         });
       }
     }
 
     const finishedAt = Date.now();
-    const overallOk =
-      channelResults.length > 0 && channelResults.every((r) => r.ok);
+    const overallOk = channelResults.length > 0 && channelResults.every((r) => r.ok);
     const firstError = channelResults.find((r) => !r.ok)?.error;
 
     return {
@@ -2166,42 +2059,34 @@ export class DaemonBusinessService {
       ...(firstError !== undefined ? { error: firstError } : {}),
       message: overallOk
         ? `同步完成（共 ${channelResults.length} 个通道，上传 ${totalUploaded} 条记录）。`
-        : (firstError ?? "部分同步通道执行失败。")
+        : (firstError ?? "部分同步通道执行失败。"),
     };
   }
 
-  async getPluginsCatalog(
-    trustedCallerScope: CallerScope
-  ): Promise<Record<string, unknown>> {
+  async getPluginsCatalog(trustedCallerScope: CallerScope): Promise<Record<string, unknown>> {
     assertOwnerChief(trustedCallerScope, "/v1/plugins/catalog");
     if (!this.ctx.pluginInstaller) {
       throw new BusinessRouteError(
         503,
         "PLUGIN_INSTALLER_UNAVAILABLE",
-        "CordisStreamingInstaller is not initialized."
+        "CordisStreamingInstaller is not initialized.",
       );
     }
 
-    const catalogPath = resolveDefaultOfficialCatalogPath(
-      this.ctx.officialCatalogPath
-    );
+    const catalogPath = resolveDefaultOfficialCatalogPath(this.ctx.officialCatalogPath);
     if (!catalogPath) {
       throw new BusinessRouteError(
         404,
         "OFFICIAL_CATALOG_NOT_FOUND",
-        "Official plugin catalog file plugins-official/catalog/official.json not found."
+        "Official plugin catalog file plugins-official/catalog/official.json not found.",
       );
     }
 
     const catalog = await this.ctx.pluginInstaller.loadOfficialCatalog(catalogPath);
     const installedList = await this.getMergedInstalledPlugins();
-    const installedById = new Map(
-      installedList.map((entry) => [entry.manifest.id, entry])
-    );
+    const installedById = new Map(installedList.map((entry) => [entry.manifest.id, entry]));
 
-    const activeCatalogEntries = catalog.plugins.filter(
-      (entry) => entry.status !== "deprecated"
-    );
+    const activeCatalogEntries = catalog.plugins.filter((entry) => entry.status !== "deprecated");
     const entries = activeCatalogEntries.map((entry) => {
       const installedRecord = installedById.get(entry.id);
       const prevVersionRaw =
@@ -2219,15 +2104,13 @@ export class DaemonBusinessService {
               distribution: installedRecord.distribution,
               ...(typeof prevVersionRaw === "string" && prevVersionRaw.length > 0
                 ? { previousVersion: prevVersionRaw }
-                : {})
+                : {}),
             }
-          : {})
+          : {}),
       };
     });
 
-    const retiredPlugins: RetiredOfficialPluginEntry[] = Array.isArray(
-      catalog.retiredPlugins
-    )
+    const retiredPlugins: RetiredOfficialPluginEntry[] = Array.isArray(catalog.retiredPlugins)
       ? catalog.retiredPlugins
       : [];
 
@@ -2238,19 +2121,17 @@ export class DaemonBusinessService {
       officialCatalogPath: catalogPath,
       plugins: entries,
       retiredPlugins,
-      installedCount: installedList.length
+      installedCount: installedList.length,
     };
   }
 
-  async getPluginsInstalled(
-    trustedCallerScope: CallerScope
-  ): Promise<Record<string, unknown>> {
+  async getPluginsInstalled(trustedCallerScope: CallerScope): Promise<Record<string, unknown>> {
     assertOwnerChief(trustedCallerScope, "/v1/plugins/installed");
     const plugins = await this.getMergedInstalledPlugins();
     return {
       ok: true,
       plugins,
-      totalCount: plugins.length
+      totalCount: plugins.length,
     };
   }
 
@@ -2259,11 +2140,7 @@ export class DaemonBusinessService {
    * during daemon startup. No-op on a fresh dataDir (strictly zero preinstalled plugins).
    */
   async hydrateInstalledPlugins(): Promise<number> {
-    if (
-      !this.ctx.pluginInstaller ||
-      !this.ctx.pluginHost ||
-      !this.ctx.onMountPlugin
-    ) {
+    if (!this.ctx.pluginInstaller || !this.ctx.pluginHost || !this.ctx.onMountPlugin) {
       return 0;
     }
 
@@ -2279,7 +2156,7 @@ export class DaemonBusinessService {
           rec,
           (reason) => {
             this.recordPluginLog(rec.manifest.id, "warn", "daemon", reason);
-          }
+          },
         );
         if (mod) {
           await this.ctx.onMountPlugin(rec, mod);
@@ -2290,7 +2167,7 @@ export class DaemonBusinessService {
           rec.manifest.id,
           "error",
           "daemon",
-          `启动加载已安装插件失败：${err instanceof Error ? err.message : String(err)}`
+          `启动加载已安装插件失败：${err instanceof Error ? err.message : String(err)}`,
         );
       }
     }
@@ -2299,46 +2176,38 @@ export class DaemonBusinessService {
 
   async installPlugin(
     rawBody: unknown,
-    trustedCallerScope: CallerScope
+    trustedCallerScope: CallerScope,
   ): Promise<Record<string, unknown>> {
     assertOwnerChief(trustedCallerScope, "/v1/plugins/install");
     if (!this.ctx.pluginInstaller || !this.ctx.pluginHost) {
       throw new BusinessRouteError(
         503,
         "PLUGIN_SUBSYSTEM_UNAVAILABLE",
-        "Plugin installer or host is not initialized."
+        "Plugin installer or host is not initialized.",
       );
     }
     if (!isPlainRecord(rawBody)) {
-      throw new BusinessRouteError(
-        400,
-        "INVALID_PARAMS",
-        "Request body must be a JSON object."
-      );
+      throw new BusinessRouteError(400, "INVALID_PARAMS", "Request body must be a JSON object.");
     }
 
     if (
       rawBody["archivePath"] !== undefined &&
       rawBody["archivePath"] !== null &&
-      (typeof rawBody["archivePath"] !== "string" ||
-        rawBody["archivePath"].trim().length > 0)
+      (typeof rawBody["archivePath"] !== "string" || rawBody["archivePath"].trim().length > 0)
     ) {
       throw new BusinessRouteError(
         400,
         "ARCHIVE_PATH_FORBIDDEN",
-        "安全策略禁止通过宿主机任意路径 archivePath 安装插件，请仅使用 archiveBase64 提交归档内容。"
+        "安全策略禁止通过宿主机任意路径 archivePath 安装插件，请仅使用 archiveBase64 提交归档内容。",
       );
     }
 
     const confirmedAudit = rawBody["confirmedAudit"] === true;
     const rawSource = rawBody["source"];
     const hasArchiveInput =
-      typeof rawBody["archiveBase64"] === "string" &&
-      rawBody["archiveBase64"].trim().length > 0;
+      typeof rawBody["archiveBase64"] === "string" && rawBody["archiveBase64"].trim().length > 0;
     const requestedSource: "official" | "npm" | "local-archive" =
-      rawSource === "official" ||
-      rawSource === "npm" ||
-      rawSource === "local-archive"
+      rawSource === "official" || rawSource === "npm" || rawSource === "local-archive"
         ? rawSource
         : rawSource === "local"
           ? "local-archive"
@@ -2364,8 +2233,7 @@ export class DaemonBusinessService {
       if (requestedSource === "local-archive") {
         let archiveBytes: Buffer | null = null;
         let fileName =
-          typeof rawBody["fileName"] === "string" &&
-          rawBody["fileName"].trim().length > 0
+          typeof rawBody["fileName"] === "string" && rawBody["fileName"].trim().length > 0
             ? rawBody["fileName"].trim()
             : "local-plugin.wb-plugin";
 
@@ -2380,7 +2248,7 @@ export class DaemonBusinessService {
           throw new BusinessRouteError(
             400,
             "ARCHIVE_REQUIRED",
-            "导入本地插件需要提供非空的 archiveBase64（.wb-plugin 或 .tgz 归档内容）。"
+            "导入本地插件需要提供非空的 archiveBase64（.wb-plugin 或 .tgz 归档内容）。",
           );
         }
 
@@ -2391,36 +2259,28 @@ export class DaemonBusinessService {
             ? { expectedSha256: rawBody["expectedSha256"].trim() }
             : {}),
           confirmedAudit,
-          hostVersion: this.ctx.hostVersion
+          hostVersion: this.ctx.hostVersion,
         });
       } else if (requestedSource === "official") {
-        const pluginId =
-          typeof rawBody["pluginId"] === "string"
-            ? rawBody["pluginId"].trim()
-            : "";
+        const pluginId = typeof rawBody["pluginId"] === "string" ? rawBody["pluginId"].trim() : "";
         if (pluginId.length === 0) {
           throw new BusinessRouteError(
             400,
             "INVALID_PARAMS",
-            "官方插件安装需要提供非空 pluginId。"
+            "官方插件安装需要提供非空 pluginId。",
           );
         }
-        const catalogPath = resolveDefaultOfficialCatalogPath(
-          this.ctx.officialCatalogPath
-        );
+        const catalogPath = resolveDefaultOfficialCatalogPath(this.ctx.officialCatalogPath);
         if (!catalogPath) {
           throw new BusinessRouteError(
             404,
             "OFFICIAL_CATALOG_NOT_FOUND",
-            "未找到官方插件目录文件 plugins-official/catalog/official.json。"
+            "未找到官方插件目录文件 plugins-official/catalog/official.json。",
           );
         }
-        const catalog =
-          await this.ctx.pluginInstaller.loadOfficialCatalog(catalogPath);
+        const catalog = await this.ctx.pluginInstaller.loadOfficialCatalog(catalogPath);
 
-        const retiredEntry = catalog.retiredPlugins?.find(
-          (item) => item.id === pluginId
-        );
+        const retiredEntry = catalog.retiredPlugins?.find((item) => item.id === pluginId);
         const rawEntry = catalog.plugins.find((p) => p.id === pluginId);
         if (
           retiredEntry !== undefined ||
@@ -2432,7 +2292,7 @@ export class DaemonBusinessService {
             "PLUGIN_RETIRED",
             retiredEntry?.noticeZh ??
               `官方插件 "${pluginId}" 已停用：已被 Prismux 内置功能取代，不再支持安装。`,
-            retiredEntry
+            retiredEntry,
           );
         }
 
@@ -2440,7 +2300,7 @@ export class DaemonBusinessService {
           throw new BusinessRouteError(
             404,
             "OFFICIAL_PLUGIN_NOT_FOUND",
-            `官方插件目录中不存在 "${pluginId}"。`
+            `官方插件目录中不存在 "${pluginId}"。`,
           );
         }
         const entry = rawEntry;
@@ -2449,19 +2309,12 @@ export class DaemonBusinessService {
           typeof rawBody["archiveBase64"] === "string" &&
           rawBody["archiveBase64"].trim().length > 0
         ) {
-          const archiveBytes = Buffer.from(
-            rawBody["archiveBase64"].trim(),
-            "base64"
-          );
-          details = await this.ctx.pluginInstaller.installOfficialEntry(
-            entry,
-            archiveBytes,
-            {
-              confirmedAudit,
-              hostVersion: this.ctx.hostVersion,
-              sourceUsed: "inline-base64"
-            }
-          );
+          const archiveBytes = Buffer.from(rawBody["archiveBase64"].trim(), "base64");
+          details = await this.ctx.pluginInstaller.installOfficialEntry(entry, archiveBytes, {
+            confirmedAudit,
+            hostVersion: this.ctx.hostVersion,
+            sourceUsed: "inline-base64",
+          });
         } else {
           // Multi-source resolution:
           // 1) Verified local cache (plugins-official/dist, .work/plugin-dist, <dataDir>/plugins-cache)
@@ -2471,10 +2324,7 @@ export class DaemonBusinessService {
           const localCached = findOfficialArchiveInSearchDirs(
             entry,
             [catalogRepoRoot, process.cwd()],
-            [
-              join(this.ctx.dataDir, "plugins-cache"),
-              join(dirname(catalogPath), "..", "dist")
-            ]
+            [join(this.ctx.dataDir, "plugins-cache"), join(dirname(catalogPath), "..", "dist")],
           );
 
           if (localCached !== null) {
@@ -2484,21 +2334,21 @@ export class DaemonBusinessService {
               {
                 confirmedAudit,
                 hostVersion: this.ctx.hostVersion,
-                sourceUsed: `local-cache:${localCached.filePath}`
-              }
+                sourceUsed: `local-cache:${localCached.filePath}`,
+              },
             );
           } else {
             const mergedSourceConfig: OfficialPluginSourceConfig = {
               ...(updaterSnapshot?.policy.customGhProxyPrefix
                 ? { customGhProxyPrefix: updaterSnapshot.policy.customGhProxyPrefix }
                 : {}),
-              ...this.ctx.officialPluginSources
+              ...this.ctx.officialPluginSources,
             };
 
             const releaseDl = await downloadOfficialPluginReleaseArchive(entry, {
               preference: effectiveNetworkPref,
               config: mergedSourceConfig,
-              recommendedSource: updaterSnapshot?.lastProbe?.recommendedSource
+              recommendedSource: updaterSnapshot?.lastProbe?.recommendedSource,
             });
 
             if (releaseDl.ok) {
@@ -2508,8 +2358,8 @@ export class DaemonBusinessService {
                 {
                   confirmedAudit,
                   hostVersion: this.ctx.hostVersion,
-                  sourceUsed: releaseDl.sourceUsed
-                }
+                  sourceUsed: releaseDl.sourceUsed,
+                },
               );
             } else if (releaseDl.tamperError !== undefined) {
               throw releaseDl.tamperError;
@@ -2520,7 +2370,7 @@ export class DaemonBusinessService {
               throw new BusinessRouteError(
                 502,
                 "PLUGIN_DOWNLOAD_FAILED",
-                `无法下载官方插件 "${entry.id}"：${summary || "所有发布源均不可用"}。`
+                `无法下载官方插件 "${entry.id}"：${summary || "所有发布源均不可用"}。`,
               );
             } else {
               // Release tag may not yet be published (e.g. preview build) or blocked;
@@ -2538,17 +2388,16 @@ export class DaemonBusinessService {
                       : {}),
                     ...(mergedSourceConfig.npmMirrorRegistryUrl
                       ? {
-                          fallbackRegistryUrl:
-                            mergedSourceConfig.npmMirrorRegistryUrl
+                          fallbackRegistryUrl: mergedSourceConfig.npmMirrorRegistryUrl,
                         }
                       : {}),
                     ignoreScripts: true,
                     confirmedAudit,
-                    hostVersion: this.ctx.hostVersion
+                    hostVersion: this.ctx.hostVersion,
                   });
                   npmDetails = {
                     ...installed,
-                    sourceUsed: `npm-fallback:${spec}`
+                    sourceUsed: `npm-fallback:${spec}`,
                   };
                   break;
                 } catch (npmErr) {
@@ -2560,7 +2409,7 @@ export class DaemonBusinessService {
                     throw npmErr;
                   }
                   npmFallbackErrors.push(
-                    `${spec}: ${npmErr instanceof Error ? npmErr.message : String(npmErr)}`
+                    `${spec}: ${npmErr instanceof Error ? npmErr.message : String(npmErr)}`,
                   );
                 }
               }
@@ -2576,8 +2425,8 @@ export class DaemonBusinessService {
                   `无法从 GitHub / Gitee Release 或 npm 镜像下载官方插件 "${entry.id}"（已尝试：${releaseSummary || "Release 不可达"}；npm 回退：${npmFallbackErrors[0] ?? "不可达"}）。请检查网络/镜像设置，或点击「导入本地 .wb-plugin」离线安装。`,
                   {
                     releaseAttempts: releaseDl.attempts,
-                    npmFallbackErrors
-                  }
+                    npmFallbackErrors,
+                  },
                 );
               }
               details = npmDetails;
@@ -2593,17 +2442,17 @@ export class DaemonBusinessService {
           throw new BusinessRouteError(
             400,
             "INVALID_PARAMS",
-            "社区 npm 安装需要提供非空包名或归档 URL（packageNameOrTarball）。"
+            "社区 npm 安装需要提供非空包名或归档 URL（packageNameOrTarball）。",
           );
         }
 
         const validatedRegistryUrl = validateTrustedPluginRegistryUrl(
           rawBody["registryUrl"],
-          "registryUrl"
+          "registryUrl",
         );
         const validatedFallbackRegistryUrl = validateTrustedPluginRegistryUrl(
           rawBody["fallbackRegistryUrl"],
-          "fallbackRegistryUrl"
+          "fallbackRegistryUrl",
         );
 
         details = await this.ctx.pluginInstaller.installFromNpm({
@@ -2617,8 +2466,7 @@ export class DaemonBusinessService {
             ? { fallbackRegistryUrl: validatedFallbackRegistryUrl }
             : this.ctx.officialPluginSources?.npmMirrorRegistryUrl
               ? {
-                  fallbackRegistryUrl:
-                    this.ctx.officialPluginSources.npmMirrorRegistryUrl
+                  fallbackRegistryUrl: this.ctx.officialPluginSources.npmMirrorRegistryUrl,
                 }
               : {}),
           networkPreference: effectiveNetworkPref,
@@ -2627,7 +2475,7 @@ export class DaemonBusinessService {
             : {}),
           ignoreScripts: true,
           confirmedAudit,
-          hostVersion: this.ctx.hostVersion
+          hostVersion: this.ctx.hostVersion,
         });
       }
     } catch (err) {
@@ -2638,20 +2486,10 @@ export class DaemonBusinessService {
         throw new BusinessRouteError(410, "PLUGIN_RETIRED", err.message);
       }
       if (err instanceof PermissionAuditRequiredError) {
-        throw new BusinessRouteError(
-          409,
-          "AUDIT_CONFIRMATION_REQUIRED",
-          err.message,
-          err.audit
-        );
+        throw new BusinessRouteError(409, "AUDIT_CONFIRMATION_REQUIRED", err.message, err.audit);
       }
       if (err instanceof EngineIncompatibleError) {
-        throw new BusinessRouteError(
-          422,
-          "ENGINE_INCOMPATIBLE",
-          err.message,
-          err.result
-        );
+        throw new BusinessRouteError(422, "ENGINE_INCOMPATIBLE", err.message, err.result);
       }
       if (err instanceof ChecksumMismatchError) {
         throw new BusinessRouteError(422, "CHECKSUM_MISMATCH", err.message);
@@ -2662,7 +2500,7 @@ export class DaemonBusinessService {
       throw new BusinessRouteError(
         400,
         "PLUGIN_INSTALL_FAILED",
-        err instanceof Error ? err.message : String(err)
+        err instanceof Error ? err.message : String(err),
       );
     }
 
@@ -2676,7 +2514,7 @@ export class DaemonBusinessService {
       details,
       (reason) => {
         this.recordPluginLog(details.manifest.id, "warn", "daemon", reason);
-      }
+      },
     );
     if (mod && this.ctx.onMountPlugin) {
       await this.ctx.onMountPlugin(details, mod);
@@ -2687,7 +2525,7 @@ export class DaemonBusinessService {
       details.manifest.id,
       "info",
       "daemon",
-      `已安装插件 ${details.manifest.id}@${details.manifest.version}（source=${details.sourceUsed ?? details.registryUsed ?? requestedSource}，mounted=${String(mounted)}）。`
+      `已安装插件 ${details.manifest.id}@${details.manifest.version}（source=${details.sourceUsed ?? details.registryUsed ?? requestedSource}，mounted=${String(mounted)}）。`,
     );
 
     return {
@@ -2698,41 +2536,31 @@ export class DaemonBusinessService {
         ? { sourceUsed: details.sourceUsed }
         : details.registryUsed !== undefined
           ? { sourceUsed: details.registryUsed }
-          : {})
+          : {}),
     };
   }
 
   async rollbackPlugin(
     rawBody: unknown,
-    trustedCallerScope: CallerScope
+    trustedCallerScope: CallerScope,
   ): Promise<Record<string, unknown>> {
     assertOwnerChief(trustedCallerScope, "/v1/plugins/rollback");
     if (!this.ctx.pluginInstaller || !this.ctx.pluginHost) {
       throw new BusinessRouteError(
         503,
         "PLUGIN_SUBSYSTEM_UNAVAILABLE",
-        "Plugin installer or host is not initialized."
+        "Plugin installer or host is not initialized.",
       );
     }
     if (!isPlainRecord(rawBody)) {
-      throw new BusinessRouteError(
-        400,
-        "INVALID_PARAMS",
-        "Request body must be a JSON object."
-      );
+      throw new BusinessRouteError(400, "INVALID_PARAMS", "Request body must be a JSON object.");
     }
-    const pluginId =
-      typeof rawBody["pluginId"] === "string" ? rawBody["pluginId"].trim() : "";
+    const pluginId = typeof rawBody["pluginId"] === "string" ? rawBody["pluginId"].trim() : "";
     if (pluginId.length === 0) {
-      throw new BusinessRouteError(
-        400,
-        "INVALID_PARAMS",
-        "回滚插件需要提供非空 pluginId。"
-      );
+      throw new BusinessRouteError(400, "INVALID_PARAMS", "回滚插件需要提供非空 pluginId。");
     }
     const targetVersion =
-      typeof rawBody["targetVersion"] === "string" &&
-      rawBody["targetVersion"].trim().length > 0
+      typeof rawBody["targetVersion"] === "string" && rawBody["targetVersion"].trim().length > 0
         ? rawBody["targetVersion"].trim()
         : undefined;
 
@@ -2747,7 +2575,7 @@ export class DaemonBusinessService {
       throw new BusinessRouteError(
         404,
         "PLUGIN_ROLLBACK_FAILED",
-        err instanceof Error ? err.message : String(err)
+        err instanceof Error ? err.message : String(err),
       );
     }
 
@@ -2758,7 +2586,7 @@ export class DaemonBusinessService {
         restored,
         (reason) => {
           this.recordPluginLog(pluginId, "warn", "daemon", reason);
-        }
+        },
       );
       if (mod && this.ctx.onMountPlugin) {
         await this.ctx.onMountPlugin(restored, mod);
@@ -2770,7 +2598,7 @@ export class DaemonBusinessService {
       pluginId,
       "info",
       "daemon",
-      `已回滚插件 ${pluginId} 至 v${restored.manifest.version}（mounted=${String(mounted)}）。`
+      `已回滚插件 ${pluginId} 至 v${restored.manifest.version}（mounted=${String(mounted)}）。`,
     );
 
     return {
@@ -2778,36 +2606,31 @@ export class DaemonBusinessService {
       pluginId,
       version: restored.manifest.version,
       plugin: restored,
-      mounted
+      mounted,
     };
   }
 
   async togglePlugin(
     rawBody: unknown,
-    trustedCallerScope: CallerScope
+    trustedCallerScope: CallerScope,
   ): Promise<Record<string, unknown>> {
     assertOwnerChief(trustedCallerScope, "/v1/plugins/toggle");
     if (!this.ctx.pluginHost) {
       throw new BusinessRouteError(
         503,
         "PLUGIN_HOST_UNAVAILABLE",
-        "CordisPluginHost is not initialized."
+        "CordisPluginHost is not initialized.",
       );
     }
     if (!isPlainRecord(rawBody)) {
-      throw new BusinessRouteError(
-        400,
-        "INVALID_PARAMS",
-        "Request body must be a JSON object."
-      );
+      throw new BusinessRouteError(400, "INVALID_PARAMS", "Request body must be a JSON object.");
     }
-    const pluginId =
-      typeof rawBody["pluginId"] === "string" ? rawBody["pluginId"].trim() : "";
+    const pluginId = typeof rawBody["pluginId"] === "string" ? rawBody["pluginId"].trim() : "";
     if (pluginId.length === 0 || typeof rawBody["enabled"] !== "boolean") {
       throw new BusinessRouteError(
         400,
         "INVALID_PARAMS",
-        "Request must include non-empty pluginId and boolean enabled."
+        "Request must include non-empty pluginId and boolean enabled.",
       );
     }
 
@@ -2821,7 +2644,7 @@ export class DaemonBusinessService {
       throw new BusinessRouteError(
         404,
         "PLUGIN_NOT_FOUND",
-        `Plugin "${pluginId}" is not installed.`
+        `Plugin "${pluginId}" is not installed.`,
       );
     }
 
@@ -2838,7 +2661,7 @@ export class DaemonBusinessService {
         diskRecord,
         (reason) => {
           this.recordPluginLog(pluginId, "warn", "daemon", reason);
-        }
+        },
       );
       if (mod) {
         await this.ctx.onMountPlugin({ ...diskRecord, enabled: true }, mod);
@@ -2859,11 +2682,9 @@ export class DaemonBusinessService {
     if (diskRecord && this.ctx.pluginInstaller) {
       const pluginInstallDir = join(
         this.ctx.pluginInstaller.getPluginsDir(),
-        diskRecord.manifest.id
+        diskRecord.manifest.id,
       );
-      updatedRecord =
-        updateInstallMetadataEnabledFlag(pluginInstallDir, enabled) ??
-        updatedRecord;
+      updatedRecord = updateInstallMetadataEnabledFlag(pluginInstallDir, enabled) ?? updatedRecord;
     }
 
     this.recordPluginLog(
@@ -2872,7 +2693,7 @@ export class DaemonBusinessService {
       "daemon",
       enabled
         ? `已启用插件 ${pluginId}（mounted=${String(mounted)}）。`
-        : `已停用插件 ${pluginId}（mounted=${String(mounted)}）。`
+        : `已停用插件 ${pluginId}（mounted=${String(mounted)}）。`,
     );
 
     return {
@@ -2880,36 +2701,31 @@ export class DaemonBusinessService {
       pluginId,
       enabled,
       mounted,
-      record: updatedRecord
+      record: updatedRecord,
     };
   }
 
   async uninstallPlugin(
     rawBody: unknown,
-    trustedCallerScope: CallerScope
+    trustedCallerScope: CallerScope,
   ): Promise<Record<string, unknown>> {
     assertOwnerChief(trustedCallerScope, "/v1/plugins/uninstall");
     if (!this.ctx.pluginHost) {
       throw new BusinessRouteError(
         503,
         "PLUGIN_HOST_UNAVAILABLE",
-        "CordisPluginHost is not initialized."
+        "CordisPluginHost is not initialized.",
       );
     }
     if (!isPlainRecord(rawBody)) {
-      throw new BusinessRouteError(
-        400,
-        "INVALID_PARAMS",
-        "Request body must be a JSON object."
-      );
+      throw new BusinessRouteError(400, "INVALID_PARAMS", "Request body must be a JSON object.");
     }
-    const pluginId =
-      typeof rawBody["pluginId"] === "string" ? rawBody["pluginId"].trim() : "";
+    const pluginId = typeof rawBody["pluginId"] === "string" ? rawBody["pluginId"].trim() : "";
     if (pluginId.length === 0) {
       throw new BusinessRouteError(
         400,
         "INVALID_PARAMS",
-        "Request must include non-empty pluginId."
+        "Request must include non-empty pluginId.",
       );
     }
 
@@ -2921,7 +2737,7 @@ export class DaemonBusinessService {
       throw new BusinessRouteError(
         404,
         "PLUGIN_NOT_FOUND",
-        `Plugin "${pluginId}" is not installed.`
+        `Plugin "${pluginId}" is not installed.`,
       );
     }
 
@@ -2934,17 +2750,12 @@ export class DaemonBusinessService {
       }
     }
 
-    this.recordPluginLog(
-      pluginId,
-      "info",
-      "daemon",
-      `已卸载插件 ${pluginId}。`
-    );
+    this.recordPluginLog(pluginId, "info", "daemon", `已卸载插件 ${pluginId}。`);
 
     return {
       ok: true,
       pluginId,
-      uninstalled: true
+      uninstalled: true,
     };
   }
 
@@ -2955,7 +2766,7 @@ export class DaemonBusinessService {
   async getPluginLogs(
     rawPluginId: string | null,
     rawLimit: number | null,
-    trustedCallerScope: CallerScope
+    trustedCallerScope: CallerScope,
   ): Promise<{
     ok: true;
     pluginId: string | null;
@@ -2968,9 +2779,7 @@ export class DaemonBusinessService {
         : DEFAULT_PLUGIN_LOGS_LIMIT;
 
     const normalizedId =
-      typeof rawPluginId === "string" && rawPluginId.trim().length > 0
-        ? rawPluginId.trim()
-        : null;
+      typeof rawPluginId === "string" && rawPluginId.trim().length > 0 ? rawPluginId.trim() : null;
 
     if (normalizedId !== null) {
       const bucket = this.pluginLogsById.get(normalizedId);
@@ -2978,14 +2787,14 @@ export class DaemonBusinessService {
         return {
           ok: true,
           pluginId: normalizedId,
-          logs: []
+          logs: [],
         };
       }
       const recent = bucket.slice(-limit).reverse();
       return {
         ok: true,
         pluginId: normalizedId,
-        logs: recent
+        logs: recent,
       };
     }
 
@@ -2997,20 +2806,20 @@ export class DaemonBusinessService {
     return {
       ok: true,
       pluginId: null,
-      logs: allLogs.slice(0, limit)
+      logs: allLogs.slice(0, limit),
     };
   }
 
   ingestHostResourceMetrics(
     rawBody: unknown,
-    trustedCallerScope: CallerScope
+    trustedCallerScope: CallerScope,
   ): HostMetricsIngestResult {
     assertOwnerChief(trustedCallerScope, "/v1/resources/host-metrics");
     if (!this.ctx.resourceMonitorService) {
       throw new BusinessRouteError(
         503,
         "RESOURCE_MONITOR_UNAVAILABLE",
-        "ResourceMonitorService is not configured."
+        "ResourceMonitorService is not configured.",
       );
     }
     const normalized = normalizeHostMetricsReport(rawBody);
@@ -3018,7 +2827,7 @@ export class DaemonBusinessService {
       throw new BusinessRouteError(
         400,
         "INVALID_HOST_METRICS",
-        "Request body must contain valid mainPid, electronProcesses, or coreServer metrics."
+        "Request body must contain valid mainPid, electronProcesses, or coreServer metrics.",
       );
     }
     return this.ctx.resourceMonitorService.ingestHostMetrics(normalized);
@@ -3037,7 +2846,7 @@ export class DaemonBusinessService {
         merged.set(rec.manifest.id, {
           ...rec,
           enabled: hostRec ? hostRec.enabled : rec.enabled,
-          mounted
+          mounted,
         });
       }
     }
@@ -3047,14 +2856,12 @@ export class DaemonBusinessService {
         if (!merged.has(hostRec.manifest.id)) {
           merged.set(hostRec.manifest.id, {
             ...hostRec,
-            mounted: this.ctx.pluginHost.isMounted(hostRec.manifest.id)
+            mounted: this.ctx.pluginHost.isMounted(hostRec.manifest.id),
           });
         }
       }
     }
 
-    return [...merged.values()].sort((a, b) =>
-      a.manifest.id.localeCompare(b.manifest.id)
-    );
+    return [...merged.values()].sort((a, b) => a.manifest.id.localeCompare(b.manifest.id));
   }
 }
