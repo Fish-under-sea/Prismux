@@ -440,6 +440,19 @@ const correlateSnapshotWithSource = (
   return Effect.succeed(snapshot);
 };
 
+export const shouldPersistProviderSnapshot = (
+  provider: ServerProvider,
+  options: { readonly hasExistingCache: boolean },
+): boolean => {
+  if (!provider.enabled && !provider.installed) {
+    return false;
+  }
+  if (provider.installed || options.hasExistingCache || provider.modelsRetained === true) {
+    return true;
+  }
+  return provider.auth.status === "authenticated" || provider.status === "ready";
+};
+
 const snapshotInstanceKey = (provider: ServerProvider): ProviderInstanceId => {
   return provider.instanceId;
 };
@@ -578,6 +591,12 @@ export const layer = Layer.effect(
         cacheDir: config.providerStatusCacheDir,
         instanceId: key,
       }).pipe(Effect.provideService(Path.Path, path));
+      const hasExistingCache = yield* fileSystem
+        .exists(filePath)
+        .pipe(Effect.orElseSucceed(() => false));
+      if (!shouldPersistProviderSnapshot(provider, { hasExistingCache })) {
+        return;
+      }
       const {
         workspaceSnapshots: _workspaceSnapshots,
         workspaceRescannedAt: _workspaceRescannedAt,
@@ -781,13 +800,14 @@ export const layer = Layer.effect(
       Effect.flatMap((changed) =>
         changed
           ? Ref.get(providersRef).pipe(
-              Effect.flatMap((providers) =>
-                instanceRegistryMutator.rebuild(
-                  providers
-                    .filter((provider) => provider.enabled && !provider.installed)
-                    .map((provider) => provider.instanceId),
-                ),
-              ),
+              Effect.flatMap((providers) => {
+                const missingIds = providers
+                  .filter((provider) => provider.enabled && !provider.installed)
+                  .map((provider) => provider.instanceId);
+                return missingIds.length > 0
+                  ? instanceRegistryMutator.rebuild(missingIds)
+                  : Effect.void;
+              }),
             )
           : Effect.void,
       ),

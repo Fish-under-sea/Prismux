@@ -157,6 +157,12 @@ export const AUTO_SEED_PROVIDER_IDS = [
 ] as const;
 export type AutoSeedProviderId = (typeof AUTO_SEED_PROVIDER_IDS)[number];
 
+/** Default-enabled built-in slots hidden on clean first boot when their local CLI is absent. */
+const AUTO_HIDE_UNINSTALLED_DEFAULT_INSTANCE_IDS = [
+  "codex",
+  "claudeAgent",
+] as const satisfies ReadonlyArray<AutoSeedProviderId>;
+
 export interface AutoSeedProviderMarker {
   readonly seeded: ReadonlyArray<string>;
   readonly dismissed: ReadonlyArray<string>;
@@ -271,17 +277,18 @@ export function applyAutoSeededProviders(input: {
   readonly settings: ServerSettings;
   readonly marker: AutoSeedProviderMarker;
   readonly seededIds: ReadonlyArray<AutoSeedProviderId>;
+  readonly hiddenIds: ReadonlyArray<AutoSeedProviderId>;
 } {
-  if (input.discovered.length === 0) {
-    return { settings: input.settings, marker: input.marker, seededIds: [] };
-  }
   const hidden = new Set<string>(input.settings.hiddenDefaultProviderInstances);
+  const nextHidden: Array<ProviderInstanceId> = [...input.settings.hiddenDefaultProviderInstances];
   const seededSet = new Set<string>(input.marker.seeded);
   const dismissedSet = new Set<string>(input.marker.dismissed);
+  const discoveredSet = new Set<string>(input.discovered);
   const nextInstances: Record<ProviderInstanceId, ProviderInstanceConfig> = {
     ...input.settings.providerInstances,
   };
   const seededIds: AutoSeedProviderId[] = [];
+  const hiddenIds: AutoSeedProviderId[] = [];
 
   for (const id of input.discovered) {
     const instanceId = ProviderInstanceId.make(id);
@@ -302,34 +309,55 @@ export function applyAutoSeededProviders(input: {
     seededIds.push(id);
   }
 
-  if (seededIds.length === 0) {
-    return { settings: input.settings, marker: input.marker, seededIds: [] };
+  for (const id of AUTO_HIDE_UNINSTALLED_DEFAULT_INSTANCE_IDS) {
+    const instanceId = ProviderInstanceId.make(id);
+    if (
+      discoveredSet.has(id) ||
+      Object.hasOwn(nextInstances, instanceId) ||
+      hidden.has(id) ||
+      seededSet.has(id) ||
+      dismissedSet.has(id)
+    ) {
+      continue;
+    }
+    hidden.add(id);
+    nextHidden.push(instanceId);
+    hiddenIds.push(id);
+  }
+
+  if (seededIds.length === 0 && hiddenIds.length === 0) {
+    return { settings: input.settings, marker: input.marker, seededIds: [], hiddenIds: [] };
   }
   return {
     settings: {
       ...input.settings,
       providerInstances: nextInstances,
+      hiddenDefaultProviderInstances: nextHidden,
     },
     marker: {
       seeded: Array.from(seededSet),
       dismissed: Array.from(dismissedSet),
     },
     seededIds,
+    hiddenIds,
   };
 }
 
 export function discoverInstalledLocalAgentsSync(input: {
   readonly platform: NodeJS.Platform;
   readonly env: NodeJS.ProcessEnv;
-  readonly resolveExecutable?: Parameters<typeof resolveAgentExecutableWithFallback>[0]["resolveExecutable"];
+  readonly resolveExecutable?: Parameters<
+    typeof resolveAgentExecutableWithFallback
+  >[0]["resolveExecutable"];
   readonly isFile?: (filePath: string) => boolean;
   readonly dshFs?: Parameters<typeof resolveLocalAcpSpawn>[0]["fs"];
-  readonly queryRegistry?: Parameters<typeof resolveAgentExecutableWithFallback>[0]["queryRegistry"];
+  readonly queryRegistry?: Parameters<
+    typeof resolveAgentExecutableWithFallback
+  >[0]["queryRegistry"];
   readonly probeDriveRoots?: boolean;
 }): ReadonlyArray<AutoSeedProviderId> {
   const discovered: AutoSeedProviderId[] = [];
-  const resolveExecutable =
-    input.resolveExecutable ?? SpawnExecutableResolution.defaultValue();
+  const resolveExecutable = input.resolveExecutable ?? SpawnExecutableResolution.defaultValue();
   const sharedOpts = {
     platform: input.platform,
     env: input.env,
@@ -1412,42 +1440,45 @@ const make = Effect.gen(function* () {
       const keptSecretNames = new Set<string>();
       const writtenSecretNames = new Set<string>();
       const inlineWrites = new Map<string, SecretChange>();
-      const settings = mapAllSettingsSecrets(withEchoedSecretReferences(current, next), (secret) => {
-        const metadata = {
-          secretName: secret.secretName,
-          ...(secret.providerInstanceId !== undefined
-            ? { providerInstanceId: secret.providerInstanceId }
-            : {}),
-          ...(secret.environmentVariable !== undefined
-            ? { environmentVariable: secret.environmentVariable }
-            : {}),
-        };
-        if (!secret.sensitive) {
-          changes.push({ ...metadata, kind: "remove", operation: "remove-secret" });
-          return { value: secret.value, redacted: false };
-        }
-        if (secret.redacted) {
-          keptSecretNames.add(secret.secretName);
-          nextSecretNames.add(secret.secretName);
-          const inlineValue = inlineValues.get(secret.secretName);
-          if (inlineValue !== undefined) {
-            inlineWrites.set(secret.secretName, {
-              ...metadata,
-              kind: "write",
-              value: textEncoder.encode(inlineValue),
-            });
+      const settings = mapAllSettingsSecrets(
+        withEchoedSecretReferences(current, next),
+        (secret) => {
+          const metadata = {
+            secretName: secret.secretName,
+            ...(secret.providerInstanceId !== undefined
+              ? { providerInstanceId: secret.providerInstanceId }
+              : {}),
+            ...(secret.environmentVariable !== undefined
+              ? { environmentVariable: secret.environmentVariable }
+              : {}),
+          };
+          if (!secret.sensitive) {
+            changes.push({ ...metadata, kind: "remove", operation: "remove-secret" });
+            return { value: secret.value, redacted: false };
           }
+          if (secret.redacted) {
+            keptSecretNames.add(secret.secretName);
+            nextSecretNames.add(secret.secretName);
+            const inlineValue = inlineValues.get(secret.secretName);
+            if (inlineValue !== undefined) {
+              inlineWrites.set(secret.secretName, {
+                ...metadata,
+                kind: "write",
+                value: textEncoder.encode(inlineValue),
+              });
+            }
+            return { value: "", redacted: true };
+          }
+          if (secret.value.length === 0) {
+            changes.push({ ...metadata, kind: "remove", operation: "remove-secret" });
+            return { value: "", redacted: false };
+          }
+          nextSecretNames.add(secret.secretName);
+          writtenSecretNames.add(secret.secretName);
+          changes.push({ ...metadata, kind: "write", value: textEncoder.encode(secret.value) });
           return { value: "", redacted: true };
-        }
-        if (secret.value.length === 0) {
-          changes.push({ ...metadata, kind: "remove", operation: "remove-secret" });
-          return { value: "", redacted: false };
-        }
-        nextSecretNames.add(secret.secretName);
-        writtenSecretNames.add(secret.secretName);
-        changes.push({ ...metadata, kind: "write", value: textEncoder.encode(secret.value) });
-        return { value: "", redacted: true };
-      });
+        },
+      );
       // A legacy inline value only moves to the store when no row in this save replaces it.
       for (const [secretName, change] of inlineWrites) {
         if (!writtenSecretNames.has(secretName)) changes.push(change);
@@ -1818,53 +1849,52 @@ const make = Effect.gen(function* () {
     (effect) => Effect.ignore(effect),
   );
 
-  const autoSeedInstalledProviders = writeSemaphore.withPermits(1)(
-    Effect.gen(function* () {
-      const { settings: current, parseFailure } = yield* reloadSettings;
-      if (Option.isSome(parseFailure)) {
-        return;
-      }
-      // Read the persisted auto-seed marker FIRST so restarts skip expensive local CLI probing.
-      const marker = yield* readAutoSeedMarker;
-      const hidden = new Set<string>(current.hiddenDefaultProviderInstances);
-      const alreadyHandled =
-        marker.initialized === true ||
-        marker.seeded.length > 0 ||
-        marker.dismissed.length > 0 ||
-        AUTO_SEED_PROVIDER_IDS.every(
-          (id) =>
-            Object.hasOwn(current.providerInstances, ProviderInstanceId.make(id)) || hidden.has(id),
-        );
-      if (alreadyHandled) {
-        return;
-      }
-      const discovered = yield* discoverInstalledLocalAgents();
-      if (discovered.length === 0) {
-        yield* writeAutoSeedMarker({ ...marker, initialized: true });
-        return;
-      }
-      const result = applyAutoSeededProviders({
-        settings: current,
-        discovered,
-        marker,
-        isDriverAllowed: managedProviders.isDriverAllowed,
-      });
-      if (result.seededIds.length === 0) {
-        yield* writeAutoSeedMarker({ ...marker, initialized: true });
-        return;
-      }
-      const next = yield* normalizeServerSettings(result.settings);
-      yield* writeSettingsAtomically(next);
-      yield* writeAutoSeedMarker({ ...result.marker, initialized: true });
-      yield* invalidateMaterialized;
-      yield* Cache.set(settingsCache, cacheKey, { settings: next, parseFailure: Option.none() });
-      yield* emitChange(next);
-    }),
-  ).pipe(
-    Effect.catchCause((cause) =>
-      Effect.logWarning("auto-seed installed providers skipped", { cause }),
-    ),
-  );
+  const autoSeedInstalledProviders = writeSemaphore
+    .withPermits(1)(
+      Effect.gen(function* () {
+        const { settings: current, parseFailure } = yield* reloadSettings;
+        if (Option.isSome(parseFailure)) {
+          return;
+        }
+        // Read the persisted auto-seed marker FIRST so restarts skip expensive local CLI probing.
+        const marker = yield* readAutoSeedMarker;
+        const hidden = new Set<string>(current.hiddenDefaultProviderInstances);
+        const alreadyHandled =
+          marker.initialized === true ||
+          marker.seeded.length > 0 ||
+          marker.dismissed.length > 0 ||
+          AUTO_SEED_PROVIDER_IDS.every(
+            (id) =>
+              Object.hasOwn(current.providerInstances, ProviderInstanceId.make(id)) ||
+              hidden.has(id),
+          );
+        if (alreadyHandled) {
+          return;
+        }
+        const discovered = yield* discoverInstalledLocalAgents();
+        const result = applyAutoSeededProviders({
+          settings: current,
+          discovered,
+          marker,
+          isDriverAllowed: managedProviders.isDriverAllowed,
+        });
+        if (result.seededIds.length === 0 && result.hiddenIds.length === 0) {
+          yield* writeAutoSeedMarker({ ...marker, initialized: true });
+          return;
+        }
+        const next = yield* normalizeServerSettings(result.settings);
+        yield* writeSettingsAtomically(next);
+        yield* writeAutoSeedMarker({ ...result.marker, initialized: true });
+        yield* invalidateMaterialized;
+        yield* Cache.set(settingsCache, cacheKey, { settings: next, parseFailure: Option.none() });
+        yield* emitChange(next);
+      }),
+    )
+    .pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("auto-seed installed providers skipped", { cause }),
+      ),
+    );
 
   const start = Effect.gen(function* () {
     const shouldStart = yield* Ref.modify(startedRef, (started) => [!started, true]);

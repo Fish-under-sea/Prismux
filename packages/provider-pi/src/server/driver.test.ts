@@ -3,7 +3,10 @@ import { assert, it } from "@effect/vitest";
 import { DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@prismux/core-contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
@@ -11,6 +14,8 @@ import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+
+import * as ProviderHost from "@prismux/provider-core/server/ProviderHost";
 
 import * as ProviderLatestVersions from "@prismux/provider-core/server/ProviderLatestVersions";
 import * as IdAllocator from "@prismux/provider-core/server/IdAllocator";
@@ -187,18 +192,57 @@ it.layer(layerTest)("PiDriver workspace discovery", (it) => {
     }),
   );
 
-  it.effect("does not run a disabled provider's workspace probe", () =>
+  it.effect("does not run a disabled provider's workspace probe or create pi-status-probe", () =>
     Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const host = yield* ProviderHost.ProviderHost;
+      const probeDir = path.join(host.paths.providerStatusCacheDir, "pi-status-probe");
+      yield* fileSystem.remove(probeDir, { recursive: true, force: true }).pipe(Effect.ignore);
+
       const instance = yield* create({}, false).pipe(
         Effect.provideService(
           ChildProcessSpawner.ChildProcessSpawner,
           ChildProcessSpawner.make(() => Effect.die("Disabled Pi must not spawn")),
         ),
       );
+      const refreshed = yield* instance.snapshot.refresh;
+      assert.isFalse(refreshed.enabled);
+      assert.isFalse(yield* fileSystem.exists(probeDir));
+
       assert.isDefined(instance.snapshotForCwd);
       const workspace = yield* instance.snapshotForCwd!("/first");
       assert.isFalse(workspace.enabled);
       assert.deepEqual(workspace.skills, []);
+      assert.isFalse(yield* fileSystem.exists(probeDir));
+    }),
+  );
+
+  it.effect("does not create pi-status-probe when enabled Pi CLI is not installed", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const host = yield* ProviderHost.ProviderHost;
+      const probeDir = path.join(host.paths.providerStatusCacheDir, "pi-status-probe");
+      yield* fileSystem.remove(probeDir, { recursive: true, force: true }).pipe(Effect.ignore);
+
+      const missingSpawner = ChildProcessSpawner.make(() =>
+        Effect.fail(
+          PlatformError.systemError({
+            _tag: "NotFound",
+            module: "ChildProcessSpawner",
+            method: "spawn",
+            description: "spawn custom-pi ENOENT",
+          }),
+        ),
+      );
+      const instance = yield* create({}, true).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, missingSpawner),
+      );
+      const refreshed = yield* instance.snapshot.refresh;
+      assert.isFalse(refreshed.installed);
+      assert.equal(refreshed.status, "error");
+      assert.isFalse(yield* fileSystem.exists(probeDir));
     }),
   );
 

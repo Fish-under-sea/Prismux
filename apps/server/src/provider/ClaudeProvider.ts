@@ -22,7 +22,11 @@ import * as Schema from "effect/Schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { createModelCapabilities } from "@prismux/core-shared/model";
 import { envTrampoline, supportsEnvChdir } from "@prismux/core-shared/envTrampoline";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Ensure isolated probe cwd synchronously before spawn so probe startup does not yield ahead of registry sync.
+import * as NodeFS from "node:fs";
 import * as HostProcess from "@prismux/core-shared/HostProcess";
+import * as ProviderHost from "@prismux/provider-core/server/ProviderHost";
+import * as ServerConfig from "../config.ts";
 import * as SpawnWorker from "../process/SpawnWorker.ts";
 import { resolveSpawnCommand } from "@prismux/core-shared/shell";
 import {
@@ -187,11 +191,13 @@ function claudeAuthMetadata(input: {
   readonly subscriptionType: string | undefined;
   readonly authMethod: string | undefined;
   readonly apiKeySource: string | undefined;
-}): {
-  readonly type: string;
-  readonly label: string;
-  readonly subscriptionType?: string;
-} | undefined {
+}):
+  | {
+      readonly type: string;
+      readonly label: string;
+      readonly subscriptionType?: string;
+    }
+  | undefined {
   if (normalizeClaudeAuthMethod(input.authMethod) === "apiKey" || hasApiKey(input.apiKeySource)) {
     return {
       type: "apiKey",
@@ -634,6 +640,58 @@ const probeClaudeCapabilities = (
 
 type ClaudeCapabilitiesProbeError = Effect.Error<ReturnType<typeof probeClaudeCapabilities>>;
 
+function isSameDirectoryPath(
+  pathService: Path.Path,
+  platform: NodeJS.Platform,
+  left: string,
+  right: string,
+): boolean {
+  const resolvedLeft = pathService.resolve(left);
+  const resolvedRight = pathService.resolve(right);
+  return platform === "win32"
+    ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase()
+    : resolvedLeft === resolvedRight;
+}
+
+function ensureDirectorySync(dir: string): void {
+  try {
+    NodeFS.mkdirSync(dir, { recursive: true });
+  } catch {
+    // Ignore filesystem permission/mock errors; spawn will report any real cwd error.
+  }
+}
+
+const resolveIsolatedClaudeProbeCwd = Effect.fn("resolveIsolatedClaudeProbeCwd")(function* (
+  cwd: string | undefined,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const pathService = yield* Path.Path;
+  const platform = yield* HostProcess.Platform;
+  const homeDirectory = yield* HostProcess.HomeDirectory;
+  if (cwd !== undefined && !isSameDirectoryPath(pathService, platform, cwd, homeDirectory)) {
+    return cwd;
+  }
+  const providerHost = yield* Effect.serviceOption(ProviderHost.ProviderHost);
+  const serverConfig = yield* Effect.serviceOption(ServerConfig.ServerConfig);
+  const cacheDir = Option.isSome(providerHost)
+    ? providerHost.value.paths.providerStatusCacheDir
+    : Option.isSome(serverConfig)
+      ? serverConfig.value.providerStatusCacheDir
+      : undefined;
+  if (cacheDir !== undefined) {
+    const probeCwd = pathService.join(cacheDir, "probes", "claude");
+    ensureDirectorySync(probeCwd);
+    return probeCwd;
+  }
+  const currentCwd = process.cwd();
+  if (cwd === undefined && !isSameDirectoryPath(pathService, platform, currentCwd, homeDirectory)) {
+    return undefined;
+  }
+  return yield* fileSystem
+    .makeTempDirectoryScoped({ prefix: "prismux-claude-probe-" })
+    .pipe(Effect.orElseSucceed(() => cwd));
+});
+
 const runClaudeCommand = Effect.fn("runClaudeCommand")(function* (
   claudeSettings: ClaudeSettings,
   args: ReadonlyArray<string>,
@@ -718,11 +776,17 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     });
   }
 
-  const versionProbe = yield* runClaudeCommand(
-    claudeSettings,
-    ["--version"],
-    providerProbeEnvironment(resolvedEnvironment),
-    cwd,
+  const versionProbe = yield* Effect.scoped(
+    resolveIsolatedClaudeProbeCwd(cwd).pipe(
+      Effect.flatMap((probeCwd) =>
+        runClaudeCommand(
+          claudeSettings,
+          ["--version"],
+          providerProbeEnvironment(resolvedEnvironment),
+          probeCwd,
+        ),
+      ),
+    ),
   ).pipe(
     Effect.timeoutOption(
       resolveProviderProbeTimeoutMs("claude", CLAUDE_VERSION_CHECK_TIMEOUT_MS, resolvedEnvironment),

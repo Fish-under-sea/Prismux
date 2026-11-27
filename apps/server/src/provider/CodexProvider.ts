@@ -57,7 +57,11 @@ import {
   type CodexRateLimitSnapshot,
   type CodexResetCreditsSummary,
 } from "./codexUsageLimits.ts";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Ensure isolated probe cwd synchronously before spawn so probe startup does not yield ahead of registry sync.
+import * as NodeFS from "node:fs";
 import * as HostProcess from "@prismux/core-shared/HostProcess";
+import * as ProviderHost from "@prismux/provider-core/server/ProviderHost";
+import * as ServerConfig from "../config.ts";
 import packageJson from "../../package.json" with { type: "json" };
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
 
@@ -209,9 +213,7 @@ function normalizeExposedCodexSpeedTierId(
  * caches often report empty `serviceTiers: []` & `additionalSpeedTiers: []` even though
  * flagship GPT models natively support `service_tier = fast` / `ultrafast`.
  */
-function fallbackCodexSpeedTiersForModel(
-  modelSlug: string,
-): ReadonlyArray<{
+function fallbackCodexSpeedTiersForModel(modelSlug: string): ReadonlyArray<{
   readonly id: ExposedCodexSpeedTierId;
   readonly name: string;
   readonly description: string;
@@ -976,8 +978,84 @@ export const probeCodexSkillsForCwd = Effect.fn("probeCodexSkillsForCwd")(functi
 // binary open, and Windows refuses to overwrite or delete a running executable.
 const CODEX_SKILLS_HELPER_IDLE_TTL = "30 seconds";
 
+function isSameDirectoryPath(
+  pathService: Path.Path,
+  platform: NodeJS.Platform,
+  left: string,
+  right: string,
+): boolean {
+  const resolvedLeft = pathService.resolve(left);
+  const resolvedRight = pathService.resolve(right);
+  return platform === "win32"
+    ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase()
+    : resolvedLeft === resolvedRight;
+}
+
+function ensureDirectorySync(dir: string): void {
+  try {
+    NodeFS.mkdirSync(dir, { recursive: true });
+  } catch {
+    // Ignore filesystem permission/mock errors; spawn will report any real cwd error.
+  }
+}
+
+const resolveIsolatedCodexProbeCwd = Effect.fn("resolveIsolatedCodexProbeCwd")(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const pathService = yield* Path.Path;
+  const platform = yield* HostProcess.Platform;
+  const homeDirectory = yield* HostProcess.HomeDirectory;
+  const providerHost = yield* Effect.serviceOption(ProviderHost.ProviderHost);
+  const serverConfig = yield* Effect.serviceOption(ServerConfig.ServerConfig);
+  const cacheDir = Option.isSome(providerHost)
+    ? providerHost.value.paths.providerStatusCacheDir
+    : Option.isSome(serverConfig)
+      ? serverConfig.value.providerStatusCacheDir
+      : undefined;
+  if (cacheDir !== undefined) {
+    const probeCwd = pathService.join(cacheDir, "probes", "codex");
+    ensureDirectorySync(probeCwd);
+    return probeCwd;
+  }
+  const currentCwd = process.cwd();
+  if (!isSameDirectoryPath(pathService, platform, currentCwd, homeDirectory)) {
+    return currentCwd;
+  }
+  return yield* fileSystem
+    .makeTempDirectoryScoped({ prefix: "prismux-codex-probe-" })
+    .pipe(Effect.orElseSucceed(() => currentCwd));
+});
+
 /** Reuses one app-server per launch identity; each read passes its cwd and rescans from disk. */
 export const makeCodexSkillsProbe = Effect.fn("makeCodexSkillsProbe")(function* () {
+  const fileSystemOption = yield* Effect.serviceOption(FileSystem.FileSystem);
+  const pathOption = yield* Effect.serviceOption(Path.Path);
+  const providerHostOption = yield* Effect.serviceOption(ProviderHost.ProviderHost);
+  const serverConfigOption = yield* Effect.serviceOption(ServerConfig.ServerConfig);
+  const platform = yield* HostProcess.Platform;
+  const homeDirectory = yield* HostProcess.HomeDirectory;
+  const resolveSkillsHelperCwd = Effect.gen(function* () {
+    const cacheDir = Option.isSome(providerHostOption)
+      ? providerHostOption.value.paths.providerStatusCacheDir
+      : Option.isSome(serverConfigOption)
+        ? serverConfigOption.value.providerStatusCacheDir
+        : undefined;
+    if (cacheDir !== undefined && Option.isSome(pathOption)) {
+      const probeCwd = pathOption.value.join(cacheDir, "probes", "codex");
+      ensureDirectorySync(probeCwd);
+      return probeCwd;
+    }
+    const currentCwd = process.cwd();
+    if (
+      Option.isSome(pathOption) &&
+      Option.isSome(fileSystemOption) &&
+      isSameDirectoryPath(pathOption.value, platform, currentCwd, homeDirectory)
+    ) {
+      return yield* fileSystemOption.value
+        .makeTempDirectoryScoped({ prefix: "prismux-codex-skills-probe-" })
+        .pipe(Effect.orElseSucceed(() => currentCwd));
+    }
+    return currentCwd;
+  });
   const helpers = yield* RcMap.make({
     lookup: (launch: {
       readonly binaryPath: string;
@@ -985,7 +1063,8 @@ export const makeCodexSkillsProbe = Effect.fn("makeCodexSkillsProbe")(function* 
       readonly launchArgs?: string;
       readonly environment: NodeJS.ProcessEnv;
     }) =>
-      withCodexAppServerClient({ ...launch, cwd: process.cwd() }).pipe(
+      resolveSkillsHelperCwd.pipe(
+        Effect.flatMap((cwd) => withCodexAppServerClient({ ...launch, cwd })),
         Effect.map(({ client }) => client),
       ),
     idleTimeToLive: CODEX_SKILLS_HELPER_IDLE_TTL,
@@ -1159,32 +1238,40 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     CODEX_AUTH_PROBE_TIMEOUT_MS,
     resolvedEnvironment,
   );
-  const probeResult = yield* probe({
-    probeTimeoutMs,
-    binaryPath: codexSettings.binaryPath,
-    homePath: codexSettings.homePath,
-    launchArgs: resolveCodexLaunchArgs(codexSettings.launchArgs, resolvedEnvironment),
-    cwd: process.cwd(),
-    environment: resolvedEnvironment,
-    ...(managedAuth ? { skipNativeUsage: true } : {}),
-  }).pipe(
-    // Process teardown can outlast the work budget without discarding a completed snapshot.
-    Effect.timeoutOption(Duration.millis(probeTimeoutMs)),
-    Effect.scoped,
-    Effect.result,
+  const { probeResult, versionOnFailure } = yield* Effect.scoped(
+    Effect.gen(function* () {
+      const probeCwd = yield* resolveIsolatedCodexProbeCwd();
+      const probeResult = yield* probe({
+        probeTimeoutMs,
+        binaryPath: codexSettings.binaryPath,
+        homePath: codexSettings.homePath,
+        launchArgs: resolveCodexLaunchArgs(codexSettings.launchArgs, resolvedEnvironment),
+        cwd: probeCwd,
+        environment: resolvedEnvironment,
+        ...(managedAuth ? { skipNativeUsage: true } : {}),
+      }).pipe(
+        // Process teardown can outlast the work budget without discarding a completed snapshot.
+        Effect.timeoutOption(Duration.millis(probeTimeoutMs)),
+        Effect.scoped,
+        Effect.result,
+      );
+      const versionOnFailure =
+        Result.isFailure(probeResult) && !isCodexAppServerSpawnError(probeResult.failure)
+          ? yield* probeCodexCliVersion({
+              binaryPath: codexSettings.binaryPath,
+              homePath: codexSettings.homePath,
+              cwd: probeCwd,
+              environment: resolvedEnvironment,
+            })
+          : null;
+      return { probeResult, versionOnFailure };
+    }),
   );
 
   if (Result.isFailure(probeResult)) {
     const error = probeResult.failure;
     const installed = !isCodexAppServerSpawnError(error);
-    const version = installed
-      ? yield* probeCodexCliVersion({
-          binaryPath: codexSettings.binaryPath,
-          homePath: codexSettings.homePath,
-          cwd: process.cwd(),
-          environment: resolvedEnvironment,
-        })
-      : null;
+    const version = versionOnFailure;
     return buildServerProvider({
       presentation: CODEX_PRESENTATION,
       enabled: codexSettings.enabled,

@@ -58,6 +58,13 @@ const AUTH_UNCHECKED_MESSAGE =
 const PublishingUsage = Context.Reference<boolean>("prismux/provider/AntigravityPublishingUsage", {
   defaultValue: () => false,
 });
+// Only explicit user refreshes hydrate the remote ACP catalog; cold startup stays read-only.
+const AllowCatalogHydration = Context.Reference<boolean>(
+  "prismux/provider/AntigravityAllowCatalogHydration",
+  {
+    defaultValue: () => false,
+  },
+);
 
 type SessionSetupResult = Pick<
   AcpSessionRuntime.AcpSessionRuntimeStartResult["sessionSetupResult"],
@@ -384,7 +391,8 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
       initialized !== undefined &&
       next.draft.models.length === 0 &&
       !hydratedCatalogOnce &&
-      options.hydrateCatalog !== undefined
+      options.hydrateCatalog !== undefined &&
+      (yield* AllowCatalogHydration)
     ) {
       hydratedCatalogOnce = true;
       yield* FiberHandle.run(
@@ -593,7 +601,11 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
   });
 
   return {
-    snapshot: { ...managed, getSnapshot },
+    snapshot: {
+      ...managed,
+      getSnapshot,
+      refresh: managed.refresh.pipe(Effect.provideService(AllowCatalogHydration, true)),
+    },
     onSessionStarted,
     onConfigOptionsUpdated,
     onAvailableCommands,

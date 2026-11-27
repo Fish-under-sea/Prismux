@@ -1,6 +1,7 @@
 import {
   officialAcpRegistryIconUrlForAgentId,
   ProviderDriverKind,
+  ProviderSetupError,
   resolveOfficialAcpRegistryIconUrl,
   TextGenerationError,
   type AcpRegistryOperationError,
@@ -11,6 +12,7 @@ import {
 } from "@prismux/core-contracts";
 import { AcpRegistrySettings } from "../settings.ts";
 import * as HostProcess from "@prismux/core-shared/HostProcess";
+import * as PtyAdapter from "@prismux/core-shared/PtyAdapter";
 import { createModelCapabilities } from "@prismux/core-shared/model";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -26,10 +28,12 @@ import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-import { AcpRequestError } from "@prismux/effect-acp/errors";
+import { AcpRequestError, AcpTransportError } from "@prismux/effect-acp/errors";
 import * as AcpSessionRuntime from "@prismux/provider-acp/server/AcpSessionRuntime";
 import {
   collectSessionConfigOptionValues,
@@ -166,7 +170,65 @@ const MAINTENANCE = makeManualOnlyProviderMaintenanceCapabilities({
 const ACP_TEXT_GENERATION_TIMEOUT_MS = 180_000;
 const ACP_TEXT_GENERATION_MAX_OUTPUT_CHARS = 128_000;
 const ACP_TEXT_GENERATION_SESSION_CLEANUP_TIMEOUT = "5 seconds";
+const ACP_BACKGROUND_CHECKING_MESSAGE =
+  "Checking ACP authentication, models, and commands in the background...";
+const DEFERRED_BOOT_AUTH_PROBE_COMMAND = "__prismux_deferred_boot_auth_probe__";
 const isTextGenerationError = Schema.is(TextGenerationError);
+
+export function resolveAcpRegistryProbeCwd(
+  pathService: Path.Path,
+  cacheDir: string,
+  instanceId: string,
+): string {
+  const safeInstanceId =
+    instanceId
+      .trim()
+      .replace(/[^A-Za-z0-9._-]+/gu, "_")
+      .replace(/^_+|_+$/gu, "") || "instance";
+  return pathService.join(cacheDir, "probes", safeInstanceId);
+}
+
+function hasPersistedAcpRegistryModelCache(
+  fileSystem: FileSystem.FileSystem,
+  cachePath: string,
+  instanceId: string,
+): Effect.Effect<boolean> {
+  return fileSystem.readFileString(cachePath).pipe(
+    Effect.map((raw) => {
+      try {
+        const parsed = JSON.parse(raw) as unknown;
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          return false;
+        }
+        const record = parsed as Record<string, unknown>;
+        if (record.instanceId !== instanceId || record.driver !== DRIVER_KIND) {
+          return false;
+        }
+        if (record.nativeSessions !== undefined) {
+          return true;
+        }
+        if (!Array.isArray(record.models)) {
+          return false;
+        }
+        return record.models.some((model) => {
+          if (typeof model !== "object" || model === null || Array.isArray(model)) {
+            return false;
+          }
+          const entry = model as Record<string, unknown>;
+          return (
+            entry.isCustom !== true &&
+            typeof entry.slug === "string" &&
+            entry.slug.trim().length > 0 &&
+            entry.slug !== "default"
+          );
+        });
+      } catch {
+        return false;
+      }
+    }),
+    Effect.orElseSucceed(() => false),
+  );
+}
 
 function isAntigravityAcpSettings(settings: AcpRegistrySettings): boolean {
   if (settings.source === "local") {
@@ -202,9 +264,7 @@ function readAntigravityWaiverSignedEffect(
           return false;
         }
         const record = parsed as Record<string, unknown>;
-        return (
-          record.signed === true && record.allowAntigravityAsControlledAgent === true
-        );
+        return record.signed === true && record.allowAntigravityAsControlledAgent === true;
       } catch {
         return false;
       }
@@ -240,7 +300,9 @@ const makeAcpRegistryTextGeneration = (input: {
     random,
   } = input;
 
-  const runAcpJson: TextGenerationOperations.Runner = Effect.fn("AcpRegistryTextGeneration.runJson")(
+  const runAcpJson: TextGenerationOperations.Runner = Effect.fn(
+    "AcpRegistryTextGeneration.runJson",
+  )(
     function* <S extends Schema.Top>(request: TextGenerationOperations.Request<S>) {
       const { operation } = request;
       if (isAntigravityAcp && !(yield* isAntigravityWaiverSigned)) {
@@ -332,10 +394,7 @@ const makeAcpRegistryTextGeneration = (input: {
       yield* runtime.handleSessionUpdate((notification) =>
         Effect.gen(function* () {
           const update = notification.update;
-          if (
-            update.sessionUpdate === "tool_call" ||
-            update.sessionUpdate === "tool_call_update"
-          ) {
+          if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {
             return yield* reject(`${providerLabel} attempted tool work during text generation.`);
           }
           if (
@@ -659,8 +718,7 @@ function baseSnapshot(
     ...(iconUrl ? { iconUrl } : {}),
     continuation: { groupKey: input.continuationKey },
     supportsTextGeneration:
-      input.supportsTextGeneration ??
-      (input.installed && input.auth.status !== "unauthenticated"),
+      input.supportsTextGeneration ?? (input.installed && input.auth.status !== "unauthenticated"),
     enabled: input.settings.enabled,
     installed: input.installed,
     version: input.version,
@@ -959,7 +1017,7 @@ export const checkAcpRegistryProviderReadiness = Effect.fn(
   return inspected._tag === "Success" && inspected.success.status === "ready"
     ? {
         ...snapshot,
-        message: "Checking ACP authentication, models, and commands in the background...",
+        message: ACP_BACKGROUND_CHECKING_MESSAGE,
       }
     : snapshot;
 });
@@ -1239,23 +1297,60 @@ export const AcpRegistryDriver: ProviderDriver<
         ? withCommandsAndConfig
         : { ...withCommandsAndConfig, supportsTextGeneration: resolvedSupportsTextGen };
     });
+    // Isolate probe and auth subprocesses from $HOME (which is host.paths.cwd in packaged desktop).
+    const probeCwd = resolveAcpRegistryProbeCwd(
+      path,
+      host.paths.providerStatusCacheDir,
+      instanceId,
+    );
+    const ensureProbeCwd = fileSystem
+      .makeDirectory(probeCwd, { recursive: true })
+      .pipe(Effect.ignore);
+    const probeAwareSpawner = ChildProcessSpawner.make((command) =>
+      ChildProcess.isStandardCommand(command) && command.options.cwd === probeCwd
+        ? ensureProbeCwd.pipe(Effect.andThen(spawner.spawn(command)))
+        : spawner.spawn(command),
+    );
+    const persistedModelCachePath = path.join(
+      host.paths.providerStatusCacheDir,
+      `${instanceId}.json`,
+    );
+    // Local CLIs (such as `dsh acp` / `agy acp`) write state directories like ~/.dsh on launch.
+    // On a clean boot without a persisted model cache, keep startup checks strictly read-only
+    // until the user explicitly refreshes, signs in, or starts a live session.
+    const hasPersistedModelCache =
+      effectiveConfig.source === "local"
+        ? yield* hasPersistedAcpRegistryModelCache(fileSystem, persistedModelCachePath, instanceId)
+        : true;
+    const backgroundProbeEnabledRef = yield* Ref.make(
+      effectiveConfig.source !== "local" || hasPersistedModelCache,
+    );
     // A local executable's version comes only from probing it, so readiness checks reuse the last report.
     const reportedLocalVersion = yield* Ref.make<string | null>(null);
     const checkProvider = checkAcpRegistryProviderReadiness(readinessInput).pipe(
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
       Effect.flatMap((provider) =>
-        Ref.get(reportedLocalVersion).pipe(
-          Effect.map((version) => {
+        Effect.all([Ref.get(reportedLocalVersion), Ref.get(backgroundProbeEnabledRef)]).pipe(
+          Effect.map(([version, backgroundProbeEnabled]) => {
             if (!provider.installed) return provider;
             const resolvedVersion =
               provider.version !== null && (!isDsh || !isPlaceholderDshVersion(provider.version))
                 ? provider.version
                 : version !== null && (!isDsh || !isPlaceholderDshVersion(version))
                   ? version
-                  : resolveLocalDshVersionFast() ?? provider.version;
-            return resolvedVersion !== provider.version
-              ? { ...provider, version: resolvedVersion }
-              : provider;
+                  : (resolveLocalDshVersionFast() ?? provider.version);
+            const withVersion =
+              resolvedVersion !== provider.version
+                ? { ...provider, version: resolvedVersion }
+                : provider;
+            if (
+              !backgroundProbeEnabled &&
+              withVersion.message === ACP_BACKGROUND_CHECKING_MESSAGE
+            ) {
+              const { message: _checkingMessage, ...withoutCheckingMessage } = withVersion;
+              return withoutCheckingMessage;
+            }
+            return withVersion;
           }),
         ),
       ),
@@ -1264,12 +1359,13 @@ export const AcpRegistryDriver: ProviderDriver<
     const enrichProvider = checkAcpRegistryProviderStatus(
       {
         ...readinessInput,
-        cwd: host.paths.cwd,
+        cwd: probeCwd,
       },
-      probeAcpRegistryConfiguration,
+      (probeInput) =>
+        ensureProbeCwd.pipe(Effect.andThen(probeAcpRegistryConfiguration(probeInput))),
     ).pipe(
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
-      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, probeAwareSpawner),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
       Effect.provideService(SecureRandom.SecureRandom, random),
@@ -1334,39 +1430,44 @@ export const AcpRegistryDriver: ProviderDriver<
       // Inspection may fetch the registry when its disk cache is missing; creation must not wait on that.
       initialSnapshot: () => buildInitialAcpRegistrySnapshot(readinessInput),
       checkProvider,
-      enrichSnapshot: Effect.fn("enrichSnapshot")(function ({
+      enrichSnapshot: Effect.fn("enrichSnapshot")(function* ({
         snapshot,
         getSnapshot,
         publishSnapshot,
       }) {
-        if (!snapshot.installed) return Effect.void;
-        const publishEnrichment = (
-          Option.isSome(runtimeCoordinator)
-            ? runtimeCoordinator.value.runBackgroundProbe(
-                effectiveConfig.source === "local"
-                  ? `local:${instanceId}`
-                  : effectiveConfig.agentId,
-                enrichProviderCached(snapshot),
-              )
-            : enrichProviderCached(snapshot).pipe(Effect.asSome)
-        ).pipe(
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.void,
-              onSome: ({ provider, generation }) =>
-                liveSnapshotSemaphore.withPermit(
-                  Ref.get(enrichmentCache).pipe(
-                    Effect.flatMap((current) =>
-                      current.generation === generation
-                        ? withLiveRuntimeState(provider).pipe(Effect.flatMap(publishSnapshot))
-                        : Effect.void,
+        if (!snapshot.installed) return;
+        const backgroundProbeEnabled = yield* Ref.get(backgroundProbeEnabledRef);
+        const publishEnrichment = !backgroundProbeEnabled
+          ? Effect.void
+          : (Option.isSome(runtimeCoordinator)
+              ? runtimeCoordinator.value.runBackgroundProbe(
+                  effectiveConfig.source === "local"
+                    ? `local:${instanceId}`
+                    : effectiveConfig.agentId,
+                  enrichProviderCached(snapshot),
+                )
+              : enrichProviderCached(snapshot).pipe(Effect.asSome)
+            ).pipe(
+              Effect.flatMap(
+                Option.match({
+                  onNone: () => Effect.void,
+                  onSome: ({ provider, generation }) =>
+                    liveSnapshotSemaphore.withPermit(
+                      Ref.get(enrichmentCache).pipe(
+                        Effect.flatMap((current) =>
+                          current.generation === generation
+                            ? withLiveRuntimeState(provider).pipe(Effect.flatMap(publishSnapshot))
+                            : Effect.void,
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-            }),
-          ),
-        );
-        if (Option.isNone(runtimeCoordinator)) return publishEnrichment;
+                }),
+              ),
+            );
+        if (Option.isNone(runtimeCoordinator)) {
+          yield* publishEnrichment;
+          return;
+        }
 
         const publishLiveCommands = runtimeCoordinator.value.watchAvailableCommands(
           instanceId,
@@ -1441,7 +1542,7 @@ export const AcpRegistryDriver: ProviderDriver<
               ),
             ),
         );
-        return Effect.all(
+        yield* Effect.all(
           [publishEnrichment, publishLiveCommands, publishLiveConfiguration, publishUrlAuthAction],
           {
             concurrency: "unbounded",
@@ -1492,32 +1593,142 @@ export const AcpRegistryDriver: ProviderDriver<
             .pipe(Effect.andThen(runtimeCoordinator.value.clearAvailableCommands(instanceId)))
         : Effect.void
     ).pipe(Effect.andThen(clearLearnedModels));
+    const refreshWithProbe = Ref.set(backgroundProbeEnabledRef, true).pipe(
+      Effect.andThen(snapshot.refresh),
+    );
+    const ptyOption = yield* Effect.serviceOption(PtyAdapter.PtyAdapter);
+    const authCatalog: AcpRegistrySupport.AcpRegistryCatalog["Service"] =
+      effectiveConfig.source === "local"
+        ? {
+            ...catalog,
+            inspect: (settings, env) =>
+              Ref.get(backgroundProbeEnabledRef).pipe(
+                Effect.flatMap(
+                  (
+                    enabledForProbe,
+                  ): Effect.Effect<
+                    AcpRegistrySupport.AcpRegistryInspection,
+                    AcpRegistrySupport.AcpRegistryError
+                  > =>
+                    enabledForProbe
+                      ? catalog.inspect(settings, env)
+                      : Effect.succeed({
+                          status: "ready",
+                          agentId: settings.commandPath.trim() || "local",
+                          version: null,
+                          distribution: "local",
+                        }),
+                ),
+              ),
+            resolve: (settings, cwd, env) =>
+              Ref.get(backgroundProbeEnabledRef).pipe(
+                Effect.flatMap(
+                  (
+                    enabledForProbe,
+                  ): Effect.Effect<
+                    AcpRegistrySupport.ResolvedAcpRegistryAgent,
+                    AcpRegistrySupport.AcpRegistryError,
+                    Scope.Scope
+                  > =>
+                    enabledForProbe
+                      ? catalog.resolve(settings, cwd, env)
+                      : Effect.succeed({
+                          distribution: "local",
+                          spawn: { command: DEFERRED_BOOT_AUTH_PROBE_COMMAND, args: [] },
+                        }),
+                ),
+              ),
+          }
+        : catalog;
+    const makeLocalAuthRuntime = (spawn: AcpSessionRuntime.AcpSpawnInput) => {
+      if (spawn.command === DEFERRED_BOOT_AUTH_PROBE_COMMAND) {
+        return Effect.succeed({
+          initialize: () => Effect.succeed({ protocolVersion: 1, authMethods: [] }),
+          authenticate: () => Effect.void,
+          start: () =>
+            Effect.fail(
+              new AcpTransportError({
+                detail: "ACP probe was deferred.",
+                cause: undefined,
+              }),
+            ),
+          handleElicitation: () => Effect.void,
+          logout: Effect.succeed({}),
+        });
+      }
+      return Effect.gen(function* () {
+        const context = yield* Layer.build(
+          AcpSessionRuntime.layer({
+            spawn,
+            cwd: probeCwd,
+            authenticateOnAuthRequired: false,
+            clientCapabilities: {
+              auth: { terminal: Option.isSome(ptyOption) },
+              elicitation: { url: {} },
+              fs: { readTextFile: false, writeTextFile: false },
+              terminal: false,
+            },
+            clientInfo: { name: "prismux-provider-auth", version: "0.0.0" },
+          }).pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, probeAwareSpawner),
+                Layer.succeed(SecureRandom.SecureRandom, random),
+              ),
+            ),
+          ),
+        );
+        return yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(
+          Effect.provide(context),
+        );
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderSetupError({
+              instanceId,
+              operation: "start",
+              detail: AcpRegistryAuth.formatFailureDetail(
+                "Could not start the selected ACP agent.",
+                cause,
+              ),
+              cause,
+            }),
+        ),
+      );
+    };
     const controller = yield* AcpRegistryAuth.makeAcpRegistryAuth({
       instanceId,
       settings: effectiveConfig,
-      cwd: host.paths.cwd,
+      cwd: probeCwd,
       environment: processEnvironment,
+      ...(effectiveConfig.source === "local" ? { makeRuntime: makeLocalAuthRuntime } : {}),
       onChanged: (authenticated) =>
         confirmedAuthentication
           .set(authenticated)
           .pipe(
             Effect.andThen(authenticated ? Effect.void : clearLiveState),
             Effect.andThen(liveSnapshotSemaphore.withPermit(invalidateEnrichmentCache)),
-            Effect.andThen(snapshot.refresh),
+            Effect.andThen(refreshWithProbe),
             Effect.asVoid,
           ),
     }).pipe(
-      Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
-      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, authCatalog),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, probeAwareSpawner),
       Effect.provideService(SecureRandom.SecureRandom, random),
     );
     const auth = {
       ...controller,
+      start: (input: Parameters<typeof controller.start>[0]) =>
+        Ref.set(backgroundProbeEnabledRef, true).pipe(Effect.andThen(controller.start(input))),
+      logout: (stopSessions: Parameters<typeof controller.logout>[0]) =>
+        Ref.set(backgroundProbeEnabledRef, true).pipe(
+          Effect.andThen(controller.logout(stopSessions)),
+        ),
       invalidate: (controller.invalidate ?? Effect.void).pipe(
         Effect.andThen(confirmedAuthentication.set(false)),
         Effect.andThen(clearLiveState),
         Effect.andThen(liveSnapshotSemaphore.withPermit(invalidateEnrichmentCache)),
-        Effect.andThen(snapshot.refresh),
+        Effect.andThen(refreshWithProbe),
         Effect.asVoid,
       ),
     };
@@ -1532,7 +1743,7 @@ export const AcpRegistryDriver: ProviderDriver<
       auth,
       snapshot: {
         ...snapshot,
-        refresh: snapshot.refresh.pipe(Effect.tap(() => controller.refreshMethods ?? Effect.void)),
+        refresh: refreshWithProbe.pipe(Effect.tap(() => controller.refreshMethods ?? Effect.void)),
       },
       snapshotForCwd: (cwd) =>
         snapshot.getSnapshot.pipe(

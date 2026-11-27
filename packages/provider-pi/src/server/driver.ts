@@ -6,6 +6,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
+import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as ProviderLatestVersions from "@prismux/provider-core/server/ProviderLatestVersions";
@@ -146,16 +147,26 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
       host.compatibility,
     );
 
-    const checkProvider = fileSystem
+    const ensureProbeCwd = fileSystem
       .makeDirectory(probeCwd, { recursive: true })
-      .pipe(
-        Effect.ignore,
-        Effect.andThen(
-          checkPiProviderStatus(effectiveConfig, processEnv, probeCwd, host.compatibility),
-        ),
-        Effect.map(stampIdentity),
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-      );
+      .pipe(Effect.ignore);
+    const probeSpawner = ChildProcessSpawner.make((command) => {
+      const needsProbeCwd =
+        ChildProcess.isStandardCommand(command) && command.options.cwd === probeCwd;
+      return needsProbeCwd
+        ? ensureProbeCwd.pipe(Effect.andThen(spawner.spawn(command)))
+        : spawner.spawn(command);
+    });
+
+    const checkProvider = (
+      effectiveConfig.enabled
+        ? checkPiProviderStatus(effectiveConfig, processEnv, probeCwd, host.compatibility).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, probeSpawner),
+          )
+        : checkPiProviderStatus(effectiveConfig, processEnv, undefined, host.compatibility).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          )
+    ).pipe(Effect.map(stampIdentity));
 
     const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
     const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<PiSettings>>({

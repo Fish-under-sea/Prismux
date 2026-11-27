@@ -421,7 +421,12 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       const [snapshot] = yield* nextReady;
       expect(snapshot).toMatchObject({
         status: "ready",
-        auth: { status: "authenticated", type: "local-cli", label: "Local agy CLI", canLogout: false },
+        auth: {
+          status: "authenticated",
+          type: "local-cli",
+          label: "Local agy CLI",
+          canLogout: false,
+        },
         supportsTextGeneration: true,
       });
       expect(snapshot.models).toEqual(buildAntigravityModelsFromSession(sessionSetupResult));
@@ -462,7 +467,12 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
         expect(yield* harness.provider.snapshot.getSnapshot).toMatchObject({
           installed: true,
           status: "warning",
-          auth: { status: "unauthenticated", type: "local-cli", label: "Local agy CLI", canLogout: false },
+          auth: {
+            status: "unauthenticated",
+            type: "local-cli",
+            label: "Local agy CLI",
+            canLogout: false,
+          },
           message:
             "Local agy CLI is not signed in. Run 'agy' or 'agy acp --login' in a terminal, then sync models.",
           models: [],
@@ -883,7 +893,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
   );
 
   it.effect(
-    "local-cli mode hydrates catalog once via official ACP and publishes native tier label",
+    "local-cli mode skips cold-boot ACP catalog spawn and hydrates once on explicit refresh",
     () =>
       Effect.gen(function* () {
         const hydrated = yield* Ref.make(0);
@@ -895,8 +905,17 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
             Effect.asVoid,
           ),
         });
+        // Cold startup readiness check stays strictly read-only without spawning agy acp.
         yield* readyHarness.initialize;
+        yield* Effect.yieldNow;
+        expect(yield* Ref.get(hydrated)).toBe(0);
+
+        // Explicit refresh hydrates the catalog once via official ACP.
+        yield* readyHarness.provider.snapshot.refresh;
         yield* Deferred.await(hydratedDone);
+        expect(yield* Ref.get(hydrated)).toBe(1);
+        yield* readyHarness.provider.snapshot.refresh;
+        yield* Effect.yieldNow;
         expect(yield* Ref.get(hydrated)).toBe(1);
 
         yield* readyHarness.provider.onSessionStarted({

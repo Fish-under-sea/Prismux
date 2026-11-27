@@ -8,6 +8,7 @@ import {
 import * as IdAllocator from "@prismux/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@prismux/provider-core/server/McpProviderSessions";
 import * as ProviderEventLoggers from "@prismux/provider-core/server/ProviderEventLoggers";
+import * as ProviderHost from "@prismux/provider-core/server/ProviderHost";
 import * as TestProviderHost from "@prismux/provider-testing/TestProviderHost";
 import { toCustomModelSetting } from "@prismux/core-shared/model";
 import { AcpRegistrySettings } from "../settings.ts";
@@ -31,6 +32,7 @@ import {
   checkAcpRegistryProviderReadiness,
   checkAcpRegistryProviderStatus,
   isAcpRegistryCacheValid,
+  resolveAcpRegistryProbeCwd,
   updateAcpRegistryEnrichmentCache,
 } from "./driver.ts";
 import {
@@ -1994,6 +1996,200 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
           }),
         ).toEqual({ title: "Waiver signed title" });
         expect(yield* fileSystem.readFileString(promptLogPath)).toBe("1");
+      }),
+  );
+
+  it.effect(
+    "keeps fresh local DSH boot strictly read-only without spawning and isolates explicit refresh probes away from host cwd",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const host = yield* ProviderHost.ProviderHost;
+        const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "acp-dsh-clean-boot-" });
+        const dshBinDir = path.join(root, "node_modules", "@deepseek-ai", "dsh", "lib");
+        const fakeDshScript = path.join(dshBinDir, "bin.js");
+        const resolvedCwds: Array<string> = [];
+        const instanceId = ProviderInstanceId.make("dsh-clean-boot");
+        const expectedProbeCwd = resolveAcpRegistryProbeCwd(
+          path,
+          host.paths.providerStatusCacheDir,
+          instanceId,
+        );
+        yield* fileSystem
+          .remove(expectedProbeCwd, { recursive: true, force: true })
+          .pipe(Effect.ignore);
+        yield* fileSystem.makeDirectory(dshBinDir, { recursive: true });
+        yield* fileSystem.writeFileString(
+          path.join(root, "node_modules", "@deepseek-ai", "dsh", "package.json"),
+          JSON.stringify({ name: "@deepseek-ai/dsh", version: "0.2.2-rc.4" }),
+        );
+        yield* fileSystem.writeFileString(
+          fakeDshScript,
+          `import * as readline from "node:readline";
+const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  if (!line.trim()) return;
+  const { id, method } = JSON.parse(line);
+  if (id === undefined) return;
+  if (method === "initialize") {
+    send({
+      id,
+      result: {
+        protocolVersion: 1,
+        agentCapabilities: { sessionCapabilities: { close: {} } },
+        authMethods: [],
+        agentInfo: { name: "deepseek-harness-acp", version: "0.0.1" },
+      },
+    });
+  } else if (method === "session/new") {
+    send({
+      id,
+      result: {
+        sessionId: "dsh-isolated-probe",
+        models: {
+          currentModelId: "deepseek-v4-pro",
+          availableModels: [{ modelId: "deepseek-v4-pro", name: "deepseek-v4-pro" }],
+        },
+      },
+    });
+  } else {
+    send({ id, result: {} });
+  }
+});
+`,
+        );
+
+        const instance = yield* AcpRegistryDriver.create({
+          instanceId,
+          displayName: "DSH",
+          enabled: true,
+          environment: [],
+          config: decodeSettings({
+            source: "local",
+            commandPath: process.execPath,
+            commandArgs: [fakeDshScript, "acp"],
+          }),
+        }).pipe(
+          Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
+            ...catalogWithInspection({
+              status: "ready",
+              agentId: "dsh",
+              version: null,
+              distribution: "local",
+            }),
+            resolve: (_settings, cwd) =>
+              Effect.sync(() => {
+                resolvedCwds.push(cwd);
+                return {
+                  distribution: "local" as const,
+                  spawn: { command: process.execPath, args: [fakeDshScript, "acp"] },
+                };
+              }),
+          }),
+        );
+
+        // Wait for the initial read-only boot readiness check to settle.
+        const initialReady = yield* instance.snapshot.streamChanges.pipe(
+          Stream.filter((snapshot) => snapshot.installed),
+          Stream.runHead,
+        );
+        const bootSnapshot = Option.getOrThrow(initialReady);
+        expect(bootSnapshot.installed).toBe(true);
+        expect(bootSnapshot.status).toBe("ready");
+        expect(bootSnapshot.version).toBe("0.2.2-rc.4");
+        expect(bootSnapshot.message).toBeUndefined();
+        yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
+        expect(resolvedCwds).toEqual([]);
+        expect(yield* fileSystem.exists(expectedProbeCwd)).toBe(false);
+
+        // Explicit refresh runs the ACP probe inside caches/probes/<safeInstanceId>, never host.paths.cwd.
+        const probed = yield* instance.snapshot.streamChanges.pipe(
+          Stream.filter((snapshot) =>
+            snapshot.models.some((model) => model.slug === "deepseek-v4-pro"),
+          ),
+          Stream.runHead,
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        yield* instance.snapshot.refresh;
+        const refreshed = Option.getOrThrow(yield* Fiber.join(probed));
+        expect(refreshed.models.map((model) => model.slug)).toEqual(["deepseek-v4-pro"]);
+        expect(resolvedCwds.length).toBeGreaterThanOrEqual(1);
+        expect(resolvedCwds.every((cwd) => cwd === expectedProbeCwd)).toBe(true);
+        expect(resolvedCwds.includes(host.paths.cwd)).toBe(false);
+        expect(yield* fileSystem.exists(expectedProbeCwd)).toBe(true);
+      }),
+  );
+
+  it.effect(
+    "runs startup enrichment in isolated probe cwd when a persisted model cache already exists",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const host = yield* ProviderHost.ProviderHost;
+        const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "acp-cached-boot-" });
+        const agentPath = path.join(root, "agent.mjs");
+        const modelsPath = path.join(root, "models.json");
+        yield* fileSystem.writeFileString(agentPath, fakeAgentSource);
+        yield* fileSystem.writeFileString(modelsPath, JSON.stringify(["cached-model-a"]));
+
+        const instanceId = ProviderInstanceId.make("dsh-cached-boot");
+        const expectedProbeCwd = resolveAcpRegistryProbeCwd(
+          path,
+          host.paths.providerStatusCacheDir,
+          instanceId,
+        );
+        const cachePath = path.join(host.paths.providerStatusCacheDir, `${instanceId}.json`);
+        yield* fileSystem.writeFileString(
+          cachePath,
+          JSON.stringify({
+            instanceId,
+            driver: "acpRegistry",
+            enabled: true,
+            installed: true,
+            status: "ready",
+            models: [{ slug: "cached-model-a", name: "Cached Model A", isCustom: false }],
+          }),
+        );
+
+        const resolvedCwds: Array<string> = [];
+        const instance = yield* AcpRegistryDriver.create({
+          instanceId,
+          displayName: "Cached Local ACP",
+          enabled: true,
+          environment: [],
+          config: decodeSettings({ source: "local", commandPath: "agent" }),
+        }).pipe(
+          Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
+            ...catalogWithInspection({
+              status: "ready",
+              agentId: "agent",
+              version: null,
+              distribution: "local",
+            }),
+            resolve: (_settings, cwd) =>
+              Effect.sync(() => {
+                resolvedCwds.push(cwd);
+                return {
+                  distribution: "local" as const,
+                  spawn: { command: process.execPath, args: [agentPath, modelsPath] },
+                };
+              }),
+          }),
+        );
+
+        const enriched = yield* instance.snapshot.streamChanges.pipe(
+          Stream.filter((snapshot) =>
+            snapshot.models.some((model) => model.slug === "cached-model-a"),
+          ),
+          Stream.runHead,
+        );
+        expect(Option.isSome(enriched)).toBe(true);
+        expect(resolvedCwds.length).toBeGreaterThanOrEqual(1);
+        expect(resolvedCwds.every((cwd) => cwd === expectedProbeCwd)).toBe(true);
+        expect(resolvedCwds.includes(host.paths.cwd)).toBe(false);
       }),
   );
 });

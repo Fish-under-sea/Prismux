@@ -743,29 +743,31 @@ it.layer(
       }),
     );
 
-    it.effect("exposes endpoint without subscriptionType when a custom Codex endpoint is configured", () =>
-      Effect.gen(function* () {
-        const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
-          Effect.succeed(
-            makeCodexProbeSnapshot({
-              endpoint: "https://proxy.example",
-              account: {
+    it.effect(
+      "exposes endpoint without subscriptionType when a custom Codex endpoint is configured",
+      () =>
+        Effect.gen(function* () {
+          const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+            Effect.succeed(
+              makeCodexProbeSnapshot({
+                endpoint: "https://proxy.example",
                 account: {
-                  type: "chatgpt",
-                  email: "test@example.com",
-                  planType: "pro",
+                  account: {
+                    type: "chatgpt",
+                    email: "test@example.com",
+                    planType: "pro",
+                  },
+                  requiresOpenaiAuth: false,
                 },
-                requiresOpenaiAuth: false,
-              },
-            }),
-          ),
-        );
+              }),
+            ),
+          );
 
-        assert.strictEqual(status.status, "ready");
-        assert.strictEqual(status.auth.endpoint, "https://proxy.example");
-        assert.strictEqual(status.auth.requiresOpenaiAuth, false);
-        assert.strictEqual(status.auth.subscriptionType, undefined);
-      }),
+          assert.strictEqual(status.status, "ready");
+          assert.strictEqual(status.auth.endpoint, "https://proxy.example");
+          assert.strictEqual(status.auth.requiresOpenaiAuth, false);
+          assert.strictEqual(status.auth.subscriptionType, undefined);
+        }),
     );
 
     it.effect("offers cyber access only on catalog models that advertise it", () =>
@@ -4983,6 +4985,248 @@ it.layer(
             if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
             throw new Error(`Unexpected args: ${joined}`);
           }),
+        ),
+      ),
+    );
+  });
+
+  describe("clean-boot cache and probe isolation", () => {
+    it("skips persisting disabled or uninstalled empty snapshots unless a cache or retained state exists", () => {
+      const disabledUninstalled: ServerProvider = {
+        instanceId: ProviderInstanceId.make("pi"),
+        driver: ProviderDriverKind.make("pi"),
+        enabled: false,
+        installed: false,
+        version: null,
+        status: "disabled",
+        auth: { status: "unknown" },
+        checkedAt: "2026-11-27T00:00:00.000Z",
+        models: [{ slug: "default", name: "Pi default", isCustom: false, capabilities: null }],
+        slashCommands: [],
+        skills: [],
+      };
+      const enabledMissingCli: ServerProvider = {
+        ...disabledUninstalled,
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        driver: ProviderDriverKind.make("claudeAgent"),
+        enabled: true,
+        status: "error",
+        message: "Claude Agent CLI (`claude`) was not found on PATH.",
+      };
+      assert.isFalse(
+        ProviderRegistry.shouldPersistProviderSnapshot(disabledUninstalled, {
+          hasExistingCache: false,
+        }),
+      );
+      assert.isFalse(
+        ProviderRegistry.shouldPersistProviderSnapshot(enabledMissingCli, {
+          hasExistingCache: false,
+        }),
+      );
+      assert.isTrue(
+        ProviderRegistry.shouldPersistProviderSnapshot(enabledMissingCli, {
+          hasExistingCache: true,
+        }),
+      );
+      assert.isTrue(
+        ProviderRegistry.shouldPersistProviderSnapshot(
+          { ...enabledMissingCli, modelsRetained: true },
+          { hasExistingCache: false },
+        ),
+      );
+      assert.isTrue(
+        ProviderRegistry.shouldPersistProviderSnapshot(
+          { ...enabledMissingCli, installed: true },
+          { hasExistingCache: false },
+        ),
+      );
+    });
+
+    it.effect(
+      "does not write empty cache files for disabled or uninstalled providers, while still persisting installed or previously cached ones",
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const makeStaticInstance = (snapshot: ServerProvider): ProviderInstance => ({
+            instanceId: snapshot.instanceId,
+            driverKind: snapshot.driver,
+            continuationIdentity: {
+              driverKind: snapshot.driver,
+              continuationKey: `${snapshot.driver}:instance:${snapshot.instanceId}`,
+            },
+            displayName: snapshot.displayName,
+            enabled: snapshot.enabled,
+            snapshot: {
+              resolveMaintenance: () =>
+                Effect.succeed(
+                  makeManualOnlyProviderMaintenanceCapabilities({
+                    provider: snapshot.driver,
+                    packageName: null,
+                  }),
+                ),
+              getSnapshot: Effect.succeed(snapshot),
+              isAwaitingFirstCheck: Effect.succeed(false),
+              refresh: Effect.succeed(snapshot),
+              streamChanges: Stream.empty,
+              applyUsageLimits: () => Effect.void,
+            },
+            orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+            textGeneration: {} as ProviderInstance["textGeneration"],
+          });
+
+          const disabledPi: ServerProvider = {
+            instanceId: ProviderInstanceId.make("pi"),
+            driver: ProviderDriverKind.make("pi"),
+            enabled: false,
+            installed: false,
+            version: null,
+            status: "disabled",
+            auth: { status: "unknown" },
+            checkedAt: "2026-11-27T00:00:00.000Z",
+            models: [{ slug: "default", name: "Pi default", isCustom: false, capabilities: null }],
+            slashCommands: [],
+            skills: [],
+          };
+          const uninstalledCodex: ServerProvider = {
+            instanceId: ProviderInstanceId.make("codex"),
+            driver: ProviderDriverKind.make("codex"),
+            enabled: true,
+            installed: false,
+            version: null,
+            status: "error",
+            auth: { status: "unknown" },
+            checkedAt: "2026-11-27T00:00:00.000Z",
+            models: [],
+            slashCommands: [],
+            skills: [],
+            message: "Could not start Codex CLI (`codex`).",
+          };
+          const installedOpenCode: ServerProvider = {
+            instanceId: ProviderInstanceId.make("opencode"),
+            driver: ProviderDriverKind.make("opencode"),
+            enabled: true,
+            installed: true,
+            version: "1.2.3",
+            status: "ready",
+            auth: { status: "authenticated" },
+            checkedAt: "2026-11-27T00:00:00.000Z",
+            models: [{ slug: "gpt-5", name: "GPT-5", isCustom: false, capabilities: null }],
+            slashCommands: [],
+            skills: [],
+          };
+          const previouslyCachedUninstalled: ServerProvider = {
+            instanceId: ProviderInstanceId.make("antigravity"),
+            driver: ProviderDriverKind.make("antigravity"),
+            enabled: true,
+            installed: false,
+            version: null,
+            status: "error",
+            auth: { status: "unknown" },
+            checkedAt: "2026-11-27T00:01:00.000Z",
+            models: [],
+            slashCommands: [],
+            skills: [],
+            message: "Antigravity ACP runtime is not installed.",
+          };
+
+          const instances = [
+            makeStaticInstance(disabledPi),
+            makeStaticInstance(uninstalledCodex),
+            makeStaticInstance(installedOpenCode),
+            makeStaticInstance(previouslyCachedUninstalled),
+          ];
+          const layerInstanceRegistry = Layer.succeed(
+            ProviderInstanceRegistry.ProviderInstanceRegistry,
+            {
+              getInstance: (id) =>
+                Effect.succeed(instances.find((instance) => instance.instanceId === id)),
+              listInstances: Effect.succeed(instances),
+              listUnavailable: Effect.succeed([]),
+              streamChanges: Stream.empty,
+              subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+            },
+          );
+
+          const config = yield* ServerConfig.ServerConfig;
+          const piCachePath = yield* resolveProviderStatusCachePath({
+            cacheDir: config.providerStatusCacheDir,
+            instanceId: disabledPi.instanceId,
+          });
+          const codexCachePath = yield* resolveProviderStatusCachePath({
+            cacheDir: config.providerStatusCacheDir,
+            instanceId: uninstalledCodex.instanceId,
+          });
+          const opencodeCachePath = yield* resolveProviderStatusCachePath({
+            cacheDir: config.providerStatusCacheDir,
+            instanceId: installedOpenCode.instanceId,
+          });
+          const antigravityCachePath = yield* resolveProviderStatusCachePath({
+            cacheDir: config.providerStatusCacheDir,
+            instanceId: previouslyCachedUninstalled.instanceId,
+          });
+          yield* writeProviderStatusCache({
+            filePath: antigravityCachePath,
+            provider: {
+              ...previouslyCachedUninstalled,
+              installed: true,
+              status: "ready",
+              checkedAt: "2026-11-27T00:00:00.000Z",
+            },
+          });
+
+          yield* Effect.gen(function* () {
+            const registry = yield* ProviderRegistry.ProviderRegistry;
+            yield* registry.getProviders;
+            assert.isFalse(yield* fs.exists(piCachePath));
+            assert.isFalse(yield* fs.exists(codexCachePath));
+            assert.isTrue(yield* fs.exists(opencodeCachePath));
+            assert.strictEqual(
+              (yield* readProviderStatusCache(opencodeCachePath))?.version,
+              "1.2.3",
+            );
+            assert.strictEqual(
+              (yield* readProviderStatusCache(antigravityCachePath))?.installed,
+              false,
+            );
+          }).pipe(
+            Effect.provide(
+              ProviderRegistry.layer.pipe(
+                Layer.provide(layerInstanceRegistry),
+                Layer.provide(layerUnusedMutator),
+              ),
+            ),
+            Effect.scoped,
+          );
+        }).pipe(
+          Effect.provide(
+            ServerConfig.layerTest(process.cwd(), {
+              prefix: "prismux-clean-boot-cache-",
+            }).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+          ),
+        ),
+    );
+
+    it.effect("isolates checkCodexProviderStatus probe cwd into caches/probes/codex", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const config = yield* ServerConfig.ServerConfig;
+        let observedCwd: string | undefined;
+        const status = yield* checkCodexProviderStatus(defaultCodexSettings, (input) =>
+          Effect.sync(() => {
+            observedCwd = input.cwd;
+            return makeCodexProbeSnapshot();
+          }),
+        );
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(
+          observedCwd,
+          path.join(config.providerStatusCacheDir, "probes", "codex"),
+        );
+      }).pipe(
+        Effect.provide(
+          ServerConfig.layerTest(process.cwd(), {
+            prefix: "prismux-codex-probe-cwd-",
+          }).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
         ),
       ),
     );
