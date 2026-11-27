@@ -1,16 +1,32 @@
 import type { ScopedThreadRef, ThreadId } from "@prismux/core-contracts";
 import {
+  assistantCitationLabel,
+  formatAssistantCitationHref,
+} from "@prismux/core-shared/assistantCitations";
+import {
   ArrowUpRightIcon,
   CornerDownLeftIcon,
   Loader2Icon,
   MessageSquarePlusIcon,
   PlusIcon,
+  QuoteIcon,
   SendIcon,
   Trash2Icon,
   WifiOffIcon,
+  XIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
+import {
+  clearPendingSideAskCitations,
+  composeSideAskPromptWithCitations,
+  deriveSideAskTitleSeed,
+  EMPTY_PENDING_SIDE_ASK_SNAPSHOT,
+  extractSideAskTitleFromPrompt,
+  getPendingSideAskSnapshot,
+  removePendingSideAskCitation,
+  subscribePendingSideAskCitations,
+} from "../../lib/sideChatPane";
 import {
   createSideQuestionRecord,
   loadPersistedSideQuestions,
@@ -22,10 +38,7 @@ import {
 import { openLinkPullRequestDialog } from "../pullRequest/LinkPullRequestDialog";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { Button } from "../ui/button";
-import {
-  notifySideQuestionsUpdated,
-  subscribeSideQuestionsUpdated,
-} from "./btwMode";
+import { notifySideQuestionsUpdated, subscribeSideQuestionsUpdated } from "./btwMode";
 
 export interface ExistingBtwSideThreadItem {
   readonly threadId: ThreadId;
@@ -109,7 +122,12 @@ export function SideChatEmptySurface(props: {
   readonly canStart: boolean;
   readonly disabledReason: string | null;
   readonly onStart?: (() => void) | undefined;
-  readonly onQuickAsk?: ((question: string) => Promise<boolean> | boolean | void) | undefined;
+  readonly onQuickAsk?:
+    | ((
+        question: string,
+        options?: { readonly titleSeed?: string },
+      ) => Promise<boolean> | boolean | void)
+    | undefined;
   readonly threadRef?: ScopedThreadRef | undefined;
   readonly isServerThread?: boolean | undefined;
   readonly existingSideThreads?: ReadonlyArray<ExistingBtwSideThreadItem> | undefined;
@@ -122,13 +140,21 @@ export function SideChatEmptySurface(props: {
 
   const [draft, setDraft] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const lastFocusedRevisionRef = useRef(0);
+  const pendingSideAsk = useSyncExternalStore(
+    (onStoreChange) =>
+      threadRef ? subscribePendingSideAskCitations(threadRef, onStoreChange) : () => {},
+    () => (threadRef ? getPendingSideAskSnapshot(threadRef) : EMPTY_PENDING_SIDE_ASK_SNAPSHOT),
+    () => (threadRef ? getPendingSideAskSnapshot(threadRef) : EMPTY_PENDING_SIDE_ASK_SNAPSHOT),
+  );
+  const attachedCitations = pendingSideAsk.citations;
   const [stagedState, setStagedState] = useState<{
     readonly key: string;
     readonly records: ReadonlyArray<SideQuestionRecord>;
   }>(() => ({
     key: storageKey,
-    records:
-      environmentId && threadId ? loadPersistedSideQuestions(environmentId, threadId) : [],
+    records: environmentId && threadId ? loadPersistedSideQuestions(environmentId, threadId) : [],
   }));
 
   const refreshPersisted = useCallback(() => {
@@ -144,6 +170,26 @@ export function SideChatEmptySurface(props: {
     return subscribeSideQuestionsUpdated(environmentId, threadId, refreshPersisted);
   }, [environmentId, refreshPersisted, threadId]);
 
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- focuses the quick-ask textarea whenever a new selection citation arrives for side ask
+  useEffect(() => {
+    if (
+      pendingSideAsk.revision <= 0 ||
+      pendingSideAsk.revision === lastFocusedRevisionRef.current
+    ) {
+      return;
+    }
+    lastFocusedRevisionRef.current = pendingSideAsk.revision;
+    const frame = window.requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.focus({ preventScroll: true });
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [pendingSideAsk.revision]);
+
   const stagedRecords =
     stagedState.key === storageKey
       ? stagedState.records
@@ -154,12 +200,13 @@ export function SideChatEmptySurface(props: {
   const existingSideThreads = props.existingSideThreads ?? [];
   const linkedThreadIds = new Set(existingSideThreads.map((item) => item.threadId));
   const visibleStagedRecords = stagedRecords.filter(
-    (record) => !record.linkedSideThreadId || !linkedThreadIds.has(record.linkedSideThreadId as ThreadId),
+    (record) =>
+      !record.linkedSideThreadId || !linkedThreadIds.has(record.linkedSideThreadId as ThreadId),
   );
 
-  const stageQuestionLocally = (question: string) => {
+  const stageQuestionLocally = (question: string, titleOverride?: string) => {
     if (!environmentId || !threadId) return;
-    const record = createSideQuestionRecord({
+    const baseRecord = createSideQuestionRecord({
       question,
       contextSummary: "",
       status: "offline",
@@ -167,6 +214,9 @@ export function SideChatEmptySurface(props: {
         props.disabledReason ??
         "当前为主会话草稿，暂无主对话历史；问题已作为独立只读旁路暂存，主会话建立后可一键追问。",
     });
+    const record: SideQuestionRecord = titleOverride?.trim()
+      ? { ...baseRecord, title: titleOverride.trim() }
+      : baseRecord;
     const current = loadPersistedSideQuestions(environmentId, threadId);
     const next = upsertSideQuestionRecord(current, record);
     savePersistedSideQuestions(environmentId, threadId, next);
@@ -184,24 +234,33 @@ export function SideChatEmptySurface(props: {
   };
 
   const launchQuestion = async (rawQuestion: string, stagedIdToClear?: string) => {
-    const question = rawQuestion.trim();
-    if (!question || submitting) return;
+    const trimmedInput = rawQuestion.trim();
+    const activeCitations = stagedIdToClear ? [] : attachedCitations;
+    if ((trimmedInput.length === 0 && activeCitations.length === 0) || submitting) return;
+    const question = stagedIdToClear
+      ? trimmedInput
+      : composeSideAskPromptWithCitations(activeCitations, trimmedInput);
+    const titleSeed = stagedIdToClear
+      ? extractSideAskTitleFromPrompt(trimmedInput)
+      : deriveSideAskTitleSeed(activeCitations, trimmedInput);
     setSubmitting(true);
     try {
       if (canStart && onQuickAsk) {
-        const started = await onQuickAsk(question);
+        const started = await onQuickAsk(question, { titleSeed });
         if (started !== false) {
           if (stagedIdToClear) {
             removeStagedRecord(stagedIdToClear);
           } else {
             setDraft("");
+            if (threadRef) clearPendingSideAskCitations(threadRef);
           }
           return;
         }
       }
       if (!stagedIdToClear) {
-        stageQuestionLocally(question);
+        stageQuestionLocally(question, titleSeed);
         setDraft("");
+        if (threadRef) clearPendingSideAskCitations(threadRef);
       }
     } finally {
       setSubmitting(false);
@@ -209,6 +268,7 @@ export function SideChatEmptySurface(props: {
   };
 
   const isDraftMode = !canStart && props.isServerThread === false;
+  const canSubmitComposer = draft.trim().length > 0 || attachedCitations.length > 0;
 
   return (
     <div
@@ -255,7 +315,44 @@ export function SideChatEmptySurface(props: {
           data-btw-empty-composer="1"
           className="rounded-2xl border border-border/75 bg-background/70 p-2.5 shadow-xs backdrop-blur-sm dark:border-white/12 dark:bg-white/[0.045]"
         >
+          {attachedCitations.length > 0 ? (
+            <div
+              data-btw-attached-citations="1"
+              className="mb-2 flex flex-wrap items-center gap-1.5"
+            >
+              {attachedCitations.map((citation) => {
+                const href = formatAssistantCitationHref(citation);
+                const label = assistantCitationLabel(citation);
+                return (
+                  <span
+                    key={href}
+                    data-btw-attached-citation="1"
+                    title={citation.text}
+                    className="inline-flex max-w-full items-center gap-1 rounded-lg border border-info/25 bg-info/10 py-0.5 pr-1 pl-2 text-2xs leading-snug text-foreground [[data-pmx-glass='1']_&]:border-foreground/15 [[data-pmx-glass='1']_&]:bg-foreground/[0.06]"
+                  >
+                    <QuoteIcon
+                      aria-hidden="true"
+                      className="size-3 shrink-0 text-info-foreground"
+                    />
+                    <span className="min-w-0 truncate">{label}</span>
+                    <button
+                      type="button"
+                      data-btw-remove-citation="1"
+                      aria-label="移除引用片段"
+                      onClick={() => {
+                        if (threadRef) removePendingSideAskCitation(threadRef, href);
+                      }}
+                      className="inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+                    >
+                      <XIcon aria-hidden="true" className="size-2.5" />
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          ) : null}
           <textarea
+            ref={textareaRef}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
@@ -268,9 +365,13 @@ export function SideChatEmptySurface(props: {
             disabled={submitting}
             aria-label="旁路提问内容"
             placeholder={
-              canStart
-                ? "直接输入只读旁路问题，Enter 立即开启多轮 BTW 对话…"
-                : "现在即可记录旁路问题，主会话启动后一键发往只读支线…"
+              attachedCitations.length > 0
+                ? canStart
+                  ? "针对已引用片段输入旁路问题，Enter 立即开启只读 BTW 对话…"
+                  : "针对已引用片段记录旁路问题，主会话启动后一键追问…"
+                : canStart
+                  ? "直接输入只读旁路问题，Enter 立即开启多轮 BTW 对话…"
+                  : "现在即可记录旁路问题，主会话启动后一键发往只读支线…"
             }
             className="w-full resize-none rounded-xl border border-border/60 bg-background/80 px-2.5 py-2 text-xs leading-relaxed text-foreground placeholder:text-muted-foreground/75 focus:border-ring focus:outline-none dark:border-white/10 dark:bg-black/25"
           />
@@ -297,7 +398,7 @@ export function SideChatEmptySurface(props: {
                 type="button"
                 size="xs"
                 variant="default"
-                disabled={submitting || draft.trim().length === 0}
+                disabled={submitting || !canSubmitComposer}
                 onClick={() => void launchQuestion(draft)}
                 data-btw-empty-submit="1"
                 className="h-7 gap-1 rounded-lg px-2.5 text-[11px]"
@@ -356,11 +457,11 @@ export function SideChatEmptySurface(props: {
                   data-btw-staged-record={record.id}
                   className="flex items-center gap-1.5 rounded-lg border border-border/50 bg-foreground/[0.02] px-2 py-1.5 text-xs dark:border-white/8"
                 >
-                  <WifiOffIcon
-                    aria-hidden="true"
-                    className="size-3.5 shrink-0 text-amber-500"
-                  />
-                  <span className="min-w-0 flex-1 truncate text-foreground/90" title={record.question}>
+                  <WifiOffIcon aria-hidden="true" className="size-3.5 shrink-0 text-amber-500" />
+                  <span
+                    className="min-w-0 flex-1 truncate text-foreground/90"
+                    title={record.question}
+                  >
                     {record.title}
                   </span>
                   {canStart && onQuickAsk ? (

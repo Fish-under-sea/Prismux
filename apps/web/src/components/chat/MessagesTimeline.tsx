@@ -238,6 +238,11 @@ interface MessagesTimelineProps {
     citation: AssistantCitation,
     sourceAnchor: AssistantCitationSourceAnchor,
   ) => boolean;
+  onSideAskAssistantText?: (
+    citation: AssistantCitation,
+    sourceAnchor: AssistantCitationSourceAnchor,
+  ) => boolean;
+  canSideAskAssistantText?: boolean;
   onReplyToResponse?: TimelineRowSharedState["onReplyToResponse"];
   isWorking: boolean;
   /** The thread is catching up from a cached copy, whose working state may be stale. */
@@ -364,6 +369,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
   citationRequest = null,
   citationHistory = CITED_HISTORY_LOADING,
   onCiteAssistantText,
+  onSideAskAssistantText,
+  canSideAskAssistantText,
   onReplyToResponse,
   isWorking,
   syncing = false,
@@ -1725,6 +1732,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
                 viewport={timelineViewportElement}
                 threadRef={citationThreadRef}
                 onCite={onCiteAssistantText}
+                onSideAsk={onSideAskAssistantText}
+                canSideAsk={canSideAskAssistantText}
               />
             ) : null}
             <LegendList<MessagesTimelineRow>

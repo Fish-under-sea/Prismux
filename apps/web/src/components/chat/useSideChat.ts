@@ -12,6 +12,10 @@ import {
 import { useRef } from "react";
 
 import { newMessageId, newThreadId } from "~/lib/utils";
+import {
+  extractSideAskTitleFromPrompt,
+  requestSideThreadComposerFocus,
+} from "../../lib/sideChatPane";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { useRightPanelStore } from "../../rightPanelStore";
@@ -19,16 +23,16 @@ import { readThreadShell, waitForThreadShell } from "../../state/entities";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
-import {
-  attachBtwReadOnlyGuardrailContext,
-  deriveBtwThreadTitle,
-  resolveBtwRuntimeMode,
-} from "./btwMode";
+import { attachBtwReadOnlyGuardrailContext, resolveBtwRuntimeMode } from "./btwMode";
 
 export type SideChatMessage = Pick<
   StartThreadTurnInput["message"],
   "text" | "attachments" | "context"
 > & { readonly titleSeed: string };
+
+export interface SideChatOpenOptions {
+  readonly initialPrompt?: string | undefined;
+}
 
 /**
  * Starts side chats from `threadRef`, or offers none when it is null. `open` forks the
@@ -61,13 +65,17 @@ export function useSideChat(input: {
     const error = squashAtomCommandFailure(failure);
     input.onError(thrownErrorMessage(error, m) ?? fallback);
   };
-  const start = async (threadRef: ScopedThreadRef, message: SideChatMessage | undefined) => {
+  const start = async (
+    threadRef: ScopedThreadRef,
+    message: SideChatMessage | undefined,
+    options?: SideChatOpenOptions,
+  ) => {
     const { runtimeMode: parentRuntimeMode, modelSelection } = input.readSettings();
     // 1:1 AGY Native BTW: side questions are ALWAYS strictly read-only (`approval-required`),
     // never inheriting writable `full-access` from the main thread.
     const btwRuntimeMode = resolveBtwRuntimeMode(parentRuntimeMode);
-    const initialTitle = deriveBtwThreadTitle(
-      message?.text || message?.titleSeed,
+    const initialTitle = extractSideAskTitleFromPrompt(
+      message?.titleSeed || message?.text || options?.initialPrompt || "",
       m(msg("Side chat")),
     );
     const targetThreadId = newThreadId();
@@ -127,7 +135,7 @@ export function useSideChat(input: {
             context: guardedContext,
           },
           ...(modelSelection === undefined ? {} : { modelSelection }),
-          titleSeed: deriveBtwThreadTitle(titleSeed || content.text, initialTitle),
+          titleSeed: extractSideAskTitleFromPrompt(titleSeed || content.text, initialTitle),
           runtimeMode: btwRuntimeMode,
           interactionMode: "default",
           createdAt: new Date().toISOString(),
@@ -144,15 +152,19 @@ export function useSideChat(input: {
       if (modelSelection !== undefined) {
         draftStore.setModelSelection(targetRef, modelSelection);
       }
+      if (options?.initialPrompt) {
+        draftStore.setPrompt(targetRef, options.initialPrompt);
+      }
+      requestSideThreadComposerFocus(targetRef);
     }
     useRightPanelStore.getState().openThread(threadRef, targetThreadId);
     return true;
   };
-  const open = async (message?: SideChatMessage) => {
+  const open = async (message?: SideChatMessage, options?: SideChatOpenOptions) => {
     const { threadRef } = input;
     if (!threadRef || pendingRef.current) return false;
     pendingRef.current = true;
-    return start(threadRef, message).finally(() => {
+    return start(threadRef, message, options).finally(() => {
       pendingRef.current = false;
     });
   };

@@ -9,22 +9,17 @@ import {
 import { AuthOrchestrationOperateScope, type ScopedThreadRef } from "@prismux/core-contracts";
 import { threadContextRecord } from "@prismux/core-shared/composerContextReferences";
 import { T, useGT } from "gt-react";
-import {
-  MessageSquarePlusIcon,
-  PlusIcon,
-  QuoteIcon,
-  Trash2Icon,
-  XIcon,
-} from "lucide-react";
-import { useEffect, useState } from "react";
+import { MessageSquarePlusIcon, PlusIcon, QuoteIcon, Trash2Icon, XIcon } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
+import { formatAssistantCitationForComposer } from "../../composer-logic";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { ComposerHandleContext } from "../../composerHandleContext";
 import { useClientSettings } from "../../hooks/useSettings";
 import { releaseComposerDraftUploads } from "../../lib/composerDraftUploads";
 import { clearThreadTerminalFocus } from "../../lib/terminalFocus";
 import { clearThreadPreviewState } from "../../previewStateStore";
-import type { SideChatParentPanel } from "../../lib/sideChatPane";
+import { registerSideThreadComposerBridge, type SideChatParentPanel } from "../../lib/sideChatPane";
 import { readLocalApi } from "../../localApi";
 import { hostRightPanel, type ThreadSurface, useRightPanelStore } from "../../rightPanelStore";
 import { useQuietThreadProjection, useQuietThreadShell } from "../../state/entities";
@@ -38,6 +33,7 @@ import {
 import { useOpenThreadFamily } from "../ThreadRouteView";
 import { useAtomCommand } from "../../state/use-atom-command";
 import ChatView from "../ChatView";
+import type { ChatComposerHandle } from "./ChatComposer";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -223,6 +219,20 @@ export default function SideThreadPane(props: {
   // A tab opens for side chats and subagents only, so an unloaded one is still one of them.
   const kind = sideThreadKindOf(thread) ?? "subagent";
   const isSideChat = kind === "side-chat";
+  const sideComposerRef = useRef<ChatComposerHandle | null>(null);
+  // oxlint-disable-next-line prismux/no-unreasoned-state-sync -- registers the side-chat composer bridge so selection side-ask can append citations and focus the side composer directly
+  useEffect(() => {
+    if (!isSideChat) return;
+    return registerSideThreadComposerBridge(threadRef, {
+      insertCitation: (citation) =>
+        sideComposerRef.current?.insertTextAtEnd(formatAssistantCitationForComposer(citation), {
+          ensureLeadingBoundary: true,
+        }) ?? false,
+      focusAtEnd: () => {
+        sideComposerRef.current?.focusAtEnd();
+      },
+    });
+  }, [isSideChat, threadRef]);
   const canOperate = useEnvironmentScope(parentRef.environmentId, AuthOrchestrationOperateScope);
   const deleteThread = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
   const confirmThreadDelete = useClientSettings((settings) => settings.confirmThreadDelete);
@@ -322,7 +332,7 @@ export default function SideThreadPane(props: {
         </p>
       ) : renderState === "loading" && thread === null ? null : (
         <BackgroundThreadContext value>
-          <ComposerHandleContext value={null}>
+          <ComposerHandleContext value={isSideChat ? sideComposerRef : null}>
             <ChatView
               environmentId={parentRef.environmentId}
               threadId={threadId}

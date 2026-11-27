@@ -249,6 +249,11 @@ import { toastManager } from "./ui/toast";
 import { projectScriptIdFromCommand } from "~/projectScripts";
 import { newMessageId } from "~/lib/utils";
 import {
+  composeSideAskPromptWithCitations,
+  consumePendingSideAskCitations,
+  deliverCitationToSideThread,
+  enqueueSideAskCitation,
+  extractSideAskTitleFromPrompt,
   isInSideChatPane,
   resolveThreadOpenRoute,
   type SideChatParentPanel,
@@ -3163,16 +3168,67 @@ export default function ChatView(props: ChatViewProps) {
                 ? gt("Available once the thread's worktree is set up.")
                 : null;
   const canStartSideChat = sideChatsOffered && sideChat.available && !sideChatDisabledReason;
-  const openSideChatStable = useStableCallback(() => void sideChat.open());
-  const quickAskSideChatStable = useStableCallback(async (question: string) => {
-    const trimmed = question.trim();
-    if (!trimmed) return false;
-    return sideChat.open({
-      text: trimmed,
-      attachments: [],
-      titleSeed: deriveBtwThreadTitle(trimmed),
-    });
+  const canSideAskFromSelection =
+    !embedded &&
+    activeThreadRef !== null &&
+    canOperateThread &&
+    activeThread?.lineage.sideChat !== true &&
+    !isSubagentThread &&
+    (serverConfig === null || serverConfig.environment.capabilities.sideChats === true);
+  const openSideChatStable = useStableCallback(() => {
+    const pendingCitations = activeThreadRef ? consumePendingSideAskCitations(activeThreadRef) : [];
+    const initialPrompt =
+      pendingCitations.length > 0
+        ? `${composeSideAskPromptWithCitations(pendingCitations, "")} `
+        : undefined;
+    void sideChat.open(undefined, initialPrompt ? { initialPrompt } : undefined);
   });
+  const quickAskSideChatStable = useStableCallback(
+    async (question: string, options?: { readonly titleSeed?: string }) => {
+      const trimmed = question.trim();
+      if (!trimmed) return false;
+      return sideChat.open({
+        text: trimmed,
+        attachments: [],
+        titleSeed: options?.titleSeed
+          ? deriveBtwThreadTitle(options.titleSeed)
+          : extractSideAskTitleFromPrompt(trimmed),
+      });
+    },
+  );
+  const sideAskAssistantTextStable = useStableCallback(
+    (citation: AssistantCitation, _sourceAnchor: AssistantCitationSourceAnchor): boolean => {
+      if (!canSideAskFromSelection || !activeThreadRef) return false;
+      if (inSplitWorkspace) {
+        focusOwnPaneStable();
+        useRightPanelStore.getState().setSplitDockOpen(true);
+      }
+      const store = useRightPanelStore.getState();
+      const panelState = selectThreadRightPanelState(store.byThreadKey, activeThreadRef);
+      const sideChatSurfaces = panelState.surfaces.filter(
+        (surface) =>
+          surface.kind === "thread" &&
+          readThreadShell(scopeThreadRef(activeThreadRef.environmentId, surface.threadId))?.lineage
+            .sideChat === true,
+      );
+      const activeExistingSideChat =
+        sideChatSurfaces.find((surface) => surface.id === panelState.activeSurfaceId) ??
+        sideChatSurfaces[0] ??
+        null;
+      if (activeExistingSideChat && activeExistingSideChat.kind === "thread") {
+        const sideThreadRef = scopeThreadRef(
+          activeThreadRef.environmentId,
+          activeExistingSideChat.threadId,
+        );
+        store.activateSurface(activeThreadRef, activeExistingSideChat.id);
+        deliverCitationToSideThread(sideThreadRef, citation);
+        return true;
+      }
+      enqueueSideAskCitation(activeThreadRef, citation);
+      store.open(activeThreadRef, "side-chat-empty");
+      return true;
+    },
+  );
   const readCurrentModelSelectionStable = useStableCallback(
     () => composerRef.current?.getSendContext().selectedModelSelection,
   );
@@ -3939,7 +3995,14 @@ export default function ChatView(props: ChatViewProps) {
           isServerThread,
           existingSideThreads: existingBtwSideThreads,
           onOpenExistingSideThread: (sideThreadId) => {
+            const pendingCitations = consumePendingSideAskCitations(activeThreadRef);
             useRightPanelStore.getState().openThread(activeThreadRef, sideThreadId);
+            if (pendingCitations.length > 0) {
+              const sideThreadRef = scopeThreadRef(activeThreadRef.environmentId, sideThreadId);
+              for (const pendingCitation of pendingCitations) {
+                deliverCitationToSideThread(sideThreadRef, pendingCitation);
+              }
+            }
           },
         }}
         issuesSupported={serverConfig?.environment.capabilities.issues === true}
@@ -4158,6 +4221,8 @@ export default function ChatView(props: ChatViewProps) {
                   citationRequest={citationRequest}
                   citationHistory={citationHistory}
                   onCiteAssistantText={citeAssistantTextStable}
+                  onSideAskAssistantText={sideAskAssistantTextStable}
+                  canSideAskAssistantText={canSideAskFromSelection}
                   onReplyToResponse={replyToResponseStable}
                   {...(activeProject && !runsOutsideHostCheckout
                     ? { onRunShellCommand: parentPanel?.runShellCommand ?? runShellCommandStable }
