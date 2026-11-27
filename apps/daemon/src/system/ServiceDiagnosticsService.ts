@@ -59,8 +59,12 @@ import {
 const execFileAsync = promisify(execFile);
 
 const DEFAULT_CACHE_TTL_MS = 30_000;
-const DEFAULT_SINGLE_CHECK_TIMEOUT_MS = 1_100;
-const DEFAULT_GLOBAL_BUDGET_MS = 2_400;
+const DEFAULT_SINGLE_CHECK_TIMEOUT_MS = 1_500;
+export const DEFAULT_DIAGNOSTICS_CLI_TIMEOUT_MS =
+  process.platform === "win32" ? 3_500 : 2_500;
+const DEFAULT_GLOBAL_BUDGET_MS = 4_500;
+const CLI_SPAWN_CONCURRENCY_LIMIT = 3;
+const WINDOWS_UNINSTALL_REG_TIMEOUT_MS = 600;
 export const CLI_DISCOVERY_POSITIVE_TTL_MS = 10 * 60 * 1000;
 export const CLI_DISCOVERY_NEGATIVE_TTL_MS = 5 * 60 * 1000;
 
@@ -144,6 +148,8 @@ export interface CliProbeResult {
   path?: string | null;
   version?: string | null;
   latencyMs: number;
+  /** True when the binary exists on disk, was invoked, and timed out during version probing. */
+  timedOut?: boolean;
   error?: string;
 }
 
@@ -321,6 +327,58 @@ function extractFirstVersionLine(output: string): string | null {
   return first.length > 100 ? `${first.slice(0, 97)}...` : first;
 }
 
+function createConcurrencyLimiter(maxConcurrent: number) {
+  let active = 0;
+  const queue: Array<() => void> = [];
+  return async <T>(task: () => Promise<T>): Promise<T> => {
+    if (active >= maxConcurrent) {
+      await new Promise<void>((resolveSlot) => {
+        queue.push(resolveSlot);
+      });
+    }
+    active += 1;
+    try {
+      return await task();
+    } finally {
+      active -= 1;
+      const next = queue.shift();
+      if (next) next();
+    }
+  };
+}
+
+const runWithCliSpawnLimit = createConcurrencyLimiter(CLI_SPAWN_CONCURRENCY_LIMIT);
+
+function isProcessTimeoutError(
+  err: unknown,
+  elapsedMs: number,
+  timeoutMs: number
+): boolean {
+  if (err && typeof err === "object") {
+    const rec = err as {
+      prismuxTimedOut?: unknown;
+      killed?: unknown;
+      code?: unknown;
+      signal?: unknown;
+      message?: unknown;
+    };
+    if (rec.prismuxTimedOut === true) return true;
+    if (rec.code === "ETIMEDOUT") return true;
+    if (rec.killed === true && elapsedMs >= Math.max(0, timeoutMs - 100)) return true;
+    if (
+      typeof rec.signal === "string" &&
+      (rec.signal === "SIGTERM" || rec.signal === "SIGKILL") &&
+      elapsedMs >= Math.max(0, timeoutMs - 100)
+    ) {
+      return true;
+    }
+    if (typeof rec.message === "string" && /\b(?:ETIMEDOUT|timed?\s*out)\b/i.test(rec.message)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function execSafeCli(
   executablePath: string,
   args: readonly string[],
@@ -335,17 +393,43 @@ async function execSafeCli(
     env: options.env ?? process.env,
     platform: options.platform ?? process.platform
   });
-  const result = await execFileAsync(spec.file, spec.args, {
-    timeout: timeoutMs,
-    windowsHide: true,
-    maxBuffer: options.maxBuffer ?? 512 * 1024,
-    env: spec.env,
-    windowsVerbatimArguments: spec.windowsVerbatimArguments
-  });
-  return {
-    stdout: String(result.stdout ?? ""),
-    stderr: String(result.stderr ?? "")
-  };
+  return runWithCliSpawnLimit(
+    () =>
+      new Promise<{ stdout: string; stderr: string }>((resolveExec, rejectExec) => {
+        const spawnStarted = performance.now();
+        const child = execFile(
+          spec.file,
+          spec.args,
+          {
+            timeout: timeoutMs,
+            windowsHide: true,
+            maxBuffer: options.maxBuffer ?? 512 * 1024,
+            env: spec.env,
+            windowsVerbatimArguments: spec.windowsVerbatimArguments
+          },
+          (err, stdout, stderr) => {
+            if (err) {
+              const spawnElapsed = Math.max(0, performance.now() - spawnStarted);
+              if (isProcessTimeoutError(err, spawnElapsed, timeoutMs)) {
+                (err as Error & { prismuxTimedOut?: boolean }).prismuxTimedOut = true;
+              }
+              rejectExec(err);
+              return;
+            }
+            resolveExec({
+              stdout: String(stdout ?? ""),
+              stderr: String(stderr ?? "")
+            });
+          }
+        );
+        // Immediately close stdin so Windows .cmd shims / interactive CLIs never block waiting for EOF.
+        try {
+          child.stdin?.end();
+        } catch {
+          // ignore stdin close failure
+        }
+      })
+  );
 }
 
 const DSH_ASAR_BOOTSTRAP_ENTRIES = [
@@ -684,7 +768,7 @@ export type DaemonWindowsRegistryQueryRunner = (
 function runWindowsUninstallRegQuery(args: readonly string[]): string | undefined {
   try {
     const raw = execFileSync("reg.exe", [...args], {
-      timeout: 1_500,
+      timeout: WINDOWS_UNINSTALL_REG_TIMEOUT_MS,
       windowsHide: true,
       maxBuffer: 4 * 1024 * 1024,
       stdio: ["ignore", "pipe", "ignore"]
@@ -700,7 +784,7 @@ async function runWindowsUninstallRegQueryAsync(
 ): Promise<string | undefined> {
   try {
     const { stdout } = await execFileAsync("reg.exe", [...args], {
-      timeout: 1_500,
+      timeout: WINDOWS_UNINSTALL_REG_TIMEOUT_MS,
       windowsHide: true,
       maxBuffer: 4 * 1024 * 1024,
       encoding: "buffer"
@@ -1134,7 +1218,34 @@ export function findPackagedDshDesktopCli(
     return found;
   }
 
-  const candidateExes: string[] = [];
+  const probeCandidatesSync = (
+    candidates: readonly string[],
+    seen: Set<string>
+  ): { executablePath: string; bootstrapPath: string } | null => {
+    for (const executablePath of candidates) {
+      const dedupeKey = platform === "win32" ? executablePath.toLowerCase() : executablePath;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      if (!isExistingFile(executablePath)) continue;
+      const appDir = dirname(executablePath);
+      const asarPath =
+        platform === "darwin"
+          ? resolve(appDir, "..", "Resources", "app.asar")
+          : join(appDir, "resources", "app.asar");
+      for (const entry of DSH_ASAR_BOOTSTRAP_ENTRIES) {
+        if (hasAsarEntrySync(asarPath, entry)) {
+          return {
+            executablePath,
+            bootstrapPath: join(asarPath, ...entry.split("/"))
+          };
+        }
+      }
+    }
+    return null;
+  };
+
+  const seen = new Set<string>();
+  const fastCandidates: string[] = [];
   if (platform === "win32") {
     const userProfile = readEnv("USERPROFILE") || homeDir;
     const localAppData = readEnv("LOCALAPPDATA") || join(userProfile, "AppData", "Local");
@@ -1148,10 +1259,29 @@ export function findPackagedDshDesktopCli(
     ];
     for (const root of roots) {
       for (const candidate of WINDOWS_DSH_DESKTOP_CANDIDATES) {
-        candidateExes.push(join(root, candidate.folder, candidate.executable));
+        fastCandidates.push(join(root, candidate.folder, candidate.executable));
       }
     }
+  } else if (platform === "darwin") {
+    const home = readEnv("HOME") || homeDir;
+    for (const root of ["/Applications", join(home, "Applications")]) {
+      for (const candidate of MACOS_DSH_DESKTOP_CANDIDATES) {
+        fastCandidates.push(
+          join(root, candidate.bundle, "Contents", "MacOS", candidate.executable)
+        );
+      }
+    }
+  }
 
+  // Fast pure-FS check FIRST (ZERO reg.exe spawns when installed in standard paths).
+  const fastHit = probeCandidatesSync(fastCandidates, seen);
+  if (fastHit) {
+    if (useCache) setTtlCached(packagedDshCache, cacheKey, fastHit, true);
+    return fastHit;
+  }
+
+  if (platform === "win32") {
+    const fallbackCandidates: string[] = [];
     if (scanRegistry) {
       const registryDirs = discoverWindowsUninstallInstallDirsSync({
         cacheKey: "dsh",
@@ -1165,7 +1295,7 @@ export function findPackagedDshDesktopCli(
         ...(options.bypassCache ? { bypassCache: true } : {})
       });
       for (const dir of registryDirs) {
-        candidateExes.push(...collectDshDirExecutableCandidatesSync(dir));
+        fallbackCandidates.push(...collectDshDirExecutableCandidatesSync(dir));
       }
     }
 
@@ -1174,42 +1304,16 @@ export function findPackagedDshDesktopCli(
         for (const subdir of WINDOWS_DSH_DRIVE_SUBDIRS) {
           const dir = `${drive}\\${subdir}`;
           if (existsSync(dir)) {
-            candidateExes.push(...collectDshDirExecutableCandidatesSync(dir));
+            fallbackCandidates.push(...collectDshDirExecutableCandidatesSync(dir));
           }
         }
       }
     }
-  } else if (platform === "darwin") {
-    const home = readEnv("HOME") || homeDir;
-    for (const root of ["/Applications", join(home, "Applications")]) {
-      for (const candidate of MACOS_DSH_DESKTOP_CANDIDATES) {
-        candidateExes.push(
-          join(root, candidate.bundle, "Contents", "MacOS", candidate.executable)
-        );
-      }
-    }
-  }
 
-  const seen = new Set<string>();
-  for (const executablePath of candidateExes) {
-    const dedupeKey = platform === "win32" ? executablePath.toLowerCase() : executablePath;
-    if (seen.has(dedupeKey)) continue;
-    seen.add(dedupeKey);
-    if (!isExistingFile(executablePath)) continue;
-    const appDir = dirname(executablePath);
-    const asarPath =
-      platform === "darwin"
-        ? resolve(appDir, "..", "Resources", "app.asar")
-        : join(appDir, "resources", "app.asar");
-    for (const entry of DSH_ASAR_BOOTSTRAP_ENTRIES) {
-      if (hasAsarEntrySync(asarPath, entry)) {
-        const found = {
-          executablePath,
-          bootstrapPath: join(asarPath, ...entry.split("/"))
-        };
-        if (useCache) setTtlCached(packagedDshCache, cacheKey, found, true);
-        return found;
-      }
+    const fallbackHit = probeCandidatesSync(fallbackCandidates, seen);
+    if (fallbackHit) {
+      if (useCache) setTtlCached(packagedDshCache, cacheKey, fallbackHit, true);
+      return fallbackHit;
     }
   }
 
@@ -1253,7 +1357,34 @@ export async function findPackagedDshDesktopCliAsync(
     return found;
   }
 
-  const candidateExes: string[] = [];
+  const probeCandidatesAsync = async (
+    candidates: readonly string[],
+    seen: Set<string>
+  ): Promise<{ executablePath: string; bootstrapPath: string } | null> => {
+    for (const executablePath of candidates) {
+      const dedupeKey = platform === "win32" ? executablePath.toLowerCase() : executablePath;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      if (!(await isExistingFileAsync(executablePath))) continue;
+      const appDir = dirname(executablePath);
+      const asarPath =
+        platform === "darwin"
+          ? resolve(appDir, "..", "Resources", "app.asar")
+          : join(appDir, "resources", "app.asar");
+      for (const entry of DSH_ASAR_BOOTSTRAP_ENTRIES) {
+        if (await hasAsarEntryAsync(asarPath, entry)) {
+          return {
+            executablePath,
+            bootstrapPath: join(asarPath, ...entry.split("/"))
+          };
+        }
+      }
+    }
+    return null;
+  };
+
+  const seen = new Set<string>();
+  const fastCandidates: string[] = [];
   if (platform === "win32") {
     const userProfile = readEnv("USERPROFILE") || homeDir;
     const localAppData = readEnv("LOCALAPPDATA") || join(userProfile, "AppData", "Local");
@@ -1267,10 +1398,29 @@ export async function findPackagedDshDesktopCliAsync(
     ];
     for (const root of roots) {
       for (const candidate of WINDOWS_DSH_DESKTOP_CANDIDATES) {
-        candidateExes.push(join(root, candidate.folder, candidate.executable));
+        fastCandidates.push(join(root, candidate.folder, candidate.executable));
       }
     }
+  } else if (platform === "darwin") {
+    const home = readEnv("HOME") || homeDir;
+    for (const root of ["/Applications", join(home, "Applications")]) {
+      for (const candidate of MACOS_DSH_DESKTOP_CANDIDATES) {
+        fastCandidates.push(
+          join(root, candidate.bundle, "Contents", "MacOS", candidate.executable)
+        );
+      }
+    }
+  }
 
+  // Fast pure-FS check FIRST (ZERO reg.exe spawns when installed in standard paths).
+  const fastHit = await probeCandidatesAsync(fastCandidates, seen);
+  if (fastHit) {
+    if (useCache) setTtlCached(packagedDshCache, cacheKey, fastHit, true);
+    return fastHit;
+  }
+
+  if (platform === "win32") {
+    const fallbackCandidates: string[] = [];
     if (scanRegistry) {
       const registryDirs = await discoverWindowsUninstallInstallDirsAsync({
         cacheKey: "dsh",
@@ -1284,7 +1434,7 @@ export async function findPackagedDshDesktopCliAsync(
         ...(options.bypassCache ? { bypassCache: true } : {})
       });
       for (const dir of registryDirs) {
-        candidateExes.push(...(await collectDshDirExecutableCandidatesAsync(dir)));
+        fallbackCandidates.push(...(await collectDshDirExecutableCandidatesAsync(dir)));
       }
     }
 
@@ -1293,42 +1443,16 @@ export async function findPackagedDshDesktopCliAsync(
         for (const subdir of WINDOWS_DSH_DRIVE_SUBDIRS) {
           const dir = `${drive}\\${subdir}`;
           if (await pathExistsAsync(dir)) {
-            candidateExes.push(...(await collectDshDirExecutableCandidatesAsync(dir)));
+            fallbackCandidates.push(...(await collectDshDirExecutableCandidatesAsync(dir)));
           }
         }
       }
     }
-  } else if (platform === "darwin") {
-    const home = readEnv("HOME") || homeDir;
-    for (const root of ["/Applications", join(home, "Applications")]) {
-      for (const candidate of MACOS_DSH_DESKTOP_CANDIDATES) {
-        candidateExes.push(
-          join(root, candidate.bundle, "Contents", "MacOS", candidate.executable)
-        );
-      }
-    }
-  }
 
-  const seen = new Set<string>();
-  for (const executablePath of candidateExes) {
-    const dedupeKey = platform === "win32" ? executablePath.toLowerCase() : executablePath;
-    if (seen.has(dedupeKey)) continue;
-    seen.add(dedupeKey);
-    if (!(await isExistingFileAsync(executablePath))) continue;
-    const appDir = dirname(executablePath);
-    const asarPath =
-      platform === "darwin"
-        ? resolve(appDir, "..", "Resources", "app.asar")
-        : join(appDir, "resources", "app.asar");
-    for (const entry of DSH_ASAR_BOOTSTRAP_ENTRIES) {
-      if (await hasAsarEntryAsync(asarPath, entry)) {
-        const found = {
-          executablePath,
-          bootstrapPath: join(asarPath, ...entry.split("/"))
-        };
-        if (useCache) setTtlCached(packagedDshCache, cacheKey, found, true);
-        return found;
-      }
+    const fallbackHit = await probeCandidatesAsync(fallbackCandidates, seen);
+    if (fallbackHit) {
+      if (useCache) setTtlCached(packagedDshCache, cacheKey, fallbackHit, true);
+      return fallbackHit;
     }
   }
 
@@ -1378,13 +1502,29 @@ export function findPackagedAntigravityCli(
     return null;
   }
 
+  const probeDirsSync = (dirs: readonly string[], seen: Set<string>): string | null => {
+    for (const dir of dirs) {
+      const key = dir.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      for (const exe of ["agy.exe", "agy.cmd", "agy.bat"]) {
+        const candidate = join(dir, exe);
+        if (isExistingFile(candidate)) {
+          return candidate;
+        }
+      }
+    }
+    return null;
+  };
+
   const userProfile = readEnvCaseInsensitive(env, "USERPROFILE", platform) || homeDir;
   const localAppData =
     readEnvCaseInsensitive(env, "LOCALAPPDATA", platform) || join(userProfile, "AppData", "Local");
   const programFiles = readEnvCaseInsensitive(env, "ProgramFiles", platform);
   const programFilesX86 = readEnvCaseInsensitive(env, "ProgramFiles(x86)", platform);
 
-  const candidateDirs: string[] = [
+  const seen = new Set<string>();
+  const fastDirs: string[] = [
     join(localAppData, "agy", "bin"),
     join(userProfile, ".antigravity", "bin"),
     join(localAppData, "Programs", "antigravity", "bin"),
@@ -1397,6 +1537,14 @@ export function findPackagedAntigravityCli(
       : [])
   ];
 
+  // Fast pure-FS check FIRST (ZERO reg.exe spawns when installed in standard paths).
+  const fastHit = probeDirsSync(fastDirs, seen);
+  if (fastHit) {
+    if (useCache) setTtlCached(packagedAgyCache, cacheKey, fastHit, true);
+    return fastHit;
+  }
+
+  const fallbackDirs: string[] = [];
   if (scanRegistry) {
     const registryDirs = discoverWindowsUninstallInstallDirsSync({
       cacheKey: "antigravity",
@@ -1408,13 +1556,13 @@ export function findPackagedAntigravityCli(
       ...(options.bypassCache ? { bypassCache: true } : {})
     });
     for (const dir of registryDirs) {
-      candidateDirs.push(join(dir, "bin"), dir, join(dir, "resources", "app", "bin"));
+      fallbackDirs.push(join(dir, "bin"), dir, join(dir, "resources", "app", "bin"));
     }
   }
 
   if (shouldScanDriveRoots) {
     for (const drive of WINDOWS_COMMON_DRIVES) {
-      candidateDirs.push(
+      fallbackDirs.push(
         `${drive}\\Antigravity\\bin`,
         `${drive}\\Program Files\\Antigravity\\bin`,
         `${drive}\\Programs\\Antigravity\\bin`
@@ -1422,18 +1570,10 @@ export function findPackagedAntigravityCli(
     }
   }
 
-  const seen = new Set<string>();
-  for (const dir of candidateDirs) {
-    const key = dir.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    for (const exe of ["agy.exe", "agy.cmd", "agy.bat"]) {
-      const candidate = join(dir, exe);
-      if (isExistingFile(candidate)) {
-        if (useCache) setTtlCached(packagedAgyCache, cacheKey, candidate, true);
-        return candidate;
-      }
-    }
+  const fallbackHit = probeDirsSync(fallbackDirs, seen);
+  if (fallbackHit) {
+    if (useCache) setTtlCached(packagedAgyCache, cacheKey, fallbackHit, true);
+    return fallbackHit;
   }
   if (useCache) setTtlCached(packagedAgyCache, cacheKey, null, false);
   return null;
@@ -1481,13 +1621,32 @@ export async function findPackagedAntigravityCliAsync(
     return null;
   }
 
+  const probeDirsAsync = async (
+    dirs: readonly string[],
+    seen: Set<string>
+  ): Promise<string | null> => {
+    for (const dir of dirs) {
+      const key = dir.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      for (const exe of ["agy.exe", "agy.cmd", "agy.bat"]) {
+        const candidate = join(dir, exe);
+        if (await isExistingFileAsync(candidate)) {
+          return candidate;
+        }
+      }
+    }
+    return null;
+  };
+
   const userProfile = readEnvCaseInsensitive(env, "USERPROFILE", platform) || homeDir;
   const localAppData =
     readEnvCaseInsensitive(env, "LOCALAPPDATA", platform) || join(userProfile, "AppData", "Local");
   const programFiles = readEnvCaseInsensitive(env, "ProgramFiles", platform);
   const programFilesX86 = readEnvCaseInsensitive(env, "ProgramFiles(x86)", platform);
 
-  const candidateDirs: string[] = [
+  const seen = new Set<string>();
+  const fastDirs: string[] = [
     join(localAppData, "agy", "bin"),
     join(userProfile, ".antigravity", "bin"),
     join(localAppData, "Programs", "antigravity", "bin"),
@@ -1500,6 +1659,14 @@ export async function findPackagedAntigravityCliAsync(
       : [])
   ];
 
+  // Fast pure-FS check FIRST (ZERO reg.exe spawns when installed in standard paths).
+  const fastHit = await probeDirsAsync(fastDirs, seen);
+  if (fastHit) {
+    if (useCache) setTtlCached(packagedAgyCache, cacheKey, fastHit, true);
+    return fastHit;
+  }
+
+  const fallbackDirs: string[] = [];
   if (scanRegistry) {
     const registryDirs = await discoverWindowsUninstallInstallDirsAsync({
       cacheKey: "antigravity",
@@ -1511,13 +1678,13 @@ export async function findPackagedAntigravityCliAsync(
       ...(options.bypassCache ? { bypassCache: true } : {})
     });
     for (const dir of registryDirs) {
-      candidateDirs.push(join(dir, "bin"), dir, join(dir, "resources", "app", "bin"));
+      fallbackDirs.push(join(dir, "bin"), dir, join(dir, "resources", "app", "bin"));
     }
   }
 
   if (shouldScanDriveRoots) {
     for (const drive of WINDOWS_COMMON_DRIVES) {
-      candidateDirs.push(
+      fallbackDirs.push(
         `${drive}\\Antigravity\\bin`,
         `${drive}\\Program Files\\Antigravity\\bin`,
         `${drive}\\Programs\\Antigravity\\bin`
@@ -1525,20 +1692,59 @@ export async function findPackagedAntigravityCliAsync(
     }
   }
 
-  const seen = new Set<string>();
-  for (const dir of candidateDirs) {
-    const key = dir.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    for (const exe of ["agy.exe", "agy.cmd", "agy.bat"]) {
-      const candidate = join(dir, exe);
-      if (await isExistingFileAsync(candidate)) {
-        if (useCache) setTtlCached(packagedAgyCache, cacheKey, candidate, true);
-        return candidate;
-      }
-    }
+  const fallbackHit = await probeDirsAsync(fallbackDirs, seen);
+  if (fallbackHit) {
+    if (useCache) setTtlCached(packagedAgyCache, cacheKey, fallbackHit, true);
+    return fallbackHit;
   }
   if (useCache) setTtlCached(packagedAgyCache, cacheKey, null, false);
+  return null;
+}
+
+/**
+ * Ultra-fast, pure-filesystem binary presence check (<10ms, ZERO subprocess spawns).
+ * Checks `PATH` + standard CLI extra dirs, plus standard packaged install directories
+ * for `agy` and `dsh` (never invokes `reg.exe` or any CLI subprocess).
+ */
+export function locateCliBinaryFastSync(
+  command: string,
+  options: {
+    env?: Record<string, string | undefined>;
+    platform?: NodeJS.Platform;
+    homeDir?: string;
+    includeFallbackDirs?: boolean;
+  } = {}
+): string | null {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const homeDir = options.homeDir ?? homedir();
+  const includeFallback = options.includeFallbackDirs !== false;
+  const extraDirs = includeFallback ? getDefaultCliExtraDirs(env, platform, homeDir) : [];
+
+  const direct = findExecutableOnPath([command], { env, platform, extraDirs });
+  if (direct) {
+    return direct;
+  }
+  if (!includeFallback) {
+    return null;
+  }
+  const normalized = command.trim().toLowerCase();
+  if (normalized === "agy") {
+    return findPackagedAntigravityCli(env, platform, homeDir, {
+      scanRegistry: false,
+      scanDriveRoots: false,
+      bypassCache: true
+    });
+  }
+  if (normalized === "dsh") {
+    return (
+      findPackagedDshDesktopCli(env, platform, homeDir, {
+        scanRegistry: false,
+        scanDriveRoots: false,
+        bypassCache: true
+      })?.executablePath ?? null
+    );
+  }
   return null;
 }
 
@@ -1583,7 +1789,7 @@ export async function defaultCliProbe(
   }
 
   const storeAndReturn = (result: CliProbeResult): CliProbeResult => {
-    if (useCache) {
+    if (useCache && result.timedOut !== true) {
       setTtlCached(
         cliProbeCache,
         probeCacheKey,
@@ -1637,29 +1843,57 @@ export async function defaultCliProbe(
         }
         dshEnv["ELECTRON_RUN_AS_NODE"] = "1";
         try {
-          const result = await execFileAsync(
-            packagedDsh.executablePath,
-            ["--expose-internals", packagedDsh.bootstrapPath, ...args],
-            {
-              timeout: timeoutMs,
-              windowsHide: true,
-              maxBuffer: 512 * 1024,
-              env: dshEnv
-            }
+          const dshExecStarted = performance.now();
+          const result = await runWithCliSpawnLimit(
+            () =>
+              new Promise<{ stdout: string; stderr: string }>((resolveExec, rejectExec) => {
+                const spawnStarted = performance.now();
+                const child = execFile(
+                  packagedDsh.executablePath,
+                  ["--expose-internals", packagedDsh.bootstrapPath, ...args],
+                  {
+                    timeout: timeoutMs,
+                    windowsHide: true,
+                    maxBuffer: 512 * 1024,
+                    env: dshEnv
+                  },
+                  (err, stdout, stderr) => {
+                    if (err) {
+                      const spawnElapsed = Math.max(0, performance.now() - spawnStarted);
+                      if (isProcessTimeoutError(err, spawnElapsed, timeoutMs)) {
+                        (err as Error & { prismuxTimedOut?: boolean }).prismuxTimedOut = true;
+                      }
+                      rejectExec(err);
+                      return;
+                    }
+                    resolveExec({
+                      stdout: String(stdout ?? ""),
+                      stderr: String(stderr ?? "")
+                    });
+                  }
+                );
+                try {
+                  child.stdin?.end();
+                } catch {
+                  // ignore stdin close failure
+                }
+              })
           );
-          const combined = `${String(result.stdout ?? "")}\n${String(result.stderr ?? "")}`;
+          const combined = `${result.stdout}\n${result.stderr}`;
           return storeAndReturn({
             found: true,
             path: packagedDsh.executablePath,
             version: extractFirstVersionLine(combined),
-            latencyMs: Math.max(0, Math.round(performance.now() - started))
+            latencyMs: Math.max(0, Math.round(performance.now() - dshExecStarted))
           });
         } catch (err) {
+          const timedOut = isProcessTimeoutError(err, performance.now() - started, timeoutMs);
           return storeAndReturn({
             found: true,
             path: packagedDsh.executablePath,
             version: null,
             latencyMs: Math.max(0, Math.round(performance.now() - started)),
+            ...(timedOut ? { timedOut: true } : {}),
             error: err instanceof Error ? err.message : String(err)
           });
         }
@@ -1713,11 +1947,13 @@ export async function defaultCliProbe(
         });
       }
     }
+    const timedOut = isProcessTimeoutError(err, performance.now() - started, timeoutMs);
     return storeAndReturn({
       found: true,
       path: located,
       version: null,
       latencyMs: Math.max(0, Math.round(performance.now() - started)),
+      ...(timedOut ? { timedOut: true } : {}),
       error: err instanceof Error ? err.message : String(err)
     });
   }
@@ -2305,8 +2541,10 @@ export class ServiceDiagnosticsService {
   private readonly opts: ServiceDiagnosticsOptions;
   private readonly cacheTtlMs: number;
   private readonly singleCheckTimeoutMs: number;
+  private readonly cliCheckTimeoutMs: number;
   private readonly globalBudgetMs: number;
   private readonly customCliProbe: boolean;
+  private readonly usesCustomCliProbe: boolean;
   private readonly cliProbeFn: (
     command: string,
     args: string[],
@@ -2338,11 +2576,17 @@ export class ServiceDiagnosticsService {
     this.cacheTtlMs = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
     this.singleCheckTimeoutMs = Math.min(
       options.singleCheckTimeoutMs ?? DEFAULT_SINGLE_CHECK_TIMEOUT_MS,
-      2_000
+      2_500
     );
+    // Installed CLI cold-start probes on Windows get a dedicated timeout decoupled from
+    // slow network mirrors; explicit test overrides (`singleCheckTimeoutMs`) are still honored.
+    this.cliCheckTimeoutMs =
+      options.singleCheckTimeoutMs !== undefined
+        ? Math.min(options.singleCheckTimeoutMs, 5_000)
+        : DEFAULT_DIAGNOSTICS_CLI_TIMEOUT_MS;
     this.globalBudgetMs = Math.min(
       options.globalBudgetMs ?? DEFAULT_GLOBAL_BUDGET_MS,
-      2_700
+      6_000
     );
     this.customCliProbe = options.cliProbe !== undefined;
     this.cliProbeFn = options.cliProbe ?? defaultCliProbe;
@@ -2363,7 +2607,7 @@ export class ServiceDiagnosticsService {
     } else {
       this.providerProbeService = new PrismuxProviderProbeService({
         coreRpcClient: options.coreRpcClient ?? options.t3RpcClient,
-        cliTimeoutMs: this.singleCheckTimeoutMs,
+        cliTimeoutMs: this.cliCheckTimeoutMs,
         ...(options.cliProbe ? { cliProbe: options.cliProbe } : {}),
         refreshEnv: this.refreshEnvFn,
         ...(options.configuredProviders !== undefined
@@ -2371,6 +2615,8 @@ export class ServiceDiagnosticsService {
           : {})
       });
     }
+    this.usesCustomCliProbe =
+      this.customCliProbe || this.providerProbeService.hasCustomCliProbe();
   }
 
   setConfiguredProviders(providers: readonly string[] | null): void {
@@ -2408,7 +2654,7 @@ export class ServiceDiagnosticsService {
     this.generation += 1;
     this.cachedReports.clear();
     this.inflightRuns.clear();
-    if (!this.customCliProbe) {
+    if (!this.usesCustomCliProbe) {
       clearCliDiscoveryCaches();
     }
     this.providerProbeService.clearCache();
@@ -2447,7 +2693,7 @@ export class ServiceDiagnosticsService {
     if (force) {
       this.generation += 1;
       this.cachedReports.clear();
-      if (!this.customCliProbe) {
+      if (!this.usesCustomCliProbe) {
         clearCliDiscoveryCaches();
       }
       this.providerProbeService.clearCache();
@@ -2492,6 +2738,7 @@ export class ServiceDiagnosticsService {
     const elapsedAfterEnvMs = Math.max(0, performance.now() - startedAt);
     const remainingBudget = Math.max(400, budget - elapsedAfterEnvMs);
     const perCheckTimeout = Math.min(this.singleCheckTimeoutMs, remainingBudget);
+    const cliPerCheckTimeout = Math.min(this.cliCheckTimeoutMs, remainingBudget);
 
     const allowedProviderSet =
       ctx.scopedProviders !== null ? new Set(ctx.scopedProviders) : null;
@@ -2504,6 +2751,8 @@ export class ServiceDiagnosticsService {
       category: DiagnosticCategoryId;
       name: string;
       settingsRoute?: string;
+      timeoutMs?: number;
+      onTimeout?: () => DiagnosticCheckItem | null;
       run: () => Promise<DiagnosticCheckItem | null>;
     }> = [
       // a. 宿主核心 (4)
@@ -2561,10 +2810,18 @@ export class ServiceDiagnosticsService {
         category: "ai_providers" as const,
         name: spec.diagName,
         settingsRoute: "/settings/providers",
+        timeoutMs: cliPerCheckTimeout,
+        ...(!this.usesCustomCliProbe
+          ? {
+              // Rule A & B: NEVER emit a degraded timeout card for an uninstalled CLI, and
+              // gracefully accept installed binaries whose auth mode resolved even if --version was slow.
+              onTimeout: () => this.buildFastProviderTimeoutFallback(spec)
+            }
+          : {}),
         run: () =>
           this.checkProviderViaUnifiedProbe(
             spec.providerId,
-            perCheckTimeout,
+            cliPerCheckTimeout,
             ctx.force,
             ctx.deepScan
           )
@@ -2576,7 +2833,8 @@ export class ServiceDiagnosticsService {
         category: "simulators_media",
         name: "7za / 7z 解压工具",
         settingsRoute: "/settings/updates",
-        run: () => this.check7Zip(perCheckTimeout)
+        timeoutMs: cliPerCheckTimeout,
+        run: () => this.check7Zip(cliPerCheckTimeout)
       },
       {
         id: "tool.steam_431960",
@@ -2589,7 +2847,8 @@ export class ServiceDiagnosticsService {
         id: "tool.android_sdk",
         category: "simulators_media",
         name: "Android SDK / adb",
-        run: () => this.checkAndroidSdk(perCheckTimeout, ctx.force, ctx.deepScan)
+        timeoutMs: cliPerCheckTimeout,
+        run: () => this.checkAndroidSdk(cliPerCheckTimeout, ctx.force, ctx.deepScan)
       },
       {
         id: "tool.expo_device_hub",
@@ -2617,6 +2876,7 @@ export class ServiceDiagnosticsService {
         id: "tool.git",
         category: "simulators_media",
         name: "Git",
+        timeoutMs: cliPerCheckTimeout,
         run: () =>
           this.checkGenericCliTool({
             id: "tool.git",
@@ -2625,7 +2885,7 @@ export class ServiceDiagnosticsService {
             args: ["--version"],
             fixAction: "安装 Git 并加入 PATH",
             fixCommand: "winget install --id Git.Git -e",
-            timeoutMs: perCheckTimeout,
+            timeoutMs: cliPerCheckTimeout,
             force: ctx.force,
             deepScan: ctx.deepScan
           })
@@ -2634,6 +2894,7 @@ export class ServiceDiagnosticsService {
         id: "tool.gh",
         category: "simulators_media",
         name: "GitHub CLI (gh)",
+        timeoutMs: cliPerCheckTimeout,
         run: () =>
           this.checkGenericCliTool({
             id: "tool.gh",
@@ -2642,7 +2903,7 @@ export class ServiceDiagnosticsService {
             args: ["--version"],
             fixAction: "按需安装 GitHub CLI（仅做版本探测）",
             fixCommand: "winget install --id GitHub.cli -e",
-            timeoutMs: perCheckTimeout,
+            timeoutMs: cliPerCheckTimeout,
             force: ctx.force,
             deepScan: ctx.deepScan
           })
@@ -2744,22 +3005,29 @@ export class ServiceDiagnosticsService {
     ];
 
     const settledRaw = await Promise.all(
-      checkSpecs.map((spec) =>
-        withTimeoutFallback<DiagnosticCheckItem | null>(
+      checkSpecs.map((spec) => {
+        const effectiveTimeout = spec.timeoutMs ?? perCheckTimeout;
+        const guardTimeout = Math.min(effectiveTimeout + 250, remainingBudget);
+        return withTimeoutFallback<DiagnosticCheckItem | null>(
           spec.run(),
-          Math.min(perCheckTimeout + 150, remainingBudget),
-          (): DiagnosticCheckItem => ({
-            id: spec.id,
-            category: spec.category,
-            name: spec.name,
-            status: "degraded",
-            summary: `探测超时（>${perCheckTimeout}ms），已跳过以保护整体体检响应速度`,
-            ...(spec.settingsRoute !== undefined
-              ? { settingsRoute: spec.settingsRoute }
-              : {})
-          })
-        )
-      )
+          guardTimeout,
+          (): DiagnosticCheckItem | null => {
+            if (spec.onTimeout) {
+              return spec.onTimeout();
+            }
+            return {
+              id: spec.id,
+              category: spec.category,
+              name: spec.name,
+              status: "degraded",
+              summary: `探测超时（>${effectiveTimeout}ms），已跳过以保护整体体检响应速度`,
+              ...(spec.settingsRoute !== undefined
+                ? { settingsRoute: spec.settingsRoute }
+                : {})
+            };
+          }
+        );
+      })
     );
     const settledItems = settledRaw.filter(
       (item): item is DiagnosticCheckItem => item !== null
@@ -3114,6 +3382,31 @@ export class ServiceDiagnosticsService {
     };
   }
 
+  private buildFastProviderTimeoutFallback(
+    spec: ProviderProbeSpec
+  ): DiagnosticCheckItem | null {
+    const fastSnap = this.providerProbeService.getFastFallbackSnapshotSync(
+      spec.providerId
+    );
+    if (!fastSnap.installed) {
+      // Rule A: uninstalled CLIs MUST be omitted, never rendered as degraded timeout cards.
+      return null;
+    }
+    // Rule B: binary exists on disk and auth mode is resolved -> graceful `ok` fallback.
+    return {
+      id: spec.diagId,
+      category: "ai_providers",
+      name: spec.diagName,
+      status: "ok",
+      ...(fastSnap.version ? { version: fastSnap.version } : {}),
+      summary: fastSnap.version
+        ? `已安装（${fastSnap.version}）· ${fastSnap.authLabel}`
+        : `已安装（版本探测较慢，已快速放行）· ${fastSnap.authLabel}`,
+      detail: fastSnap.binaryPath ?? undefined,
+      settingsRoute: "/settings/providers"
+    };
+  }
+
   private async checkProviderViaUnifiedProbe(
     providerId: string,
     timeoutMs: number,
@@ -3136,17 +3429,19 @@ export class ServiceDiagnosticsService {
       // completely so uninstalled tools never surface as degraded warning cards.
       return null;
     }
-    if (snapshot.version && !snapshot.error) {
+    if (!snapshot.error && (snapshot.version || snapshot.status === "ready")) {
       return {
         id: spec.diagId,
         category: "ai_providers",
         name: spec.diagName,
         status: "ok",
-        version: snapshot.version,
+        ...(snapshot.version ? { version: snapshot.version } : {}),
         ...(snapshot.latencyMs !== undefined
           ? { latencyMs: snapshot.latencyMs }
           : {}),
-        summary: `已安装（${snapshot.version}）· ${snapshot.authLabel}`,
+        summary: snapshot.version
+          ? `已安装（${snapshot.version}）· ${snapshot.authLabel}`
+          : `已安装（版本探测较慢，已快速放行）· ${snapshot.authLabel}`,
         detail: snapshot.binaryPath ?? undefined,
         settingsRoute: "/settings/providers"
       };

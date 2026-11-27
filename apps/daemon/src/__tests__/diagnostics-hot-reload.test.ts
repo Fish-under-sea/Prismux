@@ -7,6 +7,7 @@ import { describe, it } from "node:test";
 import type { ServiceDiagnosticsResponse } from "@prismux/protocol";
 import {
   buildSafeCliSpawnSpec,
+  clearCliDiscoveryCaches,
   defaultCliProbe,
   defaultDetectAndroidSdk,
   expandWindowsEnvVars,
@@ -14,11 +15,13 @@ import {
   mergeWindowsPathLists,
   parseRegQueryOutput,
   PrismuxDaemon,
+  PrismuxProviderProbeService,
   refreshWindowsEnvironmentFromRegistry,
   resolveExecutableExtensions,
   ServiceDiagnosticsService,
   WINDOWS_HKCU_ENV_KEY,
-  WINDOWS_HKLM_ENV_KEY
+  WINDOWS_HKLM_ENV_KEY,
+  type CoreRpcClient
 } from "../index.js";
 
 function createTempDir(prefix: string): string {
@@ -634,6 +637,175 @@ describe("Diagnostics hot-reload routes, cache invalidation & real-machine smoke
       assert.equal(healthyAiGroup.status, "ok");
       assert.equal(healthyAiGroup.okCount, 1);
       assert.equal(healthyAiGroup.degradedCount, 0);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("never degrades uninstalled CLIs or hangs all 6 providers when CoreRpcClient.listProviders() never replies (Effect RPC server)", async () => {
+    clearCliDiscoveryCaches();
+    const root = createTempDir("prismux-diag-rpc-hang-");
+    const binDir = join(root, "bin");
+    mkdirSync(binDir, { recursive: true });
+
+    // Only install `codex` on fake PATH; leave agy, claude, dsh, gemini, opencode uninstalled!
+    const codexBin =
+      process.platform === "win32"
+        ? join(binDir, "codex.cmd")
+        : join(binDir, "codex");
+    writeFileSync(
+      codexBin,
+      process.platform === "win32"
+        ? "@echo off\r\necho codex-cli 0.999.0\r\n"
+        : "#!/bin/sh\necho codex-cli 0.999.0\n",
+      { mode: 0o755 }
+    );
+
+    let listProvidersCalls = 0;
+    const hangingCoreRpc = {
+      isConnected: () => true,
+      getStatus: () => ({
+        state: "connected",
+        connected: true,
+        wsUrl: "ws://127.0.0.1:3773/ws",
+        protocolVersion: "2",
+        reconnectAttempts: 0,
+        pendingRequestCount: 0
+      }),
+      listProviders: () => {
+        listProvidersCalls += 1;
+        // Simulate Effect RPC server that accepts WS upgrade but never answers legacy `provider.list`.
+        return new Promise<never>(() => {});
+      }
+    } as unknown as CoreRpcClient;
+
+    const isolatedEnv: Record<string, string | undefined> = {
+      PATH: binDir,
+      USERPROFILE: root,
+      LOCALAPPDATA: join(root, "AppData", "Local"),
+      APPDATA: join(root, "AppData", "Roaming"),
+      HOME: root,
+      COMSPEC: process.env["COMSPEC"],
+      OPENAI_BASE_URL: "https://relay.example/v1"
+    };
+
+    try {
+      const probeService = new PrismuxProviderProbeService({
+        coreRpcClient: hangingCoreRpc,
+        env: isolatedEnv,
+        homeDir: root,
+        platform: process.platform,
+        refreshEnv: () => undefined
+      });
+      const diag = new ServiceDiagnosticsService({
+        dataDir: root,
+        version: "0.2.4-rc.1",
+        headless: true,
+        startedAt: Date.now() - 1_000,
+        coreRpcClient: hangingCoreRpc,
+        providerProbeService: probeService,
+        refreshEnv: () => undefined,
+        detectAndroidSdk: () => ({ sdkRoot: null, adbPath: null }),
+        resolve7za: () => null,
+        networkProbe: async () => ({ reachable: true, statusCode: 200, latencyMs: 5 })
+      });
+
+      const started = performance.now();
+      const report = await diag.runDiagnostics(true);
+      const elapsedMs = performance.now() - started;
+
+      // Deduplicated single RPC timeout (<=350ms), NOT 6x 15s hangs or 6x >1100ms degraded cards!
+      assert.equal(listProvidersCalls, 1, "listProviders must be deduplicated to a single bounded call");
+      assert.ok(elapsedMs < 3_000, `Diagnostics took too long (${Math.round(elapsedMs)}ms)`);
+
+      const aiGroup = report.groups.find((g) => g.id === "ai_providers");
+      assert.ok(aiGroup);
+      assert.equal(aiGroup.status, "ok");
+      assert.equal(aiGroup.degradedCount, 0);
+      assert.equal(aiGroup.errorCount, 0);
+
+      // Uninstalled CLIs on this isolated PATH must be completely omitted, NEVER degraded!
+      assert.equal(aiGroup.items.find((item) => item.id === "provider.gemini"), undefined);
+      assert.equal(aiGroup.items.find((item) => item.id === "provider.opencode"), undefined);
+      assert.equal(aiGroup.items.find((item) => item.id === "provider.claude"), undefined);
+      assert.equal(aiGroup.items.find((item) => item.id === "provider.agy"), undefined);
+
+      const codex = aiGroup.items.find((item) => item.id === "provider.codex");
+      assert.ok(codex, "installed codex must be detected");
+      assert.equal(codex.status, "ok");
+      assert.equal(codex.version, "codex-cli 0.999.0");
+      for (const item of aiGroup.items) {
+        assert.equal(item.status, "ok");
+        assert.ok(!item.summary.includes("探测超时"), `unexpected timeout summary: ${item.summary}`);
+      }
+    } finally {
+      clearCliDiscoveryCaches();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("gracefully marks installed CLIs as ok when --version times out while keeping genuine crashes degraded", async () => {
+    const dataDir = createTempDir("prismux-diag-slow-vs-crash-");
+    try {
+      const probeService = new PrismuxProviderProbeService({
+        homeDir: dataDir,
+        env: { OPENAI_BASE_URL: "https://relay.example/v1" },
+        refreshEnv: () => undefined,
+        cliProbe: async (cmd) => {
+          if (cmd === "codex") {
+            return {
+              found: true,
+              path: "C:\\Users\\Fish\\AppData\\Roaming\\npm\\codex.cmd",
+              version: null,
+              latencyMs: 3_500,
+              timedOut: true,
+              error: "Command timed out"
+            };
+          }
+          if (cmd === "claude") {
+            return {
+              found: true,
+              path: "C:\\Users\\Fish\\.local\\bin\\claude.exe",
+              version: null,
+              latencyMs: 25,
+              timedOut: false,
+              error: "Command failed with exit code 1"
+            };
+          }
+          return { found: false, path: null, version: null, latencyMs: 1 };
+        }
+      });
+
+      const diag = new ServiceDiagnosticsService({
+        dataDir,
+        version: "0.2.4-rc.1",
+        headless: true,
+        startedAt: Date.now() - 1_000,
+        providerProbeService: probeService,
+        refreshEnv: () => undefined,
+        detectAndroidSdk: () => ({ sdkRoot: null, adbPath: null }),
+        resolve7za: () => null,
+        networkProbe: async () => ({ reachable: true, statusCode: 200, latencyMs: 5 })
+      });
+
+      const report = await diag.runDiagnostics(true);
+      const aiGroup = report.groups.find((g) => g.id === "ai_providers");
+      assert.ok(aiGroup);
+
+      const codexItem = aiGroup.items.find((i) => i.id === "provider.codex");
+      assert.ok(codexItem, "slow installed codex must be reported");
+      assert.equal(codexItem.status, "ok", "installed binary + resolved auth must degrade gracefully to ok on slow --version");
+      assert.ok(codexItem.summary.includes("已安装"));
+      assert.ok(!codexItem.summary.includes("探测超时"));
+
+      const claudeItem = aiGroup.items.find((i) => i.id === "provider.claude");
+      assert.ok(claudeItem, "crashed installed claude must still be reported");
+      assert.equal(claudeItem.status, "degraded", "non-timeout CLI crash must stay degraded");
+      assert.ok(claudeItem.detail?.includes("exit code 1"));
+
+      // Uninstalled CLIs remain omitted
+      assert.equal(aiGroup.items.find((i) => i.id === "provider.gemini"), undefined);
+      assert.equal(aiGroup.items.find((i) => i.id === "provider.opencode"), undefined);
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }

@@ -1009,4 +1009,78 @@ describe("Prismux v3 Unified Provider Probe + Merged Subscription Risk Waiver", 
     assert.ok(extraDirs.includes(join(root, ".dsh", "bin")));
     assert.ok(extraDirs.includes(join(root, "AppData", "Local", "DSH NEXT", "bin")));
   });
+
+  test("Standard FS install paths resolve agy & DSH NEXT without touching Uninstall Registry, and uninstalled CLIs skip CoreRpcClient", async () => {
+    const root = makeTempDir("pmx-fast-fs-no-reg-");
+    const localAppData = join(root, "AppData", "Local");
+    const agyBinDir = join(localAppData, "agy", "bin");
+    mkdirSync(agyBinDir, { recursive: true });
+    const agyExe = join(agyBinDir, "agy.exe");
+    writeFileSync(agyExe, "MZ", "utf8");
+
+    const dshDir = join(localAppData, "Programs", "DSH NEXT");
+    const dshRes = join(dshDir, "resources");
+    mkdirSync(dshRes, { recursive: true });
+    const dshExe = join(dshDir, "DSH NEXT.exe");
+    writeFileSync(dshExe, "MZ", "utf8");
+    const asarHeaderJson = Buffer.from(
+      JSON.stringify({
+        files: { lib: { files: { "desktop-cli.js": { size: 9, offset: "0" } } } }
+      }),
+      "utf8"
+    );
+    const aligned = Math.ceil(asarHeaderJson.length / 4) * 4;
+    const hdr = Buffer.alloc(16 + aligned);
+    hdr.writeUInt32LE(4, 0);
+    hdr.writeUInt32LE(aligned + 8, 4);
+    hdr.writeUInt32LE(aligned + 4, 8);
+    hdr.writeUInt32LE(asarHeaderJson.length, 12);
+    asarHeaderJson.copy(hdr, 16);
+    writeFileSync(
+      join(dshRes, "app.asar"),
+      Buffer.concat([hdr, Buffer.from("export {};", "utf8")])
+    );
+
+    let regQueryCalls = 0;
+    const mockEnv = { USERPROFILE: root, LOCALAPPDATA: localAppData, PATH: "" };
+    const foundAgy = findPackagedAntigravityCli(mockEnv, "win32", root, {
+      queryRegistry: () => {
+        regQueryCalls += 1;
+        return "";
+      }
+    });
+    const foundDsh = findPackagedDshDesktopCli(mockEnv, "win32", root, {
+      queryRegistry: () => {
+        regQueryCalls += 1;
+        return "";
+      }
+    });
+    assert.equal(foundAgy, agyExe);
+    assert.equal(foundDsh?.executablePath, dshExe);
+    assert.equal(
+      regQueryCalls,
+      0,
+      "standard FS paths must hit before ever spawning reg.exe Uninstall Registry queries"
+    );
+
+    // Uninstalled provider probe MUST NOT touch CoreRpcClient.listProviders()!
+    let rpcCalls = 0;
+    const probeService = new PrismuxProviderProbeService({
+      homeDir: root,
+      platform: "win32",
+      env: { USERPROFILE: root, LOCALAPPDATA: localAppData, APPDATA: join(root, "AppData", "Roaming"), PATH: "" },
+      refreshEnv: () => undefined,
+      coreRpcClient: {
+        isConnected: () => true,
+        listProviders: async () => {
+          rpcCalls += 1;
+          return [];
+        }
+      } as never
+    });
+    const missingGemini = await probeService.probeProvider("gemini", { refresh: true });
+    assert.equal(missingGemini.installed, false);
+    assert.equal(missingGemini.status, "not_installed");
+    assert.equal(rpcCalls, 0, "uninstalled CLI must short-circuit via pure-FS before CoreRpcClient");
+  });
 });
