@@ -3158,10 +3158,7 @@
     {
       "t": "span",
       "i": 2,
-      "c": [
-        " ",
-        "on the computer that opened this page"
-      ]
+      "c": [" ", "on the computer that opened this page"]
     }
   ],
   "b2d53b4d1d48fbef": [
@@ -3173,10 +3170,7 @@
     {
       "t": "span",
       "i": 2,
-      "c": [
-        " ",
-        "· whoever runs it gets this access"
-      ]
+      "c": [" ", "· whoever runs it gets this access"]
     }
   ],
   "c54cc9c75db9dc58": "Only approve a sign-in you just started.",
@@ -13210,5 +13204,17 @@
   "43c430ae0bbf65d5": "For thread titles and other generated text. Source control has its own setting.",
   "5e7418ad870bb2b3": "reasoning thinking cot chain of thought translate chinese local offline nmt bergamot deepl azure volcano tencent openai api text model",
   "f63c7b2e9785b95f": "API Relay Quotas",
-  "4a44a1d009971d16": "api relay quotas balance newapi oneapi veloera voapi rixapi openai billing hub quota subscription limits management key add remove"
+  "4a44a1d009971d16": "api relay quotas balance newapi oneapi veloera voapi rixapi openai billing hub quota subscription limits management key add remove",
+  "757f9a091c741167": "Delegated agent threads",
+  "98f2af6b5589c1cd": "Archive thread",
+  "cf830288356fff6a": "Delete",
+  "783f604fec9e7309": "{count, plural, one {Collapse {count} delegated agent ({running} running)} other {Collapse {count} delegated agents ({running} running)}}",
+  "5ac17f93ff5e4265": "{count, plural, one {Expand {count} delegated agent ({running} running)} other {Expand {count} delegated agents ({running} running)}}",
+  "47633622a91366f3": "{count, plural, one {Collapse {count} delegated agent (running)} other {Collapse {count} delegated agents (running)}}",
+  "931e87b215f28389": "{count, plural, one {Expand {count} delegated agent (running)} other {Expand {count} delegated agents (running)}}",
+  "ad121221fc77bb26": "{count, plural, one {Collapse {count} delegated agent} other {Collapse {count} delegated agents}}",
+  "2feaf2d805c9d0a8": "{count, plural, one {Expand {count} delegated agent} other {Expand {count} delegated agents}}",
+  "04f0d93f16660fa3": "{count, plural, one {Also archives {count} delegated subagent thread.} other {Also archives {count} delegated subagent threads.}}",
+  "b4c7b5f07c15a259": "Failed to archive delegated subagent thread",
+  "5ad9bdfad2589c6b": "{count, plural, one {Also permanently deletes {count} delegated subagent thread.} other {Also permanently deletes {count} delegated subagent threads.}}"
 }

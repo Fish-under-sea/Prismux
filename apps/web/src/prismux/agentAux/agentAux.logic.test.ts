@@ -849,7 +849,8 @@ describe("agentAux.logic", () => {
     expect(formatAuxRoleLabel("coordinator", false, "zh")).toBe("协调者");
     expect(formatAuxRoleLabel("worker", false, "zh")).toBe("执行者");
     expect(formatAuxStatusLabel("working", null, "zh")).toBe("工作中");
-    expect(formatAuxStatusLabel("waiting_on", "coordinator", "zh")).toBe("等待 @coordinator");
+    expect(formatAuxStatusLabel("waiting_on", "coordinator", "zh")).toBe("等待 @协调者");
+    expect(formatAuxStatusLabel("waiting_on", "coordinator", "en")).toBe("Waiting on @coordinator");
     expect(formatAuxTaskStatusLabel("blocked", "zh")).toBe("受阻");
   });
 

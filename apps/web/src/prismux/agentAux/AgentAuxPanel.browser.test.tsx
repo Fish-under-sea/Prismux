@@ -378,6 +378,8 @@ describe("AgentAuxPanel real-Chrome browser verification", () => {
     await act(() => {
       membersTab!.click();
     });
+    expect(pane!.innerText).toContain("@协调者");
+    expect(pane!.innerText).not.toContain("@coordinator");
     expect(pane!.innerText).toContain("共享副本");
     expect(pane!.innerText).toContain("已退出成员");
     expect(pane!.innerText).toContain("打开会话");

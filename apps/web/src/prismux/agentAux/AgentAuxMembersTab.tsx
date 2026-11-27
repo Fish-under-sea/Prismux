@@ -10,7 +10,11 @@ import {
 import { memo, useMemo, useState } from "react";
 
 import {
+  formatAuxBoardMemberHandle,
   formatAuxDuration,
+  formatAuxMemberDisplayName,
+  formatAuxModelDisplayLabel,
+  formatAuxPlainSnippet,
   formatAuxStepsCount,
   formatAuxWorkspaceBadge,
   getAuxStrings,
@@ -53,8 +57,15 @@ export const AgentAuxMembersTab = memo(function AgentAuxMembersTab({
 
   const matchesSearch = (m: AgentAuxMember): boolean => {
     if (!normalizedQuery) return true;
+    const localizedHandle = formatAuxBoardMemberHandle(m.name, model.locale, m);
+    const localizedModel = formatAuxModelDisplayLabel(m.model);
+    const localizedSnippet = formatAuxPlainSnippet(
+      m.failureText || m.lastPostSnippet || m.nowLine,
+      model.locale,
+    );
+    const localizedBrief = formatAuxPlainSnippet(m.brief, model.locale);
     const hay =
-      `${m.name} ${m.displayName} ${m.role} ${m.roleLabel} ${m.model} ${m.brief} ${m.activity} ${m.nowLine} ${m.workspace ?? ""}`.toLowerCase();
+      `${m.name} ${localizedHandle} ${m.displayName} ${m.role} ${m.roleLabel} ${m.model} ${localizedModel} ${m.brief} ${localizedBrief} ${m.activity} ${m.nowLine} ${m.lastPostSnippet} ${localizedSnippet} ${m.workspace ?? ""}`.toLowerCase();
     return hay.includes(normalizedQuery);
   };
 
@@ -128,18 +139,36 @@ export const AgentAuxMembersTab = memo(function AgentAuxMembersTab({
     const wsBadge = shortWs
       ? formatAuxWorkspaceBadge(member.workspaceMode, shortWs, model.locale)
       : "";
-    const statusText = member.isCoordinator
-      ? member.status === "working"
-        ? s.roleCoordinatorWorking
-        : s.roleCoordinator
-      : formatAuxStatusLabel(member.status, member.waitingOn, model.locale);
+    const memberDisplayName = formatAuxMemberDisplayName(member.name, model.locale, member);
+    const memberHandle = formatAuxBoardMemberHandle(member.name, model.locale, member);
+    const formattedModel = formatAuxModelDisplayLabel(member.model);
+    const formattedBrief = formatAuxPlainSnippet(member.brief, model.locale);
+    const formattedActivity = formatAuxPlainSnippet(member.activity, model.locale);
+    const formattedFailure = formatAuxPlainSnippet(member.failureText, model.locale);
+    const formattedSnippet = formatAuxPlainSnippet(
+      member.lastPostSnippet || member.nowLine,
+      model.locale,
+    );
+    const statusText = formatAuxStatusLabel(member.status, member.waitingOn, model.locale);
 
     const hasSteps = Boolean(member.nativeSteps && member.nativeSteps.length > 0);
     const stepsOpen = expandedStepIds.has(member.id);
     const showDisplaySubtitle =
-      member.displayName &&
+      Boolean(member.displayName) &&
       member.displayName.toLowerCase() !== member.name.toLowerCase() &&
+      member.displayName.toLowerCase() !== memberDisplayName.toLowerCase() &&
       !member.isCoordinator;
+    const bottomPreviewText =
+      member.status === "working" && formattedActivity
+        ? formattedActivity
+        : formattedFailure || formattedSnippet;
+    const subtitleText = showDisplaySubtitle
+      ? member.displayName
+      : formattedBrief &&
+          formattedBrief !== bottomPreviewText &&
+          formattedBrief.toLowerCase() !== memberDisplayName.toLowerCase()
+        ? formattedBrief
+        : "";
 
     return (
       <div
@@ -172,8 +201,8 @@ export const AgentAuxMembersTab = memo(function AgentAuxMembersTab({
         <div className="pmx-aux-member-main min-w-0 flex-1">
           {/* Top Line: @name + status pill + ACP badge + #lastSeq */}
           <div className="pmx-aux-member-top">
-            <strong className="pmx-aux-member-handle" title={`@${member.name}`}>
-              @{member.name}
+            <strong className="pmx-aux-member-handle" title={memberHandle}>
+              {memberHandle}
             </strong>
             {isAbsorbedAcp ? (
               <span className="pmx-aux-acp-badge">{s.acpDelegatedBadge}</span>
@@ -196,15 +225,15 @@ export const AgentAuxMembersTab = memo(function AgentAuxMembersTab({
           </div>
 
           {/* Brief / Role title */}
-          {showDisplaySubtitle || (member.brief && member.brief !== member.nowLine) ? (
-            <p className="pmx-aux-member-brief" title={member.brief || member.displayName}>
-              {showDisplaySubtitle ? member.displayName : member.brief}
+          {subtitleText ? (
+            <p className="pmx-aux-member-brief" title={subtitleText}>
+              {subtitleText}
             </p>
           ) : null}
 
           {/* Meta line: model + workspace pill + channels + metrics */}
           <div className="pmx-aux-member-meta">
-            {member.model ? <span className="pmx-aux-member-model">{member.model}</span> : null}
+            {formattedModel ? <span className="pmx-aux-member-model">{formattedModel}</span> : null}
             {wsBadge ? (
               <span className="pmx-aux-ws-pill" title={member.workspace ?? wsBadge}>
                 <FolderGit2Icon className="size-3 shrink-0" aria-hidden="true" />
@@ -236,17 +265,15 @@ export const AgentAuxMembersTab = memo(function AgentAuxMembersTab({
           </div>
 
           {/* Live activity shimmer OR latest post snippet */}
-          {member.status === "working" && member.activity ? (
-            <p className="pmx-aux-member-snippet pmx-aux-shimmer" title={member.activity}>
-              {member.activity}
+          {member.status === "working" && formattedActivity ? (
+            <p className="pmx-aux-member-snippet pmx-aux-shimmer" title={formattedActivity}>
+              {formattedActivity}
             </p>
-          ) : member.failureText ? (
-            <p className="pmx-aux-member-snippet pmx-aux-member-snippet--err">
-              {member.failureText}
-            </p>
-          ) : member.lastPostSnippet || member.nowLine ? (
-            <p className="pmx-aux-member-snippet" title={member.lastPostSnippet || member.nowLine}>
-              {member.lastPostSnippet || member.nowLine}
+          ) : formattedFailure ? (
+            <p className="pmx-aux-member-snippet pmx-aux-member-snippet--err">{formattedFailure}</p>
+          ) : formattedSnippet ? (
+            <p className="pmx-aux-member-snippet" title={formattedSnippet}>
+              {formattedSnippet}
             </p>
           ) : (
             <p className="pmx-aux-member-snippet pmx-aux-member-snippet--empty">

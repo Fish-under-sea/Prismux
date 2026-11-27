@@ -13220,5 +13220,17 @@
   "43c430ae0bbf65d5": "用于生成会话标题和其他文本。源码管理有单独的设置。",
   "5e7418ad870bb2b3": "思考过程汉化 思维链翻译 思考翻译 中文 本地离线 离线翻译 模型 火山 腾讯 翻译 API 文本生成模型",
   "f63c7b2e9785b95f": "API 中转站配额",
-  "4a44a1d009971d16": "api 中转站 配额 余额 newapi oneapi veloera voapi rixapi openai 账单 额度 管理 添加 移除"
+  "4a44a1d009971d16": "api 中转站 配额 余额 newapi oneapi veloera voapi rixapi openai 账单 额度 管理 添加 移除",
+  "757f9a091c741167": "委派子代理会话",
+  "98f2af6b5589c1cd": "归档会话",
+  "cf830288356fff6a": "删除",
+  "783f604fec9e7309": "{count, plural, other {收起 {count} 个委派子代理（{running} 个运行中）}}",
+  "5ac17f93ff5e4265": "{count, plural, other {展开 {count} 个委派子代理（{running} 个运行中）}}",
+  "47633622a91366f3": "{count, plural, other {收起 {count} 个委派子代理（运行中）}}",
+  "931e87b215f28389": "{count, plural, other {展开 {count} 个委派子代理（运行中）}}",
+  "ad121221fc77bb26": "{count, plural, other {收起 {count} 个委派子代理}}",
+  "2feaf2d805c9d0a8": "{count, plural, other {展开 {count} 个委派子代理}}",
+  "04f0d93f16660fa3": "{count, plural, other {同时归档 {count} 个委派子代理会话。}}",
+  "b4c7b5f07c15a259": "归档委派子代理会话失败",
+  "5ad9bdfad2589c6b": "{count, plural, other {同时永久删除 {count} 个委派子代理会话。}}"
 }

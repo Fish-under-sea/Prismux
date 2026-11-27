@@ -4,9 +4,13 @@ import { memo, useMemo, useState } from "react";
 import { AgentBrandLogo } from "../agentBrand";
 import {
   formatAuxBlockedChip,
+  formatAuxBoardMemberHandle,
   formatAuxFilteredBy,
   formatAuxInReviewChip,
+  formatAuxMemberDisplayName,
+  formatAuxModelDisplayLabel,
   formatAuxNeedsYouChip,
+  formatAuxPlainSnippet,
   formatAuxTasksDone,
   formatAuxTeamCount,
   formatAuxThreadsOpenChip,
@@ -348,12 +352,14 @@ export const AgentAuxOverviewTab = memo(function AgentAuxOverviewTab({
   const renderWorkerChip = (ownerName: string) => {
     const ownerObj = memberByName.get(ownerName);
     const isSwarmBee = model.useBees && ownerObj?.sourceKind !== "acp-delegated";
+    const ownerLabel = formatAuxMemberDisplayName(ownerName, model.locale, ownerObj);
+    const ownerHandle = formatAuxBoardMemberHandle(ownerName, model.locale, ownerObj);
     return (
       <button
         key={ownerName}
         type="button"
         className="pmx-aux-wchip"
-        title={`@${ownerName}`}
+        title={ownerHandle}
         onClick={(e) => {
           e.stopPropagation();
           onSelectTeamMember(effectiveFilter === ownerName ? null : ownerName);
@@ -379,7 +385,7 @@ export const AgentAuxOverviewTab = memo(function AgentAuxOverviewTab({
             />
           )}
         </span>
-        <span>{ownerName}</span>
+        <span>{ownerLabel}</span>
       </button>
     );
   };
@@ -415,10 +421,19 @@ export const AgentAuxOverviewTab = memo(function AgentAuxOverviewTab({
               className="pmx-aux-stall-tag"
               onClick={() => onJumpSeq(model.stall!.seq)}
             >
-              @{model.stall.agent} #{model.stall.seq}
+              {formatAuxBoardMemberHandle(
+                model.stall.agent,
+                model.locale,
+                memberByName.get(model.stall.agent),
+              )}{" "}
+              #{model.stall.seq}
             </button>
           </div>
-          {model.stall.text ? <p className="pmx-aux-stall-text">{model.stall.text}</p> : null}
+          {model.stall.text ? (
+            <p className="pmx-aux-stall-text">
+              {formatAuxPlainSnippet(model.stall.text, model.locale)}
+            </p>
+          ) : null}
         </section>
       ) : null}
 
@@ -554,7 +569,8 @@ export const AgentAuxOverviewTab = memo(function AgentAuxOverviewTab({
                   <p className="mt-1 text-[12px] text-muted-foreground">{att.why}</p>
                 ) : null}
                 <div className="mt-1 text-[11px] text-muted-foreground">
-                  {s.overviewFromPrefix} @{att.from}
+                  {s.overviewFromPrefix}{" "}
+                  {formatAuxBoardMemberHandle(att.from, model.locale, memberByName.get(att.from))}
                 </div>
               </div>
             ))}
@@ -622,12 +638,18 @@ export const AgentAuxOverviewTab = memo(function AgentAuxOverviewTab({
                       </span>
                     </div>
                     {liveActivity ? (
-                      <p className="pmx-aux-run-note pmx-aux-shimmer" title={liveActivity}>
-                        {liveActivity}
+                      <p
+                        className="pmx-aux-run-note pmx-aux-shimmer"
+                        title={formatAuxPlainSnippet(liveActivity, model.locale)}
+                      >
+                        {formatAuxPlainSnippet(liveActivity, model.locale)}
                       </p>
                     ) : ws.note ? (
-                      <p className="pmx-aux-run-note" title={ws.note}>
-                        {ws.note}
+                      <p
+                        className="pmx-aux-run-note"
+                        title={formatAuxPlainSnippet(ws.note, model.locale)}
+                      >
+                        {formatAuxPlainSnippet(ws.note, model.locale)}
                       </p>
                     ) : null}
                   </div>
@@ -765,7 +787,9 @@ export const AgentAuxOverviewTab = memo(function AgentAuxOverviewTab({
                           </span>
                           <div className="pmx-aux-donem">
                             <strong>{ws.title}</strong>
-                            {ws.note ? <span>{ws.note}</span> : null}
+                            {ws.note ? (
+                              <span>{formatAuxPlainSnippet(ws.note, model.locale)}</span>
+                            ) : null}
                           </div>
                           <span className="pmx-aux-wchips">
                             {ws.owners.slice(0, 1).map((o) => renderWorkerChip(o))}
@@ -912,7 +936,7 @@ export const AgentAuxOverviewTab = memo(function AgentAuxOverviewTab({
                 {row.now ? (
                   <p className="pmx-aux-th-now">
                     {row.state !== "done" ? <span>{s.overviewNowPrefix}</span> : null}
-                    {row.now}
+                    {formatAuxPlainSnippet(row.now, model.locale)}
                   </p>
                 ) : null}
 
@@ -1015,23 +1039,31 @@ export const AgentAuxOverviewTab = memo(function AgentAuxOverviewTab({
                       : coordinator.displayName}
                   </strong>
                   <span className="pmx-aux-role-pill">
-                    {coordinator.status === "working"
-                      ? s.roleCoordinatorWorking
-                      : s.roleCoordinator}
+                    {coordinator.isCoordinator && model.useBees
+                      ? formatAuxStatusLabel(
+                          coordinator.status,
+                          coordinator.waitingOn,
+                          model.locale,
+                        )
+                      : coordinator.status === "working"
+                        ? s.roleCoordinatorWorking
+                        : s.roleCoordinator}
                   </span>
                 </div>
                 {coordinator.status === "working" && coordinator.activity ? (
                   <p className="pmx-aux-shimmer mt-1 truncate text-[12px]">
-                    {coordinator.activity}
+                    {formatAuxPlainSnippet(coordinator.activity, model.locale)}
                   </p>
                 ) : (
                   <p className="mt-1 line-clamp-2 text-[12px] text-muted-foreground">
-                    {coordinator.nowLine}
+                    {formatAuxPlainSnippet(coordinator.nowLine, model.locale)}
                   </p>
                 )}
                 <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground tabular-nums">
                   {coordinator.model ? (
-                    <span className="font-mono">{coordinator.model}</span>
+                    <span className="font-mono">
+                      {formatAuxModelDisplayLabel(coordinator.model)}
+                    </span>
                   ) : null}
                   {coordinator.lastSeq > 0 && model.messages.length > 0 ? (
                     <button
@@ -1128,6 +1160,7 @@ export const AgentAuxOverviewTab = memo(function AgentAuxOverviewTab({
               {liveWorkers.slice(0, 12).map((member) => {
                 const isSel = effectiveFilter === member.name;
                 const memberUsesBees = model.useBees && member.sourceKind !== "acp-delegated";
+                const memberHandle = formatAuxBoardMemberHandle(member.name, model.locale, member);
                 return (
                   <button
                     key={member.id}
@@ -1140,7 +1173,7 @@ export const AgentAuxOverviewTab = memo(function AgentAuxOverviewTab({
                       .filter(Boolean)
                       .join(" ")}
                     aria-pressed={isSel}
-                    title={`@${member.name} · ${formatAuxStatusLabel(member.status, member.waitingOn, model.locale)}`}
+                    title={`${memberHandle} · ${formatAuxStatusLabel(member.status, member.waitingOn, model.locale)}`}
                     onClick={() => onSelectTeamMember(isSel ? null : member.name)}
                   >
                     <span className="pmx-aux-crew-icon" aria-hidden="true">
@@ -1154,7 +1187,7 @@ export const AgentAuxOverviewTab = memo(function AgentAuxOverviewTab({
                         size="sm"
                       />
                     </span>
-                    <span className="pmx-aux-crew-name">@{member.name}</span>
+                    <span className="pmx-aux-crew-name">{memberHandle}</span>
                   </button>
                 );
               })}

@@ -22,6 +22,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { makeThreadFixture } from "../../test-fixtures";
+import zhCatalog from "../../i18n/translations/zh.json";
 import {
   DSH_BRAND_COLOR,
   DSH_FISH_LOGO_VIEWBOX,
@@ -78,6 +79,10 @@ function makeShell(overrides: Partial<OrchestrationV2ThreadShell> = {}, envId = 
   });
 }
 
+const ZH_TRANSLATIONS = {
+  zh: zhCatalog,
+} as unknown as React.ComponentProps<typeof GTProvider>["translations"];
+
 function wrap(node: React.ReactNode, locale: "zh" | "en" = "zh"): string {
   const rootRoute = createRootRoute();
   const router = createRouter({
@@ -92,7 +97,7 @@ function wrap(node: React.ReactNode, locale: "zh" | "en" = "zh"): string {
     createElement(
       RouterContextWrapper,
       { router },
-      <GTProvider locale={locale} translations={{}}>
+      <GTProvider locale={locale} translations={locale === "zh" ? ZH_TRANSLATIONS : {}}>
         <TooltipProvider>{node}</TooltipProvider>
       </GTProvider>,
     ),
@@ -1328,6 +1333,149 @@ describe("DelegatedSubthreadTree & SidebarThreadRow SSR rendering", () => {
     expect(runningCollapsedToggle).toContain('data-delegated-running-dot="true"');
     expect(runningCollapsedToggle).toContain('aria-label="Expand 2 delegated agents (1 running)"');
     expect(extractChevronClass(runningCollapsedToggle)).not.toContain("rotate-90");
+
+    // 5. Simplified Chinese (`zh`) locale renders 100% localized Chinese toggle labels across all 6 expand/collapse states (zero English fallback)
+    const zhCollapsedSingleToggle = extractToggleMarkup(
+      wrap(
+        <ul>
+          <SidebarThreadRow
+            {...baseRowProps}
+            delegatedChildren={[childDone]}
+            delegatedTreeExpanded={false}
+            delegatedTreeHasRunning={false}
+          />
+        </ul>,
+        "zh",
+      ),
+    );
+    expect(zhCollapsedSingleToggle).toContain('aria-label="展开 1 个委派子代理"');
+    expect(zhCollapsedSingleToggle).not.toContain("Expand");
+
+    const zhExpandedMultiToggle = extractToggleMarkup(
+      wrap(
+        <ul>
+          <SidebarThreadRow
+            {...baseRowProps}
+            delegatedChildren={[childDone, childDoneSecond]}
+            delegatedTreeExpanded
+            delegatedTreeHasRunning={false}
+          />
+        </ul>,
+        "zh",
+      ),
+    );
+    expect(zhExpandedMultiToggle).toContain('aria-label="收起 2 个委派子代理"');
+    expect(zhExpandedMultiToggle).not.toContain("Collapse");
+
+    const zhRunningExpandedToggle = extractToggleMarkup(
+      wrap(
+        <ul>
+          <SidebarThreadRow {...baseRowProps} delegatedTreeExpanded delegatedTreeHasRunning />
+        </ul>,
+        "zh",
+      ),
+    );
+    expect(zhRunningExpandedToggle).toContain('aria-label="收起 2 个委派子代理（1 个运行中）"');
+
+    const zhRunningCollapsedToggle = extractToggleMarkup(
+      wrap(
+        <ul>
+          <SidebarThreadRow
+            {...baseRowProps}
+            delegatedTreeExpanded={false}
+            delegatedTreeHasRunning
+          />
+        </ul>,
+        "zh",
+      ),
+    );
+    expect(zhRunningCollapsedToggle).toContain('aria-label="展开 2 个委派子代理（1 个运行中）"');
+
+    const zhRunningGenericCollapsedToggle = extractToggleMarkup(
+      wrap(
+        <ul>
+          <SidebarThreadRow
+            {...baseRowProps}
+            delegatedChildren={[childDone]}
+            delegatedTreeExpanded={false}
+            delegatedTreeHasRunning
+          />
+        </ul>,
+        "zh",
+      ),
+    );
+    expect(zhRunningGenericCollapsedToggle).toContain('aria-label="展开 1 个委派子代理（运行中）"');
+
+    const zhRunningGenericExpandedToggle = extractToggleMarkup(
+      wrap(
+        <ul>
+          <SidebarThreadRow
+            {...baseRowProps}
+            delegatedChildren={[childDone]}
+            delegatedTreeExpanded
+            delegatedTreeHasRunning
+          />
+        </ul>,
+        "zh",
+      ),
+    );
+    expect(zhRunningGenericExpandedToggle).toContain('aria-label="收起 1 个委派子代理（运行中）"');
+
+    // DelegatedSubthreadTree aria-label & quick action labels are also localized in zh vs en
+    const parentKey = scopedThreadKey(scopeThreadRef(ENV_LOCAL, parentId));
+    const zhSubtreeHtml = wrap(
+      <DelegatedSubthreadTree
+        parentKey={parentKey}
+        childThreads={[childDone]}
+        activeThreadKey={null}
+        inWorkspaceCard
+        providerEntryByInstanceId={providerMap}
+        canOperateEnvironment
+        onSelectChild={vi.fn()}
+        onActivateChild={vi.fn()}
+        onContextMenuChild={vi.fn()}
+        onArchiveChild={vi.fn()}
+        onDeleteChild={vi.fn()}
+      />,
+      "zh",
+    );
+    expect(zhSubtreeHtml).toContain('aria-label="委派子代理会话"');
+    expect(zhSubtreeHtml).toContain('aria-label="归档会话"');
+    expect(zhSubtreeHtml).toContain('aria-label="删除"');
+
+    const enSubtreeHtml = wrap(
+      <DelegatedSubthreadTree
+        parentKey={parentKey}
+        childThreads={[childDone]}
+        activeThreadKey={null}
+        inWorkspaceCard
+        providerEntryByInstanceId={providerMap}
+        canOperateEnvironment
+        onSelectChild={vi.fn()}
+        onActivateChild={vi.fn()}
+        onContextMenuChild={vi.fn()}
+        onArchiveChild={vi.fn()}
+        onDeleteChild={vi.fn()}
+      />,
+      "en",
+    );
+    expect(enSubtreeHtml).toContain('aria-label="Delegated agent threads"');
+    expect(enSubtreeHtml).toContain('aria-label="Archive thread"');
+    expect(enSubtreeHtml).toContain('aria-label="Delete"');
+
+    const enExpandedRowHtml = wrap(
+      <ul>
+        <SidebarThreadRow
+          {...baseRowProps}
+          delegatedChildren={[childDone]}
+          delegatedTreeExpanded
+          delegatedTreeHasRunning={false}
+        />
+      </ul>,
+      "en",
+    );
+    expect(enExpandedRowHtml).toContain('aria-label="Collapse 1 delegated agent"');
+    expect(enExpandedRowHtml).toContain('aria-label="Delegated agent threads"');
   });
 
   it("renders DeepSeek whale SVG (never [AR]) for local acpRegistry DSH subagents with custom display names, command paths, or opaque UUID instance IDs", () => {

@@ -135,7 +135,9 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
     expect(m(msg("Word", { $context: "show effort as a word" }))).toBe("文字");
     expect(m(msg("Import from prismux.json"))).toBe("从 prismux.json 导入");
     expect(m(msg("prismux.json is invalid"))).toBe("prismux.json 无效");
-    expect(m(msg("Inherited from the repository's prismux.json"))).toBe("继承自仓库的 prismux.json");
+    expect(m(msg("Inherited from the repository's prismux.json"))).toBe(
+      "继承自仓库的 prismux.json",
+    );
     expect(m(msg("Prismux system footprint"))).toBe("Prismux 系统资源占用");
     expect(zhCatalog["84795e1ec8a16024"]).toBe("Prismux 系统资源占用");
     expect(m(msg("Running natively"))).toBe("原生运行");
@@ -164,7 +166,9 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
           "For thread titles and other generated text. Source control has its own setting. Text generators from Agent configurator also appear here.",
         ),
       ),
-    ).toBe("用于生成会话标题和其他文本。版本控制有单独的设置。“智能体配置”中添加的文本生成器也会显示在这里。");
+    ).toBe(
+      "用于生成会话标题和其他文本。版本控制有单独的设置。“智能体配置”中添加的文本生成器也会显示在这里。",
+    );
     expect(m(msg("Default reasoning effort"))).toBe("默认思考强度");
     expect(
       m(
@@ -184,12 +188,12 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
 
     // Reasoning / CoT translation (思考过程汉化)
     expect(m(msg("Reasoning translation"))).toBe("思考过程汉化");
-    expect(
-      m(msg("Off (keep original)", { $context: "reasoning translation provider" })),
-    ).toBe("关闭（保留原文）");
-    expect(
-      m(msg("Bing Translate (no key)", { $context: "reasoning translation provider" })),
-    ).toBe("Bing 翻译（免密）");
+    expect(m(msg("Off (keep original)", { $context: "reasoning translation provider" }))).toBe(
+      "关闭（保留原文）",
+    );
+    expect(m(msg("Bing Translate (no key)", { $context: "reasoning translation provider" }))).toBe(
+      "Bing 翻译（免密）",
+    );
     expect(
       m(msg("Google Translate (no key)", { $context: "reasoning translation provider" })),
     ).toBe("Google 翻译（免密）");
@@ -209,7 +213,9 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
           "No sign-in or API key required. When enabled, reasoning text is sent to the selected online translation service and may contain code or conversation details.",
         ),
       ),
-    ).toBe("无需额外登录或 API Key；开启后思考内容会发送至所选在线翻译服务，可能包含代码或对话细节。");
+    ).toBe(
+      "无需额外登录或 API Key；开启后思考内容会发送至所选在线翻译服务，可能包含代码或对话细节。",
+    );
     expect(
       m(
         msg(
@@ -334,7 +340,9 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
           "Already signed in with agy CLI? Reuse it directly via the official agy acp channel with the native Google Antigravity icon.",
         ),
       ),
-    ).toBe("已通过 agy CLI 登录？可直接经由官方 agy acp 通道复用并保留原生 Google Antigravity 图标。");
+    ).toBe(
+      "已通过 agy CLI 登录？可直接经由官方 agy acp 通道复用并保留原生 Google Antigravity 图标。",
+    );
     expect(
       m(
         msg(
@@ -391,7 +399,9 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
           path: "/usr/local/bin/prismux",
         }),
       ),
-    ).toBe("新终端中将优先运行位于 /usr/local/bin/prismux 的另一个 prismux。请先移除它以使用 Prismux 的版本。");
+    ).toBe(
+      "新终端中将优先运行位于 /usr/local/bin/prismux 的另一个 prismux。请先移除它以使用 Prismux 的版本。",
+    );
     expect(m(msg("手机模拟器"))).toBe("手机模拟器");
     expect(m(msg("零依赖内置 iPhone 16 Pro / Android 机身外壳与真机触摸仿真。"))).toBe(
       "零依赖内置 iPhone 16 Pro / Android 机身外壳与真机触摸仿真。",
@@ -445,9 +455,13 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
     expect(m(msg("Show fewer models"))).toBe("收起更多模型");
 
     // Orca left sidebar + icon rail
-    expect(m(msg("Service diagnostics", { $context: "sidebar quick navigation" }))).toBe("服务体检");
+    expect(m(msg("Service diagnostics", { $context: "sidebar quick navigation" }))).toBe(
+      "服务体检",
+    );
     expect(m(msg("Automations", { $context: "sidebar quick navigation" }))).toBe("自动化");
-    expect(m(msg("Prismux Mobile", { $context: "sidebar quick navigation" }))).toBe("Prismux 手机端");
+    expect(m(msg("Prismux Mobile", { $context: "sidebar quick navigation" }))).toBe(
+      "Prismux 手机端",
+    );
     expect(m(msg("Plugins", { $context: "sidebar quick navigation" }))).toBe("插件中心");
     expect(m(msg("Locate current thread"))).toBe("定位当前会话");
     expect(m(msg("Wallpaper & appearance"))).toBe("壁纸与外观");
@@ -502,11 +516,83 @@ describe("Prismux Simplified Chinese i18n catalog", () => {
     expect(m(msg("Edited {fileName}"), { fileName: "app.ts" })).toBe("已修改 app.ts");
     expect(m(msg("Created {fileName}"), { fileName: "new.ts" })).toBe("已创建 new.ts");
     expect(m(msg("Deleted {fileName}"), { fileName: "old.ts" })).toBe("已删除 old.ts");
-    expect(m(msg("Fetched {url}"), { url: "https://prismux.dev" })).toBe("已抓取 https://prismux.dev");
+    expect(m(msg("Fetched {url}"), { url: "https://prismux.dev" })).toBe(
+      "已抓取 https://prismux.dev",
+    );
     expect(m(msg("Updating plan"))).toBe("正在更新计划");
     expect(m(msg("Updated plan"))).toBe("已更新计划");
     expect(m(msg("Running tool"))).toBe("正在调用工具");
     expect(m(msg("Used tool"))).toBe("已调用工具");
+
+    // Sidebar delegated subagent expand/collapse tooltips & tree actions
+    expect(
+      m(
+        msg(
+          "{count, plural, one {Expand {count} delegated agent} other {Expand {count} delegated agents}}",
+        ),
+        { count: 1 },
+      ),
+    ).toBe("展开 1 个委派子代理");
+    expect(
+      m(
+        msg(
+          "{count, plural, one {Collapse {count} delegated agent} other {Collapse {count} delegated agents}}",
+        ),
+        { count: 2 },
+      ),
+    ).toBe("收起 2 个委派子代理");
+    expect(
+      m(
+        msg(
+          "{count, plural, one {Expand {count} delegated agent ({running} running)} other {Expand {count} delegated agents ({running} running)}}",
+        ),
+        { count: 2, running: 1 },
+      ),
+    ).toBe("展开 2 个委派子代理（1 个运行中）");
+    expect(
+      m(
+        msg(
+          "{count, plural, one {Collapse {count} delegated agent ({running} running)} other {Collapse {count} delegated agents ({running} running)}}",
+        ),
+        { count: 2, running: 1 },
+      ),
+    ).toBe("收起 2 个委派子代理（1 个运行中）");
+    expect(
+      m(
+        msg(
+          "{count, plural, one {Expand {count} delegated agent (running)} other {Expand {count} delegated agents (running)}}",
+        ),
+        { count: 1 },
+      ),
+    ).toBe("展开 1 个委派子代理（运行中）");
+    expect(
+      m(
+        msg(
+          "{count, plural, one {Collapse {count} delegated agent (running)} other {Collapse {count} delegated agents (running)}}",
+        ),
+        { count: 1 },
+      ),
+    ).toBe("收起 1 个委派子代理（运行中）");
+    expect(m(msg("Delegated agent threads"))).toBe("委派子代理会话");
+    expect(
+      m(
+        msg(
+          "{count, plural, one {Also archives {count} delegated subagent thread.} other {Also archives {count} delegated subagent threads.}}",
+        ),
+        { count: 2 },
+      ),
+    ).toBe("同时归档 2 个委派子代理会话。");
+    expect(m(msg("Failed to archive delegated subagent thread"))).toBe("归档委派子代理会话失败");
+    expect(
+      m(
+        msg(
+          "{count, plural, one {Also permanently deletes {count} delegated subagent thread.} other {Also permanently deletes {count} delegated subagent threads.}}",
+        ),
+        { count: 2 },
+      ),
+    ).toBe("同时永久删除 2 个委派子代理会话。");
+    expect(zhCatalog["98f2af6b5589c1cd"]).toBe("归档会话");
+    expect(zhCatalog["cf830288356fff6a"]).toBe("删除");
   });
 
   it("enforces Prismux brand cleanup across zh.json while preserving T3 Connect relay copy", () => {

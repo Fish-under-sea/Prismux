@@ -27,6 +27,8 @@ import {
 import { observeResize } from "~/lib/observeResize";
 import { AgentBrandLogo, renderBundledBrandSvg } from "../agentBrand";
 import {
+  formatAuxBoardMemberHandle,
+  formatAuxMemberDisplayName,
   formatAuxPostsOverDuration,
   formatAuxReplayProgress,
   formatAuxWaitingOn,
@@ -880,7 +882,10 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
                 .map((bee) => {
                   const scale: 1 | 2 | 3 = bee.size === "lg" ? 2 : bee.size === "sm" ? 1 : 1;
                   const useBeeSprite = model.useBees && bee.sourceKind !== "acp-delegated";
-                  const tooltip = `@${bee.name} · ${formatAuxStatusLabel(bee.state, bee.waitingOn, model.locale)}`;
+                  const beeMember = memberByName.get(bee.name);
+                  const beeHandle = formatAuxBoardMemberHandle(bee.name, model.locale, beeMember);
+                  const beeLabel = formatAuxMemberDisplayName(bee.name, model.locale, beeMember);
+                  const tooltip = `${beeHandle} · ${formatAuxStatusLabel(bee.state, bee.waitingOn, model.locale)}`;
                   const isBeeWorkingAnimated =
                     !isGraphMotionPaused && bee.replayState === "working";
 
@@ -932,7 +937,7 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
                         </span>
                       )}
                       {hiveLayout.showNames && !bee.isQueen ? (
-                        <span className="pmx-aux-hv-bee-name">{bee.name}</span>
+                        <span className="pmx-aux-hv-bee-name">{beeLabel}</span>
                       ) : null}
                     </button>
                   );
@@ -1055,10 +1060,16 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
                 6,
                 Math.floor((node.width - (useBeeImg && beeUrl ? 34 : 31)) / 7),
               );
-              const shortLabel =
-                node.displayName.length > labelMax
-                  ? `${node.displayName.slice(0, labelMax - 1)}…`
+              const nodeMember = memberByName.get(node.name);
+              const resolvedNodeDisplay =
+                node.displayName.toLowerCase() === node.name.toLowerCase() ||
+                /^acp[_-]?registry[-_]+/i.test(node.displayName)
+                  ? formatAuxMemberDisplayName(node.name, model.locale, nodeMember)
                   : node.displayName;
+              const shortLabel =
+                resolvedNodeDisplay.length > labelMax
+                  ? `${resolvedNodeDisplay.slice(0, labelMax - 1)}…`
+                  : resolvedNodeDisplay;
               const safeNodeKey = node.name.replace(/[^a-zA-Z0-9_-]/g, "");
 
               return (
@@ -1129,15 +1140,15 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
                   {node.broadcastCount > 0 ? (
                     <g transform={`translate(${node.width - 14}, -6)`}>
                       <rect
-                        x="-14"
+                        x={model.locale === "zh" ? "-17" : "-14"}
                         y="-6"
-                        width="32"
+                        width={model.locale === "zh" ? "38" : "32"}
                         height="13"
                         rx="6.5"
                         className="pmx-aux-graph-all-bg"
                       />
                       <text x="2" y="3" textAnchor="middle" className="pmx-aux-graph-all-txt">
-                        @all {node.broadcastCount}
+                        {s.boardBroadcastAllMention} {node.broadcastCount}
                       </text>
                     </g>
                   ) : null}
@@ -1229,10 +1240,15 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
                     className="pmx-aux-wchip"
                     onClick={() => onOpenMemberPosts(name)}
                   >
-                    <span>@{name}</span>
+                    <span>{formatAuxBoardMemberHandle(name, model.locale, m)}</span>
                     {m?.waitingOn ? (
                       <span className="text-[10.5px] text-amber-600 dark:text-amber-300">
-                        · {formatAuxWaitingOn(m.waitingOn, model.locale)}
+                        ·{" "}
+                        {formatAuxWaitingOn(
+                          m.waitingOn,
+                          model.locale,
+                          memberByName.get(m.waitingOn),
+                        )}
                       </span>
                     ) : null}
                   </button>
@@ -1248,13 +1264,24 @@ export const AgentAuxGraphTab = memo(function AgentAuxGraphTab({
         <div className="pmx-aux-card pmx-aux-replay-caption" data-testid="aux-replay-caption">
           <div className="pmx-aux-msg-head">
             <div className="pmx-aux-msg-who">
-              <strong className="pmx-aux-msg-author">@{currentReplayMsg.agent}</strong>
+              <strong className="pmx-aux-msg-author">
+                {formatAuxBoardMemberHandle(
+                  currentReplayMsg.agent,
+                  model.locale,
+                  memberByName.get(currentReplayMsg.agent),
+                )}
+              </strong>
               {currentReplayMsg.mentions.length > 0 ? (
                 <span className="pmx-aux-msg-to">
-                  → {currentReplayMsg.mentions.map((n) => `@${n}`).join(" ")}
+                  →{" "}
+                  {currentReplayMsg.mentions
+                    .map((n) => formatAuxBoardMemberHandle(n, model.locale, memberByName.get(n)))
+                    .join(" ")}
                 </span>
               ) : currentReplayMsg.all ? (
-                <span className="pmx-aux-mention pmx-aux-mention--all">@all</span>
+                <span className="pmx-aux-mention pmx-aux-mention--all">
+                  {s.boardBroadcastAllMention}
+                </span>
               ) : null}
             </div>
             <button

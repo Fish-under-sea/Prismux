@@ -15,9 +15,12 @@ import {
   formatAuxEntryBadge,
   formatAuxFilteredBy,
   formatAuxInReviewChip,
+  formatAuxMemberDisplayName,
+  formatAuxModelDisplayLabel,
   formatAuxModelMismatchNote,
   formatAuxNeedsYouChip,
   formatAuxNewPostsFloat,
+  formatAuxPlainSnippet,
   formatAuxPostsOverDuration,
   formatAuxReadableModelId,
   formatAuxReplayProgress,
@@ -30,6 +33,7 @@ import {
   formatAuxWaitingCount,
   formatAuxWaitingOn,
   formatAuxWorkspaceBadge,
+  isEquivalentAuxModelSpec,
   localizeAuxBoardPlainText,
 } from "./agentAux.i18n";
 import type { AgentAuxViewModel } from "./agentAux.logic";
@@ -449,5 +453,77 @@ describe("agentAux.i18n (100% Native Chinese & English Parity)", () => {
     expect(enVisibleText).toContain(
       "Requested model magpie/group/deepseek; the provider reported running group/deepseek.",
     );
+  });
+
+  it("formats member display names, JSON model tuples, waiting/filter handles, and plain previews cleanly in zh and en", () => {
+    expect(formatAuxMemberDisplayName("coordinator", "zh")).toBe("协调者");
+    expect(formatAuxMemberDisplayName("coordinator", "en")).toBe("coordinator");
+    expect(formatAuxMemberDisplayName("acpregistry-生成100字打招呼", "zh")).toBe("生成100字打招呼");
+    expect(formatAuxMemberDisplayName("acpregistry-生成100字打招呼", "en")).toBe("生成100字打招呼");
+    expect(formatAuxMemberDisplayName("all", "zh")).toBe("全体");
+    expect(formatAuxMemberDisplayName("all", "en")).toBe("all");
+
+    expect(formatAuxWaitingOn("coordinator", "zh")).toBe("等待 @协调者");
+    expect(formatAuxWaitingOn("acpregistry-生成100字打招呼", "zh")).toBe("等待 @生成100字打招呼");
+    expect(formatAuxWaitingOn("coordinator", "en")).toBe("Waiting on @coordinator");
+    expect(formatAuxFilteredBy("coordinator", "zh")).toBe("已筛选：@协调者");
+    expect(formatAuxFilteredBy("acpregistry-生成100字打招呼", "zh")).toBe(
+      "已筛选：@生成100字打招呼",
+    );
+
+    expect(formatAuxModelDisplayLabel('["magpie","group/deepseek"]')).toBe("group/deepseek");
+    expect(formatAuxModelDisplayLabel('["openai", "gpt-5.4"]')).toBe("gpt-5.4");
+    expect(formatAuxModelDisplayLabel('["deepseek-v4.1"]')).toBe("deepseek-v4.1");
+    expect(formatAuxModelDisplayLabel("claude-opus-4-6")).toBe("claude-opus-4-6");
+    expect(formatAuxModelDisplayLabel("")).toBe("");
+
+    expect(isEquivalentAuxModelSpec('["magpie","group/deepseek"]', "group/deepseek")).toBe(true);
+    expect(isEquivalentAuxModelSpec('["magpie","group/deepseek"]', "group/qwen")).toBe(false);
+
+    // Strips false-positive equivalent model mismatch prefix and preserves the real answer
+    expect(
+      formatAuxPlainSnippet(
+        '@coordinator [done] Requested model ["magpie","group/deepseek"]; the provider reported running group/deepseek.\n\n你好！很高兴见到你！',
+        "zh",
+      ),
+    ).toBe("@协调者 [已完成] 你好！很高兴见到你！");
+    expect(
+      formatAuxPlainSnippet(
+        '@coordinator [done] Requested model ["magpie","group/deepseek"]; the provider reported running group/deepseek.\n\nHello there!',
+        "en",
+      ),
+    ).toBe("@coordinator [done] Hello there!");
+
+    // Localizes genuine model mismatch while unwrapping JSON tuple
+    expect(
+      formatAuxPlainSnippet(
+        '@coordinator [done] Requested model ["magpie","group/deepseek"]; the provider reported running group/qwen.\n\n你好！',
+        "zh",
+      ),
+    ).toBe("@协调者 [已完成] 请求模型 group/deepseek，提供方实际运行 group/qwen。 你好！");
+    expect(
+      formatAuxPlainSnippet(
+        '@coordinator [done] Requested model ["magpie","group/deepseek"]; the provider reported running group/qwen.\n\nHello!',
+        "en",
+      ),
+    ).toBe(
+      "@coordinator [done] Requested model group/deepseek; the provider reported running group/qwen. Hello!",
+    );
+
+    // Cleans dispatch bold markdown and deduplicates redundant `@Name Name` prefix
+    expect(
+      formatAuxPlainSnippet(
+        "@acpregistry-生成100字打招呼 **生成100字打招呼**\n\n请生成一段100字左右的打招呼文案",
+        "zh",
+      ),
+    ).toBe("@生成100字打招呼 请生成一段100字左右的打招呼文案");
+
+    // Localizes [blocked], [stall], @all, and standalone JSON model tuple
+    expect(
+      formatAuxPlainSnippet(
+        '@all [blocked] [stall] 使用 `["magpie","group/deepseek"]` 测试 **完成**',
+        "zh",
+      ),
+    ).toBe("@全体 [受阻] [停滞] 使用 group/deepseek 测试 完成");
   });
 });

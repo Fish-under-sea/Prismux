@@ -783,4 +783,122 @@ describe("AgentAuxPanel & AgentAuxOverviewEntryButton", () => {
     expect(finishedAcpGraphHtml).not.toContain("pmx-aux-hv-bee--working");
     expect(finishedAcpGraphHtml).not.toContain('data-breathing="true"');
   });
+
+  it("zero-leaks @coordinator, @acpregistry-, raw JSON model tuples, [done], and Requested model across all 4 tabs in zh while keeping raw routing IDs and en parity", () => {
+    const dshEntry = {
+      instanceId: "acpRegistry:dsh",
+      driverKind: "acpRegistry",
+      displayName: "DSH",
+      acpRegistryAgentId: "dsh",
+    };
+    const buildTupleModel = (locale: "zh" | "en") =>
+      buildAgentAuxViewModel({
+        provider: "acpRegistry",
+        providerEntry: dshEntry,
+        model: '["magpie","group/deepseek"]',
+        providerEntryByInstanceId: new Map([[dshEntry.instanceId, dshEntry]]),
+        threadId: "thread-dsh-tuple" as ThreadId,
+        threadShell: {
+          id: "thread-dsh-tuple" as ThreadId,
+          title: "测试 DSH 协同面板",
+          status: "idle",
+          activityRunStatus: "completed",
+          activeRunId: null,
+          modelSelection: {
+            instanceId: dshEntry.instanceId,
+            model: '["magpie","group/deepseek"]',
+          },
+          lineage: {},
+        },
+        projection: {
+          runs: [{ id: "r-tuple", status: "completed" }],
+          subagents: [
+            {
+              id: "sub-greet",
+              runId: "r-tuple",
+              title: "生成100字打招呼",
+              status: "completed",
+              driver: "acpRegistry",
+              providerInstanceId: dshEntry.instanceId,
+              model: '["magpie","group/deepseek"]',
+              executedModel: '["magpie","group/deepseek"]',
+              childThreadId: "child-greet" as ThreadId,
+              prompt: "请生成一段100字左右的打招呼文案",
+              result:
+                'Requested model ["magpie","group/deepseek"]; the provider reported running group/deepseek.\n\n你好！很高兴认识你，祝你今天一切顺利！',
+              startedAt: 1_760_000_000_000,
+              completedAt: 1_760_000_010_000,
+            },
+          ],
+        },
+        daemonSnapshot: null,
+        locale,
+      });
+
+    const zhModel = buildTupleModel("zh");
+    const zhOverview = renderToStaticMarkup(
+      <AgentAuxPanel model={zhModel} initialTab="overview" locale="zh" />,
+    );
+    const zhBoard = renderToStaticMarkup(
+      <AgentAuxPanel model={zhModel} initialTab="board" locale="zh" />,
+    );
+    const zhMembers = renderToStaticMarkup(
+      <AgentAuxPanel
+        model={zhModel}
+        initialTab="members"
+        locale="zh"
+        onOpenChildThread={vi.fn()}
+      />,
+    );
+    const zhGraph = renderToStaticMarkup(
+      <AgentAuxPanel model={zhModel} initialTab="graph" locale="zh" />,
+    );
+
+    const visibleOf = (html: string) => html.replace(/<[^>]+>/g, " ");
+    const allZhVisible = [zhOverview, zhBoard, zhMembers, zhGraph].map(visibleOf).join("\n");
+
+    // Zero raw internal handles, JSON tuple brackets, English [done], or Requested model across ALL 4 tabs
+    expect(allZhVisible).not.toContain("@coordinator");
+    expect(allZhVisible).not.toContain("@acpregistry-");
+    expect(allZhVisible).not.toContain("acpregistry-");
+    expect(allZhVisible).not.toContain('["magpie"');
+    expect(allZhVisible).not.toContain("[done]");
+    expect(allZhVisible).not.toContain("Requested model");
+
+    // Members tab: localized handles, clean model label, clean stripped snippet, no redundant markdown
+    const zhMembersVisible = visibleOf(zhMembers);
+    expect(zhMembersVisible).toContain("@协调者");
+    expect(zhMembersVisible).toContain("@生成100字打招呼");
+    expect(zhMembersVisible).toContain("group/deepseek");
+    expect(zhMembersVisible).toContain("[已完成]");
+    expect(zhMembersVisible).toContain("你好！很高兴认识你，祝你今天一切顺利！");
+    expect(zhMembersVisible).not.toContain("**生成100字打招呼**");
+    // Raw routing IDs preserved for clicks/filtering
+    expect(zhMembers).toContain('data-aux-member="coordinator"');
+    expect(zhMembers).toContain('data-aux-member="acpregistry-生成100字打招呼"');
+
+    // Overview tab: clean model label & localized crew chip
+    const zhOverviewVisible = visibleOf(zhOverview);
+    expect(zhOverviewVisible).toContain("group/deepseek");
+    expect(zhOverviewVisible).toContain("@生成100字打招呼");
+
+    // Graph tab: localized tooltip & zero raw acpregistry-/coordinator in titles
+    expect(zhGraph).toContain('title="@协调者 ·');
+    expect(zhGraph).toContain('title="@生成100字打招呼 ·');
+    expect(zhGraph).toContain('data-hive-bee="coordinator"');
+    expect(zhGraph).toContain('data-hive-bee="acpregistry-生成100字打招呼"');
+
+    // English mode retains English handles & [done] while still unwrapping raw JSON tuples
+    const enModel = buildTupleModel("en");
+    const enMembers = renderToStaticMarkup(
+      <AgentAuxPanel model={enModel} initialTab="members" locale="en" />,
+    );
+    const enMembersVisible = visibleOf(enMembers);
+    expect(enMembersVisible).toContain("@coordinator");
+    expect(enMembersVisible).toContain("@生成100字打招呼");
+    expect(enMembersVisible).toContain("group/deepseek");
+    expect(enMembersVisible).toContain("[done]");
+    expect(enMembersVisible).not.toContain('["magpie"');
+    expect(enMembersVisible).not.toContain("acpregistry-");
+  });
 });

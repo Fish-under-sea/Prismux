@@ -23,6 +23,8 @@ import type { DaemonAgentAuxInspectResponse, DaemonAgentAuxNativeStepDto } from 
 import {
   formatAuxCoordinatorSummary,
   formatAuxDelegationWave,
+  formatAuxMemberDisplayName,
+  formatAuxModelDisplayLabel,
   formatAuxTasksDone,
   formatAuxWaitingOn,
   getAuxStrings,
@@ -411,7 +413,7 @@ export function stripLeadingMentionTokens(
 
   let rest = text;
   for (;;) {
-    const m = /^\s*@([\p{L}\p{Nd}][\p{L}\p{Nd}_-]{0,31})(?:[\s,:–—-]+|$)/u.exec(rest);
+    const m = /^\s*@([\p{L}\p{Nd}][\p{L}\p{Nd}_-]{0,63})(?:[\s,:–—-]+|$)/u.exec(rest);
     if (!m?.[1]) break;
     const tok = m[1].toLowerCase();
     const matchesTarget = allowed.has(tok) || [...allowed].some((n) => n.startsWith(`${tok}-`));
@@ -471,7 +473,7 @@ export type BoardBodyToken =
   | { readonly kind: "code"; readonly value: string };
 
 const BOARD_TOKEN_RE =
-  /(`[^`\n]+`)|((?<![\p{L}\p{Nd}_-])@[\p{L}\p{Nd}][\p{L}\p{Nd}_-]{0,31})|((?<![\p{L}\p{Nd}_/-])#(\d{1,6})\b)/gu;
+  /(`[^`\n]+`)|((?<![\p{L}\p{Nd}_-])@[\p{L}\p{Nd}][\p{L}\p{Nd}_-]{0,63})|((?<![\p{L}\p{Nd}_/-])#(\d{1,6})\b)/gu;
 
 export function tokenizeBoardText(
   text: string,
@@ -1743,9 +1745,16 @@ export function computeMentionGraphLayout(input: {
   const others = visibleMembers.filter((m) => m.name !== coordinator?.name);
   const orderedMembers = coordinator ? [coordinator, ...others] : visibleMembers;
 
+  const resolveNodeDisplayName = (m: AgentAuxMember): string =>
+    m.displayName.toLowerCase() === m.name.toLowerCase() ||
+    /^acp[_-]?registry[-_]+/i.test(m.displayName)
+      ? formatAuxMemberDisplayName(m.name, model.locale, m)
+      : m.displayName;
+
   const nodeH = 28;
   const pillWidth = (m: AgentAuxMember, maxW: number): number => {
-    const full = Math.max(78, 48 + Math.ceil(m.displayName.length * 7.2));
+    const label = resolveNodeDisplayName(m);
+    const full = Math.max(78, 48 + Math.ceil(label.length * 7.2));
     return m.isCoordinator ? Math.min(180, full) : Math.min(maxW, full);
   };
 
@@ -1765,7 +1774,7 @@ export function computeMentionGraphLayout(input: {
     );
     return {
       name: m.name,
-      displayName: m.displayName,
+      displayName: resolveNodeDisplayName(m),
       providerBrand: m.providerBrand,
       sourceKind: m.sourceKind,
       x,
@@ -2481,7 +2490,7 @@ function collectDelegatedChildren(input: {
             ),
             title: brief,
             brief,
-            model: modelStr || formatAgentBrandName(memberBrand),
+            model: formatAuxModelDisplayLabel(modelStr) || formatAgentBrandName(memberBrand),
             providerBrand: memberBrand,
             sourceKind,
             status,
@@ -2493,8 +2502,8 @@ function collectDelegatedChildren(input: {
             unread: 0,
             activity: status === "working" ? agent.progress?.trim() || brief : "",
             activityKind: status === "working" ? "tool" : "",
-            nowLine: snippet.slice(0, 160),
-            lastPostSnippet: snippet.slice(0, 180),
+            nowLine: snippet.slice(0, 360),
+            lastPostSnippet: snippet.slice(0, 360),
             lastSeq: 0,
             lastTime: "",
             killed: status === "killed",
@@ -2596,7 +2605,7 @@ function collectDelegatedChildren(input: {
         ),
         title: brief,
         brief,
-        model: modelStr || formatAgentBrandName(memberBrand),
+        model: formatAuxModelDisplayLabel(modelStr) || formatAgentBrandName(memberBrand),
         providerBrand: memberBrand,
         sourceKind: "acp-delegated",
         status,
@@ -2608,8 +2617,8 @@ function collectDelegatedChildren(input: {
         unread: 0,
         activity: status === "working" ? progress || brief : "",
         activityKind: status === "working" ? "tool" : "",
-        nowLine: snippet.slice(0, 160),
-        lastPostSnippet: snippet.slice(0, 180),
+        nowLine: snippet.slice(0, 360),
+        lastPostSnippet: snippet.slice(0, 360),
         lastSeq: 0,
         lastTime: "",
         killed: status === "killed",
@@ -2701,7 +2710,7 @@ function collectDelegatedChildren(input: {
         ),
         title: brief,
         brief,
-        model: itemModel || formatAgentBrandName(memberBrand),
+        model: formatAuxModelDisplayLabel(itemModel) || formatAgentBrandName(memberBrand),
         providerBrand: memberBrand,
         sourceKind: "acp-delegated",
         status,
@@ -2713,8 +2722,8 @@ function collectDelegatedChildren(input: {
         unread: 0,
         activity: status === "working" ? itemProgress || brief : "",
         activityKind: status === "working" ? "tool" : "",
-        nowLine: snippet.slice(0, 160),
-        lastPostSnippet: snippet.slice(0, 180),
+        nowLine: snippet.slice(0, 360),
+        lastPostSnippet: snippet.slice(0, 360),
         lastSeq: 0,
         lastTime: "",
         killed: status === "killed",
@@ -2776,7 +2785,7 @@ function collectDelegatedChildren(input: {
         ),
         title: displayName,
         brief: displayName,
-        model: shellModel || formatAgentBrandName(memberBrand),
+        model: formatAuxModelDisplayLabel(shellModel) || formatAgentBrandName(memberBrand),
         providerBrand: memberBrand,
         sourceKind: "acp-delegated",
         status,
@@ -2959,7 +2968,7 @@ function collectDelegatedChildren(input: {
           roleLabel: formatAuxRoleLabel(sp.role || "subagent", false, input.locale),
           title: sp.title || displayName,
           brief: sp.title || displayName,
-          model: sp.model || CANONICAL_PROVIDER_DISPLAY_NAMES.codex,
+          model: formatAuxModelDisplayLabel(sp.model) || CANONICAL_PROVIDER_DISPLAY_NAMES.codex,
           providerBrand: "codex",
           sourceKind: "codex",
           status,
@@ -3192,7 +3201,7 @@ export function mergeSwarmAndDelegatedAgents(input: {
       posts: prev.posts + 1,
       lastSeq: msg.seq,
       lastTime: msg.time,
-      snippet: msg.text.slice(0, 180),
+      snippet: msg.text.slice(0, 360),
     });
   }
 
@@ -3653,7 +3662,7 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
         roleLabel: formatAuxRoleLabel(m.role, isCoordinator, locale),
         title: isCoordinator ? s.roleCoordinator : extractedBrief,
         brief: extractedBrief,
-        model: m.model.replace(/-(?:dropdown|high|medium)$/i, ""),
+        model: formatAuxModelDisplayLabel(m.model).replace(/-(?:dropdown|high|medium)$/i, ""),
         providerBrand: "antigravity",
         sourceKind: "swarm",
         status: visualStatus,
@@ -4039,7 +4048,7 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
         roleLabel: formatAuxRoleLabel(m.agentType, m.isLead, locale),
         title: m.agentType,
         brief: m.agentType,
-        model: m.model,
+        model: formatAuxModelDisplayLabel(m.model),
         providerBrand: "claude-code",
         sourceKind: "claude-team",
         status,
@@ -4051,8 +4060,8 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
         unread: team.messages.filter((msg) => msg.recipient === m.name && !msg.read).length,
         activity: m.status === "working" ? s.stateWorking : "",
         activityKind: m.status === "working" ? "tool" : "",
-        nowLine: lastMsg?.summary || lastMsg?.text.slice(0, 140) || m.backendType || s.roleWorker,
-        lastPostSnippet: lastMsg?.text.slice(0, 180) || "",
+        nowLine: lastMsg?.summary || lastMsg?.text.slice(0, 360) || m.backendType || s.roleWorker,
+        lastPostSnippet: lastMsg?.text.slice(0, 360) || "",
         lastSeq: lastMsg?.seq ?? 0,
         lastTime: lastMsg?.time ?? "",
         killed: false,
@@ -4350,7 +4359,7 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
       posts: prev.posts + 1,
       lastSeq: msg.seq,
       lastTime: msg.time,
-      snippet: msg.text.slice(0, 180),
+      snippet: msg.text.slice(0, 360),
     });
   }
 
@@ -4380,7 +4389,7 @@ export function buildAgentAuxViewModel(input: BuildAgentAuxViewModelInput): Agen
       : anyChildActive
         ? "working"
         : "parked";
-  const parentModel = parentModelRaw || brandDisplayName;
+  const parentModel = formatAuxModelDisplayLabel(parentModelRaw) || brandDisplayName;
   const coordStats = childMsgStats.get("coordinator");
   const coordDisplayName =
     locale === "zh" ? `主线程 · ${brandDisplayName}` : `Main · ${brandDisplayName}`;

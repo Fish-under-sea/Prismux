@@ -284,7 +284,7 @@ export const AGENT_AUX_STRINGS: Readonly<Record<AgentAuxLocale, AgentAuxMessages
     graphPacingReal: "真实时间",
     graphSpeedAria: "回放倍速",
     graphHideInactive: "隐藏非活跃",
-    graphExpandAll: "展开 @all",
+    graphExpandAll: "展开 @全体",
     graphReplayStart: "跳到开头",
     graphReplayPrev: "上一条消息",
     graphReplayPlay: "播放回放",
@@ -301,9 +301,9 @@ export const AGENT_AUX_STRINGS: Readonly<Record<AgentAuxLocale, AgentAuxMessages
     graphLegendMessageSent: "消息刚发送",
     graphLegendWaitingOn: "等待回复",
     graphLegendMentionCount: "发送消息（线宽=次数）",
-    graphLegendViaAll: "经由 @all 广播",
+    graphLegendViaAll: "经由 @全体 广播",
     graphLegendUnaddressed: "未定向提及",
-    graphLegendBroadcast: "广播 @all",
+    graphLegendBroadcast: "广播 @全体",
     graphLegendActive: "活跃中",
     graphLocateInBoard: "在看板中定位",
     graphCloseCard: "关闭详情",
@@ -530,12 +530,22 @@ export function formatAuxTeamCount(
   };
 }
 
-export function formatAuxFilteredBy(name: string, locale: AgentAuxLocale): string {
-  return locale === "zh" ? `已筛选：@${name}` : `Filtered by @${name}`;
+export function formatAuxFilteredBy(
+  name: string,
+  locale: AgentAuxLocale,
+  options?: { readonly displayName?: string; readonly isCoordinator?: boolean },
+): string {
+  const handle = formatAuxBoardMemberHandle(name, locale, options);
+  return locale === "zh" ? `已筛选：${handle}` : `Filtered by ${handle}`;
 }
 
-export function formatAuxWaitingOn(name: string, locale: AgentAuxLocale): string {
-  return locale === "zh" ? `等待 @${name}` : `Waiting on @${name}`;
+export function formatAuxWaitingOn(
+  name: string,
+  locale: AgentAuxLocale,
+  options?: { readonly displayName?: string; readonly isCoordinator?: boolean },
+): string {
+  const handle = formatAuxBoardMemberHandle(name, locale, options);
+  return locale === "zh" ? `等待 ${handle}` : `Waiting on ${handle}`;
 }
 
 export function formatAuxWaitingCount(count: number, locale: AgentAuxLocale): string {
@@ -648,6 +658,44 @@ export function formatAuxBoardStatusTag(
 const ACP_REGISTRY_HANDLE_PREFIX_RE = /^acp[_-]?registry[-_]+/i;
 
 /**
+ * Formats a member handle into its localized display name (without a leading `@`) while keeping
+ * raw routing IDs untouched (`coordinator` -> `协调者` in zh; strips noisy internal `acpregistry-`
+ * driver prefixes while keeping disambiguation suffixes readable).
+ */
+export function formatAuxMemberDisplayName(
+  name: string,
+  locale: AgentAuxLocale,
+  options?: { readonly displayName?: string; readonly isCoordinator?: boolean },
+): string {
+  const raw = name.trim().replace(/^@+/, "");
+  if (!raw) return "";
+  const s = getAuxStrings(locale);
+  const lower = raw.toLowerCase();
+  if (lower === "all") {
+    return s.boardBroadcastAllMention.replace(/^@+/, "");
+  }
+  if (lower === "coordinator" || (locale === "zh" && lower === "team-lead")) {
+    return locale === "zh" ? s.roleCoordinator : raw;
+  }
+  if (lower === "acpregistry") {
+    const cleanDisplay = options?.displayName?.trim();
+    if (cleanDisplay) return cleanDisplay;
+    return locale === "zh" ? s.roleAcpDelegated : "acp";
+  }
+  if (ACP_REGISTRY_HANDLE_PREFIX_RE.test(raw)) {
+    const stripped = raw.replace(ACP_REGISTRY_HANDLE_PREFIX_RE, "").trim();
+    if (!stripped) {
+      return locale === "zh" ? s.roleSubagent : "acp";
+    }
+    if (/^\d+$/.test(stripped)) {
+      return locale === "zh" ? `${s.roleSubagent}-${stripped}` : `acp-${stripped}`;
+    }
+    return stripped;
+  }
+  return raw;
+}
+
+/**
  * Formats a board member handle for display (always prefixed with `@`) without altering the
  * underlying member routing ID (`coordinator` -> `@协调者` in zh; strips noisy internal
  * `acpregistry-` driver prefixes while keeping disambiguation suffixes readable).
@@ -657,32 +705,8 @@ export function formatAuxBoardMemberHandle(
   locale: AgentAuxLocale,
   options?: { readonly displayName?: string; readonly isCoordinator?: boolean },
 ): string {
-  const raw = name.trim().replace(/^@+/, "");
-  if (!raw) return "@";
-  const s = getAuxStrings(locale);
-  const lower = raw.toLowerCase();
-  if (lower === "all") {
-    return s.boardBroadcastAllMention;
-  }
-  if (lower === "coordinator" || (locale === "zh" && lower === "team-lead")) {
-    return locale === "zh" ? `@${s.roleCoordinator}` : `@${raw}`;
-  }
-  if (lower === "acpregistry") {
-    const cleanDisplay = options?.displayName?.trim();
-    if (cleanDisplay) return `@${cleanDisplay}`;
-    return locale === "zh" ? `@${s.roleAcpDelegated}` : "@acp";
-  }
-  if (ACP_REGISTRY_HANDLE_PREFIX_RE.test(raw)) {
-    const stripped = raw.replace(ACP_REGISTRY_HANDLE_PREFIX_RE, "").trim();
-    if (!stripped) {
-      return locale === "zh" ? `@${s.roleSubagent}` : "@acp";
-    }
-    if (/^\d+$/.test(stripped)) {
-      return locale === "zh" ? `@${s.roleSubagent}-${stripped}` : `@acp-${stripped}`;
-    }
-    return `@${stripped}`;
-  }
-  return `@${raw}`;
+  const display = formatAuxMemberDisplayName(name, locale, options);
+  return display ? `@${display}` : "@";
 }
 
 interface ParsedBoardModelSpec {
@@ -741,6 +765,36 @@ export function formatAuxReadableModelId(
   return parsed.model;
 }
 
+/**
+ * Unwraps raw model identifiers (including JSON routing tuples like `["magpie","group/deepseek"]`)
+ * into clean user-facing labels across Overview, Members, Board, and Graph tabs.
+ */
+export function formatAuxModelDisplayLabel(rawModel: string | null | undefined): string {
+  const raw = (rawModel ?? "").trim();
+  if (!raw) return "";
+  return formatAuxReadableModelId(raw);
+}
+
+/**
+ * Returns true when `requestedModel` and `executedModel` resolve to the same underlying model
+ * after unwrapping JSON routing tuples such as `["magpie","group/deepseek"]` vs `group/deepseek`.
+ */
+export function isEquivalentAuxModelSpec(requestedModel: string, executedModel: string): boolean {
+  const reqParsed = parseBoardModelSpec(requestedModel);
+  const execParsed = parseBoardModelSpec(executedModel);
+  const reqModel = reqParsed.model.trim().toLowerCase();
+  const execModel = execParsed.model.trim().toLowerCase();
+  if (!reqModel || !execModel) return false;
+  if (reqModel === execModel) return true;
+  if (reqParsed.provider && `${reqParsed.provider.toLowerCase()}/${reqModel}` === execModel) {
+    return true;
+  }
+  if (execParsed.provider && `${execParsed.provider.toLowerCase()}/${execModel}` === reqModel) {
+    return true;
+  }
+  return false;
+}
+
 export function formatAuxModelMismatchNote(
   requestedModel: string,
   executedModel: string,
@@ -760,9 +814,12 @@ export function formatAuxModelMismatchNote(
 
 const REQUESTED_MODEL_NOTE_RE =
   /Requested model ([^\n;]+?);\s*the provider reported running ([^\n]+?)\.(?=\s|$)/g;
+const STANDALONE_MODEL_TUPLE_RE = /\[\s*"([^"\s[\]]+)"\s*,\s*"([^"\s[\]]+)"\s*\]/g;
 const CHILD_NO_ASSISTANT_RESULT_RE = /Child task completed without an assistant result\./g;
 const CHILD_ENDED_WITH_STATUS_RE = /Child task ended with status ([a-z_]+)\./gi;
 const LAST_ASSISTANT_BEFORE_FAIL_RE = /Last assistant message before the run failed:/g;
+const PLAIN_STATUS_TAG_RE = /\[(done|blocked|stall)\]/gi;
+const PLAIN_MENTION_RE = /(?<![\p{L}\p{Nd}_-])@([\p{L}\p{Nd}][\p{L}\p{Nd}_-]{0,63})/gu;
 
 function localizeSubagentRunStatusZh(status: string): string {
   switch (status.toLowerCase()) {
@@ -788,9 +845,11 @@ function localizeSubagentRunStatusZh(status: string): string {
  */
 export function localizeAuxBoardPlainText(text: string, locale: AgentAuxLocale): string {
   if (!text) return text;
-  let out = text.replace(REQUESTED_MODEL_NOTE_RE, (_full, requested: string, executed: string) =>
-    formatAuxModelMismatchNote(requested, executed, locale),
-  );
+  let out = text
+    .replace(REQUESTED_MODEL_NOTE_RE, (_full, requested: string, executed: string) =>
+      formatAuxModelMismatchNote(requested, executed, locale),
+    )
+    .replace(STANDALONE_MODEL_TUPLE_RE, (_full, _provider: string, model: string) => model);
   if (locale === "zh") {
     out = out
       .replace(CHILD_NO_ASSISTANT_RESULT_RE, "子任务已完成，但未返回助手结果。")
@@ -800,5 +859,56 @@ export function localizeAuxBoardPlainText(text: string, locale: AgentAuxLocale):
       )
       .replace(LAST_ASSISTANT_BEFORE_FAIL_RE, "运行失败前最后一条助手消息：");
   }
+  return out;
+}
+
+/** Localizes single-line member/workstream previews, stripping equivalent model-mismatch prefixes and inline markdown. */
+export function formatAuxPlainSnippet(
+  raw: string | null | undefined,
+  locale: AgentAuxLocale,
+): string {
+  const input = (raw ?? "").trim();
+  if (!input) return "";
+
+  let out = input.replace(REQUESTED_MODEL_NOTE_RE, (_full, requested: string, executed: string) =>
+    isEquivalentAuxModelSpec(requested, executed)
+      ? ""
+      : formatAuxModelMismatchNote(requested, executed, locale),
+  );
+
+  out = out.replace(STANDALONE_MODEL_TUPLE_RE, (_full, _provider: string, model: string) => model);
+
+  if (locale === "zh") {
+    out = out
+      .replace(CHILD_NO_ASSISTANT_RESULT_RE, "子任务已完成，但未返回助手结果。")
+      .replace(
+        CHILD_ENDED_WITH_STATUS_RE,
+        (_full, status: string) => `子任务已结束（状态：${localizeSubagentRunStatusZh(status)}）。`,
+      )
+      .replace(LAST_ASSISTANT_BEFORE_FAIL_RE, "运行失败前最后一条助手消息：");
+  }
+
+  out = out
+    .replace(PLAIN_STATUS_TAG_RE, (_full, kind: string) =>
+      formatAuxBoardStatusTag(kind.toLowerCase() as AuxBoardStatusTagKind, locale),
+    )
+    .replace(PLAIN_MENTION_RE, (_full, name: string) => formatAuxBoardMemberHandle(name, locale))
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+    .replace(/__([^_\n]+)__/g, "$1")
+    .replace(/~~([^~\n]+)~~/g, "$1")
+    .replace(/`([^`\n]+)`/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // Deduplicate adjacent `@Name Name ...` emitted by synthetic dispatch previews
+  const dupMention = /^@([^\s]+)\s+([^\s]+)(?:\s+(.+))?$/.exec(out);
+  if (
+    dupMention?.[1] &&
+    dupMention[2] &&
+    dupMention[1].toLowerCase() === dupMention[2].toLowerCase()
+  ) {
+    out = dupMention[3] ? `@${dupMention[1]} ${dupMention[3]}` : `@${dupMention[1]}`;
+  }
+
   return out;
 }
