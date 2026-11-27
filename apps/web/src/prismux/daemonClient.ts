@@ -101,6 +101,7 @@ export interface DaemonChiefSlotDto {
   activeProvider?: string;
   secretaryName?: string;
   agentsMdPath?: string;
+  workspacePath?: string;
   model?: string;
   reasoningEffort?: string;
   defaultEffort?: string;
@@ -152,14 +153,22 @@ export interface DaemonMemoryStatsResponse {
   dbPath?: string;
 }
 
+export type DaemonMemoryKind =
+  | "episodic"
+  | "fact"
+  | "preference"
+  | "member_profile"
+  | "handoff_note";
+
 export interface DaemonMemorySearchItemDto {
   id: string;
   namespace: string;
-  kind: string;
+  kind: DaemonMemoryKind | string;
   title?: string;
   content: string;
   tags?: string[];
-  source?: string;
+  sourceRef?: string | null;
+  importance?: number;
   score?: number;
   createdAt?: number;
   updatedAt?: number;
@@ -181,11 +190,12 @@ export interface DaemonMemorySearchResponse {
 export interface DaemonMemoryUpsertRequest {
   id?: string;
   namespace: string;
-  kind: DaemonObsidianCuratedKind | string;
-  title?: string;
+  kind: DaemonMemoryKind;
+  title: string;
   content: string;
-  tags?: string[];
-  source?: string;
+  sourceRef?: string | null;
+  importance?: number;
+  machineId?: string;
   callerScope?: string;
 }
 

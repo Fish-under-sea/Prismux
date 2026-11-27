@@ -189,9 +189,11 @@ function normalizeWorkspacePathForCompare(raw: string | null | undefined): strin
   return raw.trim().replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
-function isChiefWorkspacePathLike(raw: string | null | undefined): boolean {
+export function isChiefWorkspacePathLike(raw: string | null | undefined): boolean {
   const normalized = normalizeWorkspacePathForCompare(raw);
   return (
+    normalized.endsWith("/chief-workspace") ||
+    normalized === "~/.prismux/chief-workspace" ||
     normalized.endsWith("/.prismux/chief") ||
     normalized.endsWith("/prismux/chief") ||
     normalized === "~/.prismux/chief"
@@ -1054,14 +1056,20 @@ export function PrismuxIpcDispatchBridge() {
           (typeof slot?.reasoningEffort === "string" && slot.reasoningEffort.trim()) ||
           (typeof slot?.defaultEffort === "string" && slot.defaultEffort.trim()) ||
           null;
+        const slotWorkspacePath =
+          typeof slot?.workspacePath === "string" && slot.workspacePath.trim().length > 0
+            ? slot.workspacePath.trim()
+            : null;
         const agentsMdPath =
           agentsMdRes?.path?.trim() ||
           chiefRes?.agentsMdPath?.trim() ||
           (typeof slot?.agentsMdPath === "string" ? slot.agentsMdPath.trim() : "") ||
           null;
-        const derivedWorkspacePath = agentsMdPath
-          ? agentsMdPath.replace(/[\\/]AGENTS\.md$/i, "")
-          : null;
+        const derivedWorkspacePath =
+          slotWorkspacePath ??
+          (agentsMdPath
+            ? agentsMdPath.replace(/[\\/]chief[\\/]AGENTS\.md$/i, "/chief-workspace")
+            : null);
         return {
           provider,
           model,

@@ -137,6 +137,7 @@ import {
   buildDispatchModelSelection,
   handlePrismuxDispatchEnvelope,
   isChiefDispatchEnvelope,
+  isChiefWorkspacePathLike,
   type DispatchExecutionDeps,
   type StagedPrismuxDispatch,
 } from "../PrismuxIpcDispatchBridge";
@@ -152,8 +153,10 @@ import {
 } from "./ChiefIdentityAndAgentsMdSection";
 import { ObsidianAgentImportCard, isValidObsidianTargetNamespace } from "./ObsidianAgentImportCard";
 import {
+  MEMORY_KIND_OPTIONS,
   PrismuxMemoryEngineSection,
   isValidMemoryNamespaceInput,
+  normalizeMemoryKind,
   resolveMemoryNamespacesForFilter,
 } from "./PrismuxMemoryEngineSection";
 import {
@@ -682,12 +685,17 @@ describe("Chief Secretary Full-Flow Audit Regressions (7 Dimensions)", () => {
 
       await client.upsertMemory({
         namespace: "private/chief",
-        kind: "decision",
+        kind: "fact",
         title: "单一架构",
         content: "使用 SQLite 单文件记忆",
+        sourceRef: "manual-ui",
       });
       expect(calls[1]?.url).toContain("/v1/memory/upsert");
       expect(calls[1]?.method).toBe("POST");
+      expect(calls[1]?.body).toMatchObject({
+        kind: "fact",
+        sourceRef: "manual-ui",
+      });
 
       await client.deleteMemory("mem-abc-123");
       expect(calls[2]?.url).toContain("/v1/memory/entries/mem-abc-123");
@@ -1054,6 +1062,15 @@ describe("Chief Secretary Full-Flow Audit Regressions (7 Dimensions)", () => {
   });
 
   it("Dim 4: supports 3-domain memory filtering, empty-query browsing, manual create, inline edit, and DELETE /v1/memory/entries/:id", async () => {
+    // Strictly align manual create/edit kinds with protocol MEMORY_KINDS
+    const allowedMemoryKinds = ["episodic", "fact", "preference", "member_profile", "handoff_note"];
+    expect(MEMORY_KIND_OPTIONS.map((item) => item.value).sort()).toEqual(
+      [...allowedMemoryKinds].sort(),
+    );
+    expect(normalizeMemoryKind("knowledge")).toBe("fact");
+    expect(normalizeMemoryKind("experience")).toBe("episodic");
+    expect(normalizeMemoryKind("handoff_note")).toBe("handoff_note");
+
     expect(isValidMemoryNamespaceInput("private/chief")).toBe(true);
     expect(isValidMemoryNamespaceInput("workspace/prismux")).toBe(true);
     expect(isValidMemoryNamespaceInput("social/qq-group-10086")).toBe(true);
@@ -1093,7 +1110,7 @@ describe("Chief Secretary Full-Flow Audit Regressions (7 Dimensions)", () => {
       {
         id: "mem-2",
         namespace: "workspace/prismux",
-        kind: "decision",
+        kind: "fact",
         title: "记忆引擎选型",
         content: "纯本地单文件 SQLite",
         tags: ["sqlite"],
@@ -1101,6 +1118,7 @@ describe("Chief Secretary Full-Flow Audit Regressions (7 Dimensions)", () => {
       },
     ];
     const searchBodies: Array<Record<string, unknown>> = [];
+    const upsertBodies: Array<Record<string, unknown>> = [];
     const deletedUrls: string[] = [];
 
     const mockDaemon = {
@@ -1118,7 +1136,7 @@ describe("Chief Secretary Full-Flow Audit Regressions (7 Dimensions)", () => {
             sqliteVecLoaded: true,
             retrievalMode: "fts5+sqlite-vec",
             byNamespace,
-            byKind: { preference: 1, decision: 1 },
+            byKind: { preference: 1, fact: 1 },
             latestUpdatedAt: FIXED_TEST_EPOCH,
             dbSizeBytes: 65536,
             dbPath: "~/.prismux/data/memory.db",
@@ -1138,19 +1156,27 @@ describe("Chief Secretary Full-Flow Audit Regressions (7 Dimensions)", () => {
         }
         if (endpoint === "/v1/memory/upsert" && init?.method === "POST") {
           const body = JSON.parse(String(init.body ?? "{}")) as Record<string, unknown>;
+          upsertBodies.push(body);
+          // Enforce real DaemonRpcServer.ts MEMORY_KINDS validation
+          if (!allowedMemoryKinds.includes(String(body.kind ?? ""))) {
+            throw new PrismuxDaemonError(`Invalid memory kind: "${String(body.kind ?? "")}".`, {
+              status: 400,
+              code: "invalid_params",
+            });
+          }
           const existingIdx = records.findIndex((rec) => rec.id === body.id);
           if (existingIdx >= 0) {
             records[existingIdx] = {
               ...records[existingIdx]!,
               title: String(body.title ?? ""),
               content: String(body.content ?? ""),
-              kind: String(body.kind ?? "knowledge"),
+              kind: String(body.kind ?? "fact"),
             };
           } else {
             records.push({
               id: `mem-${records.length + 1}`,
               namespace: String(body.namespace ?? "private/chief"),
-              kind: String(body.kind ?? "knowledge"),
+              kind: String(body.kind ?? "fact"),
               title: String(body.title ?? ""),
               content: String(body.content ?? ""),
               tags: Array.isArray(body.tags) ? (body.tags as string[]) : [],
@@ -1230,6 +1256,30 @@ describe("Chief Secretary Full-Flow Audit Regressions (7 Dimensions)", () => {
       await Promise.resolve();
     });
     expect(container.textContent).toContain("测试新增记忆");
+    expect(upsertBodies[0]).toMatchObject({
+      namespace: "private/chief",
+      kind: "fact",
+      title: "测试新增记忆",
+      content: "每周五整理周报",
+      sourceRef: "manual-ui",
+    });
+
+    // Inline edit existing mem-2 sends valid kind + sourceRef
+    await act(async () => {
+      invokeClick(container.querySelector('[data-pmx-memory-edit-btn="mem-2"]'));
+    });
+    await act(async () => {
+      invokeClick(container.querySelector('[data-pmx-memory-edit-save="mem-2"]'));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(upsertBodies[1]).toMatchObject({
+      id: "mem-2",
+      namespace: "workspace/prismux",
+      kind: "fact",
+      sourceRef: "manual-ui",
+    });
 
     // Two-step delete on mem-1 hits DELETE /v1/memory/entries/mem-1
     await act(async () => {
@@ -1380,10 +1430,24 @@ describe("Chief Secretary Full-Flow Audit Regressions (7 Dimensions)", () => {
     expect(dshSelection.instanceId).toBe(ProviderInstanceId.make("acpRegistry_dsh"));
     expect(dshSelection.model).toBe("deepseek-v4-pro");
 
+    expect(isChiefWorkspacePathLike("C:\\Users\\Fish\\.prismux\\chief-workspace")).toBe(true);
+    expect(isChiefWorkspacePathLike("~/.prismux/chief-workspace")).toBe(true);
+    expect(isChiefWorkspacePathLike("D:\\CustomData\\chief-workspace")).toBe(true);
+    expect(isChiefWorkspacePathLike("C:\\Users\\Fish\\.prismux\\chief")).toBe(true);
+    expect(isChiefWorkspacePathLike("D:\\workspace\\Prismux")).toBe(false);
+
     expect(
       isChiefDispatchEnvelope({
         provider: "chief",
         workspacePath: "",
+        worktreePath: null,
+      }),
+    ).toBe(true);
+    // Real Daemon dispatch with concrete provider + ~/.prismux/chief-workspace must be recognized as Chief dispatch
+    expect(
+      isChiefDispatchEnvelope({
+        provider: "claude-code",
+        workspacePath: "C:\\Users\\Fish\\.prismux\\chief-workspace",
         worktreePath: null,
       }),
     ).toBe(true);
@@ -1412,7 +1476,7 @@ describe("Chief Secretary Full-Flow Audit Regressions (7 Dimensions)", () => {
         provider: "dsh",
         model: "deepseek-v4-pro",
         reasoningEffort: "high",
-        workspacePath: "C:\\Users\\Fish\\.prismux\\chief",
+        workspacePath: "C:\\Users\\Fish\\.prismux\\chief-workspace",
         agentsMdContent:
           "<!-- prismux:chief-identity:begin -->\n称呼：小棱\n<!-- prismux:chief-identity:end -->\n回复简洁专业。",
       })),
@@ -1474,11 +1538,26 @@ describe("Chief Secretary Full-Flow Audit Regressions (7 Dimensions)", () => {
 
     const outcome = await handlePrismuxDispatchEnvelope(chiefEnvelope, deps);
     expect(outcome.outcome).toBe("auto_sent");
-    expect(capturedWorkspacePath).toBe("C:\\Users\\Fish\\.prismux\\chief");
+    expect(capturedWorkspacePath).toBe("C:\\Users\\Fish\\.prismux\\chief-workspace");
     expect(startedTurns[0]?.modelSelection.instanceId).toBe("acpRegistry_dsh");
     expect(startedTurns[0]?.modelSelection.model).toBe("deepseek-v4-pro");
     expect(startedTurns[0]?.prompt).toContain("称呼：小棱");
     expect(startedTurns[0]?.prompt).toContain("主秘书，帮我检查今天的工作区状态");
+
+    // Concrete provider (dsh) dispatched to real ~/.prismux/chief-workspace also receives AGENTS.md
+    const concreteChiefOutcome = await handlePrismuxDispatchEnvelope(
+      {
+        ...chiefEnvelope,
+        taskId: "task-chief-workspace-direct",
+        provider: "dsh",
+        workspacePath: "C:\\Users\\Fish\\.prismux\\chief-workspace",
+        prompt: "汇总今日待办",
+      },
+      deps,
+    );
+    expect(concreteChiefOutcome.outcome).toBe("auto_sent");
+    expect(startedTurns[1]?.prompt).toContain("称呼：小棱");
+    expect(startedTurns[1]?.prompt).toContain("汇总今日待办");
 
     // Confirmation banner unwraps JSON tuple model slugs and uses custom displayName
     const bannerHtml = renderToStaticMarkup(

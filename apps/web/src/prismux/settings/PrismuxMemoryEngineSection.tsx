@@ -41,7 +41,7 @@ import {
 import { cn } from "../../lib/utils";
 import {
   PrismuxDaemonError,
-  type DaemonObsidianCuratedKind,
+  type DaemonMemoryKind,
   type PrismuxDaemonClient,
 } from "../daemonClient";
 import type { ActiveChiefSlotSnapshot } from "./ChiefIdentityAndAgentsMdSection";
@@ -50,23 +50,28 @@ import { ObsidianAgentImportCard } from "./ObsidianAgentImportCard";
 type MemoryRetrievalModeValue = "fts5+sqlite-vec" | "fts5-only";
 export type MemoryDomainFilter = "all" | "chief" | "workspace" | "qq_group";
 
-const MEMORY_KIND_OPTIONS: ReadonlyArray<{
-  readonly value: DaemonObsidianCuratedKind;
+export const MEMORY_KIND_OPTIONS: ReadonlyArray<{
+  readonly value: DaemonMemoryKind;
   readonly label: string;
 }> = [
+  { value: "fact", label: "事实知识" },
   { value: "preference", label: "个人偏好" },
-  { value: "decision", label: "架构决策" },
-  { value: "project", label: "项目脉络" },
-  { value: "knowledge", label: "知识事实" },
-  { value: "experience", label: "经验踩坑" },
+  { value: "episodic", label: "情景经验" },
+  { value: "handoff_note", label: "交接摘要" },
+  { value: "member_profile", label: "成员画像" },
 ];
 
 const MEMORY_KIND_LABELS: Readonly<Record<string, string>> = {
+  fact: "事实知识",
   preference: "个人偏好",
+  episodic: "情景经验",
+  handoff_note: "交接摘要",
+  member_profile: "成员画像",
+  // Legacy / Obsidian curated display aliases for read compatibility
+  knowledge: "事实知识",
   decision: "架构决策",
   project: "项目脉络",
-  knowledge: "知识事实",
-  experience: "经验踩坑",
+  experience: "情景经验",
   note: "笔记",
 };
 
@@ -231,14 +236,22 @@ function parseTagsInput(raw: string): string[] {
   );
 }
 
-function normalizeMemoryKind(raw: string): DaemonObsidianCuratedKind {
-  return raw === "preference" ||
-    raw === "decision" ||
-    raw === "project" ||
-    raw === "knowledge" ||
-    raw === "experience"
-    ? raw
-    : "knowledge";
+export function normalizeMemoryKind(raw: string): DaemonMemoryKind {
+  switch (raw.trim()) {
+    case "fact":
+    case "preference":
+    case "episodic":
+    case "handoff_note":
+    case "member_profile":
+      return raw.trim() as DaemonMemoryKind;
+    case "experience":
+      return "episodic";
+    case "knowledge":
+    case "decision":
+    case "project":
+    default:
+      return "fact";
+  }
 }
 
 function parseMemoryStatsResponse(raw: unknown): MemoryStatsView {
@@ -289,7 +302,7 @@ function parseMemorySearchHits(raw: unknown): {
     parsed.push({
       id,
       namespace: asString(entry.namespace, "private/chief"),
-      kind: asString(entry.kind, "knowledge"),
+      kind: asString(entry.kind, "fact"),
       title: asString(entry.title).trim() || "(无标题)",
       content,
       tags: asStringArray(entry.tags),
@@ -345,7 +358,7 @@ export const PrismuxMemoryEngineSection = memo(function PrismuxMemoryEngineSecti
   // Manual create form state
   const [createOpen, setCreateOpen] = useState(false);
   const [createNamespace, setCreateNamespace] = useState("private/chief");
-  const [createKind, setCreateKind] = useState<DaemonObsidianCuratedKind>("knowledge");
+  const [createKind, setCreateKind] = useState<DaemonMemoryKind>("fact");
   const [createTitle, setCreateTitle] = useState("");
   const [createContent, setCreateContent] = useState("");
   const [createTags, setCreateTags] = useState("");
@@ -353,7 +366,7 @@ export const PrismuxMemoryEngineSection = memo(function PrismuxMemoryEngineSecti
 
   // Inline edit state
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editKind, setEditKind] = useState<DaemonObsidianCuratedKind>("knowledge");
+  const [editKind, setEditKind] = useState<DaemonMemoryKind>("fact");
   const [editTitle, setEditTitle] = useState("");
   const [editContent, setEditContent] = useState("");
   const [editTags, setEditTags] = useState("");
@@ -563,11 +576,11 @@ export const PrismuxMemoryEngineSection = memo(function PrismuxMemoryEngineSecti
         method: "POST",
         body: JSON.stringify({
           namespace: trimmedNs,
-          kind: createKind,
+          kind: normalizeMemoryKind(createKind),
           title: trimmedTitle || trimmedContent.slice(0, 32),
           content: trimmedContent,
           tags: parseTagsInput(createTags),
-          source: "manual-ui",
+          sourceRef: "manual-ui",
         }),
       });
       setCreateTitle("");
@@ -627,11 +640,11 @@ export const PrismuxMemoryEngineSection = memo(function PrismuxMemoryEngineSecti
           body: JSON.stringify({
             id: hit.id,
             namespace: hit.namespace,
-            kind: editKind,
+            kind: normalizeMemoryKind(editKind),
             title: editTitle.trim() || trimmedContent.slice(0, 32),
             content: trimmedContent,
             tags: parseTagsInput(editTags),
-            source: "manual-ui",
+            sourceRef: "manual-ui",
           }),
         });
         setEditingId(null);
